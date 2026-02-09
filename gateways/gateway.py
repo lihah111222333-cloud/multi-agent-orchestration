@@ -7,28 +7,19 @@
 4. 返回结果
 """
 
+import asyncio
 import logging
+import traceback
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
 from langchain_openai import ChatOpenAI
-from config.settings import LLM_MODEL, LLM_TEMPERATURE, OPENAI_BASE_URL
+from config.settings import (
+    LLM_MODEL, LLM_TEMPERATURE, OPENAI_BASE_URL,
+    LLM_TIMEOUT, LLM_MAX_RETRIES, GATEWAY_TIMEOUT,
+)
+from utils import extract_text
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_text(content) -> str:
-    """从 LLM 响应中提取文本（兼容 list / str 格式）"""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        texts = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                texts.append(item["text"])
-            elif isinstance(item, str):
-                texts.append(item)
-        return "\n".join(texts) if texts else str(content)
-    return str(content)
 
 
 class Gateway:
@@ -46,13 +37,35 @@ class Gateway:
         self.agent_configs = agent_configs
 
     async def process(self, task: str) -> str:
-        """处理任务：连接所有 Agent → 获取工具 → LLM 选择执行 → 返回结果"""
+        """处理任务（带超时保护）"""
+        try:
+            return await asyncio.wait_for(
+                self._do_process(task),
+                timeout=GATEWAY_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            error_msg = f"[{self.display_name}] 执行超时 ({GATEWAY_TIMEOUT}s)"
+            logger.error(error_msg)
+            return error_msg
+        except Exception as e:
+            error_msg = f"[{self.display_name}] 执行异常: {e}"
+            logger.error(error_msg)
+            logger.debug(traceback.format_exc())
+            return error_msg
+
+    async def _do_process(self, task: str) -> str:
+        """实际处理逻辑：连接 Agent → 获取工具 → LLM 选择执行 → 返回结果"""
         logger.info(f"[{self.display_name}] 开始处理任务: {task}")
 
+        client = None
         try:
-            # v0.2+ API: 不再使用 async with
+            # 连接所有 Agent MCP Server
             client = MultiServerMCPClient(self.agent_configs)
             tools = await client.get_tools()
+
+            if not tools:
+                raise RuntimeError(f"未能从 {len(self.agent_configs)} 个 Agent 加载任何工具")
+
             logger.info(
                 f"[{self.display_name}] 已加载 {len(tools)} 个工具 "
                 f"来自 {len(self.agent_configs)} 个 Agent"
@@ -63,6 +76,8 @@ class Gateway:
                 model=LLM_MODEL,
                 temperature=LLM_TEMPERATURE,
                 base_url=OPENAI_BASE_URL,
+                max_retries=LLM_MAX_RETRIES,
+                request_timeout=LLM_TIMEOUT,
             )
             agent = create_react_agent(llm, tools)
 
@@ -71,14 +86,41 @@ class Gateway:
                 {"messages": [{"role": "user", "content": task}]}
             )
 
-            output = _extract_text(result["messages"][-1].content)
+            output = extract_text(result["messages"][-1].content)
             logger.info(f"[{self.display_name}] 任务完成")
             return output
 
         except Exception as e:
             error_msg = f"[{self.display_name}] 任务执行失败: {e}"
             logger.error(error_msg)
+            logger.debug(traceback.format_exc())
             return error_msg
+        finally:
+            # 清理 MCP Client 资源（关闭 Agent 子进程）
+            if client is not None:
+                try:
+                    await self._cleanup_client(client)
+                except Exception as cleanup_err:
+                    logger.warning(
+                        f"[{self.display_name}] MCP Client 清理时出错: {cleanup_err}"
+                    )
+
+    @staticmethod
+    async def _cleanup_client(client: MultiServerMCPClient):
+        """清理 MCP Client 创建的子进程和连接"""
+        # 尝试关闭所有 session
+        if hasattr(client, '_sessions'):
+            for name, session in client._sessions.items():
+                try:
+                    if hasattr(session, 'close'):
+                        await session.close()
+                except Exception:
+                    pass
+        if hasattr(client, '_cleanup'):
+            try:
+                await client._cleanup()
+            except Exception:
+                pass
 
     def __repr__(self):
         return (

@@ -8,10 +8,15 @@ load_dotenv()
 # ========================
 # LLM 配置
 # ========================
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5.2-codex")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5.2")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", None)  # 支持第三方中转 API
+
+# LLM 健壮性配置
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "60"))          # 单次 LLM 调用超时(秒)
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))   # LLM 调用最大重试次数
+GATEWAY_TIMEOUT = int(os.getenv("GATEWAY_TIMEOUT", "120"))  # 单个 Gateway 执行超时(秒)
 
 # ========================
 # Gateway → Agent 映射

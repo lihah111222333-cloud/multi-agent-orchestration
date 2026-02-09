@@ -6,33 +6,33 @@
 3. aggregator: 汇总所有 Gateway 的结果，生成最终输出
 """
 
-import asyncio
 import logging
 import operator
+import traceback
 from typing import Annotated, TypedDict
 
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 
 from gateways.gateway import Gateway
-from config.settings import GATEWAY_AGENT_MAP, LLM_MODEL, LLM_TEMPERATURE, OPENAI_BASE_URL
+from config.settings import (
+    GATEWAY_AGENT_MAP, LLM_MODEL, LLM_TEMPERATURE,
+    OPENAI_BASE_URL, LLM_TIMEOUT, LLM_MAX_RETRIES,
+)
+from utils import extract_text
 
 logger = logging.getLogger(__name__)
 
 
-def _extract_text(content) -> str:
-    """从 LLM 响应中提取文本（兼容 list / str 格式）"""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        texts = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                texts.append(item["text"])
-            elif isinstance(item, str):
-                texts.append(item)
-        return "\n".join(texts) if texts else str(content)
-    return str(content)
+def _create_llm() -> ChatOpenAI:
+    """创建带重试和超时的 LLM 实例"""
+    return ChatOpenAI(
+        model=LLM_MODEL,
+        temperature=LLM_TEMPERATURE,
+        base_url=OPENAI_BASE_URL,
+        max_retries=LLM_MAX_RETRIES,
+        request_timeout=LLM_TIMEOUT,
+    )
 
 
 # ========================
@@ -74,13 +74,15 @@ async def dispatcher(state: MasterState) -> dict:
     - Gateway 1: 数据分析相关
     - Gateway 2: 内容生成相关
     - Gateway 3: 系统运维相关
+
+    如果 LLM 返回格式不规范，则将原始任务分配给所有 Gateway（降级策略）。
     """
     task = state["task"]
     logger.info(f"[Master] 收到任务: {task}")
 
-    # 使用 LLM 拆分任务
-    llm = ChatOpenAI(model=LLM_MODEL, temperature=LLM_TEMPERATURE, base_url=OPENAI_BASE_URL)
-    prompt = f"""你是一个任务分配器。将以下任务拆分为 3 个子任务：
+    try:
+        llm = _create_llm()
+        prompt = f"""你是一个任务分配器。将以下任务拆分为 3 个子任务：
 
 任务: {task}
 
@@ -89,18 +91,40 @@ async def dispatcher(state: MasterState) -> dict:
 2. 内容生成团队（文本生成、翻译、代码生成、报告）
 3. 系统运维团队（监控、日志、部署、告警）
 
-格式（每行一个子任务，用 | 分隔）:
+格式（严格用 | 分隔，不要有编号，只输出一行）:
 数据分析子任务 | 内容生成子任务 | 系统运维子任务"""
 
-    response = await llm.ainvoke(prompt)
-    text = _extract_text(response.content)
-    parts = text.split("|")
+        response = await llm.ainvoke(prompt)
+        text = extract_text(response.content)
+        parts = text.split("|")
 
-    assignments = {
-        "gateway_1": parts[0].strip() if len(parts) > 0 else task,
-        "gateway_2": parts[1].strip() if len(parts) > 1 else task,
-        "gateway_3": parts[2].strip() if len(parts) > 2 else task,
-    }
+        if len(parts) >= 3:
+            assignments = {
+                "gateway_1": parts[0].strip(),
+                "gateway_2": parts[1].strip(),
+                "gateway_3": parts[2].strip(),
+            }
+        else:
+            # 降级：LLM 返回格式不符，将原始任务发给所有 Gateway
+            logger.warning(
+                f"[Master] LLM 返回格式不规范（期望 3 段，实际 {len(parts)} 段），"
+                f"降级为全量分配。原始响应: {text[:200]}"
+            )
+            assignments = {
+                "gateway_1": task,
+                "gateway_2": task,
+                "gateway_3": task,
+            }
+
+    except Exception as e:
+        # 降级：LLM 调用失败，将原始任务发给所有 Gateway
+        logger.error(f"[Master] Dispatcher LLM 调用失败: {e}")
+        logger.debug(traceback.format_exc())
+        assignments = {
+            "gateway_1": task,
+            "gateway_2": task,
+            "gateway_3": task,
+        }
 
     logger.info(f"[Master] 任务分配完成: {assignments}")
     return {"gateway_assignments": assignments}
@@ -136,9 +160,9 @@ async def aggregator(state: MasterState) -> dict:
         for r in state["results"]
     )
 
-    # 使用 LLM 生成综合摘要
-    llm = ChatOpenAI(model=LLM_MODEL, temperature=LLM_TEMPERATURE, base_url=OPENAI_BASE_URL)
-    prompt = f"""请将以下多个团队的执行结果整合为一份简洁的综合报告：
+    try:
+        llm = _create_llm()
+        prompt = f"""请将以下多个团队的执行结果整合为一份简洁的综合报告：
 
 {results_text}
 
@@ -147,8 +171,15 @@ async def aggregator(state: MasterState) -> dict:
 2. 指出各团队的核心发现
 3. 给出综合建议"""
 
-    response = await llm.ainvoke(prompt)
-    final = f"# 综合报告\n\n{_extract_text(response.content)}\n\n---\n\n## 详细结果\n\n{results_text}"
+        response = await llm.ainvoke(prompt)
+        summary = extract_text(response.content)
+        final = f"# 综合报告\n\n{summary}\n\n---\n\n## 详细结果\n\n{results_text}"
+
+    except Exception as e:
+        # 降级：LLM 汇总失败，直接返回原始结果
+        logger.error(f"[Master] Aggregator LLM 调用失败: {e}")
+        logger.debug(traceback.format_exc())
+        final = f"# 综合报告（LLM 汇总失败，展示原始结果）\n\n{results_text}"
 
     logger.info("[Master] 聚合完成")
     return {"final_answer": final}

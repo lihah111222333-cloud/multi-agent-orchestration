@@ -15,9 +15,24 @@ from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 
 from gateways.gateway import Gateway
-from config.settings import GATEWAY_AGENT_MAP, LLM_MODEL, LLM_TEMPERATURE
+from config.settings import GATEWAY_AGENT_MAP, LLM_MODEL, LLM_TEMPERATURE, OPENAI_BASE_URL
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_text(content) -> str:
+    """从 LLM 响应中提取文本（兼容 list / str 格式）"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                texts.append(item["text"])
+            elif isinstance(item, str):
+                texts.append(item)
+        return "\n".join(texts) if texts else str(content)
+    return str(content)
 
 
 # ========================
@@ -64,7 +79,7 @@ async def dispatcher(state: MasterState) -> dict:
     logger.info(f"[Master] 收到任务: {task}")
 
     # 使用 LLM 拆分任务
-    llm = ChatOpenAI(model=LLM_MODEL, temperature=LLM_TEMPERATURE)
+    llm = ChatOpenAI(model=LLM_MODEL, temperature=LLM_TEMPERATURE, base_url=OPENAI_BASE_URL)
     prompt = f"""你是一个任务分配器。将以下任务拆分为 3 个子任务：
 
 任务: {task}
@@ -78,7 +93,8 @@ async def dispatcher(state: MasterState) -> dict:
 数据分析子任务 | 内容生成子任务 | 系统运维子任务"""
 
     response = await llm.ainvoke(prompt)
-    parts = response.content.split("|")
+    text = _extract_text(response.content)
+    parts = text.split("|")
 
     assignments = {
         "gateway_1": parts[0].strip() if len(parts) > 0 else task,
@@ -121,7 +137,7 @@ async def aggregator(state: MasterState) -> dict:
     )
 
     # 使用 LLM 生成综合摘要
-    llm = ChatOpenAI(model=LLM_MODEL, temperature=LLM_TEMPERATURE)
+    llm = ChatOpenAI(model=LLM_MODEL, temperature=LLM_TEMPERATURE, base_url=OPENAI_BASE_URL)
     prompt = f"""请将以下多个团队的执行结果整合为一份简洁的综合报告：
 
 {results_text}
@@ -132,7 +148,7 @@ async def aggregator(state: MasterState) -> dict:
 3. 给出综合建议"""
 
     response = await llm.ainvoke(prompt)
-    final = f"# 综合报告\n\n{response.content}\n\n---\n\n## 详细结果\n\n{results_text}"
+    final = f"# 综合报告\n\n{_extract_text(response.content)}\n\n---\n\n## 详细结果\n\n{results_text}"
 
     logger.info("[Master] 聚合完成")
     return {"final_answer": final}

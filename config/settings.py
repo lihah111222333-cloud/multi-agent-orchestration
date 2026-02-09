@@ -8,9 +8,10 @@ load_dotenv()
 # ========================
 # LLM 配置
 # ========================
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5.2-codex")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", None)  # 支持第三方中转 API
 
 # ========================
 # Gateway → Agent 映射

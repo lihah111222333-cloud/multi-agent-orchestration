@@ -13,7 +13,7 @@ def create_agent_server(name: str, description: str = "") -> FastMCP:
     Returns:
         FastMCP 实例，可以在其上注册 tools
     """
-    server = FastMCP(name, description=description)
+    server = FastMCP(name, instructions=description)
     return server
 
 

@@ -13,6 +13,7 @@ __all__ = [
 
 import json
 import os
+import re
 import shlex
 import subprocess
 from datetime import datetime
@@ -34,6 +35,26 @@ MAX_TIMEOUT_SEC = 3600
 DEFAULT_OUTPUT_LIMIT = 20000
 MIN_OUTPUT_LIMIT = 200
 MAX_OUTPUT_LIMIT = 200000
+
+_DANGEROUS_COMMAND_PATTERNS = (
+    re.compile(r"(?:^|[;&|()\s])rm\s+-rf(?:\s|$)", re.IGNORECASE),
+    re.compile(r"(?:^|[;&|()\s])shutdown(?:\s|$)", re.IGNORECASE),
+    re.compile(r"(?:^|[;&|()\s])reboot(?:\s|$)", re.IGNORECASE),
+    re.compile(r"curl[^\n|]*\|\s*(?:bash|sh)(?:\s|$)", re.IGNORECASE),
+    re.compile(r"wget[^\n|]*\|\s*(?:bash|sh)(?:\s|$)", re.IGNORECASE),
+)
+
+
+def _detect_dangerous_pattern(command: str) -> str:
+    text = str(command or "").strip()
+    if not text:
+        return ""
+
+    for pattern in _DANGEROUS_COMMAND_PATTERNS:
+        if pattern.search(text):
+            return pattern.pattern
+
+    return ""
 
 
 def _require_row(row: Optional[dict[str, Any]], action: str) -> dict[str, Any]:
@@ -221,7 +242,13 @@ def prepare_command_card_run(
         return {"ok": False, "message": str(exc)}
 
     risk_level = str(card.get("risk_level", "normal")).strip().lower() or "normal"
-    needs_review = bool(require_review) if require_review is not None else risk_level in APPROVAL_REQUIRED_RISKS
+    dangerous_pattern = _detect_dangerous_pattern(rendered)
+
+    if require_review is not None:
+        needs_review = bool(require_review)
+    else:
+        needs_review = (risk_level in APPROVAL_REQUIRED_RISKS) or bool(dangerous_pattern)
+
     status = "pending_review" if needs_review else "ready"
 
     row = fetch_one(
@@ -259,7 +286,12 @@ def prepare_command_card_run(
             thread_id=f"cmdrun:{run['id']}",
             parent_id=None,
             requires_review=True,
-            metadata={"run_id": run["id"], "card_key": key, "risk_level": risk_level},
+            metadata={
+                "run_id": run["id"],
+                "card_key": key,
+                "risk_level": risk_level,
+                "dangerous_pattern": dangerous_pattern,
+            },
             status="pending",
         )
         execute(
@@ -275,12 +307,18 @@ def prepare_command_card_run(
         actor=str(requested_by or "agent"),
         target=key,
         detail=f"run_id={run['id']}",
-        extra={"risk_level": risk_level, "requires_review": needs_review},
+        extra={
+            "risk_level": risk_level,
+            "requires_review": needs_review,
+            "dangerous_pattern": dangerous_pattern,
+        },
     )
 
     return {
         "ok": True,
         "needs_review": needs_review,
+        "dangerous_command": bool(dangerous_pattern),
+        "dangerous_pattern": dangerous_pattern,
         "run": run,
         "interaction": interaction,
     }
@@ -472,6 +510,16 @@ def execute_command_card(
         }
 
     if prepared.get("needs_review") and auto_approve:
+        dangerous_command = bool(prepared.get("dangerous_command"))
+        if dangerous_command:
+            return {
+                "ok": True,
+                "pending_review": True,
+                "run": run,
+                "interaction": prepared.get("interaction"),
+                "message": "检测到危险命令模式，禁止自动审批，需人工审批",
+                "execution_mode": execution_mode,
+            }
         if risk_level not in AUTO_APPROVE_ALLOWED_RISKS:
             return {
                 "ok": True,

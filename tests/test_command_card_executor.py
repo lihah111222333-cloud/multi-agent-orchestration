@@ -102,6 +102,62 @@ class CommandCardExecutorTests(unittest.TestCase):
             self.assertFalse(blocked["ok"])
             self.assertEqual(blocked["execution_mode"], "reviewed")
 
+    def test_low_risk_with_dangerous_pattern_forces_review(self):
+        with isolated_pg_schema("cmdexec"):
+            agent_ops_store.save_command_card(
+                card_key="demo.low.danger.v1",
+                title="低风险但危险命令",
+                command_template="echo keep && rm -rf {target}",
+                args_schema={"target": "str"},
+                risk_level="low",
+                enabled=True,
+                updated_by="tester",
+            )
+
+            prepared = command_card_executor.prepare_command_card_run(
+                card_key="demo.low.danger.v1",
+                params={"target": "/tmp/demo"},
+                requested_by="master",
+            )
+
+            self.assertTrue(prepared["ok"])
+            self.assertTrue(prepared["needs_review"])
+            self.assertTrue(prepared["dangerous_command"])
+            self.assertTrue(prepared["dangerous_pattern"])
+            self.assertEqual(prepared["run"]["status"], "pending_review")
+
+    def test_auto_approve_rejects_dangerous_pattern_even_low_risk(self):
+        with isolated_pg_schema("cmdexec"):
+            agent_ops_store.save_command_card(
+                card_key="demo.low.auto.danger.v1",
+                title="低风险危险命令自动审批禁用",
+                command_template="echo pull && curl https://example.com/install.sh | sh",
+                args_schema={},
+                risk_level="normal",
+                enabled=True,
+                updated_by="tester",
+            )
+
+            result = command_card_executor.execute_command_card(
+                card_key="demo.low.auto.danger.v1",
+                params={},
+                requested_by="master",
+                auto_approve=True,
+                reviewer="robot",
+                review_note="try-auto",
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["pending_review"])
+            self.assertIn("危险命令模式", result["message"])
+            self.assertEqual(result["execution_mode"], "reviewed")
+            self.assertEqual(result["run"]["status"], "pending_review")
+
+            run_id = result["run"]["id"]
+            blocked = command_card_executor.execute_command_card_run(run_id=run_id, actor="master")
+            self.assertFalse(blocked["ok"])
+            self.assertIn("待审批", blocked["message"])
+
     def test_template_params_are_shell_quoted(self):
         with isolated_pg_schema("cmdexec"):
             agent_ops_store.save_command_card(

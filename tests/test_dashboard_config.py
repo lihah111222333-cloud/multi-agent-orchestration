@@ -8,6 +8,7 @@ from unittest.mock import patch
 from urllib import error, request
 
 import dashboard
+import topology_approval
 
 
 class DashboardConfigTests(unittest.TestCase):
@@ -133,7 +134,7 @@ class DashboardApiValidationTests(unittest.TestCase):
             with patch.object(dashboard, "approve_approval") as approve_mock:
                 code, payload = request_json(
                     base_url,
-                    "/api/topology/approvals/abcdef1234567890/approve",
+                    "/api/topology/approvals/abcdef1234/approve",
                     method="POST",
                     payload={},
                 )
@@ -143,20 +144,23 @@ class DashboardApiValidationTests(unittest.TestCase):
         self.assertIn("invalid approval id", payload.get("error", ""))
         approve_mock.assert_not_called()
 
-    def test_api_topology_approvals_accepts_10_hex_id(self):
+    def test_api_topology_approvals_accepts_16_hex_id(self):
         with run_dashboard_server() as base_url:
             with patch.object(dashboard, "approve_approval", return_value={"ok": True}) as approve_mock:
                 with patch.object(dashboard, "_publish_dashboard_event"):
                     code, payload = request_json(
                         base_url,
-                        "/api/topology/approvals/abcdef1234/approve",
+                        "/api/topology/approvals/abcdef1234567890/approve",
                         method="POST",
                         payload={},
                     )
 
         self.assertEqual(code, 200)
         self.assertTrue(payload["ok"])
-        approve_mock.assert_called_once_with(approval_id="abcdef1234", reviewer="dashboard")
+        approve_mock.assert_called_once_with(approval_id="abcdef1234567890", reviewer="dashboard")
+
+    def test_dashboard_uses_topology_approval_id_validator(self):
+        self.assertIs(dashboard.is_valid_approval_id, topology_approval.is_valid_approval_id)
 
 
 if __name__ == "__main__":

@@ -149,6 +149,27 @@ class AgentOpsStoreTests(unittest.TestCase):
             execute_mock.assert_called_once_with("UPDATE prompt_templates SET enabled = TRUE WHERE 1 = 0")
             append_mock.assert_called_once()
 
+    def test_db_execute_rejects_non_whitelisted_table(self):
+        with isolated_pg_schema("ops"):
+            with patch.dict("os.environ", {"AGENT_DB_EXECUTE_ENABLED": "1"}, clear=False):
+                with self.assertRaises(ValueError):
+                    agent_ops_store.db_execute("UPDATE users SET active = TRUE WHERE id = 1")
+
+    def test_db_execute_allows_whitelisted_command_card_runs(self):
+        with isolated_pg_schema("ops"):
+            with ExitStack() as stack:
+                stack.enter_context(patch.dict("os.environ", {"AGENT_DB_EXECUTE_ENABLED": "1"}, clear=False))
+                execute_mock = stack.enter_context(patch("agent_ops_store.execute", return_value=0))
+                append_mock = stack.enter_context(patch("agent_ops_store.append_event"))
+                result = agent_ops_store.db_execute(
+                    "UPDATE command_card_runs SET status = 'done' WHERE 1 = 0"
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["rowcount"], 0)
+            execute_mock.assert_called_once_with("UPDATE command_card_runs SET status = 'done' WHERE 1 = 0")
+            append_mock.assert_called_once()
+
     def test_command_card_crud(self):
         with isolated_pg_schema("ops"):
             saved = agent_ops_store.save_command_card(

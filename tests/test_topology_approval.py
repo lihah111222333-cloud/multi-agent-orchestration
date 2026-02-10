@@ -16,6 +16,11 @@ import topology_approval as approval
 
 
 class TopologyApprovalTests(unittest.TestCase):
+    def test_approval_id_rule_is_hex_16(self):
+        self.assertTrue(approval.is_valid_approval_id("abcdef1234567890"))
+        self.assertFalse(approval.is_valid_approval_id("abcdef1234"))
+        self.assertFalse(approval.is_valid_approval_id("ABCDEF1234567890"))
+
     def test_create_and_approve_flow(self):
         with isolated_pg_schema("approval"):
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -63,6 +68,7 @@ class TopologyApprovalTests(unittest.TestCase):
                     created = approval.create_approval(proposed, requested_by="master", reason="test")
                     self.assertTrue(created["ok"])
                     req_id = created["request"]["id"]
+                    self.assertRegex(req_id, r"^[a-f0-9]{16}$")
 
                     pending = approval.list_approvals(status="pending", limit=10)
                     self.assertEqual(len(pending), 1)

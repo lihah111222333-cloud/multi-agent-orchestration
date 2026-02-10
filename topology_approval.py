@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,6 +24,8 @@ from db.postgres import connect_cursor, execute, fetch_all, fetch_one
 from utils import normalize_limit
 
 __all__ = [
+    "APPROVAL_ID_HEX_LEN",
+    "is_valid_approval_id",
     "list_approvals",
     "get_approval",
     "create_approval",
@@ -38,11 +41,16 @@ MIN_TTL_SEC = 30
 DEFAULT_ARCHIVE_DAYS = 30
 MIN_ARCHIVE_DAYS = 1
 APPROVAL_ID_HEX_LEN = 16
+APPROVAL_ID_RE = re.compile(rf"^[a-f0-9]{{{APPROVAL_ID_HEX_LEN}}}$")
 APPROVAL_EXPIRE_NOTE = "审批超时自动过期"
 APPROVAL_EXPIRE_ACTOR = "system"
 
 
 
+
+
+def is_valid_approval_id(value: str) -> bool:
+    return APPROVAL_ID_RE.fullmatch(str(value or "")) is not None
 
 
 def _now() -> datetime:

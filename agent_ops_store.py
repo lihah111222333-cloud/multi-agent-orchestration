@@ -31,6 +31,16 @@ _ALLOWED_EXEC_KEYWORDS = {
     "merge",
     "with",
 }
+_DB_EXECUTE_ALLOWED_TABLES = {
+    "agent_interactions",
+    "prompt_templates",
+    "command_cards",
+    "command_card_runs",
+}
+_DML_TARGET_TABLE_RE = re.compile(
+    r"\b(?:insert\s+into|update|delete\s+from|merge\s+into)\s+([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\b",
+    re.IGNORECASE,
+)
 
 
 class RowMissingError(RuntimeError):
@@ -96,6 +106,18 @@ def _validate_execute_query(query: str) -> str:
 
     if first == "with" and not _SQL_DML_KEYWORD_RE.search(sanitized):
         raise ValueError("db_execute 的 WITH 语句必须包含 INSERT/UPDATE/DELETE/MERGE")
+
+    dml_tables = {
+        str(match.group(1) or "").strip().lower().split(".")[-1]
+        for match in _DML_TARGET_TABLE_RE.finditer(sanitized)
+        if str(match.group(1) or "").strip()
+    }
+    if not dml_tables:
+        raise ValueError("db_execute 未检测到 DML 目标表")
+
+    blocked_tables = sorted(table for table in dml_tables if table not in _DB_EXECUTE_ALLOWED_TABLES)
+    if blocked_tables:
+        raise ValueError(f"db_execute 禁止操作非白名单表: {', '.join(blocked_tables)}")
 
     return body
 

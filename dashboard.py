@@ -23,7 +23,7 @@ from dotenv import load_dotenv, set_key
 from audit_log import append_event, query_events, list_filter_values as list_audit_filter_values
 from db.postgres import fetch_one
 from system_log import query_logs as query_system_logs, list_filter_values as list_system_filter_values
-from topology_approval import approve_approval, list_approvals, reject_approval
+from topology_approval import approve_approval, is_valid_approval_id, list_approvals, reject_approval
 
 ENV_FILE = Path(__file__).parent / ".env"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -101,7 +101,6 @@ CONFIG_SELECT_OPTIONS = {
     for item in group.get("items", [])
     if item.get("type") == "select"
 }
-APPROVAL_ID_RE = re.compile(r"^[a-f0-9]{10}$")
 
 
 class DashboardEventBus:
@@ -994,7 +993,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             parts = path.strip("/").split("/")
             if len(parts) == 5:
                 _, _, _, approval_id, action = parts
-                if not APPROVAL_ID_RE.fullmatch(approval_id):
+                if not is_valid_approval_id(approval_id):
                     self._respond(400, "application/json", b'{"ok":false,"error":"invalid approval id"}')
                     return
                 if action == "approve":

@@ -112,28 +112,35 @@ class ItermBridgeTests(unittest.TestCase):
             }
         ]
 
-        with mock.patch("agents.iterm_bridge._build_agent_sessions", side_effect=[[stale_session], [rebound_session]]):
-            with mock.patch("agents.iterm_bridge._resolve_targets", side_effect=[[stale_session], [rebound_session]]):
+        def build_sessions_side_effect(current_state):
+            sid = str(current_state.get("agents", [{}])[0].get("session_id", ""))
+            if sid == "OLD-SID":
+                return [stale_session]
+            return [rebound_session]
+
+        with mock.patch("agents.iterm_bridge._build_agent_sessions", side_effect=build_sessions_side_effect):
+            with mock.patch("agents.iterm_bridge._resolve_targets", side_effect=lambda rows, _ids, all_agents: rows):
                 with mock.patch("agents.iterm_bridge._run_iterm_io", side_effect=[first_rows, second_rows]) as run_io:
-                    with mock.patch(
-                        "agents.iterm_bridge._rebind_state_sessions",
-                        return_value={
-                            "state": rebound_state,
-                            "rebound": True,
-                            "rebound_count": 1,
-                            "reason": "rebound_applied",
-                        },
-                    ) as rebind:
-                        result = bridge._run_direct_with_optional_rebind(
-                            state_path=state_path,
-                            state=stale_state,
-                            target_agent_ids=[],
-                            all_agents=True,
-                            text="hello",
-                            append_enter=True,
-                            wait_sec=0.3,
-                            read_lines=10,
-                        )
+                    with mock.patch("agents.iterm_bridge._list_live_session_ids", return_value=("window-1", ["OLD-SID"])):
+                        with mock.patch(
+                            "agents.iterm_bridge._rebind_state_sessions",
+                            return_value={
+                                "state": rebound_state,
+                                "rebound": True,
+                                "rebound_count": 1,
+                                "reason": "rebound_applied",
+                            },
+                        ) as rebind:
+                            result = bridge._run_direct_with_optional_rebind(
+                                state_path=state_path,
+                                state=stale_state,
+                                target_agent_ids=[],
+                                all_agents=True,
+                                text="hello",
+                                append_enter=True,
+                                wait_sec=0.3,
+                                read_lines=10,
+                            )
 
         self.assertEqual(run_io.call_count, 2)
         rebind.assert_called_once_with(state_path, stale_state)
@@ -303,6 +310,129 @@ class ItermBridgeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         env = run_cmd.call_args.kwargs["env"]
         self.assertEqual(env.get("ITERM_IO_BRIDGE_DIRECT"), "1")
+
+    def test_list_rebinds_and_fills_missing_agents(self):
+        stale_state = {
+            "window_id": "window-old",
+            "count": 2,
+            "tab_count": 2,
+            "agents": [],
+            "session_ids": [],
+        }
+        rebound_state = {
+            "window_id": "window-new",
+            "count": 2,
+            "tab_count": 2,
+            "agents": [
+                {
+                    "index": 1,
+                    "agent_id": "agent_01",
+                    "agent_name": "Runtime Agent 01",
+                    "session_id": "SID-01",
+                },
+                {
+                    "index": 2,
+                    "agent_id": "agent_02",
+                    "agent_name": "Runtime Agent 02",
+                    "session_id": "SID-02",
+                },
+            ],
+            "session_ids": ["SID-01", "SID-02"],
+        }
+
+        with mock.patch("agents.iterm_bridge._normalize_state_file", return_value=Path("/tmp/state.json")):
+            with mock.patch("agents.iterm_bridge._load_state", return_value=stale_state):
+                with mock.patch(
+                    "agents.iterm_bridge._refresh_state_via_rebind",
+                    return_value=(rebound_state, True, 2, ""),
+                ):
+                    result = bridge.list_iterm_agent_sessions()
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["state_rebound"])
+        self.assertEqual(result["rebound_count"], 2)
+        self.assertEqual(result["tab_count"], 2)
+        self.assertEqual(len(result["sessions"]), 2)
+        self.assertEqual(result["sessions"][0]["session_id"], "SID-01")
+
+    def test_send_precheck_rebind_before_iterm_io(self):
+        stale_state = {
+            "window_id": "window-old",
+            "agents": [
+                {
+                    "index": 1,
+                    "agent_id": "agent_01",
+                    "agent_name": "Agent 01",
+                    "session_id": "OLD-SID",
+                }
+            ],
+            "session_ids": ["OLD-SID"],
+        }
+        rebound_state = {
+            "window_id": "window-old",
+            "agents": [
+                {
+                    "index": 1,
+                    "agent_id": "agent_01",
+                    "agent_name": "Agent 01",
+                    "session_id": "NEW-SID",
+                }
+            ],
+            "session_ids": ["NEW-SID"],
+        }
+
+        stale_session = bridge.AgentSession(index=1, agent_id="agent_01", agent_name="Agent 01", session_id="OLD-SID")
+        rebound_session = bridge.AgentSession(index=1, agent_id="agent_01", agent_name="Agent 01", session_id="NEW-SID")
+        rows = [
+            {
+                "agent_id": "agent_01",
+                "agent_name": "Agent 01",
+                "session_id": "NEW-SID",
+                "sent": True,
+                "read": True,
+                "output": ["ok"],
+                "error": "",
+            }
+        ]
+
+        with mock.patch("agents.iterm_bridge._build_agent_sessions", side_effect=[[stale_session], [rebound_session]]):
+            with mock.patch("agents.iterm_bridge._resolve_targets", side_effect=[[stale_session], [rebound_session]]):
+                with mock.patch("agents.iterm_bridge._list_live_session_ids", return_value=("window-old", ["NEW-SID"])):
+                    with mock.patch(
+                        "agents.iterm_bridge._refresh_state_via_rebind",
+                        return_value=(rebound_state, True, 1, ""),
+                    ) as refresh:
+                        with mock.patch("agents.iterm_bridge._run_iterm_io", return_value=rows) as run_io:
+                            result = bridge._run_direct_with_optional_rebind(
+                                state_path=Path("/tmp/state.json"),
+                                state=stale_state,
+                                target_agent_ids=["agent_01"],
+                                all_agents=False,
+                                text="pwd",
+                                append_enter=True,
+                                wait_sec=0.0,
+                                read_lines=5,
+                            )
+
+        self.assertTrue(result["state_rebound"])
+        self.assertEqual(result["rebound_count"], 1)
+        self.assertEqual(result["targets"][0].session_id, "NEW-SID")
+        self.assertEqual(result["rows"], rows)
+        refresh.assert_called_once()
+        run_io.assert_called_once()
+
+    def test_save_state_is_atomic_replace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "iterm_launch_state.json"
+            payload = {"ok": True, "items": [1, 2, 3]}
+
+            with mock.patch("agents.iterm_bridge.os.replace") as replace_mock:
+                bridge._save_state(state_path, payload)
+
+            replace_mock.assert_called_once()
+            src, dst = replace_mock.call_args.args
+            self.assertTrue(str(src).endswith(".tmp-" + str(os.getpid())))
+            self.assertEqual(Path(dst), state_path)
 
 
 if __name__ == "__main__":

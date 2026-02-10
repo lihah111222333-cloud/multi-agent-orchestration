@@ -368,74 +368,78 @@ def _list_live_sessions(window_id: str = "") -> tuple[str, list[dict[str, str]]]
         app = await iterm2.async_get_app(connection)
         windows = list(getattr(app, "terminal_windows", []) or [])
 
-        target_window = None
+        # Determine which windows to scan
         normalized_window_id = str(window_id or "").strip()
         if normalized_window_id:
+            # Specific window requested — original single-window behavior
+            target_windows = []
             for window in windows:
                 if str(getattr(window, "window_id", "") or "") == normalized_window_id:
-                    target_window = window
+                    target_windows = [window]
                     break
+            if not target_windows:
+                return
+        else:
+            # No window specified — scan ALL windows
+            target_windows = windows
 
-        if target_window is None:
-            target_window = getattr(app, "current_terminal_window", None)
-        if target_window is None and windows:
-            target_window = windows[0]
-        if target_window is None:
+        if not target_windows:
             return
 
-        selected_window_id = str(getattr(target_window, "window_id", "") or "")
+        selected_window_id = str(getattr(target_windows[0], "window_id", "") or "")
 
         seen: set[str] = set()
-        for tab in list(getattr(target_window, "tabs", []) or []):
-            for session in _iter_tab_sessions(tab):
-                session_id = str(getattr(session, "session_id", "") or "").strip()
-                if not session_id or session_id in seen:
-                    continue
-                seen.add(session_id)
+        for target_window in target_windows:
+            for tab in list(getattr(target_window, "tabs", []) or []):
+                for session in _iter_tab_sessions(tab):
+                    session_id = str(getattr(session, "session_id", "") or "").strip()
+                    if not session_id or session_id in seen:
+                        continue
+                    seen.add(session_id)
 
-                badge = ""
-                agent_id = ""
-                agent_name = ""
-                agent_label = ""
-                get_variable = getattr(session, "async_get_variable", None)
-                if get_variable is not None:
-                    try:
-                        badge_value = await get_variable("user.badge")
-                        badge = str(badge_value or "").strip()
-                    except Exception:
-                        badge = ""
+                    badge = ""
+                    agent_id = ""
+                    agent_name = ""
+                    agent_label = ""
+                    get_variable = getattr(session, "async_get_variable", None)
+                    if get_variable is not None:
+                        try:
+                            badge_value = await get_variable("user.badge")
+                            badge = str(badge_value or "").strip()
+                        except Exception:
+                            badge = ""
 
-                    try:
-                        agent_id_value = await get_variable("user.agent_id")
-                        agent_id = str(agent_id_value or "").strip()
-                    except Exception:
-                        agent_id = ""
+                        try:
+                            agent_id_value = await get_variable("user.agent_id")
+                            agent_id = str(agent_id_value or "").strip()
+                        except Exception:
+                            agent_id = ""
 
-                    try:
-                        agent_name_value = await get_variable("user.agent_name")
-                        agent_name = str(agent_name_value or "").strip()
-                    except Exception:
-                        agent_name = ""
+                        try:
+                            agent_name_value = await get_variable("user.agent_name")
+                            agent_name = str(agent_name_value or "").strip()
+                        except Exception:
+                            agent_name = ""
 
-                    try:
-                        agent_label_value = await get_variable("user.agent_label")
-                        agent_label = str(agent_label_value or "").strip()
-                    except Exception:
-                        agent_label = ""
+                        try:
+                            agent_label_value = await get_variable("user.agent_label")
+                            agent_label = str(agent_label_value or "").strip()
+                        except Exception:
+                            agent_label = ""
 
-                session_name = str(getattr(session, "name", "") or "").strip()
-                resolved_name = agent_label or agent_name or session_name
-                sessions.append(
-                    {
-                        "session_id": session_id,
-                        "badge": badge,
-                        "agent_id": agent_id,
-                        "agent_name": agent_name,
-                        "agent_label": agent_label,
-                        "name": resolved_name,
-                        "session_name": session_name,
-                    }
-                )
+                    session_name = str(getattr(session, "name", "") or "").strip()
+                    resolved_name = agent_label or agent_name or session_name
+                    sessions.append(
+                        {
+                            "session_id": session_id,
+                            "badge": badge,
+                            "agent_id": agent_id,
+                            "agent_name": agent_name,
+                            "agent_label": agent_label,
+                            "name": resolved_name,
+                            "session_name": session_name,
+                        }
+                    )
 
     iterm2.run_until_complete(main)
     return selected_window_id, sessions
@@ -941,3 +945,147 @@ def read_iterm_output(
             "action": "read",
             "error": str(e),
         }
+
+
+# ── Terminal Live Viewer APIs ──────────────────────────────────────────
+
+import threading
+import asyncio
+import time
+
+_active_streamers: dict[str, dict] = {}  # session_id -> {"thread", "stop_event", "loop"}
+_streamer_lock = threading.Lock()
+
+
+def read_session_screen(session_id: str, lines: int = 60) -> dict[str, Any]:
+    """One-shot read of a session's screen contents."""
+    import iterm2
+
+    result: dict[str, Any] = {"ok": False, "session_id": session_id, "lines": []}
+
+    async def main(connection):
+        app = await iterm2.async_get_app(connection)
+        session = app.get_session_by_id(session_id)
+        if session is None:
+            result["error"] = "session not found"
+            return
+        output = await _read_tail_lines(session, lines)
+        result["ok"] = True
+        result["lines"] = output
+        result["ts"] = _now_iso()
+
+    try:
+        iterm2.run_until_complete(main)
+    except Exception as e:
+        result["error"] = str(e)
+    return result
+
+
+def send_to_session(session_id: str, text: str) -> dict[str, Any]:
+    """Send text (command) to a specific iTerm session."""
+    import iterm2
+
+    result: dict[str, Any] = {"ok": False, "session_id": session_id}
+
+    async def main(connection):
+        app = await iterm2.async_get_app(connection)
+        session = app.get_session_by_id(session_id)
+        if session is None:
+            result["error"] = "session not found"
+            return
+        await session.async_send_text(text)
+        result["ok"] = True
+        result["ts"] = _now_iso()
+
+    try:
+        iterm2.run_until_complete(main)
+    except Exception as e:
+        result["error"] = str(e)
+    return result
+
+
+def start_session_streamer(session_id: str, publish_fn=None) -> dict[str, Any]:
+    """Start a ScreenStreamer for a session. Pushes output via publish_fn(event_type, payload).
+    Returns immediately; streaming runs in background thread.
+    """
+    with _streamer_lock:
+        if session_id in _active_streamers:
+            return {"ok": True, "session_id": session_id, "status": "already_running"}
+
+    stop_event = threading.Event()
+
+    def _streamer_thread():
+        import iterm2
+
+        async def main(connection):
+            app = await iterm2.async_get_app(connection)
+            session = app.get_session_by_id(session_id)
+            if session is None:
+                if publish_fn:
+                    publish_fn("terminal_output", {
+                        "session_id": session_id,
+                        "error": "session not found",
+                        "ts": _now_iso(),
+                    })
+                return
+
+            async with session.get_screen_streamer() as streamer:
+                while not stop_event.is_set():
+                    try:
+                        contents = await asyncio.wait_for(
+                            streamer.async_get(), timeout=2.0
+                        )
+                    except asyncio.TimeoutError:
+                        continue
+                    except Exception:
+                        break
+
+                    if contents is None:
+                        continue
+
+                    lines = []
+                    num = int(getattr(contents, "number_of_lines", 0) or 0)
+                    for i in range(num):
+                        try:
+                            lines.append(_sanitize_screen_line(contents.line(i).string))
+                        except Exception:
+                            continue
+
+                    if publish_fn and lines:
+                        publish_fn("terminal_output", {
+                            "session_id": session_id,
+                            "lines": lines,
+                            "ts": _now_iso(),
+                        })
+
+        try:
+            iterm2.run_until_complete(main)
+        except Exception:
+            pass
+        finally:
+            with _streamer_lock:
+                _active_streamers.pop(session_id, None)
+
+    thread = threading.Thread(target=_streamer_thread, daemon=True, name=f"streamer-{session_id}")
+    with _streamer_lock:
+        _active_streamers[session_id] = {"thread": thread, "stop_event": stop_event}
+    thread.start()
+
+    return {"ok": True, "session_id": session_id, "status": "started", "ts": _now_iso()}
+
+
+def stop_session_streamer(session_id: str) -> dict[str, Any]:
+    """Stop a running ScreenStreamer."""
+    with _streamer_lock:
+        entry = _active_streamers.pop(session_id, None)
+    if entry is None:
+        return {"ok": True, "session_id": session_id, "status": "not_running"}
+    entry["stop_event"].set()
+    entry["thread"].join(timeout=5.0)
+    return {"ok": True, "session_id": session_id, "status": "stopped", "ts": _now_iso()}
+
+
+def list_active_streamers() -> list[str]:
+    """Return list of session_ids with active streamers."""
+    with _streamer_lock:
+        return list(_active_streamers.keys())

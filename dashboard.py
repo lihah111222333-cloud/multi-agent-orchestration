@@ -25,13 +25,20 @@ from dotenv import load_dotenv, set_key
 from agent_ops_store import (
     get_prompt_template,
     save_prompt_template,
+    list_prompt_templates,
     list_prompt_template_versions,
     list_task_trace_spans,
     list_task_traces,
     rollback_prompt_template,
+    set_prompt_template_enabled,
 )
+from config.prompt_template_presets import list_common_prompt_templates
 from agent_monitor import patrol_agents_once
-from agents.iterm_bridge import list_iterm_agent_sessions, read_iterm_output
+from agents.iterm_bridge import (list_iterm_agent_sessions, read_iterm_output,
+                                  read_session_screen, send_to_session,
+                                  start_session_streamer, stop_session_streamer,
+                                  list_active_streamers,
+                                  _list_live_sessions)
 from tg_bridge import (
     start_tg_bridge, stop_tg_bridge, is_tg_bridge_running,
     get_tg_history, clear_tg_history, send_message_to_tg, get_tg_bridge_info,
@@ -76,6 +83,7 @@ CONFIG_SCHEMA = [
              "options": ["1", "0"], "desc": "是否启用 Master 自动提出拓扑变更"},
             {"key": "TOPOLOGY_APPROVAL_TTL_SEC", "label": "审批过期(秒)", "type": "number", "desc": "审批单超时自动过期"},
             {"key": "DASHBOARD_SSE_SYNC_SEC", "label": "实时同步间隔(秒)", "type": "number", "desc": "SSE 心跳同步周期"},
+            {"key": "TG_AUTO_REFRESH_SEC", "label": "TG自动刷新(秒)", "type": "number", "desc": "Telegram 页面自动刷新间隔，0=关闭"},
             {"key": "AUDIT_LOG_LIMIT", "label": "审计日志条数", "type": "number", "desc": "面板默认加载条数"},
             {"key": "SYSTEM_LOG_LIMIT", "label": "系统日志条数", "type": "number", "desc": "面板默认加载条数"},
             {"key": "AUDIT_LOG_MAX_BYTES", "label": "审计日志最大字节", "type": "number", "desc": "超过后自动轮转"},
@@ -121,6 +129,7 @@ DEFAULTS = {
     "TOPOLOGY_PROPOSAL_ENABLED": "1",
     "TOPOLOGY_APPROVAL_TTL_SEC": "120",
     "DASHBOARD_SSE_SYNC_SEC": "5",
+    "TG_AUTO_REFRESH_SEC": "60",
     "AUDIT_LOG_LIMIT": "100",
     "SYSTEM_LOG_LIMIT": "100",
     "AUDIT_LOG_MAX_BYTES": str(5 * 1024 * 1024),
@@ -532,6 +541,23 @@ def _parse_json_object(raw: Any, field_name: str) -> dict[str, Any]:
     return loaded
 
 
+def _parse_json_array(raw: Any, field_name: str) -> list[Any]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    text = str(raw).strip()
+    if not text:
+        return []
+    try:
+        loaded = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field_name} 不是合法 JSON 数组") from exc
+    if not isinstance(loaded, list):
+        raise ValueError(f"{field_name} 必须是 JSON 数组")
+    return loaded
+
+
 def _generate_default_prompt(agent_desc: str, tool_name: str, tool_desc: str, params_str: str) -> str:
     """Generate default prompt text for a tool."""
     return (f'你有一个 MCP 工具叫 "{tool_name}"。\n\n'
@@ -637,6 +663,71 @@ def _save_prompt(agent_key: str, tool_name: str, prompt_text: str) -> dict:
         "agent_key": str(agent_key or "").strip(),
         "tool_name": str(tool_name or "").strip(),
         "prompt": saved,
+    }
+
+
+def _save_prompt_template_entry(data: dict[str, Any], updated_by: str = "dashboard") -> dict[str, Any]:
+    prompt_key = str(data.get("prompt_key", "") or "").strip()
+    title = str(data.get("title", "") or "").strip()
+    prompt_text = str(data.get("prompt_text", "") or "").strip()
+    agent_key = str(data.get("agent_key", "") or "").strip()
+    tool_name = str(data.get("tool_name", "") or "").strip()
+    enabled = _safe_bool(data.get("enabled", True), default=True)
+
+    if not prompt_key:
+        raise ValueError("prompt_key 不能为空")
+    if not title:
+        raise ValueError("title 不能为空")
+    if not prompt_text:
+        raise ValueError("prompt_text 不能为空")
+
+    variables = _parse_json_object(data.get("variables", {}), "variables")
+    tags = _parse_json_array(data.get("tags", []), "tags")
+
+    return save_prompt_template(
+        prompt_key=prompt_key,
+        title=title,
+        prompt_text=prompt_text,
+        agent_key=agent_key,
+        tool_name=tool_name,
+        variables=variables,
+        tags=tags,
+        enabled=enabled,
+        updated_by=str(updated_by or "dashboard").strip() or "dashboard",
+    )
+
+
+def _seed_common_prompt_templates(overwrite: bool = False, updated_by: str = "dashboard") -> dict[str, Any]:
+    templates = list_common_prompt_templates()
+    inserted = 0
+    updated = 0
+    skipped = 0
+    saved_items: list[dict[str, Any]] = []
+
+    for item in templates:
+        prompt_key = str(item.get("prompt_key", "") or "").strip()
+        if not prompt_key:
+            continue
+
+        existing = get_prompt_template(prompt_key)
+        if existing and not overwrite:
+            skipped += 1
+            continue
+
+        saved = _save_prompt_template_entry(item, updated_by=updated_by)
+        saved_items.append(saved)
+        if existing:
+            updated += 1
+        else:
+            inserted += 1
+
+    return {
+        "ok": True,
+        "total": len(templates),
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": skipped,
+        "templates": saved_items,
     }
 
 
@@ -793,12 +884,7 @@ def render_html() -> str:
     </aside>
 
     <main class="main">
-        <div class="stats-bar">
-            <div class="stat-card"><div class="stat-label">Gateways</div><div class="stat-value green">{gateway_count}</div></div>
-            <div class="stat-card"><div class="stat-label">Agents</div><div class="stat-value blue">{agent_count}</div></div>
-            <div class="stat-card"><div class="stat-label">Model</div><div class="stat-value cyan" style="font-size:1rem">{html.escape(config.get('LLM_MODEL', ''))}</div></div>
-            <div class="stat-card"><div class="stat-label">Agent Health</div><div id="agent-health-stat" class="stat-value amber">--</div></div>
-        </div>
+
 
         <!-- Config Page -->
         <div id="page-config" class="page active">
@@ -936,13 +1022,78 @@ def render_html() -> str:
             <div class="card">
                 <header class="card-header">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-                    <h2>MCP 工具提示词</h2>
+                    <h2>提示词模板管理</h2>
                 </header>
                 <div class="card-body">
-                    <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:16px">
-                        每个 Agent 的 MCP 工具提示词。点击复制后可直接粘贴给 AI Agent，也可在线编辑后再复制。
-                    </p>
-                    <div id="prompts-list"><div class="approval-empty">加载中...</div></div>
+                    <div class="log-toolbar" style="gap:8px;flex-wrap:wrap">
+                        <input type="text" id="prompt-search" class="input" placeholder="搜索 key / 标题 / 标签 / 内容..." style="max-width:300px" oninput="loadPrompts()">
+                        <label style="display:inline-flex;align-items:center;gap:6px;color:var(--text-secondary);font-size:0.8rem">
+                            <input type="checkbox" id="prompt-enabled-only" onchange="loadPrompts()"> 仅启用
+                        </label>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="seedPromptTemplates(false)">
+                            导入常用模板
+                        </button>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="seedPromptTemplates(true)">
+                            覆盖更新模板
+                        </button>
+                        <button type="button" class="btn btn-sm btn-primary" onclick="openPromptCreatePopup()">
+                            新建模板
+                        </button>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="openPromptPastePopup()">
+                            快速粘贴
+                        </button>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="loadPrompts()">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+                            刷新
+                        </button>
+                    </div>
+                    <table class="log-table" id="prompt-table">
+                        <thead><tr>
+                            <th style="width:220px">模板 Key</th>
+                            <th style="width:180px">标题</th>
+                            <th style="width:140px">Agent/Tool</th>
+                            <th style="width:160px">标签</th>
+                            <th style="width:90px">状态</th>
+                            <th style="width:160px">更新时间</th>
+                            <th style="width:180px;text-align:center">操作</th>
+                        </tr></thead>
+                        <tbody id="prompt-tbody"></tbody>
+                    </table>
+                    <div id="prompt-empty" class="approval-empty">加载中...</div>
+                </div>
+            </div>
+            <div id="prompt-popup" class="prompt-popup" style="display:none">
+                <div class="prompt-popup-header">
+                    <span id="prompt-popup-title" class="prompt-popup-title"></span>
+                    <button class="prompt-popup-close" onclick="closePromptPopup()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+                <div class="prompt-popup-meta">
+                    <input type="text" id="prompt-popup-key" class="input" placeholder="prompt_key，例如 orch.review.plan_dag">
+                    <input type="text" id="prompt-popup-title-input" class="input" placeholder="标题">
+                    <input type="text" id="prompt-popup-agent-key" class="input" placeholder="agent_key，例如 master">
+                    <input type="text" id="prompt-popup-tool-name" class="input" placeholder="tool_name，例如 task">
+                    <input type="text" id="prompt-popup-tags" class="input" placeholder="标签，逗号分隔，如 preset,orchestration">
+                    <label style="display:inline-flex;align-items:center;gap:6px;color:var(--text-secondary);font-size:0.8rem">
+                        <input type="checkbox" id="prompt-popup-enabled" checked> 启用
+                    </label>
+                </div>
+                <textarea id="prompt-popup-variables" class="prompt-popup-variables" placeholder='模板变量(JSON对象)，例如 {{"PROJECT_ROOT":"项目根目录"}}'></textarea>
+                <textarea id="prompt-popup-textarea" class="prompt-popup-textarea" placeholder="提示词正文"></textarea>
+                <div class="prompt-popup-actions">
+                    <span class="prompt-shortcut-tip">⌘/Ctrl+S 保存 · Esc 关闭</span>
+                    <span class="copy-ok" id="prompt-popup-copy-ok">已复制</span>
+                    <button class="btn btn-sm btn-secondary" id="prompt-popup-fullscreen-btn" onclick="togglePromptPopupFullscreen()">全屏编辑</button>
+                    <button class="btn btn-sm btn-secondary" onclick="copyPromptPopup()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                        复制
+                    </button>
+                    <button class="btn btn-sm btn-primary" id="prompt-popup-save" onclick="savePromptPopup()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/></svg>
+                        保存
+                    </button>
+                    <button class="btn btn-sm btn-secondary" onclick="savePromptPopup(true)">保存并关闭</button>
                 </div>
             </div>
         </div>
@@ -971,6 +1122,40 @@ def render_html() -> str:
                         <th>Agent</th><th>名称</th><th>状态</th><th>停滞(秒)</th><th>错误</th><th>最近输出</th>
                     </tr></thead><tbody id="mon-tbody"></tbody></table>
                     <div id="mon-empty" class="approval-empty" style="display:none">暂无 Agent 会话</div>
+                </div>
+            </div>
+            <!-- Terminal Live Viewer -->
+            <div class="card" style="margin-top:16px">
+                <header class="card-header">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                    <h2>终端实时查看器</h2>
+                </header>
+                <div class="card-body">
+                    <div class="log-toolbar" style="flex-wrap:wrap;gap:8px">
+                        <div class="terminal-mode-group">
+                            <button type="button" class="btn btn-sm terminal-mode-btn active" data-mode="stream" onclick="switchTerminalMode('stream')">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 010 8.49m-8.48-.01a6 6 0 010-8.49m11.31-2.82a10 10 0 010 14.14m-14.14 0a10 10 0 010-14.14"/></svg>
+                                实时
+                            </button>
+                            <button type="button" class="btn btn-sm terminal-mode-btn" data-mode="stream-cmd" onclick="switchTerminalMode('stream-cmd')">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                                实时+命令
+                            </button>
+                            <button type="button" class="btn btn-sm terminal-mode-btn" data-mode="stream-cmd-snap" onclick="switchTerminalMode('stream-cmd-snap')">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                                实时+命令+画面
+                            </button>
+                        </div>
+                        <select id="terminal-agent-select" class="input" style="max-width:220px;font-size:0.78rem" onchange="onTerminalAgentChange()">
+                            <option value="">选择 Agent...</option>
+                        </select>
+                        <span id="terminal-stream-status" class="badge badge-gray" style="font-size:0.7rem">未连接</span>
+                    </div>
+                    <div id="terminal-output" class="terminal-output"><span style="color:var(--text-muted)">选择 Agent 后开始实时推流...</span></div>
+                    <div id="terminal-cmd-bar" class="terminal-cmd-bar" style="display:none">
+                        <input type="text" id="terminal-cmd-input" class="input" placeholder="输入命令后回车发送..." style="flex:1;font-family:var(--font-mono);font-size:0.78rem" />
+                        <button type="button" class="btn btn-sm btn-primary" onclick="termSendCommand()">发送</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1014,6 +1199,7 @@ def render_html() -> str:
 
 <script>
 window.__SSE_SYNC_SEC = {sse_sync_sec};
+window.__TG_AUTO_REFRESH_SEC = {_safe_int(config.get("TG_AUTO_REFRESH_SEC", "60"), 60, 0, 3600)};
 window.__AUDIT_LOG_LIMIT = {_safe_int(config.get("AUDIT_LOG_LIMIT", "100"), 100, 10, 500)};
 window.__SYSTEM_LOG_LIMIT = {_safe_int(config.get("SYSTEM_LOG_LIMIT", "100"), 100, 10, 500)};
 </script>
@@ -1092,6 +1278,58 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 headers={"Cache-Control": "no-store"},
             )
 
+        elif path == "/api/terminal/read":
+            session_id = params.get("session_id", [""])[0].strip()
+            lines_count = _safe_int(params.get("lines", ["60"])[0], 60, 1, 200)
+            if not session_id:
+                self._respond(400, "application/json", b'{"ok":false,"error":"missing session_id"}')
+            else:
+                result = read_session_screen(session_id, lines=lines_count)
+                code = 200 if result.get("ok") else 500
+                self._respond(code, "application/json; charset=utf-8",
+                              json.dumps(result, ensure_ascii=False).encode("utf-8"),
+                              headers={"Cache-Control": "no-store"})
+
+        elif path == "/api/terminal/sessions":
+            try:
+                # Merge two sources: state file (registered agents) + live scan (master, etc.)
+                merged: dict[str, dict] = {}  # session_id -> info
+
+                # 1) registered agents from state file
+                try:
+                    agent_status = _build_agent_status_snapshot(read_lines=0)
+                    for a in (agent_status.get("agents") or []):
+                        sid = str(a.get("session_id", "") or "").strip()
+                        if sid:
+                            merged[sid] = {
+                                "session_id": sid,
+                                "badge": str(a.get("badge", "") or "").strip(),
+                                "agent_id": str(a.get("agent_id", "") or "").strip(),
+                                "agent_name": str(a.get("agent_name", "") or "").strip(),
+                                "name": str(a.get("agent_name", "") or "").strip(),
+                            }
+                except Exception:
+                    pass
+
+                # 2) live sessions (picks up master + unregistered)
+                try:
+                    window_id, live = _list_live_sessions()
+                    for s in live:
+                        sid = str(s.get("session_id", "") or "").strip()
+                        if sid and sid not in merged:
+                            merged[sid] = s
+                except Exception:
+                    window_id = ""
+
+                sessions = list(merged.values())
+                self._respond(200, "application/json; charset=utf-8",
+                              json.dumps({"ok": True, "sessions": sessions},
+                                         ensure_ascii=False).encode("utf-8"),
+                              headers={"Cache-Control": "no-store"})
+            except Exception as e:
+                self._respond(500, "application/json",
+                              json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
         elif path == "/api/tg/info":
             info = get_tg_bridge_info()
             self._respond(200, "application/json; charset=utf-8",
@@ -1150,6 +1388,26 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._respond(200, "application/x-ndjson; charset=utf-8", payload.encode("utf-8"),
                           headers={"Content-Disposition": f"attachment; filename=system-log-{ts}.ndjson",
                                    "Cache-Control": "no-store"})
+
+        elif path == "/api/prompt-templates":
+            try:
+                limit = _safe_int(params.get("limit", ["200"])[0], 200, 1, 500)
+                templates = list_prompt_templates(
+                    agent_key=str(params.get("agent_key", [""])[0] or "").strip(),
+                    tool_name=str(params.get("tool_name", [""])[0] or "").strip(),
+                    keyword=str(params.get("keyword", [""])[0] or "").strip(),
+                    enabled_only=_safe_bool(params.get("enabled_only", ["0"])[0], default=False),
+                    limit=limit,
+                )
+                self._respond(
+                    200,
+                    "application/json",
+                    json.dumps({"ok": True, "count": len(templates), "templates": templates}, ensure_ascii=False).encode("utf-8"),
+                )
+            except ValueError as e:
+                self._respond(400, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
 
         elif path == "/api/prompts":
             try:
@@ -1293,6 +1551,90 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(500, "application/json",
                               json.dumps({"ok": False, "error": detail, "error_detail": detail},
                                          ensure_ascii=False).encode("utf-8"))
+
+        elif path == "/api/prompt-templates":
+            body = self.rfile.read(self._safe_content_length())
+            try:
+                data = json.loads(body)
+                updated_by = str(data.get("updated_by", "dashboard") or "").strip() or "dashboard"
+                saved = _save_prompt_template_entry(data, updated_by=updated_by)
+                result = {"ok": True, "prompt": saved}
+                _publish_dashboard_event("sync", {
+                    "scope": ["prompts", "audit"],
+                    "reason": "prompt_template_saved",
+                    "prompt_key": saved.get("prompt_key", ""),
+                })
+                self._respond(200, "application/json", json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            except ValueError as e:
+                self._respond(400, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/prompt-templates/toggle":
+            body = self.rfile.read(self._safe_content_length())
+            try:
+                data = json.loads(body)
+                prompt_key = str(data.get("prompt_key", "") or "").strip()
+                if not prompt_key:
+                    raise ValueError("prompt_key 不能为空")
+                enabled = _safe_bool(data.get("enabled", True), default=True)
+                updated_by = str(data.get("updated_by", "dashboard") or "").strip() or "dashboard"
+                result = set_prompt_template_enabled(prompt_key=prompt_key, enabled=enabled, updated_by=updated_by)
+                code = 200 if result.get("ok") else 400
+                if result.get("ok"):
+                    _publish_dashboard_event("sync", {
+                        "scope": ["prompts", "audit"],
+                        "reason": "prompt_template_toggle",
+                        "prompt_key": prompt_key,
+                        "enabled": enabled,
+                    })
+                self._respond(code, "application/json", json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            except ValueError as e:
+                self._respond(400, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/prompt-templates/rollback":
+            body = self.rfile.read(self._safe_content_length())
+            try:
+                data = json.loads(body)
+                prompt_key = str(data.get("prompt_key", "") or "").strip()
+                version_id = _safe_int(data.get("version_id", "0"), 0, 1, 2_147_483_647)
+                updated_by = str(data.get("updated_by", "dashboard") or "").strip() or "dashboard"
+                result = rollback_prompt_template(prompt_key=prompt_key, version_id=version_id, updated_by=updated_by)
+                code = 200 if result.get("ok") else 400
+                if result.get("ok"):
+                    _publish_dashboard_event("sync", {
+                        "scope": ["prompts", "audit"],
+                        "reason": "prompt_template_rollback",
+                        "prompt_key": prompt_key,
+                        "version_id": version_id,
+                    })
+                self._respond(code, "application/json", json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            except ValueError as e:
+                self._respond(400, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/prompt-templates/seed":
+            body = self.rfile.read(self._safe_content_length())
+            try:
+                data = json.loads(body) if body else {}
+                overwrite = _safe_bool(data.get("overwrite", False), default=False)
+                updated_by = str(data.get("updated_by", "dashboard") or "").strip() or "dashboard"
+                result = _seed_common_prompt_templates(overwrite=overwrite, updated_by=updated_by)
+                _publish_dashboard_event("sync", {
+                    "scope": ["prompts", "audit"],
+                    "reason": "prompt_templates_seeded",
+                    "inserted": int(result.get("inserted") or 0),
+                    "updated": int(result.get("updated") or 0),
+                    "skipped": int(result.get("skipped") or 0),
+                })
+                self._respond(200, "application/json", json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            except ValueError as e:
+                self._respond(400, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
 
         elif path == "/api/prompts":
             body = self.rfile.read(self._safe_content_length())
@@ -1503,6 +1845,50 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(code, "application/json", json.dumps(res, ensure_ascii=False).encode("utf-8"))
             else:
                 self._respond(400, "application/json", b'{"ok":false,"error":"invalid path"}')
+        elif path == "/api/terminal/send":
+            body = self.rfile.read(self._safe_content_length())
+            try:
+                data = json.loads(body)
+                session_id = str(data.get("session_id", "")).strip()
+                text = str(data.get("text", ""))
+                if not session_id:
+                    raise ValueError("missing session_id")
+                result = send_to_session(session_id, text)
+                code = 200 if result.get("ok") else 500
+                self._respond(code, "application/json; charset=utf-8",
+                              json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                self._respond(400, "application/json",
+                              json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/terminal/stream/start":
+            body = self.rfile.read(self._safe_content_length())
+            try:
+                data = json.loads(body)
+                session_id = str(data.get("session_id", "")).strip()
+                if not session_id:
+                    raise ValueError("missing session_id")
+                result = start_session_streamer(session_id, publish_fn=_publish_dashboard_event)
+                self._respond(200, "application/json; charset=utf-8",
+                              json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                self._respond(400, "application/json",
+                              json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/terminal/stream/stop":
+            body = self.rfile.read(self._safe_content_length())
+            try:
+                data = json.loads(body)
+                session_id = str(data.get("session_id", "")).strip()
+                if not session_id:
+                    raise ValueError("missing session_id")
+                result = stop_session_streamer(session_id)
+                self._respond(200, "application/json; charset=utf-8",
+                              json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                self._respond(400, "application/json",
+                              json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
         else:
             self.send_error(404)
 

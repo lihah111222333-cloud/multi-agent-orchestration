@@ -175,9 +175,31 @@ function applyAgentStatusPayload(payload = {}) {
             setAgentChipStatus(id, 'unknown', 0, false);
         }
     });
-
     renderAgentSummary(payload.summary || {}, payload.ts || '', payload.error || '');
     renderMonitorTable(rows, payload.summary || {}, payload.ts || '');
+
+    // populate terminal agent selector — fetch ALL live sessions (incl. master)
+    refreshTerminalSessions();
+}
+
+function refreshTerminalSessions() {
+    const select = document.getElementById('terminal-agent-select');
+    if (!select) return;
+    fetch('/api/terminal/sessions')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.ok || !Array.isArray(data.sessions)) return;
+            const currentVal = select.value;
+            const options = '<option value="">选择会话...</option>' +
+                data.sessions.map(s => {
+                    const sid = s.session_id || '';
+                    const label = s.name || s.agent_label || s.badge || s.session_name || sid.slice(0, 8);
+                    const badge = s.badge ? `[${s.badge}] ` : '';
+                    return `<option value="${escapeHtml(sid)}" ${sid === currentVal ? 'selected' : ''}>${badge}${escapeHtml(label)}</option>`;
+                }).join('');
+            select.innerHTML = options;
+        })
+        .catch(() => { });
 }
 
 function renderMonitorTable(agents, summary, ts) {
@@ -392,106 +414,430 @@ function exportSystemLogs() {
     window.location.href = '/api/system-log/export?' + params;
 }
 
-/* ---- Prompts ---- */
-async function loadPrompts() {
-    try {
-        const r = await fetch('/api/prompts');
-        const j = await r.json();
-        if (!j.ok) return;
-        const box = document.getElementById('prompts-list');
-        box.innerHTML = j.agents.map((agent, ai) => {
-            const isPinned = agent.is_pinned;
-            const pinnedClass = isPinned ? ' prompt-card--pinned' : '';
+/* ---- Prompts (Template Management + Popup) ---- */
+let _promptRows = [];
+let _popupTimer = null;
+let _currentPopupData = null;
+let _promptPopupHotkeysBound = false;
 
-            // For pinned system prompt, show the full prompt_text directly
-            if (isPinned && agent.prompt_text) {
-                return `<div class="prompt-card${pinnedClass}">
-                    <div class="prompt-header" onclick="this.parentElement.querySelector('.prompt-body').classList.toggle('hidden')">
-                        <div>
-                            <span class="prompt-agent-name" style="color:var(--accent)">${agent.description}</span>
-                        </div>
-                        <span class="prompt-tools-count" style="color:var(--amber)">置顶</span>
-                    </div>
-                    <div class="prompt-body">
-                        <div class="prompt-tool">
-                            <textarea class="prompt-textarea" id="prompt-${ai}-sys" style="min-height:300px">${agent.prompt_text}</textarea>
-                            <div class="prompt-actions">
-                                <span class="copy-ok" id="copy-ok-${ai}-sys">已复制</span>
-                                <button class="btn btn-sm btn-secondary" onclick="copyPromptId('prompt-${ai}-sys','copy-ok-${ai}-sys')">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-                                    复制
-                                </button>
-                                <button class="btn btn-sm btn-primary" onclick="savePrompt('_system','system_prompt','prompt-${ai}-sys')">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/></svg>
-                                    保存
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>`;
-            }
-
-            const toolsHtml = agent.tools.map((tool, ti) => {
-                const paramsStr = tool.params.map(p => {
-                    const def = p.default !== null ? ` = "${p.default}"` : '';
-                    return `${p.name}: ${p.type}${def}`;
-                }).join(', ');
-                const promptText = tool.prompt_text || `你有一个 MCP 工具叫 "${tool.name}"。\n\n功能: ${tool.description}\n参数: ${paramsStr || '无'}\n\n使用场景: 当用户需要${tool.description}时，调用此工具。`;
-                return `<div class="prompt-tool">
-                    <div class="prompt-tool-name">${tool.name}</div>
-                    <div class="prompt-tool-desc">${tool.description}</div>
-                    <div class="prompt-params">参数: ${paramsStr || '无'}</div>
-                    <textarea class="prompt-textarea" id="prompt-${ai}-${ti}">${promptText}</textarea>
-                    <div class="prompt-actions">
-                        <span class="copy-ok" id="copy-ok-${ai}-${ti}">已复制</span>
-                        <button class="btn btn-sm btn-secondary" onclick="copyPromptId('prompt-${ai}-${ti}','copy-ok-${ai}-${ti}')">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-                            复制
-                        </button>
-                        <button class="btn btn-sm btn-primary" onclick="savePrompt('${agent.key}','${tool.name}','prompt-${ai}-${ti}')">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/></svg>
-                            保存
-                        </button>
-                    </div>
-                </div>`;
-            }).join('');
-            return `<div class="prompt-card${pinnedClass}">
-                <div class="prompt-header" onclick="this.parentElement.querySelector('.prompt-body').classList.toggle('hidden')">
-                    <div>
-                        <span class="prompt-agent-name">${agent.key}</span>
-                        <span class="prompt-agent-desc">${agent.description}</span>
-                    </div>
-                    <span class="prompt-tools-count">${agent.tools.length} tools</span>
-                </div>
-                <div class="prompt-body">${toolsHtml}</div>
-            </div>`;
-        }).join('');
-    } catch (e) { console.error('loadPrompts error:', e); }
-}
-
-function copyPromptId(textareaId, feedbackId) {
-    const ta = document.getElementById(textareaId);
-    if (!ta) return;
-    navigator.clipboard.writeText(ta.value).then(() => {
-        const ok = document.getElementById(feedbackId);
-        ok.classList.add('show');
-        setTimeout(() => ok.classList.remove('show'), 1500);
+function _normalizePromptRows(rows) {
+    return (rows || []).map((row) => {
+        const tags = Array.isArray(row.tags) ? row.tags : [];
+        return {
+            promptKey: row.prompt_key || '',
+            title: row.title || '',
+            agentKey: row.agent_key || '',
+            toolName: row.tool_name || '',
+            promptText: row.prompt_text || '',
+            variables: (row.variables && typeof row.variables === 'object' && !Array.isArray(row.variables)) ? row.variables : {},
+            tags,
+            enabled: !!row.enabled,
+            updatedAt: row.updated_at || '',
+            desc: String(row.prompt_text || '').replace(/\s+/g, ' ').slice(0, 100),
+        };
     });
 }
 
-async function savePrompt(agentKey, toolName, textareaId) {
-    const ta = document.getElementById(textareaId);
-    if (!ta) return;
+function _formatPromptTags(tags) {
+    if (!Array.isArray(tags) || tags.length === 0) return '-';
+    return tags.join(', ');
+}
+
+function _parseTagsInput(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return [];
+    if (text.startsWith('[')) {
+        try {
+            const parsed = JSON.parse(text);
+            if (Array.isArray(parsed)) {
+                return parsed.map(v => String(v || '').trim()).filter(Boolean);
+            }
+        } catch (_) {
+            // fallback to comma split
+        }
+    }
+    return text.split(',').map(v => v.trim()).filter(Boolean);
+}
+
+function _parseVariablesInput(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return {};
     try {
-        const r = await fetch('/api/prompts', {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return parsed;
+        }
+        throw new Error('variables 必须是 JSON 对象');
+    } catch (e) {
+        throw new Error('变量定义必须是 JSON 对象');
+    }
+}
+
+function _setPromptPopupFullscreenState(enabled) {
+    const popup = document.getElementById('prompt-popup');
+    const btn = document.getElementById('prompt-popup-fullscreen-btn');
+    if (!popup) return;
+    if (enabled) {
+        popup.classList.add('fullscreen');
+    } else {
+        popup.classList.remove('fullscreen');
+    }
+    if (btn) {
+        btn.textContent = enabled ? '退出全屏' : '全屏编辑';
+    }
+}
+
+function _bindPromptPopupHotkeys() {
+    if (_promptPopupHotkeysBound) return;
+    document.addEventListener('keydown', (event) => {
+        const popup = document.getElementById('prompt-popup');
+        if (!popup || popup.style.display === 'none') return;
+
+        if ((event.metaKey || event.ctrlKey) && String(event.key || '').toLowerCase() === 's') {
+            event.preventDefault();
+            savePromptPopup();
+            return;
+        }
+
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closePromptPopup();
+        }
+    });
+    _promptPopupHotkeysBound = true;
+}
+
+async function loadPrompts() {
+    try {
+        const kw = (document.getElementById('prompt-search')?.value || '').trim();
+        const enabledOnly = !!document.getElementById('prompt-enabled-only')?.checked;
+        const params = new URLSearchParams();
+        params.set('limit', '500');
+        if (kw) params.set('keyword', kw);
+        if (enabledOnly) params.set('enabled_only', '1');
+
+        const r = await fetch('/api/prompt-templates?' + params.toString());
+        const j = await r.json();
+        if (!j.ok) {
+            toast(j.error || '加载模板失败', false);
+            return;
+        }
+
+        _promptRows = _normalizePromptRows(j.templates || []);
+        renderPromptTable(_promptRows);
+    } catch (e) {
+        console.error('loadPrompts error:', e);
+        toast('加载模板失败: ' + e.message, false);
+    }
+}
+
+function renderPromptTable(rows) {
+    const tbody = document.getElementById('prompt-tbody');
+    const empty = document.getElementById('prompt-empty');
+    if (!tbody) return;
+
+    if (!rows.length) {
+        tbody.innerHTML = '';
+        if (empty) {
+            empty.style.display = '';
+            empty.textContent = '暂无模板，可点击“导入常用模板”';
+        }
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+
+    tbody.innerHTML = rows.map((row, idx) => {
+        const keyHtml = escapeHtml(row.promptKey);
+        const titleHtml = escapeHtml(row.title || row.promptKey);
+        const scopeHtml = escapeHtml(`${row.agentKey || '-'} / ${row.toolName || '-'}`);
+        const tagsHtml = escapeHtml(_formatPromptTags(row.tags));
+        const statusBadge = row.enabled
+            ? '<span class="level-badge level-success">enabled</span>'
+            : '<span class="level-badge level-disabled">disabled</span>';
+        const updated = escapeHtml(row.updatedAt || '-');
+        const rowBorder = row.enabled ? '' : ' style="opacity:.68"';
+        return `<tr class="prompt-row" data-idx="${idx}"${rowBorder}
+                    onmouseenter="showPromptPopupDelayed(event,${idx})"
+                    onmouseleave="hidePromptPopupDelayed()">
+            <td style="font-family:var(--font-mono);font-size:0.76rem;color:var(--accent)">${keyHtml}</td>
+            <td style="font-size:0.78rem">${titleHtml}</td>
+            <td style="font-family:var(--font-mono);font-size:0.74rem;color:var(--text-secondary)">${scopeHtml}</td>
+            <td style="font-size:0.74rem;color:var(--text-secondary);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tagsHtml}</td>
+            <td>${statusBadge}</td>
+            <td style="font-size:0.74rem;color:var(--text-secondary)">${updated}</td>
+            <td style="text-align:center;white-space:nowrap">
+                <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openPromptPopup(${idx})" title="编辑" style="cursor:pointer">编辑</button>
+                <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();copyPromptDirect(${idx})" title="复制" style="cursor:pointer;margin-left:4px">复制</button>
+                <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();togglePromptEnabled(${idx})" title="启停" style="cursor:pointer;margin-left:4px">${row.enabled ? '禁用' : '启用'}</button>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+function filterPromptTable() {
+    loadPrompts();
+}
+
+function copyPromptDirect(idx) {
+    const row = _promptRows[idx];
+    if (!row) return;
+    navigator.clipboard.writeText(row.promptText || '').then(() => toast('已复制到剪贴板', true));
+}
+
+function _showPromptPopup(row, popupTitle) {
+    const popup = document.getElementById('prompt-popup');
+    const titleEl = document.getElementById('prompt-popup-title');
+    const keyInput = document.getElementById('prompt-popup-key');
+    const titleInput = document.getElementById('prompt-popup-title-input');
+    const agentInput = document.getElementById('prompt-popup-agent-key');
+    const toolInput = document.getElementById('prompt-popup-tool-name');
+    const tagsInput = document.getElementById('prompt-popup-tags');
+    const enabledInput = document.getElementById('prompt-popup-enabled');
+    const varsInput = document.getElementById('prompt-popup-variables');
+    const textInput = document.getElementById('prompt-popup-textarea');
+
+    if (!popup || !titleEl || !keyInput || !titleInput || !agentInput || !toolInput || !tagsInput || !enabledInput || !varsInput || !textInput) {
+        return;
+    }
+
+    titleEl.textContent = popupTitle;
+    keyInput.value = row.promptKey || '';
+    titleInput.value = row.title || '';
+    agentInput.value = row.agentKey || '';
+    toolInput.value = row.toolName || '';
+    tagsInput.value = Array.isArray(row.tags) ? row.tags.join(',') : '';
+    enabledInput.checked = !!row.enabled;
+    varsInput.value = JSON.stringify(row.variables || {}, null, 2);
+    textInput.value = row.promptText || '';
+
+    _bindPromptPopupHotkeys();
+    _setPromptPopupFullscreenState(false);
+    popup.style.display = 'flex';
+
+    const savedW = localStorage.getItem('prompt_popup_w');
+    const savedH = localStorage.getItem('prompt_popup_h');
+    if (savedW) popup.style.width = savedW + 'px';
+    if (savedH) popup.style.height = savedH + 'px';
+
+    if (!popup._resizeObs) {
+        popup._resizeObs = new ResizeObserver(() => {
+            if (popup.style.display !== 'none') {
+                localStorage.setItem('prompt_popup_w', popup.offsetWidth);
+                localStorage.setItem('prompt_popup_h', popup.offsetHeight);
+            }
+        });
+        popup._resizeObs.observe(popup);
+    }
+}
+
+function showPromptPopupDelayed(event, idx) {
+    clearTimeout(_popupTimer);
+    _popupTimer = setTimeout(() => _showPopupAtRow(event.currentTarget, idx), 350);
+}
+
+function hidePromptPopupDelayed() {
+    clearTimeout(_popupTimer);
+    _popupTimer = setTimeout(() => {
+        const popup = document.getElementById('prompt-popup');
+        if (popup && !popup.matches(':hover')) popup.style.display = 'none';
+    }, 400);
+}
+
+function _showPopupAtRow(rowEl, idx) {
+    const row = _promptRows[idx];
+    if (!row) return;
+    _currentPopupData = row;
+    _showPromptPopup(row, `${row.promptKey || '提示词模板'}（编辑）`);
+
+    const popup = document.getElementById('prompt-popup');
+    if (!popup) return;
+    const rect = rowEl.getBoundingClientRect();
+    const popupW = popup.offsetWidth || 700;
+    const popupH = popup.offsetHeight || 620;
+    let left = rect.right + 12;
+    let top = rect.top;
+    if (left + popupW > window.innerWidth) left = rect.left - popupW - 12;
+    if (top + popupH > window.innerHeight) top = window.innerHeight - popupH - 16;
+    if (top < 8) top = 8;
+    if (left < 8) left = 8;
+    popup.style.left = left + 'px';
+    popup.style.top = top + 'px';
+}
+
+function openPromptPopup(idx) {
+    clearTimeout(_popupTimer);
+    const rowEl = document.querySelector(`.prompt-row[data-idx="${idx}"]`);
+    if (rowEl) _showPopupAtRow(rowEl, idx);
+    setTimeout(() => {
+        const ta = document.getElementById('prompt-popup-textarea');
+        if (ta) ta.focus();
+    }, 100);
+}
+
+function openPromptCreatePopup() {
+    clearTimeout(_popupTimer);
+    _currentPopupData = null;
+    const popup = document.getElementById('prompt-popup');
+    if (!popup) return;
+
+    _showPromptPopup({
+        promptKey: '',
+        title: '',
+        agentKey: 'master',
+        toolName: 'task',
+        tags: ['preset'],
+        enabled: true,
+        variables: {},
+        promptText: '',
+    }, '新建提示词模板');
+
+    const popupW = popup.offsetWidth || 700;
+    const popupH = popup.offsetHeight || 620;
+    popup.style.left = Math.max(8, Math.round((window.innerWidth - popupW) / 2)) + 'px';
+    popup.style.top = Math.max(8, Math.round((window.innerHeight - popupH) / 2)) + 'px';
+}
+
+function openPromptPastePopup() {
+    openPromptCreatePopup();
+    const titleInput = document.getElementById('prompt-popup-title-input');
+    const tagsInput = document.getElementById('prompt-popup-tags');
+    const textInput = document.getElementById('prompt-popup-textarea');
+    if (titleInput && !titleInput.value.trim()) {
+        titleInput.value = '快速粘贴模板';
+    }
+    if (tagsInput && !tagsInput.value.trim()) {
+        tagsInput.value = 'custom,paste';
+    }
+    setTimeout(() => {
+        if (textInput) {
+            textInput.focus();
+        }
+    }, 60);
+}
+
+function togglePromptPopupFullscreen() {
+    const popup = document.getElementById('prompt-popup');
+    if (!popup) return;
+    _setPromptPopupFullscreenState(!popup.classList.contains('fullscreen'));
+}
+
+function closePromptPopup() {
+    clearTimeout(_popupTimer);
+    const popup = document.getElementById('prompt-popup');
+    if (popup) {
+        popup.style.display = 'none';
+    }
+    _setPromptPopupFullscreenState(false);
+    _currentPopupData = null;
+}
+
+function copyPromptPopup() {
+    const ta = document.getElementById('prompt-popup-textarea');
+    if (!ta) return;
+    navigator.clipboard.writeText(ta.value).then(() => {
+        const ok = document.getElementById('prompt-popup-copy-ok');
+        if (ok) {
+            ok.classList.add('show');
+            setTimeout(() => ok.classList.remove('show'), 1500);
+        }
+    });
+}
+
+async function savePromptPopup(closeAfter = false) {
+    const keyInput = document.getElementById('prompt-popup-key');
+    const titleInput = document.getElementById('prompt-popup-title-input');
+    const agentInput = document.getElementById('prompt-popup-agent-key');
+    const toolInput = document.getElementById('prompt-popup-tool-name');
+    const tagsInput = document.getElementById('prompt-popup-tags');
+    const enabledInput = document.getElementById('prompt-popup-enabled');
+    const varsInput = document.getElementById('prompt-popup-variables');
+    const textInput = document.getElementById('prompt-popup-textarea');
+    if (!keyInput || !titleInput || !agentInput || !toolInput || !tagsInput || !enabledInput || !varsInput || !textInput) return;
+
+    let variables = {};
+    try {
+        variables = _parseVariablesInput(varsInput.value);
+    } catch (e) {
+        toast(e.message, false);
+        return;
+    }
+
+    const payload = {
+        prompt_key: keyInput.value.trim(),
+        title: titleInput.value.trim(),
+        agent_key: agentInput.value.trim(),
+        tool_name: toolInput.value.trim(),
+        tags: _parseTagsInput(tagsInput.value),
+        enabled: !!enabledInput.checked,
+        variables,
+        prompt_text: textInput.value,
+        updated_by: 'dashboard',
+    };
+
+    try {
+        const r = await fetch('/api/prompt-templates', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ agent_key: agentKey, tool_name: toolName, prompt_text: ta.value })
+            body: JSON.stringify(payload),
         });
         const j = await r.json();
-        if (j.ok) { toast('提示词已保存到数据库', true); }
-        else { toast(j.error || '保存失败', false); }
-    } catch (e) { toast('保存失败: ' + e.message, false); }
+        if (j.ok) {
+            toast('模板已保存', true);
+            await loadPrompts();
+            _currentPopupData = j.prompt || null;
+            if (closeAfter) {
+                closePromptPopup();
+            }
+        } else {
+            toast(j.error || '保存失败', false);
+        }
+    } catch (e) {
+        toast('保存失败: ' + e.message, false);
+    }
+}
+
+async function togglePromptEnabled(idx) {
+    const row = _promptRows[idx];
+    if (!row) return;
+    try {
+        const r = await fetch('/api/prompt-templates/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt_key: row.promptKey,
+                enabled: !row.enabled,
+                updated_by: 'dashboard',
+            }),
+        });
+        const j = await r.json();
+        if (j.ok) {
+            toast(`模板已${!row.enabled ? '启用' : '禁用'}`, true);
+            await loadPrompts();
+        } else {
+            toast(j.error || '状态更新失败', false);
+        }
+    } catch (e) {
+        toast('状态更新失败: ' + e.message, false);
+    }
+}
+
+async function seedPromptTemplates(overwrite) {
+    try {
+        const r = await fetch('/api/prompt-templates/seed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ overwrite: !!overwrite, updated_by: 'dashboard' }),
+        });
+        const j = await r.json();
+        if (j.ok) {
+            toast(`模板导入完成：新增${j.inserted || 0}，更新${j.updated || 0}，跳过${j.skipped || 0}`, true);
+            await loadPrompts();
+        } else {
+            toast(j.error || '导入失败', false);
+        }
+    } catch (e) {
+        toast('导入失败: ' + e.message, false);
+    }
 }
 
 /* ---- Command Cards ---- */
@@ -815,6 +1161,28 @@ function startEventStream() {
         }
     });
 
+    eventSource.addEventListener('tg_message', (evt) => {
+        try {
+            const data = JSON.parse(evt.data || '{}');
+            const msg = data.payload;
+            if (msg && msg.role) appendTgMessage(msg);
+        } catch (e) {
+            console.error('SSE tg_message parse failed:', e);
+        }
+    });
+
+    eventSource.addEventListener('terminal_output', (evt) => {
+        try {
+            const data = JSON.parse(evt.data || '{}');
+            const p = data.payload || {};
+            if (p.session_id && Array.isArray(p.lines)) {
+                appendTerminalLines(p.session_id, p.lines);
+            }
+        } catch (e) {
+            console.error('SSE terminal_output parse failed:', e);
+        }
+    });
+
     eventSource.onerror = () => {
         setLiveStatus('offline');
         startPollingFallback();
@@ -890,27 +1258,35 @@ function renderTgChatLog(history) {
         container.innerHTML = '<div class="approval-empty">暂无对话记录</div>';
         return;
     }
-    const html = history.map(item => {
-        const ts = (item.ts || '').replace('T', ' ').substring(0, 19);
-        const role = item.role || 'system';
-        let roleLabel, roleColor;
-        if (role === 'user') { roleLabel = '👤 用户'; roleColor = 'var(--blue)'; }
-        else if (role === 'bot') { roleLabel = '🤖 Bot'; roleColor = 'var(--accent)'; }
-        else { roleLabel = '⚙️ 系统'; roleColor = 'var(--text-muted)'; }
+    container.innerHTML = history.map(item => _renderTgMessageHtml(item)).join('');
+    container.scrollTop = container.scrollHeight;
+}
 
-        const statusBadge = item.status === 'error'
-            ? ' <span class="level-badge level-error">error</span>'
-            : '';
+function _renderTgMessageHtml(item) {
+    const ts = (item.ts || '').replace('T', ' ').substring(0, 19);
+    const role = item.role || 'system';
+    let roleLabel, roleColor;
+    if (role === 'user') { roleLabel = '👤 用户'; roleColor = 'var(--blue)'; }
+    else if (role === 'bot') { roleLabel = '🤖 Bot'; roleColor = 'var(--accent)'; }
+    else { roleLabel = '⚙️ 系统'; roleColor = 'var(--text-muted)'; }
+    const statusBadge = item.status === 'error'
+        ? ' <span class="level-badge level-error">error</span>' : '';
+    return `<div style="margin-bottom:10px;padding:8px 12px;border-radius:var(--radius-xs);background:var(--bg-surface);border-left:3px solid ${roleColor};animation:fadeInMsg .25s ease">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span style="font-size:0.78rem;font-weight:600;color:${roleColor}">${roleLabel}${item.user ? ' (' + escapeHtml(item.user) + ')' : ''}${statusBadge}</span>
+            <span style="font-size:0.68rem;color:var(--text-muted);font-family:var(--font-mono)">${ts}</span>
+        </div>
+        <div style="font-size:0.82rem;color:var(--text-primary);white-space:pre-wrap;word-break:break-word">${escapeHtml(item.text)}</div>
+    </div>`;
+}
 
-        return `<div style="margin-bottom:10px;padding:8px 12px;border-radius:var(--radius-xs);background:var(--bg-surface);border-left:3px solid ${roleColor}">
-            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-                <span style="font-size:0.78rem;font-weight:600;color:${roleColor}">${roleLabel}${item.user ? ' (' + escapeHtml(item.user) + ')' : ''}${statusBadge}</span>
-                <span style="font-size:0.68rem;color:var(--text-muted);font-family:var(--font-mono)">${ts}</span>
-            </div>
-            <div style="font-size:0.82rem;color:var(--text-primary);white-space:pre-wrap;word-break:break-word">${escapeHtml(item.text)}</div>
-        </div>`;
-    }).join('');
-    container.innerHTML = html;
+function appendTgMessage(item) {
+    const container = document.getElementById('tg-chat-log');
+    if (!container) return;
+    // remove "暂无" placeholder if present
+    const empty = container.querySelector('.approval-empty');
+    if (empty) empty.remove();
+    container.insertAdjacentHTML('beforeend', _renderTgMessageHtml(item));
     container.scrollTop = container.scrollHeight;
 }
 
@@ -957,9 +1333,164 @@ async function tgClearHistory() {
     } catch (e) { toast('清空失败: ' + e.message, false); }
 }
 
-// Auto-refresh TG when switching to telegram page
+// Auto-refresh TG when switching to telegram page + configurable poll
+let _tgAutoTimer = null;
 const _origSwitchPage = switchPage;
 switchPage = function (pageId) {
     _origSwitchPage(pageId);
-    if (pageId === 'telegram') { tgRefresh(); }
+    clearInterval(_tgAutoTimer);
+    _tgAutoTimer = null;
+    if (pageId === 'telegram') {
+        tgRefresh();
+        const sec = window.__TG_AUTO_REFRESH_SEC || 60;
+        if (sec > 0) _tgAutoTimer = setInterval(tgRefresh, sec * 1000);
+    }
 };
+
+// ── Terminal Live Viewer ──────────────────────────────────────────────
+
+let _termMode = 'stream';         // 'stream' | 'stream-cmd' | 'stream-cmd-snap'
+let _termSessionId = '';
+let _termStreaming = false;
+let _termSnapTimer = null;
+const _TERM_MAX_LINES = 500;
+
+function switchTerminalMode(mode) {
+    _termMode = mode;
+    document.querySelectorAll('.terminal-mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+
+    const cmdBar = document.getElementById('terminal-cmd-bar');
+    if (cmdBar) cmdBar.style.display = (mode === 'stream') ? 'none' : 'flex';
+
+    // manage snapshot timer
+    clearInterval(_termSnapTimer);
+    _termSnapTimer = null;
+    if (mode === 'stream-cmd-snap' && _termSessionId) {
+        _termSnapTimer = setInterval(termReadSnapshot, 2000);
+    }
+}
+
+function onTerminalAgentChange() {
+    const select = document.getElementById('terminal-agent-select');
+    const sessionId = select ? select.value : '';
+
+    // stop previous stream
+    if (_termSessionId && _termStreaming) {
+        fetch('/api/terminal/stream/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: _termSessionId }),
+        }).catch(() => { });
+    }
+    _termStreaming = false;
+    _termSessionId = sessionId;
+    clearInterval(_termSnapTimer);
+    _termSnapTimer = null;
+
+    const output = document.getElementById('terminal-output');
+    if (output) output.innerHTML = '<span style="color:var(--text-muted)">连接中...</span>';
+
+    const statusBadge = document.getElementById('terminal-stream-status');
+
+    if (!sessionId) {
+        if (output) output.innerHTML = '<span style="color:var(--text-muted)">选择 Agent 后开始实时推流...</span>';
+        if (statusBadge) { statusBadge.className = 'badge badge-gray'; statusBadge.textContent = '未连接'; }
+        return;
+    }
+
+    // start stream
+    fetch('/api/terminal/stream/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId }),
+    }).then(r => r.json()).then(data => {
+        if (data.ok) {
+            _termStreaming = true;
+            if (statusBadge) { statusBadge.className = 'badge badge-green'; statusBadge.textContent = '推流中'; }
+            // do initial read
+            termReadSnapshot();
+            // start snapshot timer for mode 3
+            if (_termMode === 'stream-cmd-snap') {
+                _termSnapTimer = setInterval(termReadSnapshot, 2000);
+            }
+        } else {
+            if (statusBadge) { statusBadge.className = 'badge badge-red'; statusBadge.textContent = '连接失败'; }
+            if (output) output.innerHTML = '<span style="color:var(--red)">连接失败: ' + escapeHtml(data.error || '') + '</span>';
+        }
+    }).catch(e => {
+        if (statusBadge) { statusBadge.className = 'badge badge-red'; statusBadge.textContent = '错误'; }
+    });
+}
+
+function termReadSnapshot() {
+    if (!_termSessionId) return;
+    fetch('/api/terminal/read?session_id=' + encodeURIComponent(_termSessionId) + '&lines=60')
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok && data.lines) {
+                const output = document.getElementById('terminal-output');
+                if (output) {
+                    const wasNearBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 50;
+                    output.textContent = data.lines.join('\n');
+                    if (wasNearBottom) output.scrollTop = output.scrollHeight;
+                }
+            }
+        })
+        .catch(() => { });
+}
+
+function termSendCommand() {
+    const input = document.getElementById('terminal-cmd-input');
+    if (!input || !_termSessionId) return;
+    const text = input.value;
+    if (!text) return;
+
+    fetch('/api/terminal/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: _termSessionId, text: text + '\n' }),
+    }).then(r => r.json()).then(data => {
+        if (data.ok) {
+            input.value = '';
+            // read snapshot after short delay to see result
+            setTimeout(termReadSnapshot, 500);
+        } else {
+            toast('发送失败: ' + (data.error || ''), false);
+        }
+    }).catch(e => toast('发送失败: ' + e.message, false));
+}
+
+function appendTerminalLines(sessionId, lines) {
+    if (sessionId !== _termSessionId) return;
+    const output = document.getElementById('terminal-output');
+    if (!output) return;
+
+    // if it has the placeholder, clear it
+    const placeholder = output.querySelector('span');
+    if (placeholder && placeholder.style.color) output.innerHTML = '';
+
+    // only auto-scroll if user is near bottom
+    const wasNearBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 50;
+    const text = lines.join('\n');
+    output.textContent += (output.textContent ? '\n' : '') + text;
+
+    // trim if too long
+    const allLines = output.textContent.split('\n');
+    if (allLines.length > _TERM_MAX_LINES) {
+        output.textContent = allLines.slice(-_TERM_MAX_LINES).join('\n');
+    }
+
+    if (wasNearBottom) output.scrollTop = output.scrollHeight;
+}
+
+// Enter key for command input
+document.addEventListener('DOMContentLoaded', () => {
+    const cmdInput = document.getElementById('terminal-cmd-input');
+    if (cmdInput) {
+        cmdInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); termSendCommand(); }
+        });
+    }
+});

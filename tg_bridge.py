@@ -48,6 +48,12 @@ def _add_history(role: str, text: str, chat_id: str = "", user: str = "", status
     }
     with _history_lock:
         _history.append(entry)
+    # Push real-time SSE event to dashboard
+    try:
+        from dashboard import _publish_dashboard_event
+        _publish_dashboard_event("tg_message", entry)
+    except Exception:
+        pass
     return entry
 
 
@@ -415,6 +421,249 @@ async def _bot_main(stop_event: threading.Event) -> None:
                 f"再次发送 /watchdog 关闭"
             )
 
+    # ---- 终端命令：per-chat watch state ----
+    _tg_watch_sessions: dict[int, str] = {}  # chat_id -> session_id
+
+    # ---- /sessions 列出会话 ----
+    async def cmd_sessions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not _is_authorized(update.effective_chat.id):
+            await update.message.reply_text("⛔ 未授权")
+            return
+        try:
+            from agents.iterm_bridge import _list_live_sessions, list_iterm_agent_sessions
+
+            # Step 1: get live sessions (all windows) — these have current session IDs
+            sessions_list: list[dict] = []
+            seen_agent_ids: set[str] = set()
+            seen_session_ids: set[str] = set()
+            loop = asyncio.get_event_loop()
+
+            try:
+                _, live = await loop.run_in_executor(None, _list_live_sessions)
+                for s in live:
+                    sid = str(s.get("session_id", "")).strip()
+                    aid = str(s.get("agent_id", "")).strip()
+                    if not sid or sid in seen_session_ids:
+                        continue
+                    if aid and aid in seen_agent_ids:
+                        continue  # same agent in another window
+                    seen_session_ids.add(sid)
+                    if aid:
+                        seen_agent_ids.add(aid)
+                    sessions_list.append(s)
+            except Exception as exc:
+                logger.warning("cmd_sessions: _list_live_sessions 失败: %s", exc)
+
+            # Step 2: supplement with state file (only agents NOT already found live)
+            try:
+                state_result = await loop.run_in_executor(None, list_iterm_agent_sessions)
+                for a in (state_result.get("sessions") or []):
+                    aid = str(a.get("agent_id", "")).strip()
+                    sid = str(a.get("session_id", "")).strip()
+                    if aid and aid in seen_agent_ids:
+                        continue  # already have this agent from live
+                    if sid and sid in seen_session_ids:
+                        continue
+                    if sid:
+                        seen_session_ids.add(sid)
+                    if aid:
+                        seen_agent_ids.add(aid)
+                    sessions_list.append({
+                        "session_id": sid,
+                        "agent_id": aid,
+                        "name": a.get("agent_name", "") or a.get("session_label", ""),
+                    })
+            except Exception as exc:
+                logger.warning("cmd_sessions: list_iterm_agent_sessions 失败: %s", exc)
+
+            if not sessions_list:
+                await update.message.reply_text("📭 暂无可用的 iTerm 会话")
+                return
+
+            lines = ["📋 可用会话列表\n"]
+            for i, info in enumerate(sessions_list, 1):
+                sid = info.get("session_id", "")
+                name = info.get("name") or info.get("agent_name") or info.get("session_name") or sid[:8]
+                badge = info.get("badge", "")
+                aid = info.get("agent_id", "")
+                tag = f"[{badge}] " if badge else (f"({aid}) " if aid else "")
+                lines.append(f"{i}. {tag}{name}")
+            lines.append(f"\n使用 /watch <序号或名称> 开始观察")
+            await update.message.reply_text("\n".join(lines))
+        except Exception as exc:
+            await update.message.reply_text(f"❌ 查询失败: {exc}")
+
+    # ---- /watch 观察终端 ----
+    async def cmd_watch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not _is_authorized(update.effective_chat.id):
+            await update.message.reply_text("⛔ 未授权")
+            return
+
+        args = context.args
+        if not args:
+            chat_id = update.effective_chat.id
+            current = _tg_watch_sessions.get(chat_id)
+            if current:
+                await update.message.reply_text(f"👁 当前观察: {current[:12]}...\n发送 /watch off 停止")
+            else:
+                await update.message.reply_text("用法: /watch <序号或agent_id>\n发送 /sessions 查看列表")
+            return
+
+        target = args[0].strip()
+
+        # /watch off
+        if target.lower() == "off":
+            removed = _tg_watch_sessions.pop(update.effective_chat.id, None)
+            await update.message.reply_text("👁 已停止观察" if removed else "未在观察任何会话")
+            return
+
+        try:
+            from agents.iterm_bridge import _list_live_sessions, list_iterm_agent_sessions
+
+            # build merged list: live first, then state file supplement
+            merged_list: list[dict] = []
+            seen_agent_ids: set[str] = set()
+            seen_session_ids: set[str] = set()
+            loop = asyncio.get_event_loop()
+
+            try:
+                _, live = await loop.run_in_executor(None, _list_live_sessions)
+                for s in live:
+                    sid = str(s.get("session_id", "")).strip()
+                    aid = str(s.get("agent_id", "")).strip()
+                    if not sid or sid in seen_session_ids:
+                        continue
+                    seen_session_ids.add(sid)
+                    if aid:
+                        seen_agent_ids.add(aid)
+                    merged_list.append(s)
+            except Exception:
+                pass
+
+            try:
+                state_result = await loop.run_in_executor(None, list_iterm_agent_sessions)
+                for a in (state_result.get("sessions") or []):
+                    aid = str(a.get("agent_id", "")).strip()
+                    sid = str(a.get("session_id", "")).strip()
+                    if (aid and aid in seen_agent_ids) or (sid and sid in seen_session_ids):
+                        continue
+                    if sid:
+                        seen_session_ids.add(sid)
+                    if aid:
+                        seen_agent_ids.add(aid)
+                    merged_list.append({
+                        "session_id": sid,
+                        "agent_id": aid,
+                        "name": a.get("agent_name", "") or a.get("session_label", ""),
+                    })
+            except Exception:
+                pass
+
+            # resolve target: by index first, then fuzzy substring match
+            session_id = None
+            try:
+                idx = int(target) - 1
+                if 0 <= idx < len(merged_list):
+                    session_id = merged_list[idx]["session_id"]
+            except ValueError:
+                needle = target.lower()
+                for item in merged_list:
+                    hay = " ".join([
+                        item.get("agent_id", ""),
+                        item.get("name", ""),
+                        item.get("agent_name", ""),
+                        item.get("session_name", ""),
+                        item.get("badge", ""),
+                        item.get("session_id", ""),
+                    ]).lower()
+                    if needle in hay:
+                        session_id = item["session_id"]
+                        break
+
+            if not session_id:
+                await update.message.reply_text(f"❌ 未找到会话: {target}\n发送 /sessions 查看列表")
+                return
+
+            _tg_watch_sessions[update.effective_chat.id] = session_id
+            name = ""
+            for item in merged_list:
+                if item.get("session_id") == session_id:
+                    name = item.get("name") or item.get("agent_id") or ""
+                    break
+            await update.message.reply_text(
+                f"👁 开始观察: {name}\n"
+                f"🔗 Session: {session_id[:12]}...\n\n"
+                f"使用 /snap 获取画面快照\n"
+                f"使用 /cmd <命令> 发送命令\n"
+                f"使用 /watch off 停止观察",
+            )
+        except Exception as exc:
+            await update.message.reply_text(f"❌ 失败: {exc}")
+
+    # ---- /snap 画面快照 ----
+    async def cmd_snap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not _is_authorized(update.effective_chat.id):
+            await update.message.reply_text("⛔ 未授权")
+            return
+
+        session_id = _tg_watch_sessions.get(update.effective_chat.id)
+        if not session_id:
+            await update.message.reply_text("❌ 未在观察任何会话\n请先 /watch <序号>")
+            return
+
+        try:
+            from agents.iterm_bridge import read_session_screen
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, lambda: read_session_screen(session_id, 60))
+            if result.get("ok") and result.get("lines"):
+                text = "\n".join(result["lines"])
+                await update.message.reply_text(f"📸 终端快照\n\n{_truncate(text, 3800)}")
+            else:
+                await update.message.reply_text(f"❌ 读取失败: {result.get('error', '未知错误')}")
+        except Exception as exc:
+            await update.message.reply_text(f"❌ 读取失败: {exc}")
+
+    # ---- /cmd 发送命令 ----
+    async def cmd_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not _is_authorized(update.effective_chat.id):
+            await update.message.reply_text("⛔ 未授权")
+            return
+
+        session_id = _tg_watch_sessions.get(update.effective_chat.id)
+        if not session_id:
+            await update.message.reply_text("❌ 未在观察任何会话\n请先 /watch <序号>")
+            return
+
+        cmd_text = " ".join(context.args) if context.args else ""
+        if not cmd_text:
+            await update.message.reply_text("用法: /cmd <命令内容>")
+            return
+
+        try:
+            from agents.iterm_bridge import send_to_session, read_session_screen
+            loop = asyncio.get_event_loop()
+
+            result = await loop.run_in_executor(None, lambda: send_to_session(session_id, cmd_text + "\n"))
+            if not result.get("ok"):
+                await update.message.reply_text(f"❌ 发送失败: {result.get('error', '')}")
+                return
+
+            pending_msg = await update.message.reply_text("⏳ 命令已发送，等待输出...")
+
+            await asyncio.sleep(2)
+
+            snap = await loop.run_in_executor(None, lambda: read_session_screen(session_id, 40))
+            if snap.get("ok") and snap.get("lines"):
+                text = "\n".join(snap["lines"])
+                try:
+                    await pending_msg.edit_text(f"✅ 命令已执行\n\n{_truncate(text, 3800)}")
+                except Exception:
+                    await update.message.reply_text(_truncate(text, 3800))
+            else:
+                await pending_msg.edit_text("✅ 命令已发送（无新输出）")
+        except Exception as exc:
+            await update.message.reply_text(f"❌ 失败: {exc}")
+
     # ---- 构建 Application ----
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", cmd_start))
@@ -422,6 +671,10 @@ async def _bot_main(stop_event: threading.Event) -> None:
     app.add_handler(CommandHandler("wake", cmd_wake))
     app.add_handler(CommandHandler("watchdog", cmd_watchdog))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("sessions", cmd_sessions))
+    app.add_handler(CommandHandler("watch", cmd_watch))
+    app.add_handler(CommandHandler("snap", cmd_snap))
+    app.add_handler(CommandHandler("cmd", cmd_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("TG bridge: Bot 启动中 (token=...%s)", token[-6:])
@@ -440,6 +693,24 @@ async def _bot_main(stop_event: threading.Event) -> None:
             "first_name": bot_me.first_name or "",
             "id": bot_me.id,
         }
+
+        # 注册中文菜单
+        try:
+            from telegram import BotCommand
+            await app.bot.set_my_commands([
+                BotCommand("start", "启动 / 连接 Bot"),
+                BotCommand("status", "查看 Agent 状态"),
+                BotCommand("wake", "唤醒主 Agent"),
+                BotCommand("sessions", "列出所有终端会话"),
+                BotCommand("watch", "观察某个终端会话"),
+                BotCommand("snap", "获取终端画面快照"),
+                BotCommand("cmd", "向终端发送命令"),
+                BotCommand("watchdog", "启停看门狗"),
+                BotCommand("id", "查看 Chat ID"),
+            ])
+        except Exception as exc:
+            logger.warning("TG bridge: set_my_commands 失败: %s", exc)
+
         logger.info("TG bridge: Bot 已启动 @%s", _bot_info.get("username", ""))
         _add_history("system", f"Bot 已启动 @{_bot_info.get('username', '')}")
 

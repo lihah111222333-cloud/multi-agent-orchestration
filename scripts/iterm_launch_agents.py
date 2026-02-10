@@ -399,7 +399,7 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description="iTerm 动态启动 Agent")
     parser.add_argument("--task", default="", help="任务描述（用于自动决定数量）")
-    parser.add_argument("--tabs", type=int, default=None, help="手动指定数量，只允许 4/6/8/12")
+    parser.add_argument("--tabs", type=int, default=None, help="手动指定数量，只允许 4/5/6/8/12")
     parser.add_argument("--min-tabs", type=int, default=4, help="最小数量（默认 4）")
     parser.add_argument("--max-tabs", type=int, default=12, help="最大数量（默认 12）")
     parser.add_argument("--config", default=str(root / "config.json"), help="拓扑配置路径")
@@ -482,6 +482,8 @@ def main() -> int:
 
     identity_delay_sec = max(0.0, float(args.identity_delay))
     if args.layout == "panes":
+        if count not in {4, 6, 8, 12}:
+            raise SystemExit("panes 布局仅支持 4/6/8/12；若使用 5 个代理请改用 --layout tabs")
         launch_meta = _run_iterm_panes(entries, pane_count=count, identity_delay_sec=identity_delay_sec)
     else:
         launch_meta = _run_iterm_tabs(entries, identity_delay_sec=identity_delay_sec)

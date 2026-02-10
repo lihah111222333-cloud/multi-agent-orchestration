@@ -14,14 +14,15 @@ from iterm_tab_planner import (
 class ItermTabPlannerTests(unittest.TestCase):
     def test_normalize_requested_tabs(self):
         self.assertEqual(normalize_requested_tabs(4), 4)
+        self.assertEqual(normalize_requested_tabs(5), 5)
         self.assertEqual(normalize_requested_tabs(12), 12)
 
         with self.assertRaises(ValueError):
-            normalize_requested_tabs(5)
+            normalize_requested_tabs(7)
 
     def test_estimate_from_task(self):
         tabs, _ = estimate_tabs_from_task("做一次多agent并发全链路压测与拓扑优化")
-        self.assertIn(tabs, (4, 6, 8, 12))
+        self.assertIn(tabs, (4, 5, 6, 8, 12))
         self.assertGreaterEqual(tabs, 4)
 
     def test_estimate_from_architecture(self):
@@ -65,7 +66,7 @@ class ItermTabPlannerTests(unittest.TestCase):
                 task="请做一次多agent并发全链路压测与容灾演练",
                 config_path=path,
             )
-            self.assertIn(decision["tab_count"], (4, 6, 8, 12))
+            self.assertIn(decision["tab_count"], (4, 5, 6, 8, 12))
             self.assertGreaterEqual(decision["tab_count"], 4)
             self.assertIn("最终取 max", decision["reason"])
 

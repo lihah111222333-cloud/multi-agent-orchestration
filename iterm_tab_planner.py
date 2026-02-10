@@ -1,7 +1,7 @@
 """iTerm Agent Tab 数量规划器
 
 规则：
-- 只允许 4/6/8/12
+- 只允许 4/5/6/8/12
 - 最少 4
 - 可根据任务描述 + 当前拓扑自动决策
 """
@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-ALLOWED_TAB_COUNTS = (4, 6, 8, 12)
+ALLOWED_TAB_COUNTS = (4, 5, 6, 8, 12)
 
 
 def _allowed_in_range(min_tabs: int, max_tabs: int) -> list[int]:
@@ -45,7 +45,7 @@ def _pick_by_score(score: int, min_tabs: int, max_tabs: int) -> int:
 
 def normalize_requested_tabs(requested_tabs: int, min_tabs: int = 4, max_tabs: int = 12) -> int:
     if requested_tabs not in ALLOWED_TAB_COUNTS:
-        raise ValueError("tabs 仅允许 4/6/8/12")
+        raise ValueError("tabs 仅允许 4/5/6/8/12")
     if requested_tabs < min_tabs:
         raise ValueError(f"tabs 不可小于最小值: {min_tabs}")
     if requested_tabs > max_tabs:

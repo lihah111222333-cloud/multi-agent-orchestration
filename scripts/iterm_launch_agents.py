@@ -174,6 +174,19 @@ async def _safe_iterm_call(target: Any, method: str, *args: Any) -> bool:
 async def _decorate_session(entry: dict[str, Any], session: Any, tab: Any | None) -> dict[str, bool]:
     label_applied = await _safe_iterm_call(session, "async_set_name", str(entry.get("session_label", "") or ""))
     badge_applied = await _safe_iterm_call(session, "async_set_variable", "user.badge", str(entry.get("badge", "") or ""))
+    agent_id_applied = await _safe_iterm_call(session, "async_set_variable", "user.agent_id", str(entry.get("agent_id", "") or ""))
+    agent_name_applied = await _safe_iterm_call(
+        session,
+        "async_set_variable",
+        "user.agent_name",
+        str(entry.get("agent_name", "") or ""),
+    )
+    agent_label_applied = await _safe_iterm_call(
+        session,
+        "async_set_variable",
+        "user.agent_label",
+        str(entry.get("session_label", "") or ""),
+    )
 
     tab_title_applied = False
     if tab is not None:
@@ -182,6 +195,9 @@ async def _decorate_session(entry: dict[str, Any], session: Any, tab: Any | None
     return {
         "label_applied": label_applied,
         "badge_applied": badge_applied,
+        "agent_id_applied": agent_id_applied,
+        "agent_name_applied": agent_name_applied,
+        "agent_label_applied": agent_label_applied,
         "tab_title_applied": tab_title_applied,
     }
 
@@ -221,6 +237,39 @@ async def _inject_identity_prompts(
     return injected_count
 
 
+async def _reapply_labels_after_wakeup(
+    session_rows: list[dict[str, Any]],
+    *,
+    relabel_delay_sec: float = 0.35,
+) -> int:
+    if not session_rows:
+        return 0
+
+    if relabel_delay_sec > 0:
+        await asyncio.sleep(relabel_delay_sec)
+
+    relabeled_count = 0
+    for row in session_rows:
+        session = row.get("session")
+        entry = row.get("entry")
+        tab = row.get("tab")
+        if session is None or not isinstance(entry, dict):
+            continue
+
+        decorated = await _decorate_session(entry, session=session, tab=tab)
+        row["label_applied"] = bool(row.get("label_applied", False) or decorated["label_applied"])
+        row["badge_applied"] = bool(row.get("badge_applied", False) or decorated["badge_applied"])
+        row["agent_id_applied"] = bool(row.get("agent_id_applied", False) or decorated["agent_id_applied"])
+        row["agent_name_applied"] = bool(row.get("agent_name_applied", False) or decorated["agent_name_applied"])
+        row["agent_label_applied"] = bool(row.get("agent_label_applied", False) or decorated["agent_label_applied"])
+        row["tab_title_applied"] = bool(row.get("tab_title_applied", False) or decorated["tab_title_applied"])
+
+        if decorated["label_applied"]:
+            relabeled_count += 1
+
+    return relabeled_count
+
+
 def _run_iterm_tabs(entries: list[dict[str, Any]], identity_delay_sec: float) -> dict[str, Any]:
     import iterm2
 
@@ -258,12 +307,18 @@ def _run_iterm_tabs(entries: list[dict[str, Any]], identity_delay_sec: float) ->
                     "identity_injected": False,
                     "label_applied": decorated["label_applied"],
                     "badge_applied": decorated["badge_applied"],
+                    "agent_id_applied": decorated["agent_id_applied"],
+                    "agent_name_applied": decorated["agent_name_applied"],
+                    "agent_label_applied": decorated["agent_label_applied"],
                     "tab_title_applied": decorated["tab_title_applied"],
                     "session": session,
+                    "entry": entry,
+                    "tab": tab,
                 }
             )
 
         identity_injected_count = await _inject_identity_prompts(session_rows, identity_delay_sec=identity_delay_sec)
+        relabeled_count = await _reapply_labels_after_wakeup(session_rows)
 
         session_ids = [str(row.get("session_id", "") or "") for row in session_rows]
         result = {
@@ -276,11 +331,15 @@ def _run_iterm_tabs(entries: list[dict[str, Any]], identity_delay_sec: float) ->
                     "identity_injected": bool(row.get("identity_injected", False)),
                     "label_applied": bool(row.get("label_applied", False)),
                     "badge_applied": bool(row.get("badge_applied", False)),
+                    "agent_id_applied": bool(row.get("agent_id_applied", False)),
+                    "agent_name_applied": bool(row.get("agent_name_applied", False)),
+                    "agent_label_applied": bool(row.get("agent_label_applied", False)),
                     "tab_title_applied": bool(row.get("tab_title_applied", False)),
                 }
                 for row in session_rows
             ],
             "identity_injected_count": identity_injected_count,
+            "relabel_applied_count": relabeled_count,
             "layout": {
                 "mode": "tabs",
             },
@@ -338,12 +397,18 @@ def _run_iterm_panes(entries: list[dict[str, Any]], pane_count: int, identity_de
                     "identity_injected": False,
                     "label_applied": decorated["label_applied"],
                     "badge_applied": decorated["badge_applied"],
+                    "agent_id_applied": decorated["agent_id_applied"],
+                    "agent_name_applied": decorated["agent_name_applied"],
+                    "agent_label_applied": decorated["agent_label_applied"],
                     "tab_title_applied": False,
                     "session": session,
+                    "entry": entry,
+                    "tab": None,
                 }
             )
 
         identity_injected_count = await _inject_identity_prompts(session_rows, identity_delay_sec=identity_delay_sec)
+        relabeled_count = await _reapply_labels_after_wakeup(session_rows)
 
         session_ids = [str(row.get("session_id", "") or "") for row in session_rows]
         result = {
@@ -356,11 +421,15 @@ def _run_iterm_panes(entries: list[dict[str, Any]], pane_count: int, identity_de
                     "identity_injected": bool(row.get("identity_injected", False)),
                     "label_applied": bool(row.get("label_applied", False)),
                     "badge_applied": bool(row.get("badge_applied", False)),
+                    "agent_id_applied": bool(row.get("agent_id_applied", False)),
+                    "agent_name_applied": bool(row.get("agent_name_applied", False)),
+                    "agent_label_applied": bool(row.get("agent_label_applied", False)),
                     "tab_title_applied": False,
                 }
                 for row in session_rows
             ],
             "identity_injected_count": identity_injected_count,
+            "relabel_applied_count": relabeled_count,
             "layout": {
                 "mode": "panes",
                 "cols": cols,
@@ -499,6 +568,7 @@ def main() -> int:
         "arch_tabs": decision.get("arch_tabs"),
         "layout": launch_meta.get("layout", {"mode": args.layout}),
         "identity_injected_count": int(launch_meta.get("identity_injected_count") or 0),
+        "relabel_applied_count": int(launch_meta.get("relabel_applied_count") or 0),
         "agents": [
             {
                 "index": entry["index"],
@@ -511,6 +581,9 @@ def main() -> int:
                 "identity_injected": bool(session_rows[idx].get("identity_injected")) if idx < len(session_rows) else False,
                 "label_applied": bool(session_rows[idx].get("label_applied")) if idx < len(session_rows) else False,
                 "badge_applied": bool(session_rows[idx].get("badge_applied")) if idx < len(session_rows) else False,
+                "agent_id_applied": bool(session_rows[idx].get("agent_id_applied")) if idx < len(session_rows) else False,
+                "agent_name_applied": bool(session_rows[idx].get("agent_name_applied")) if idx < len(session_rows) else False,
+                "agent_label_applied": bool(session_rows[idx].get("agent_label_applied")) if idx < len(session_rows) else False,
                 "tab_title_applied": bool(session_rows[idx].get("tab_title_applied")) if idx < len(session_rows) else False,
             }
             for idx, entry in enumerate(entries)
@@ -532,7 +605,8 @@ def main() -> int:
     print(
         f"[iTerm] labels={sum(1 for row in payload['agents'] if row.get('label_applied'))}/{len(payload['agents'])}, "
         f"badges={sum(1 for row in payload['agents'] if row.get('badge_applied'))}/{len(payload['agents'])}, "
-        f"identity={payload['identity_injected_count']}/{len(payload['agents'])}"
+        f"identity={payload['identity_injected_count']}/{len(payload['agents'])}, "
+        f"relabel={payload['relabel_applied_count']}/{len(payload['agents'])}"
     )
     print(f"[State] {args.state_file}")
     return 0

@@ -23,7 +23,7 @@ from dotenv import load_dotenv, set_key
 from agent_monitor import classify_status
 from agents.iterm_bridge import list_iterm_agent_sessions, read_iterm_output
 from audit_log import append_event, query_events, list_filter_values as list_audit_filter_values
-from db.postgres import fetch_one
+from db.postgres import fetch_all, fetch_one
 from system_log import query_logs as query_system_logs, list_filter_values as list_system_filter_values
 from topology_approval import approve_approval, is_valid_approval_id, list_approvals, reject_approval
 
@@ -323,7 +323,146 @@ def _summarize_agent_status(agents: list[dict[str, Any]]) -> dict[str, int]:
     return summary
 
 
-def _build_agent_status_snapshot(read_lines: int = 30) -> dict[str, Any]:
+def _is_agent_status_table_missing_error(exc: Exception) -> bool:
+    msg = str(exc)
+    normalized = msg.lower()
+    if "agent_status" not in normalized:
+        return False
+    return (
+        "does not exist" in normalized
+        or "undefinedtable" in normalized
+        or "no such table" in normalized
+        or "不存在" in msg
+    )
+
+
+def _to_epoch_seconds(raw: Any) -> float:
+    if raw is None:
+        return 0.0
+    if isinstance(raw, datetime):
+        dt = raw
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+
+    text = str(raw).strip()
+    if not text:
+        return 0.0
+
+    iso_text = text.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(iso_text)
+    except ValueError:
+        return 0.0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _normalize_output_tail(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+
+    values: list[Any]
+    if isinstance(raw, list):
+        values = raw
+    elif isinstance(raw, tuple):
+        values = list(raw)
+    elif isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = text
+            if isinstance(parsed, list):
+                values = parsed
+            else:
+                values = [text]
+        else:
+            values = text.splitlines()
+    else:
+        values = [raw]
+
+    normalized = [str(item).strip() for item in values if str(item).strip()]
+    return normalized[-20:]
+
+
+def _build_agent_status_snapshot_from_table() -> Optional[dict[str, Any]]:
+    ts = datetime.now(timezone.utc).isoformat()
+
+    try:
+        rows = fetch_all("SELECT * FROM agent_status LIMIT 500")
+    except Exception as exc:
+        if _is_agent_status_table_missing_error(exc):
+            return None
+        logger.debug("读取 agent_status 表失败，回退旧状态采集逻辑", exc_info=True)
+        return None
+
+    if not isinstance(rows, list):
+        rows = []
+
+    by_agent: dict[str, tuple[float, dict[str, Any]]] = {}
+    latest_ts = ts
+    latest_epoch = 0.0
+
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+
+        agent_id = str(row.get("agent_id", "")).strip()
+        if not agent_id:
+            continue
+
+        raw_updated = row.get("updated_at") or row.get("ts") or row.get("created_at")
+        updated_epoch = _to_epoch_seconds(raw_updated)
+        if updated_epoch <= 0:
+            updated_epoch = float(idx + 1)
+
+        if raw_updated is not None:
+            updated_text = str(raw_updated).strip()
+            if updated_text and _to_epoch_seconds(raw_updated) >= latest_epoch:
+                latest_epoch = _to_epoch_seconds(raw_updated)
+                latest_ts = updated_text
+
+        status = str(row.get("status", "unknown")).strip().lower()
+        if status not in _AGENT_STATUS_NAMES:
+            status = "unknown"
+
+        output_source = row.get("output_tail", row.get("output"))
+        normalized_row = {
+            "agent_id": agent_id,
+            "agent_name": str(row.get("agent_name", "")).strip(),
+            "session_id": str(row.get("session_id", "")).strip(),
+            "status": status,
+            "stagnant_sec": _safe_int(row.get("stagnant_sec", 0), 0, 0, 2147483647),
+            "error": str(row.get("error", "") or "").strip(),
+            "output_tail": _normalize_output_tail(output_source),
+        }
+
+        previous = by_agent.get(agent_id)
+        if not previous or updated_epoch >= previous[0]:
+            by_agent[agent_id] = (updated_epoch, normalized_row)
+
+    agents = [item[1] for item in sorted(by_agent.values(), key=lambda row: row[0], reverse=True)]
+
+    return {
+        "ok": True,
+        "ts": latest_ts,
+        "summary": _summarize_agent_status(agents),
+        "agents": agents,
+        "source": {
+            "sessions_ok": True,
+            "output_ok": True,
+            "db_ok": True,
+            "mode": "agent_status_table",
+        },
+    }
+
+
+def _build_agent_status_snapshot_legacy(read_lines: int = 30) -> dict[str, Any]:
     """Collect current iTerm agent status snapshot for dashboard API."""
     ts = datetime.now(timezone.utc).isoformat()
 
@@ -439,6 +578,13 @@ def _build_agent_status_snapshot(read_lines: int = 30) -> dict[str, Any]:
         "agents": agents,
         "source": {"sessions_ok": True, "output_ok": True},
     }
+
+
+def _build_agent_status_snapshot(read_lines: int = 30) -> dict[str, Any]:
+    table_snapshot = _build_agent_status_snapshot_from_table()
+    if table_snapshot is not None:
+        return table_snapshot
+    return _build_agent_status_snapshot_legacy(read_lines=read_lines)
 
 
 def _check_dashboard_ready() -> tuple[bool, str]:

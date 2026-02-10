@@ -1,5 +1,7 @@
+import asyncio
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import scripts.iterm_launch_agents as launcher
 
@@ -51,6 +53,43 @@ class ItermLaunchAgentsTests(unittest.TestCase):
         )
 
         self.assertEqual(entries[0]["identity_prompt"], "")
+
+    def test_reapply_labels_after_wakeup(self):
+        rows = [
+            {
+                "session": object(),
+                "entry": {"agent_id": "agent_01"},
+                "tab": object(),
+                "label_applied": False,
+                "badge_applied": False,
+                "agent_id_applied": False,
+                "agent_name_applied": False,
+                "agent_label_applied": False,
+                "tab_title_applied": False,
+            }
+        ]
+
+        decorate_mock = AsyncMock(
+            return_value={
+                "label_applied": True,
+                "badge_applied": True,
+                "agent_id_applied": True,
+                "agent_name_applied": True,
+                "agent_label_applied": True,
+                "tab_title_applied": True,
+            }
+        )
+
+        with patch("scripts.iterm_launch_agents._decorate_session", decorate_mock):
+            count = asyncio.run(launcher._reapply_labels_after_wakeup(rows, relabel_delay_sec=0))
+
+        self.assertEqual(count, 1)
+        self.assertTrue(rows[0]["label_applied"])
+        self.assertTrue(rows[0]["badge_applied"])
+        self.assertTrue(rows[0]["agent_id_applied"])
+        self.assertTrue(rows[0]["agent_name_applied"])
+        self.assertTrue(rows[0]["agent_label_applied"])
+        self.assertTrue(rows[0]["tab_title_applied"])
 
 
 if __name__ == "__main__":

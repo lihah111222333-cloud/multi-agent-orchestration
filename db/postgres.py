@@ -342,6 +342,31 @@ def ensure_schema() -> None:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_prompt_templates_agent_tool ON prompt_templates (agent_key, tool_name)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_prompt_templates_enabled ON prompt_templates (enabled, updated_at DESC)")
 
+                # Agent 提示词模板版本归档表
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS prompt_template_versions (
+                        id BIGSERIAL PRIMARY KEY,
+                        prompt_key TEXT NOT NULL,
+                        title TEXT NOT NULL DEFAULT '',
+                        agent_key TEXT NOT NULL DEFAULT '',
+                        tool_name TEXT NOT NULL DEFAULT '',
+                        prompt_text TEXT NOT NULL,
+                        variables JSONB,
+                        tags JSONB,
+                        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                        created_by TEXT NOT NULL DEFAULT '',
+                        updated_by TEXT NOT NULL DEFAULT '',
+                        source_updated_at TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_prompt_template_versions_key_id ON prompt_template_versions (prompt_key, id DESC)"
+                )
+
                 # 命令卡表
                 cur.execute(
                     """

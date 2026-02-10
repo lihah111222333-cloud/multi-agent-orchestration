@@ -211,6 +211,25 @@ def _row_to_prompt(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _row_to_prompt_version(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": int(row.get("id", 0)),
+        "prompt_key": str(row.get("prompt_key", "")),
+        "title": str(row.get("title", "")),
+        "agent_key": str(row.get("agent_key", "")),
+        "tool_name": str(row.get("tool_name", "")),
+        "prompt_text": str(row.get("prompt_text", "")),
+        "variables": row.get("variables") if isinstance(row.get("variables"), (dict, list)) else {},
+        "tags": row.get("tags") if isinstance(row.get("tags"), (dict, list)) else [],
+        "enabled": bool(row.get("enabled", True)),
+        "created_by": str(row.get("created_by", "")),
+        "updated_by": str(row.get("updated_by", "")),
+        "source_updated_at": _fmt_dt(row.get("source_updated_at")),
+        "created_at": _fmt_dt(row.get("created_at")),
+        "archived_at": _fmt_dt(row.get("archived_at")),
+    }
+
+
 def _row_to_card(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": int(row.get("id", 0)),
@@ -440,6 +459,42 @@ def save_prompt_template(
     if not prompt_body:
         raise ValueError("prompt_text 不能为空")
 
+    previous = fetch_one(
+        """
+        SELECT id, prompt_key, title, agent_key, tool_name, prompt_text,
+               variables, tags, enabled, created_by, updated_by,
+               created_at, updated_at
+        FROM prompt_templates
+        WHERE prompt_key = %s
+        """,
+        (key,),
+    )
+
+    if previous:
+        execute(
+            """
+            INSERT INTO prompt_template_versions (
+                prompt_key, title, agent_key, tool_name, prompt_text,
+                variables, tags, enabled, created_by, updated_by,
+                source_updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
+            """,
+            (
+                str(previous.get("prompt_key") or ""),
+                str(previous.get("title") or ""),
+                str(previous.get("agent_key") or ""),
+                str(previous.get("tool_name") or ""),
+                str(previous.get("prompt_text") or ""),
+                _as_json_text(previous.get("variables")),
+                _as_json_text(previous.get("tags") if previous.get("tags") is not None else []),
+                bool(previous.get("enabled", True)),
+                str(previous.get("created_by") or ""),
+                str(previous.get("updated_by") or ""),
+                previous.get("updated_at"),
+            ),
+        )
+
     row = fetch_one(
         """
         INSERT INTO prompt_templates (
@@ -486,6 +541,67 @@ def save_prompt_template(
         detail=result.get("tool_name", ""),
     )
     return result
+
+
+def list_prompt_template_versions(prompt_key: str, limit: int = 20) -> list[dict[str, Any]]:
+    key = _normalize_key("prompt_key", prompt_key)
+    rows = fetch_all(
+        """
+        SELECT id, prompt_key, title, agent_key, tool_name, prompt_text,
+               variables, tags, enabled, created_by, updated_by,
+               source_updated_at, created_at, archived_at
+        FROM prompt_template_versions
+        WHERE prompt_key = %s
+        ORDER BY id DESC
+        LIMIT %s
+        """,
+        (key, normalize_limit(limit, default=20)),
+    )
+    return [_row_to_prompt_version(row) for row in rows]
+
+
+def rollback_prompt_template(prompt_key: str, version_id: int, updated_by: str = "") -> dict[str, Any]:
+    key = _normalize_key("prompt_key", prompt_key)
+    try:
+        vid = int(version_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("version_id 非法") from exc
+    if vid <= 0:
+        raise ValueError("version_id 非法")
+
+    version_row = fetch_one(
+        """
+        SELECT id, prompt_key, title, agent_key, tool_name, prompt_text,
+               variables, tags, enabled, created_by, updated_by,
+               source_updated_at, created_at, archived_at
+        FROM prompt_template_versions
+        WHERE id = %s AND prompt_key = %s
+        """,
+        (vid, key),
+    )
+    if not version_row:
+        return {"ok": False, "message": f"prompt version not found: {key}#{vid}"}
+
+    prompt = save_prompt_template(
+        prompt_key=key,
+        title=str(version_row.get("title") or ""),
+        prompt_text=str(version_row.get("prompt_text") or ""),
+        agent_key=str(version_row.get("agent_key") or ""),
+        tool_name=str(version_row.get("tool_name") or ""),
+        variables=version_row.get("variables"),
+        tags=version_row.get("tags"),
+        enabled=bool(version_row.get("enabled", True)),
+        updated_by=str(updated_by or ""),
+    )
+    append_event(
+        event_type="prompt_template",
+        action="rollback",
+        result="ok",
+        actor=str(updated_by or ""),
+        target=key,
+        detail=f"version_id={vid}",
+    )
+    return {"ok": True, "prompt": prompt, "version": _row_to_prompt_version(version_row)}
 
 
 def get_prompt_template(prompt_key: str) -> Optional[dict[str, Any]]:

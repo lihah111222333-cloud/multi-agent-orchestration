@@ -7,6 +7,58 @@ from tests.pg_test_helper import isolated_pg_schema
 
 
 class AgentOpsStoreTests(unittest.TestCase):
+    def test_prompt_template_versioning_and_rollback(self):
+        with isolated_pg_schema("ops"):
+            first = agent_ops_store.save_prompt_template(
+                prompt_key="agent_01.fetch_market_data.v2",
+                title="市场采集模板v1",
+                prompt_text="v1 prompt",
+                agent_key="agent_01",
+                tool_name="fetch_market_data",
+                variables={"symbol": "BTC"},
+                tags=["market", "v1"],
+                enabled=True,
+                updated_by="tester",
+            )
+            self.assertEqual(first["prompt_text"], "v1 prompt")
+
+            second = agent_ops_store.save_prompt_template(
+                prompt_key="agent_01.fetch_market_data.v2",
+                title="市场采集模板v2",
+                prompt_text="v2 prompt",
+                agent_key="agent_01",
+                tool_name="fetch_market_data",
+                variables={"symbol": "ETH"},
+                tags=["market", "v2"],
+                enabled=False,
+                updated_by="tester2",
+            )
+            self.assertEqual(second["prompt_text"], "v2 prompt")
+
+            versions = agent_ops_store.list_prompt_template_versions(
+                prompt_key="agent_01.fetch_market_data.v2",
+                limit=20,
+            )
+            self.assertGreaterEqual(len(versions), 1)
+            self.assertEqual(versions[0]["prompt_text"], "v1 prompt")
+            self.assertEqual(versions[0]["updated_by"], "tester")
+
+            rolled = agent_ops_store.rollback_prompt_template(
+                prompt_key="agent_01.fetch_market_data.v2",
+                version_id=int(versions[0]["id"]),
+                updated_by="rollbacker",
+            )
+            self.assertTrue(rolled["ok"])
+            self.assertEqual(rolled["prompt"]["prompt_text"], "v1 prompt")
+            self.assertEqual(rolled["prompt"]["updated_by"], "rollbacker")
+
+            versions_after = agent_ops_store.list_prompt_template_versions(
+                prompt_key="agent_01.fetch_market_data.v2",
+                limit=20,
+            )
+            texts = [row["prompt_text"] for row in versions_after]
+            self.assertIn("v2 prompt", texts)
+
     def test_save_command_card_raises_explicit_error_when_db_returns_no_row(self):
         with patch("agent_ops_store.fetch_one", return_value=None):
             with self.assertRaises(agent_ops_store.RowMissingError):

@@ -34,9 +34,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", None)  # 支持第三方中转 API
 
 # LLM 健壮性配置
-LLM_TIMEOUT = as_int_env("LLM_TIMEOUT", 60, min_value=1)  # 单次 LLM 调用超时(秒)
+LLM_TIMEOUT = as_int_env("LLM_TIMEOUT", 120, min_value=1)  # 单次 LLM 调用超时(秒)
 LLM_MAX_RETRIES = as_int_env("LLM_MAX_RETRIES", 3, min_value=0)  # LLM 调用最大重试次数
-GATEWAY_TIMEOUT = as_int_env("GATEWAY_TIMEOUT", 120, min_value=1)  # 单个 Gateway 执行超时(秒)
+GATEWAY_TIMEOUT = as_int_env("GATEWAY_TIMEOUT", 240, min_value=1)  # 单个 Gateway 执行超时(秒)
 GATEWAY_MAX_ATTEMPTS = as_int_env("GATEWAY_MAX_ATTEMPTS", 2, min_value=1)  # Gateway 最大尝试次数（默认1次重试）
 
 # ========================

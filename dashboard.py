@@ -73,9 +73,9 @@ DEFAULTS = {
     "OPENAI_BASE_URL": "",
     "LLM_MODEL": "gpt-4o",
     "LLM_TEMPERATURE": "0.7",
-    "LLM_TIMEOUT": "60",
+    "LLM_TIMEOUT": "120",
     "LLM_MAX_RETRIES": "3",
-    "GATEWAY_TIMEOUT": "120",
+    "GATEWAY_TIMEOUT": "240",
     "GATEWAY_MAX_ATTEMPTS": "2",
     "GATEWAY_MIN_QUALITY_SCORE": "25",
     "LOG_LEVEL": "INFO",
@@ -912,7 +912,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 auto_approve = _safe_bool(data.get("auto_approve", False), default=False)
                 reviewer = str(data.get("reviewer", "")).strip()
                 review_note = str(data.get("review_note", "")).strip()
-                timeout_sec = _safe_int(data.get("timeout_sec", "120"), 120, 1, 3600)
+                timeout_sec = _safe_int(data.get("timeout_sec", "240"), 240, 1, 3600)
 
                 res = execute_command_card(
                     card_key=card_key,
@@ -980,7 +980,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 data = json.loads(body)
                 run_id = _parse_required_int(data.get("run_id"), "run_id", 1, 10_000_000)
                 actor = _safe_identifier(data.get("actor", "dashboard")) or "dashboard"
-                timeout_sec = _safe_int(data.get("timeout_sec", "120"), 120, 1, 3600)
+                timeout_sec = _safe_int(data.get("timeout_sec", "240"), 240, 1, 3600)
 
                 res = execute_command_card_run(
                     run_id=run_id,

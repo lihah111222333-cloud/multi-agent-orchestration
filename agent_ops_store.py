@@ -6,7 +6,7 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from audit_log import append_event
@@ -40,6 +40,9 @@ _DB_EXECUTE_ALLOWED_TABLES = {
     "task_traces",
     "command_cards",
     "command_card_runs",
+    "task_acks",
+    "task_dags",
+    "task_dag_nodes",
 }
 _DML_TARGET_TABLE_RE = re.compile(
     r"\b(?:insert\s+into|update|delete\s+from|merge\s+into)\s+([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\b",
@@ -174,7 +177,15 @@ def _as_json_text(value: Any) -> str:
 
 def _fmt_dt(value: Any) -> str:
     if isinstance(value, datetime):
-        return value.isoformat()
+        local = value.astimezone()
+        return local.strftime("%Y-%-m-%-d:%H:%M")
+    return str(value or "")
+
+
+def _fmt_dt_utc8_iso(value: Any) -> str:
+    if isinstance(value, datetime):
+        tz_utc8 = timezone(timedelta(hours=8))
+        return value.astimezone(tz_utc8).isoformat()
     return str(value or "")
 
 
@@ -470,8 +481,10 @@ def _row_to_card(row: dict[str, Any]) -> dict[str, Any]:
         "enabled": bool(row.get("enabled", True)),
         "created_by": str(row.get("created_by", "")),
         "updated_by": str(row.get("updated_by", "")),
-        "created_at": _fmt_dt(row.get("created_at")),
-        "updated_at": _fmt_dt(row.get("updated_at")),
+        "created_at": _fmt_dt_utc8_iso(row.get("created_at")),
+        "updated_at": _fmt_dt_utc8_iso(row.get("updated_at")),
+        "last_run_at": _fmt_dt_utc8_iso(row.get("last_run_at")),
+        "run_count": int(row.get("run_count", 0) or 0),
     }
 
 
@@ -661,6 +674,7 @@ def save_prompt_template(
     tags: Optional[Any] = None,
     enabled: bool = True,
     updated_by: str = "",
+    description: str = "",
 ) -> dict[str, Any]:
     """保存或更新提示词模板（按 prompt_key 做 upsert）。
 
@@ -918,6 +932,52 @@ def set_prompt_template_enabled(prompt_key: str, enabled: bool, updated_by: str 
     return {"ok": True, "prompt": result}
 
 
+def delete_prompt_templates(prompt_keys: list[str], updated_by: str = "") -> dict[str, Any]:
+    """批量删除提示词模板。"""
+    if not isinstance(prompt_keys, list):
+        raise ValueError("prompt_keys 必须是数组")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in prompt_keys:
+        key = _normalize_key("prompt_key", str(raw or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+
+    if not normalized:
+        raise ValueError("prompt_keys 不能为空")
+
+    rows = fetch_all(
+        """
+        DELETE FROM prompt_templates
+        WHERE prompt_key = ANY(%s::text[])
+        RETURNING prompt_key
+        """,
+        (normalized,),
+    )
+    deleted_keys = [str(row.get("prompt_key", "")) for row in rows if str(row.get("prompt_key", "")).strip()]
+
+    if deleted_keys:
+        append_event(
+            event_type="prompt_template",
+            action="delete",
+            result="ok",
+            actor=str(updated_by or ""),
+            target=",".join(deleted_keys[:10]),
+            detail=f"deleted={len(deleted_keys)}",
+            extra={"prompt_keys": deleted_keys},
+        )
+
+    return {
+        "ok": True,
+        "requested": len(normalized),
+        "deleted": len(deleted_keys),
+        "prompt_keys": deleted_keys,
+    }
+
+
 def save_command_card(
     card_key: str,
     title: str,
@@ -1025,29 +1085,37 @@ def list_command_cards(
     params: list[Any] = []
 
     if risk_level:
-        where.append("risk_level = %s")
+        where.append("c.risk_level = %s")
         params.append(str(risk_level).strip().lower())
     if enabled_only:
-        where.append("enabled = TRUE")
+        where.append("c.enabled = TRUE")
     if keyword:
         kw = f"%{escape_like(keyword.lower())}%"
         where.append(
-            "(LOWER(card_key) LIKE %s ESCAPE E'\\\\' "
-            "OR LOWER(title) LIKE %s ESCAPE E'\\\\' "
-            "OR LOWER(description) LIKE %s ESCAPE E'\\\\' "
-            "OR LOWER(command_template) LIKE %s ESCAPE E'\\\\')"
+            "(LOWER(c.card_key) LIKE %s ESCAPE E'\\\\' "
+            "OR LOWER(c.title) LIKE %s ESCAPE E'\\\\' "
+            "OR LOWER(c.description) LIKE %s ESCAPE E'\\\\' "
+            "OR LOWER(c.command_template) LIKE %s ESCAPE E'\\\\')"
         )
         params.extend([kw, kw, kw, kw])
 
     sql_text = """
-        SELECT id, card_key, title, description, command_template,
-               args_schema, risk_level, enabled, created_by, updated_by,
-               created_at, updated_at
-        FROM command_cards
+        SELECT c.id, c.card_key, c.title, c.description, c.command_template,
+               c.args_schema, c.risk_level, c.enabled, c.created_by, c.updated_by,
+               c.created_at, c.updated_at,
+               stats.last_run_at, COALESCE(stats.run_count, 0) AS run_count
+        FROM command_cards AS c
+        LEFT JOIN (
+            SELECT card_key,
+                   MAX(COALESCE(executed_at, updated_at, created_at)) AS last_run_at,
+                   COUNT(*)::BIGINT AS run_count
+            FROM command_card_runs
+            GROUP BY card_key
+        ) AS stats ON stats.card_key = c.card_key
     """
     if where:
         sql_text += " WHERE " + " AND ".join(where)
-    sql_text += " ORDER BY updated_at DESC, id DESC LIMIT %s"
+    sql_text += " ORDER BY c.updated_at DESC, c.id DESC LIMIT %s"
     params.append(normalize_limit(limit))
 
     return [_row_to_card(row) for row in fetch_all(sql_text, params)]
@@ -1083,6 +1151,51 @@ def set_command_card_enabled(card_key: str, enabled: bool, updated_by: str = "")
     return {"ok": True, "command_card": result}
 
 
+def delete_command_cards(card_keys: list[str], updated_by: str = "") -> dict[str, Any]:
+    if not isinstance(card_keys, list):
+        raise ValueError("card_keys 必须是数组")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in card_keys:
+        key = _normalize_key("card_key", str(raw or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+
+    if not normalized:
+        raise ValueError("card_keys 不能为空")
+
+    rows = fetch_all(
+        """
+        DELETE FROM command_cards
+        WHERE card_key = ANY(%s::text[])
+        RETURNING card_key
+        """,
+        (normalized,),
+    )
+    deleted_keys = [str(row.get("card_key", "")) for row in rows if str(row.get("card_key", "")).strip()]
+
+    if deleted_keys:
+        append_event(
+            event_type="command_card",
+            action="delete",
+            result="ok",
+            actor=str(updated_by or ""),
+            target=",".join(deleted_keys[:10]),
+            detail=f"deleted={len(deleted_keys)}",
+            extra={"card_keys": deleted_keys},
+        )
+
+    return {
+        "ok": True,
+        "requested": len(normalized),
+        "deleted": len(deleted_keys),
+        "card_keys": deleted_keys,
+    }
+
+
 # 便捷：允许 Agent 执行只读查询
 def db_query(sql_text: str, limit: int = 200) -> list[dict[str, Any]]:
     query = _validate_read_only_query(sql_text)
@@ -1114,3 +1227,500 @@ def db_execute(sql_text: str) -> dict[str, Any]:
         extra={"rowcount": rowcount},
     )
     return {"ok": True, "rowcount": rowcount}
+
+
+# ─── Task ACK ───────────────────────────────────────────────────────
+
+_ACK_STATUS_SET = {"pending", "acked", "in_progress", "done", "failed", "cancelled"}
+_ACK_PRIORITY_SET = {"low", "normal", "high", "critical"}
+
+
+def _row_to_ack(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": int(row.get("id", 0)),
+        "ack_key": str(row.get("ack_key", "")),
+        "title": str(row.get("title", "")),
+        "description": str(row.get("description", "")),
+        "assigned_to": str(row.get("assigned_to", "")),
+        "requested_by": str(row.get("requested_by", "")),
+        "priority": str(row.get("priority", "normal")),
+        "status": str(row.get("status", "pending")),
+        "progress": int(row.get("progress", 0) or 0),
+        "ack_message": str(row.get("ack_message", "")),
+        "result_summary": str(row.get("result_summary", "")),
+        "metadata": row.get("metadata") if isinstance(row.get("metadata"), (dict, list)) else {},
+        "due_at": _fmt_dt(row.get("due_at")),
+        "acked_at": _fmt_dt(row.get("acked_at")),
+        "started_at": _fmt_dt(row.get("started_at")),
+        "finished_at": _fmt_dt(row.get("finished_at")),
+        "created_at": _fmt_dt(row.get("created_at")),
+        "updated_at": _fmt_dt(row.get("updated_at")),
+    }
+
+
+_ACK_RETURNING = """
+    RETURNING id, ack_key, title, description, assigned_to, requested_by,
+              priority, status, progress, ack_message, result_summary,
+              metadata, due_at, acked_at, started_at, finished_at,
+              created_at, updated_at
+"""
+
+
+def save_task_ack(
+    ack_key: str,
+    title: str = "",
+    description: str = "",
+    assigned_to: str = "",
+    requested_by: str = "",
+    priority: str = "normal",
+    status: str = "pending",
+    progress: int = 0,
+    ack_message: str = "",
+    result_summary: str = "",
+    metadata: Optional[Any] = None,
+    due_at: Optional[str] = None,
+) -> dict[str, Any]:
+    key = _normalize_key("ack_key", ack_key)
+    pri = str(priority or "normal").strip().lower()
+    if pri not in _ACK_PRIORITY_SET:
+        pri = "normal"
+    st = str(status or "pending").strip().lower()
+    if st not in _ACK_STATUS_SET:
+        st = "pending"
+    prog = max(0, min(100, int(progress or 0)))
+
+    row = fetch_one(
+        f"""
+        INSERT INTO task_acks (
+            ack_key, title, description, assigned_to, requested_by,
+            priority, status, progress, ack_message, result_summary,
+            metadata, due_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::timestamptz)
+        ON CONFLICT (ack_key)
+        DO UPDATE SET
+            title = EXCLUDED.title,
+            description = EXCLUDED.description,
+            assigned_to = EXCLUDED.assigned_to,
+            requested_by = EXCLUDED.requested_by,
+            priority = EXCLUDED.priority,
+            status = EXCLUDED.status,
+            progress = EXCLUDED.progress,
+            ack_message = EXCLUDED.ack_message,
+            result_summary = EXCLUDED.result_summary,
+            metadata = EXCLUDED.metadata,
+            due_at = EXCLUDED.due_at,
+            updated_at = NOW()
+        {_ACK_RETURNING}
+        """,
+        (
+            key,
+            str(title or "").strip(),
+            str(description or "").strip(),
+            str(assigned_to or "").strip(),
+            str(requested_by or "").strip(),
+            pri, st, prog,
+            str(ack_message or "").strip(),
+            str(result_summary or "").strip(),
+            _as_json_text(metadata),
+            str(due_at or "").strip() or None,
+        ),
+    )
+    result = _row_to_ack(_require_row(row, "save_task_ack"))
+    append_event(
+        event_type="task_ack", action="save", result="ok",
+        actor=str(requested_by or ""), target=key,
+        detail=f"status={st} priority={pri}",
+    )
+    return {"ok": True, "task_ack": result}
+
+
+def list_task_acks(
+    keyword: str = "",
+    status: str = "",
+    priority: str = "",
+    assigned_to: str = "",
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    where: list[str] = []
+    params: list[Any] = []
+
+    if status:
+        where.append("status = %s")
+        params.append(str(status).strip().lower())
+    if priority:
+        where.append("priority = %s")
+        params.append(str(priority).strip().lower())
+    if assigned_to:
+        where.append("assigned_to = %s")
+        params.append(str(assigned_to).strip())
+    if keyword:
+        kw = f"%{escape_like(keyword.lower())}%"
+        where.append(
+            "(LOWER(ack_key) LIKE %s ESCAPE E'\\\\' "
+            "OR LOWER(title) LIKE %s ESCAPE E'\\\\' "
+            "OR LOWER(description) LIKE %s ESCAPE E'\\\\')"
+        )
+        params.extend([kw, kw, kw])
+
+    sql = "SELECT * FROM task_acks"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY updated_at DESC, id DESC LIMIT %s"
+    params.append(normalize_limit(limit))
+
+    return [_row_to_ack(row) for row in fetch_all(sql, params)]
+
+
+def update_task_ack_status(
+    ack_key: str,
+    status: str,
+    progress: Optional[int] = None,
+    ack_message: str = "",
+    result_summary: str = "",
+    updated_by: str = "",
+) -> dict[str, Any]:
+    key = _normalize_key("ack_key", ack_key)
+    st = str(status or "").strip().lower()
+    if st not in _ACK_STATUS_SET:
+        raise ValueError(f"无效状态: {st}")
+
+    sets = ["status = %s", "updated_at = NOW()"]
+    params: list[Any] = [st]
+
+    if st == "acked":
+        sets.append("acked_at = COALESCE(acked_at, NOW())")
+    elif st == "in_progress":
+        sets.append("started_at = COALESCE(started_at, NOW())")
+    elif st in ("done", "failed", "cancelled"):
+        sets.append("finished_at = NOW()")
+
+    if progress is not None:
+        sets.append("progress = %s")
+        params.append(max(0, min(100, int(progress))))
+    if ack_message:
+        sets.append("ack_message = %s")
+        params.append(str(ack_message).strip())
+    if result_summary:
+        sets.append("result_summary = %s")
+        params.append(str(result_summary).strip())
+
+    params.append(key)
+    row = fetch_one(
+        f"UPDATE task_acks SET {', '.join(sets)} WHERE ack_key = %s {_ACK_RETURNING}",
+        params,
+    )
+    if not row:
+        return {"ok": False, "error": f"ACK not found: {key}"}
+
+    result = _row_to_ack(row)
+    append_event(
+        event_type="task_ack", action="status", result="ok",
+        actor=str(updated_by or ""), target=key, detail=st,
+    )
+    return {"ok": True, "task_ack": result}
+
+
+def delete_task_acks(ack_keys: list[str], updated_by: str = "") -> dict[str, Any]:
+    if not isinstance(ack_keys, list):
+        raise ValueError("ack_keys 必须是数组")
+    normalized = list({_normalize_key("ack_key", str(k or "")) for k in ack_keys})
+    if not normalized:
+        raise ValueError("ack_keys 不能为空")
+
+    rows = fetch_all(
+        "DELETE FROM task_acks WHERE ack_key = ANY(%s::text[]) RETURNING ack_key",
+        (normalized,),
+    )
+    deleted = [str(r.get("ack_key", "")) for r in rows if str(r.get("ack_key", "")).strip()]
+    if deleted:
+        append_event(
+            event_type="task_ack", action="delete", result="ok",
+            actor=str(updated_by or ""), target=",".join(deleted[:10]),
+            detail=f"deleted={len(deleted)}",
+        )
+    return {"ok": True, "requested": len(normalized), "deleted": len(deleted), "ack_keys": deleted}
+
+
+# ─── Task DAG ───────────────────────────────────────────────────────
+
+_DAG_STATUS_SET = {"draft", "ready", "running", "paused", "done", "failed"}
+_NODE_STATUS_SET = {"pending", "running", "done", "failed", "skipped"}
+_NODE_TYPE_SET = {"task", "gate", "check"}
+
+
+def _row_to_dag(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": int(row.get("id", 0)),
+        "dag_key": str(row.get("dag_key", "")),
+        "title": str(row.get("title", "")),
+        "description": str(row.get("description", "")),
+        "status": str(row.get("status", "draft")),
+        "created_by": str(row.get("created_by", "")),
+        "metadata": row.get("metadata") if isinstance(row.get("metadata"), (dict, list)) else {},
+        "started_at": _fmt_dt(row.get("started_at")),
+        "finished_at": _fmt_dt(row.get("finished_at")),
+        "created_at": _fmt_dt(row.get("created_at")),
+        "updated_at": _fmt_dt(row.get("updated_at")),
+    }
+
+
+def _row_to_dag_node(row: dict[str, Any]) -> dict[str, Any]:
+    deps = row.get("depends_on")
+    if not isinstance(deps, list):
+        deps = []
+    return {
+        "id": int(row.get("id", 0)),
+        "dag_key": str(row.get("dag_key", "")),
+        "node_key": str(row.get("node_key", "")),
+        "title": str(row.get("title", "")),
+        "node_type": str(row.get("node_type", "task")),
+        "assigned_to": str(row.get("assigned_to", "")),
+        "depends_on": deps,
+        "status": str(row.get("status", "pending")),
+        "command_ref": str(row.get("command_ref", "")),
+        "config": row.get("config") if isinstance(row.get("config"), (dict, list)) else {},
+        "result": row.get("result") if isinstance(row.get("result"), (dict, list)) else {},
+        "started_at": _fmt_dt(row.get("started_at")),
+        "finished_at": _fmt_dt(row.get("finished_at")),
+        "created_at": _fmt_dt(row.get("created_at")),
+        "updated_at": _fmt_dt(row.get("updated_at")),
+    }
+
+
+_DAG_RETURNING = """
+    RETURNING id, dag_key, title, description, status, created_by,
+              metadata, started_at, finished_at, created_at, updated_at
+"""
+
+_NODE_RETURNING = """
+    RETURNING id, dag_key, node_key, title, node_type, assigned_to,
+              depends_on, status, command_ref, config, result,
+              started_at, finished_at, created_at, updated_at
+"""
+
+
+def save_task_dag(
+    dag_key: str,
+    title: str = "",
+    description: str = "",
+    status: str = "draft",
+    created_by: str = "",
+    metadata: Optional[Any] = None,
+) -> dict[str, Any]:
+    key = _normalize_key("dag_key", dag_key)
+    st = str(status or "draft").strip().lower()
+    if st not in _DAG_STATUS_SET:
+        st = "draft"
+
+    row = fetch_one(
+        f"""
+        INSERT INTO task_dags (dag_key, title, description, status, created_by, metadata)
+        VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+        ON CONFLICT (dag_key)
+        DO UPDATE SET
+            title = EXCLUDED.title,
+            description = EXCLUDED.description,
+            status = EXCLUDED.status,
+            created_by = EXCLUDED.created_by,
+            metadata = EXCLUDED.metadata,
+            updated_at = NOW()
+        {_DAG_RETURNING}
+        """,
+        (
+            key,
+            str(title or "").strip(),
+            str(description or "").strip(),
+            st,
+            str(created_by or "").strip(),
+            _as_json_text(metadata),
+        ),
+    )
+    result = _row_to_dag(_require_row(row, "save_task_dag"))
+    append_event(
+        event_type="task_dag", action="save", result="ok",
+        actor=str(created_by or ""), target=key,
+    )
+    return {"ok": True, "task_dag": result}
+
+
+def list_task_dags(
+    keyword: str = "",
+    status: str = "",
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    where: list[str] = []
+    params: list[Any] = []
+
+    if status:
+        where.append("status = %s")
+        params.append(str(status).strip().lower())
+    if keyword:
+        kw = f"%{escape_like(keyword.lower())}%"
+        where.append(
+            "(LOWER(dag_key) LIKE %s ESCAPE E'\\\\' "
+            "OR LOWER(title) LIKE %s ESCAPE E'\\\\' "
+            "OR LOWER(description) LIKE %s ESCAPE E'\\\\')"
+        )
+        params.extend([kw, kw, kw])
+
+    sql = "SELECT * FROM task_dags"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY updated_at DESC, id DESC LIMIT %s"
+    params.append(normalize_limit(limit))
+
+    dags = [_row_to_dag(row) for row in fetch_all(sql, params)]
+
+    # 附加每个 DAG 的节点统计
+    if dags:
+        dag_keys = [d["dag_key"] for d in dags]
+        stats_rows = fetch_all(
+            """
+            SELECT dag_key, status, COUNT(*) AS cnt
+            FROM task_dag_nodes
+            WHERE dag_key = ANY(%s::text[])
+            GROUP BY dag_key, status
+            """,
+            (dag_keys,),
+        )
+        stats: dict[str, dict[str, int]] = {}
+        for sr in stats_rows:
+            dk = str(sr.get("dag_key", ""))
+            st_name = str(sr.get("status", ""))
+            cnt = int(sr.get("cnt", 0))
+            stats.setdefault(dk, {})[st_name] = cnt
+
+        for d in dags:
+            dk = d["dag_key"]
+            node_stats = stats.get(dk, {})
+            total = sum(node_stats.values())
+            done = node_stats.get("done", 0)
+            d["node_total"] = total
+            d["node_done"] = done
+            d["node_stats"] = node_stats
+
+    return dags
+
+
+def get_task_dag_detail(dag_key: str) -> Optional[dict[str, Any]]:
+    key = _normalize_key("dag_key", dag_key)
+    row = fetch_one("SELECT * FROM task_dags WHERE dag_key = %s", (key,))
+    if not row:
+        return None
+    dag = _row_to_dag(row)
+    nodes = fetch_all(
+        "SELECT * FROM task_dag_nodes WHERE dag_key = %s ORDER BY id", (key,),
+    )
+    dag["nodes"] = [_row_to_dag_node(n) for n in nodes]
+    return dag
+
+
+def save_dag_node(
+    dag_key: str,
+    node_key: str,
+    title: str = "",
+    node_type: str = "task",
+    assigned_to: str = "",
+    depends_on: Optional[list[str]] = None,
+    command_ref: str = "",
+    config: Optional[Any] = None,
+) -> dict[str, Any]:
+    dk = _normalize_key("dag_key", dag_key)
+    nk = _normalize_key("node_key", node_key)
+    nt = str(node_type or "task").strip().lower()
+    if nt not in _NODE_TYPE_SET:
+        nt = "task"
+    deps = list(depends_on) if isinstance(depends_on, list) else []
+
+    row = fetch_one(
+        f"""
+        INSERT INTO task_dag_nodes (dag_key, node_key, title, node_type, assigned_to, depends_on, command_ref, config)
+        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb)
+        ON CONFLICT (dag_key, node_key)
+        DO UPDATE SET
+            title = EXCLUDED.title,
+            node_type = EXCLUDED.node_type,
+            assigned_to = EXCLUDED.assigned_to,
+            depends_on = EXCLUDED.depends_on,
+            command_ref = EXCLUDED.command_ref,
+            config = EXCLUDED.config,
+            updated_at = NOW()
+        {_NODE_RETURNING}
+        """,
+        (dk, nk, str(title or "").strip(), nt, str(assigned_to or "").strip(),
+         _as_json_text(deps), str(command_ref or "").strip(), _as_json_text(config)),
+    )
+    result = _row_to_dag_node(_require_row(row, "save_dag_node"))
+    append_event(
+        event_type="task_dag", action="node_save", result="ok",
+        target=f"{dk}/{nk}",
+    )
+    return {"ok": True, "node": result}
+
+
+def update_dag_node_status(
+    dag_key: str,
+    node_key: str,
+    status: str,
+    result: Optional[Any] = None,
+    updated_by: str = "",
+) -> dict[str, Any]:
+    dk = _normalize_key("dag_key", dag_key)
+    nk = _normalize_key("node_key", node_key)
+    st = str(status or "").strip().lower()
+    if st not in _NODE_STATUS_SET:
+        raise ValueError(f"无效节点状态: {st}")
+
+    sets = ["status = %s", "updated_at = NOW()"]
+    params: list[Any] = [st]
+
+    if st == "running":
+        sets.append("started_at = COALESCE(started_at, NOW())")
+    elif st in ("done", "failed", "skipped"):
+        sets.append("finished_at = NOW()")
+
+    if result is not None:
+        sets.append("result = %s::jsonb")
+        params.append(_as_json_text(result))
+
+    params.extend([dk, nk])
+    row = fetch_one(
+        f"UPDATE task_dag_nodes SET {', '.join(sets)} WHERE dag_key = %s AND node_key = %s {_NODE_RETURNING}",
+        params,
+    )
+    if not row:
+        return {"ok": False, "error": f"节点未找到: {dk}/{nk}"}
+
+    node = _row_to_dag_node(row)
+    append_event(
+        event_type="task_dag", action="node_status", result="ok",
+        actor=str(updated_by or ""), target=f"{dk}/{nk}", detail=st,
+    )
+    return {"ok": True, "node": node}
+
+
+def delete_task_dags(dag_keys: list[str], updated_by: str = "") -> dict[str, Any]:
+    if not isinstance(dag_keys, list):
+        raise ValueError("dag_keys 必须是数组")
+    normalized = list({_normalize_key("dag_key", str(k or "")) for k in dag_keys})
+    if not normalized:
+        raise ValueError("dag_keys 不能为空")
+
+    # 先删节点再删主表
+    fetch_all(
+        "DELETE FROM task_dag_nodes WHERE dag_key = ANY(%s::text[]) RETURNING id",
+        (normalized,),
+    )
+    rows = fetch_all(
+        "DELETE FROM task_dags WHERE dag_key = ANY(%s::text[]) RETURNING dag_key",
+        (normalized,),
+    )
+    deleted = [str(r.get("dag_key", "")) for r in rows if str(r.get("dag_key", "")).strip()]
+    if deleted:
+        append_event(
+            event_type="task_dag", action="delete", result="ok",
+            actor=str(updated_by or ""), target=",".join(deleted[:10]),
+            detail=f"deleted={len(deleted)}",
+        )
+    return {"ok": True, "requested": len(normalized), "deleted": len(deleted), "dag_keys": deleted}

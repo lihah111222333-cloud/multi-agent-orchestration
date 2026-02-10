@@ -20,6 +20,8 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv, set_key
 
+from agent_monitor import classify_status
+from agents.iterm_bridge import list_iterm_agent_sessions, read_iterm_output
 from audit_log import append_event, query_events, list_filter_values as list_audit_filter_values
 from db.postgres import fetch_one
 from system_log import query_logs as query_system_logs, list_filter_values as list_system_filter_values
@@ -28,6 +30,11 @@ from topology_approval import approve_approval, is_valid_approval_id, list_appro
 ENV_FILE = Path(__file__).parent / ".env"
 STATIC_DIR = Path(__file__).parent / "static"
 logger = logging.getLogger(__name__)
+
+AGENT_STATUS_STUCK_SEC = 60
+_AGENT_STATUS_MEMORY: dict[str, dict[str, Any]] = {}
+_AGENT_STATUS_LOCK = threading.Lock()
+_AGENT_STATUS_NAMES = ("running", "idle", "stuck", "error", "disconnected", "unknown")
 
 # 配置项定义
 CONFIG_SCHEMA = [
@@ -291,6 +298,147 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "no", "n", "off"}:
         return False
     return default
+
+
+def _empty_agent_status_summary() -> dict[str, int]:
+    return {
+        "total": 0,
+        "healthy": 0,
+        "unhealthy": 0,
+        **{name: 0 for name in _AGENT_STATUS_NAMES},
+    }
+
+
+def _summarize_agent_status(agents: list[dict[str, Any]]) -> dict[str, int]:
+    summary = _empty_agent_status_summary()
+    for agent in agents:
+        status = str(agent.get("status", "unknown")).strip().lower()
+        if status not in _AGENT_STATUS_NAMES:
+            status = "unknown"
+        summary[status] += 1
+        summary["total"] += 1
+
+    summary["healthy"] = summary["running"] + summary["idle"]
+    summary["unhealthy"] = summary["total"] - summary["healthy"]
+    return summary
+
+
+def _build_agent_status_snapshot(read_lines: int = 30) -> dict[str, Any]:
+    """Collect current iTerm agent status snapshot for dashboard API."""
+    ts = datetime.now(timezone.utc).isoformat()
+
+    sessions_payload = list_iterm_agent_sessions()
+    if not sessions_payload.get("ok"):
+        return {
+            "ok": False,
+            "ts": ts,
+            "error": str(sessions_payload.get("error", "list_sessions_failed")),
+            "summary": _empty_agent_status_summary(),
+            "agents": [],
+            "source": {"sessions_ok": False, "output_ok": False},
+        }
+
+    sessions = sessions_payload.get("sessions", [])
+    if not isinstance(sessions, list):
+        sessions = []
+
+    output_payload = read_iterm_output(all_agents=True, read_lines=max(1, int(read_lines)))
+    if not output_payload.get("ok"):
+        agents = [
+            {
+                "agent_id": str(item.get("agent_id", "")),
+                "agent_name": str(item.get("agent_name", "")),
+                "session_id": str(item.get("session_id", "")),
+                "status": "unknown",
+                "stagnant_sec": 0,
+                "error": str(output_payload.get("error", "read_output_failed")),
+                "output_tail": [],
+            }
+            for item in sessions
+        ]
+        return {
+            "ok": False,
+            "ts": ts,
+            "error": str(output_payload.get("error", "read_output_failed")),
+            "summary": _summarize_agent_status(agents),
+            "agents": agents,
+            "source": {"sessions_ok": True, "output_ok": False},
+        }
+
+    rows = output_payload.get("results", [])
+    if not isinstance(rows, list):
+        rows = []
+    row_by_agent: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        agent_id = str(row.get("agent_id", "")).strip()
+        if agent_id:
+            row_by_agent[agent_id] = row
+
+    now_ts = time.time()
+    agents: list[dict[str, Any]] = []
+
+    with _AGENT_STATUS_LOCK:
+        for item in sessions:
+            if not isinstance(item, dict):
+                continue
+
+            agent_id = str(item.get("agent_id", "")).strip()
+            agent_name = str(item.get("agent_name", "")).strip()
+            session_id = str(item.get("session_id", "")).strip()
+
+            row = row_by_agent.get(agent_id, {})
+            output_tail_raw = row.get("output", [])
+            output_tail = output_tail_raw if isinstance(output_tail_raw, list) else [str(output_tail_raw)]
+            output_tail = [str(line) for line in output_tail if str(line).strip()]
+
+            error_text = str(row.get("error", "")).strip()
+            has_session = bool(session_id) and "session not found" not in error_text.lower()
+
+            fingerprint = "\n".join(output_tail[-6:])
+            memory = _AGENT_STATUS_MEMORY.get(agent_id)
+            if memory and memory.get("fingerprint") == fingerprint:
+                last_change_ts = float(memory.get("last_change_ts", now_ts))
+            else:
+                last_change_ts = now_ts
+
+            _AGENT_STATUS_MEMORY[agent_id] = {
+                "fingerprint": fingerprint,
+                "last_change_ts": last_change_ts,
+            }
+
+            stagnant_sec = max(0, int(now_ts - last_change_ts))
+            status = classify_status(
+                output_tail,
+                has_session=has_session,
+                stagnant_sec=stagnant_sec,
+            )
+
+            if error_text and status not in {"error", "disconnected"}:
+                status = "disconnected"
+            if status not in _AGENT_STATUS_NAMES:
+                status = "unknown"
+
+            agents.append(
+                {
+                    "agent_id": agent_id,
+                    "agent_name": agent_name,
+                    "session_id": session_id,
+                    "status": status,
+                    "stagnant_sec": stagnant_sec,
+                    "error": error_text,
+                    "output_tail": output_tail[-20:],
+                }
+            )
+
+    return {
+        "ok": True,
+        "ts": ts,
+        "summary": _summarize_agent_status(agents),
+        "agents": agents,
+        "source": {"sessions_ok": True, "output_ok": True},
+    }
 
 
 def _check_dashboard_ready() -> tuple[bool, str]:
@@ -736,6 +884,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 config["OPENAI_API_KEY"] = k[:8] + "..." + k[-4:] if len(k) > 12 else "***"
             config["ignored_keys"] = []
             self._respond(200, "application/json", json.dumps(config).encode("utf-8"))
+
+        elif path == "/api/agent-status":
+            lines = _safe_int(params.get("lines", ["30"])[0], 30, 1, 200)
+            payload = _build_agent_status_snapshot(read_lines=lines)
+            status_code = 200 if payload.get("ok") else 503
+            self._respond(
+                status_code,
+                "application/json; charset=utf-8",
+                json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={"Cache-Control": "no-store"},
+            )
 
         elif path == "/api/topology/approvals":
             status = params.get("status", [""])[0]

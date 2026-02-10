@@ -135,6 +135,79 @@ class DashboardCommandCardTests(unittest.TestCase):
                 run_ids = {int(row.get("id", 0)) for row in runs.get("runs", [])}
                 self.assertIn(run_id, run_ids)
 
+                code, cards_with_stats = request_json(base_url, "/api/command-cards?keyword=ops.test.normal&limit=20")
+                self.assertEqual(code, 200)
+                self.assertTrue(cards_with_stats["ok"])
+                normal_card = next(
+                    (row for row in cards_with_stats.get("cards", []) if row.get("card_key") == "ops.test.normal"),
+                    None,
+                )
+                self.assertIsNotNone(normal_card)
+                self.assertGreaterEqual(int(normal_card.get("run_count", 0)), 1)
+                self.assertTrue(str(normal_card.get("last_run_at", "")).strip())
+
+    def test_save_toggle_command_card_via_dashboard_api(self):
+        with isolated_pg_schema("dashcmd"):
+            with run_dashboard_server() as base_url:
+                payload = {
+                    "card_key": "launch.wjboot.workspace",
+                    "title": "拉起工作区代理",
+                    "description": "按等分窗格拉起代理",
+                    "command_template": "python3 scripts/iterm_launch_agents.py --tabs {tabs} --layout panes",
+                    "args_schema": {"tabs": "number"},
+                    "risk_level": "normal",
+                    "enabled": True,
+                    "updated_by": "tester",
+                }
+
+                code, saved = request_json(
+                    base_url,
+                    "/api/command-cards",
+                    method="POST",
+                    payload=payload,
+                )
+                self.assertEqual(code, 200)
+                self.assertTrue(saved["ok"])
+                self.assertEqual(saved["command_card"]["card_key"], "launch.wjboot.workspace")
+
+                code, cards = request_json(base_url, "/api/command-cards?keyword=launch.wjboot.workspace&limit=20")
+                self.assertEqual(code, 200)
+                self.assertTrue(cards["ok"])
+                keys = {row.get("card_key") for row in cards.get("cards", [])}
+                self.assertIn("launch.wjboot.workspace", keys)
+
+                code, toggled = request_json(
+                    base_url,
+                    "/api/command-cards/toggle",
+                    method="POST",
+                    payload={"card_key": "launch.wjboot.workspace", "enabled": False, "updated_by": "tester"},
+                )
+                self.assertEqual(code, 200)
+                self.assertTrue(toggled["ok"])
+                self.assertFalse(toggled["command_card"]["enabled"])
+
+                code, enabled_only = request_json(base_url, "/api/command-cards?enabled_only=1&limit=200")
+                self.assertEqual(code, 200)
+                self.assertTrue(enabled_only["ok"])
+                enabled_keys = {row.get("card_key") for row in enabled_only.get("cards", [])}
+                self.assertNotIn("launch.wjboot.workspace", enabled_keys)
+
+                code, deleted = request_json(
+                    base_url,
+                    "/api/command-cards/delete",
+                    method="POST",
+                    payload={"card_keys": ["launch.wjboot.workspace"], "updated_by": "tester"},
+                )
+                self.assertEqual(code, 200)
+                self.assertTrue(deleted["ok"])
+                self.assertEqual(int(deleted.get("deleted", 0)), 1)
+
+                code, after_delete = request_json(base_url, "/api/command-cards?keyword=launch.wjboot.workspace&limit=20")
+                self.assertEqual(code, 200)
+                self.assertTrue(after_delete["ok"])
+                keys_after_delete = {row.get("card_key") for row in after_delete.get("cards", [])}
+                self.assertNotIn("launch.wjboot.workspace", keys_after_delete)
+
     def test_reject_invalid_run_id(self):
         with isolated_pg_schema("dashcmd"):
             with run_dashboard_server() as base_url:

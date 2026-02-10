@@ -749,7 +749,7 @@ def build_graph(
 
     gateway_nodes = []
     for gw_id in gateways.keys():
-        node_name = f"gateway::{gw_id}"
+        node_name = f"gateway__{gw_id}"
         graph.add_node(node_name, _make_gateway_node(gw_id, gateway_agent_map, gateways))
         gateway_nodes.append(node_name)
 

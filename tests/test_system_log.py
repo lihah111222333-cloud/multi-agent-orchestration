@@ -54,7 +54,8 @@ class SystemLogQueryEscapingTests(unittest.TestCase):
         self.assertIn("ESCAPE E'\\\\'", sql_text)
 
         from utils import escape_like
-        expected_kw = f"%{escape_like(r'Err_%\\Case'.lower())}%"
+        keyword = r"Err_%\\Case".lower()
+        expected_kw = f"%{escape_like(keyword)}%"
         params = list(captured.get("params", []))
         self.assertIn(expected_kw, params)
 

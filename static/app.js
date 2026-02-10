@@ -31,6 +31,28 @@ function toast(msg, ok) {
     setTimeout(() => d.remove(), 3500);
 }
 
+/** 自定义确认弹窗（替代 window.confirm，避免自动刷新导致一闪而过） */
+function showConfirm(msg) {
+    return new Promise((resolve) => {
+        _confirmDialogActive = true;
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999';
+        const box = document.createElement('div');
+        box.style.cssText = 'background:var(--card-bg,#1e293b);border:1px solid var(--border,#334155);border-radius:12px;padding:28px 32px 20px;max-width:420px;width:90%;color:var(--text-primary,#e2e8f0);font-size:0.95rem;box-shadow:0 8px 32px rgba(0,0,0,.4)';
+        box.innerHTML = `<div style="margin-bottom:20px;line-height:1.6">${escapeHtml(msg)}</div>
+            <div style="display:flex;gap:12px;justify-content:flex-end">
+                <button id="_confirm-no" class="btn btn-sm btn-secondary" style="min-width:64px">取消</button>
+                <button id="_confirm-yes" class="btn btn-sm btn-danger" style="min-width:64px">确认</button>
+            </div>`;
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        const cleanup = (val) => { _confirmDialogActive = false; overlay.remove(); resolve(val); };
+        box.querySelector('#_confirm-yes').onclick = () => cleanup(true);
+        box.querySelector('#_confirm-no').onclick = () => cleanup(false);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(false); });
+    });
+}
+
 function escapeHtml(value) {
     return String(value || '')
         .replace(/&/g, '&amp;')
@@ -416,6 +438,7 @@ function exportSystemLogs() {
 
 /* ---- Prompts (Template Management + Popup) ---- */
 let _promptRows = [];
+let _selectedPromptKeys = new Set();
 let _popupTimer = null;
 let _currentPopupData = null;
 let _promptPopupHotkeysBound = false;
@@ -426,6 +449,7 @@ function _normalizePromptRows(rows) {
         return {
             promptKey: row.prompt_key || '',
             title: row.title || '',
+            description: row.description || '',
             agentKey: row.agent_key || '',
             toolName: row.tool_name || '',
             promptText: row.prompt_text || '',
@@ -547,7 +571,8 @@ function renderPromptTable(rows) {
     if (empty) empty.style.display = 'none';
 
     tbody.innerHTML = rows.map((row, idx) => {
-        const keyHtml = escapeHtml(row.promptKey);
+        const rawKey = row.promptKey;
+        const keyHtml = escapeHtml(rawKey);
         const titleHtml = escapeHtml(row.title || row.promptKey);
         const scopeHtml = escapeHtml(`${row.agentKey || '-'} / ${row.toolName || '-'}`);
         const tagsHtml = escapeHtml(_formatPromptTags(row.tags));
@@ -556,22 +581,57 @@ function renderPromptTable(rows) {
             : '<span class="level-badge level-disabled">disabled</span>';
         const updated = escapeHtml(row.updatedAt || '-');
         const rowBorder = row.enabled ? '' : ' style="opacity:.68"';
+        const descHtml = escapeHtml(row.description || '').slice(0, 60);
+        const checked = _selectedPromptKeys.has(rawKey) ? 'checked' : '';
         return `<tr class="prompt-row" data-idx="${idx}"${rowBorder}
-                    onmouseenter="showPromptPopupDelayed(event,${idx})"
-                    onmouseleave="hidePromptPopupDelayed()">
+                    onclick="copyPromptDirect(${idx})"
+                    ondblclick="sendPromptToMaster(${idx})">
+            <td style="width:34px;text-align:center"><input type="checkbox" class="prompt-select" data-prompt-key="${keyHtml}" ${checked} onclick="event.stopPropagation()" onchange="togglePromptCheck('${keyHtml}',this.checked)"></td>
             <td style="font-family:var(--font-mono);font-size:0.76rem;color:var(--accent)">${keyHtml}</td>
             <td style="font-size:0.78rem">${titleHtml}</td>
+            <td style="font-size:0.74rem;color:var(--text-secondary);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${descHtml}">${descHtml || '<span style="opacity:.3">—</span>'}</td>
             <td style="font-family:var(--font-mono);font-size:0.74rem;color:var(--text-secondary)">${scopeHtml}</td>
-            <td style="font-size:0.74rem;color:var(--text-secondary);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tagsHtml}</td>
+            <td style="font-size:0.74rem;color:var(--text-secondary);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tagsHtml}</td>
             <td>${statusBadge}</td>
             <td style="font-size:0.74rem;color:var(--text-secondary)">${updated}</td>
             <td style="text-align:center;white-space:nowrap">
                 <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openPromptPopup(${idx})" title="编辑" style="cursor:pointer">编辑</button>
-                <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();copyPromptDirect(${idx})" title="复制" style="cursor:pointer;margin-left:4px">复制</button>
                 <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();togglePromptEnabled(${idx})" title="启停" style="cursor:pointer;margin-left:4px">${row.enabled ? '禁用' : '启用'}</button>
             </td>
         </tr>`;
     }).join('');
+}
+
+function togglePromptCheck(key, checked) {
+    if (checked) _selectedPromptKeys.add(key);
+    else _selectedPromptKeys.delete(key);
+}
+
+function togglePromptSelectAll(checked) {
+    _selectedPromptKeys = new Set();
+    if (checked) _promptRows.forEach(r => _selectedPromptKeys.add(r.promptKey));
+    document.querySelectorAll('.prompt-select').forEach(cb => cb.checked = checked);
+}
+
+async function deleteSelectedPrompts() {
+    const keys = Array.from(_selectedPromptKeys);
+    if (!keys.length) { toast('请先勾选要删除的提示词', false); return; }
+
+    const confirmed = await showConfirm(`确认删除已勾选的 ${keys.length} 条提示词？`);
+    if (!confirmed) return;
+
+    try {
+        const r = await fetch('/api/prompt-templates/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt_keys: keys, updated_by: 'dashboard' }),
+        });
+        const j = await r.json();
+        if (!j.ok) { toast(j.error || '删除失败', false); return; }
+        _selectedPromptKeys = new Set();
+        toast(`已删除 ${j.deleted || 0} 条提示词`, true);
+        await loadPrompts();
+    } catch (e) { toast('删除失败: ' + e.message, false); }
 }
 
 function filterPromptTable() {
@@ -582,6 +642,32 @@ function copyPromptDirect(idx) {
     const row = _promptRows[idx];
     if (!row) return;
     navigator.clipboard.writeText(row.promptText || '').then(() => toast('已复制到剪贴板', true));
+}
+
+async function sendPromptToMaster(idx) {
+    const row = _promptRows[idx];
+    if (!row || !row.promptText) return;
+    try {
+        const r = await fetch('/api/session/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                agent_key: 'master',
+                text: row.promptText,
+            }),
+        });
+        const j = await r.json();
+        if (j.ok) {
+            toast('已下发到主 Agent', true);
+        } else {
+            // fallback: copy to clipboard
+            await navigator.clipboard.writeText(row.promptText);
+            toast(j.error || '下发失败，已复制到剪贴板', false);
+        }
+    } catch (e) {
+        await navigator.clipboard.writeText(row.promptText);
+        toast('下发接口不可用，已复制到剪贴板', false);
+    }
 }
 
 function _showPromptPopup(row, popupTitle) {
@@ -603,6 +689,8 @@ function _showPromptPopup(row, popupTitle) {
     titleEl.textContent = popupTitle;
     keyInput.value = row.promptKey || '';
     titleInput.value = row.title || '';
+    const descInput = document.getElementById('prompt-popup-description');
+    if (descInput) descInput.value = row.description || '';
     agentInput.value = row.agentKey || '';
     toolInput.value = row.toolName || '';
     tagsInput.value = Array.isArray(row.tags) ? row.tags.join(',') : '';
@@ -627,6 +715,31 @@ function _showPromptPopup(row, popupTitle) {
             }
         });
         popup._resizeObs.observe(popup);
+    }
+
+    // enable drag-to-move on header
+    if (!popup._dragBound) {
+        const header = popup.querySelector('.prompt-popup-header');
+        if (header) {
+            header.style.cursor = 'move';
+            let dragging = false, startX, startY, origLeft, origTop;
+            header.addEventListener('mousedown', (e) => {
+                if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
+                dragging = true;
+                startX = e.clientX;
+                startY = e.clientY;
+                origLeft = popup.offsetLeft;
+                origTop = popup.offsetTop;
+                e.preventDefault();
+            });
+            document.addEventListener('mousemove', (e) => {
+                if (!dragging) return;
+                popup.style.left = (origLeft + e.clientX - startX) + 'px';
+                popup.style.top = (origTop + e.clientY - startY) + 'px';
+            });
+            document.addEventListener('mouseup', () => { dragging = false; });
+        }
+        popup._dragBound = true;
     }
 }
 
@@ -666,8 +779,19 @@ function _showPopupAtRow(rowEl, idx) {
 
 function openPromptPopup(idx) {
     clearTimeout(_popupTimer);
-    const rowEl = document.querySelector(`.prompt-row[data-idx="${idx}"]`);
-    if (rowEl) _showPopupAtRow(rowEl, idx);
+    const row = _promptRows[idx];
+    if (!row) return;
+    _currentPopupData = row;
+    _showPromptPopup(row, `${row.promptKey || '提示词模板'}（编辑）`);
+
+    const popup = document.getElementById('prompt-popup');
+    if (!popup) return;
+    // Stable center position (right-center of viewport)
+    const popupW = popup.offsetWidth || 700;
+    const popupH = popup.offsetHeight || 620;
+    popup.style.left = Math.max(8, Math.round((window.innerWidth - popupW) / 2 + 100)) + 'px';
+    popup.style.top = Math.max(8, Math.round((window.innerHeight - popupH) / 2)) + 'px';
+
     setTimeout(() => {
         const ta = document.getElementById('prompt-popup-textarea');
         if (ta) ta.focus();
@@ -683,6 +807,7 @@ function openPromptCreatePopup() {
     _showPromptPopup({
         promptKey: '',
         title: '',
+        description: '',
         agentKey: 'master',
         toolName: 'task',
         tags: ['preset'],
@@ -765,6 +890,7 @@ async function savePromptPopup(closeAfter = false) {
     const payload = {
         prompt_key: keyInput.value.trim(),
         title: titleInput.value.trim(),
+        description: (document.getElementById('prompt-popup-description') || {}).value || '',
         agent_key: agentInput.value.trim(),
         tool_name: toolInput.value.trim(),
         tags: _parseTagsInput(tagsInput.value),
@@ -841,37 +967,479 @@ async function seedPromptTemplates(overwrite) {
 }
 
 /* ---- Command Cards ---- */
-function renderCommandCards(cards) {
-    const tbody = document.getElementById('cmd-card-tbody');
-    const select = document.getElementById('cmd-card-key');
-    if (!tbody || !select) return;
+let _commandCardRows = [];
+let _selectedCommandCardKeys = new Set();
+let _currentCommandPopupData = null;
+let _commandPopupHotkeysBound = false;
+let _confirmDialogActive = false;
 
-    const current = select.value;
-    select.innerHTML = '<option value="">选择命令卡</option>' + cards.map(card => {
-        const key = escapeHtml(card.card_key || '');
-        const title = escapeHtml(card.title || card.card_key || '');
-        const selected = current === card.card_key ? 'selected' : '';
-        return `<option value="${key}" ${selected}>${title} (${key})</option>`;
-    }).join('');
+function _normalizeCommandCardRows(rows) {
+    return (rows || []).map((row) => {
+        const argsSchema = (row.args_schema && typeof row.args_schema === 'object' && !Array.isArray(row.args_schema))
+            ? row.args_schema
+            : {};
+        return {
+            cardKey: row.card_key || '',
+            title: row.title || '',
+            description: row.description || '',
+            commandTemplate: row.command_template || '',
+            argsSchema,
+            riskLevel: row.risk_level || 'normal',
+            enabled: !!row.enabled,
+            updatedAt: row.updated_at || '',
+            lastRunAt: row.last_run_at || '',
+            runCount: Number(row.run_count || 0),
+        };
+    });
+}
 
-    if (!cards.length) {
-        tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text-muted)">暂无命令卡</td></tr>';
+function _toUTC8(date) {
+    // Force UTC+8 regardless of browser timezone
+    const utcMs = date.getTime() + date.getTimezoneOffset() * 60000;
+    return new Date(utcMs + 8 * 3600000);
+}
+
+function _formatCommandCardTime(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return '-';
+
+    // 已经是后端格式的 2026-2-11:20:30 直接返回
+    const m = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2}):(\d{1,2}):(\d{1,2})/);
+    if (m) return text;
+
+    const parsed = new Date(text);
+    if (!Number.isNaN(parsed.getTime())) {
+        const d8 = _toUTC8(parsed);
+        return `${d8.getFullYear()}-${d8.getMonth() + 1}-${d8.getDate()} ${String(d8.getHours()).padStart(2, '0')}:${String(d8.getMinutes()).padStart(2, '0')}`;
+    }
+
+    return text;
+}
+
+function _parseCommandArgsSchemaInput(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return {};
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return parsed;
+        }
+        throw new Error('args_schema 必须是 JSON 对象');
+    } catch (e) {
+        throw new Error('参数定义必须是 JSON 对象');
+    }
+}
+
+function _setCommandPopupFullscreenState(enabled) {
+    const popup = document.getElementById('cmd-popup');
+    const btn = document.getElementById('cmd-popup-fullscreen-btn');
+    if (!popup) return;
+    if (enabled) {
+        popup.classList.add('fullscreen');
+    } else {
+        popup.classList.remove('fullscreen');
+    }
+    if (btn) {
+        btn.textContent = enabled ? '退出全屏' : '全屏编辑';
+    }
+}
+
+function _bindCommandPopupHotkeys() {
+    if (_commandPopupHotkeysBound) return;
+    document.addEventListener('keydown', (event) => {
+        const popup = document.getElementById('cmd-popup');
+        if (!popup || popup.style.display === 'none') return;
+
+        if ((event.metaKey || event.ctrlKey) && String(event.key || '').toLowerCase() === 's') {
+            event.preventDefault();
+            saveCommandPopup();
+            return;
+        }
+
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeCommandPopup();
+        }
+    });
+    _commandPopupHotkeysBound = true;
+}
+
+function _showCommandPopup(row, popupTitle) {
+    const popup = document.getElementById('cmd-popup');
+    const titleEl = document.getElementById('cmd-popup-title');
+    const keyInput = document.getElementById('cmd-popup-key');
+    const titleInput = document.getElementById('cmd-popup-title-input');
+    const riskInput = document.getElementById('cmd-popup-risk');
+    const enabledInput = document.getElementById('cmd-popup-enabled');
+    const descInput = document.getElementById('cmd-popup-desc');
+    const schemaInput = document.getElementById('cmd-popup-args-schema');
+    const commandInput = document.getElementById('cmd-popup-textarea');
+
+    if (!popup || !titleEl || !keyInput || !titleInput || !riskInput || !enabledInput || !descInput || !schemaInput || !commandInput) {
         return;
     }
 
-    tbody.innerHTML = cards.map(card => {
-        const key = escapeHtml(card.card_key || '');
-        const risk = escapeHtml(card.risk_level || 'normal');
-        const riskClass = classToken(card.risk_level || 'normal');
-        const enabledText = card.enabled ? 'enabled' : 'disabled';
+    titleEl.textContent = popupTitle;
+    keyInput.value = row.cardKey || '';
+    titleInput.value = row.title || '';
+    riskInput.value = row.riskLevel || 'normal';
+    enabledInput.checked = !!row.enabled;
+    descInput.value = row.description || '';
+    schemaInput.value = JSON.stringify(row.argsSchema || {}, null, 2);
+    commandInput.value = row.commandTemplate || '';
+
+    _bindCommandPopupHotkeys();
+    _setCommandPopupFullscreenState(false);
+    popup.style.display = 'flex';
+
+    const savedW = localStorage.getItem('command_popup_w');
+    const savedH = localStorage.getItem('command_popup_h');
+    if (savedW) popup.style.width = savedW + 'px';
+    if (savedH) popup.style.height = savedH + 'px';
+
+    if (!popup._resizeObs) {
+        popup._resizeObs = new ResizeObserver(() => {
+            if (popup.style.display !== 'none') {
+                localStorage.setItem('command_popup_w', popup.offsetWidth);
+                localStorage.setItem('command_popup_h', popup.offsetHeight);
+            }
+        });
+        popup._resizeObs.observe(popup);
+    }
+
+    if (!popup._dragBound) {
+        const header = popup.querySelector('.command-popup-header');
+        if (header) {
+            header.style.cursor = 'move';
+            let dragging = false;
+            let startX = 0;
+            let startY = 0;
+            let origLeft = 0;
+            let origTop = 0;
+
+            header.addEventListener('mousedown', (event) => {
+                if (event.target.tagName === 'BUTTON' || event.target.tagName === 'INPUT') return;
+                dragging = true;
+                startX = event.clientX;
+                startY = event.clientY;
+                origLeft = popup.offsetLeft;
+                origTop = popup.offsetTop;
+                event.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (event) => {
+                if (!dragging) return;
+                popup.style.left = (origLeft + event.clientX - startX) + 'px';
+                popup.style.top = (origTop + event.clientY - startY) + 'px';
+            });
+
+            document.addEventListener('mouseup', () => {
+                dragging = false;
+            });
+        }
+        popup._dragBound = true;
+    }
+}
+
+function openCommandPopup(idx) {
+    const row = _commandCardRows[idx];
+    if (!row) return;
+
+    _currentCommandPopupData = row;
+    _showCommandPopup(row, `${row.cardKey || '命令卡'}（编辑）`);
+
+    const popup = document.getElementById('cmd-popup');
+    if (!popup) return;
+    const popupW = popup.offsetWidth || 760;
+    const popupH = popup.offsetHeight || 640;
+    popup.style.left = Math.max(8, Math.round((window.innerWidth - popupW) / 2 + 100)) + 'px';
+    popup.style.top = Math.max(8, Math.round((window.innerHeight - popupH) / 2)) + 'px';
+
+    setTimeout(() => {
+        const ta = document.getElementById('cmd-popup-textarea');
+        if (ta) ta.focus();
+    }, 100);
+}
+
+function openCommandCreatePopup() {
+    _currentCommandPopupData = null;
+    const popup = document.getElementById('cmd-popup');
+    if (!popup) return;
+
+    _showCommandPopup({
+        cardKey: '',
+        title: '',
+        description: '',
+        commandTemplate: '',
+        argsSchema: {},
+        riskLevel: 'normal',
+        enabled: true,
+    }, '新建命令卡');
+
+    const popupW = popup.offsetWidth || 760;
+    const popupH = popup.offsetHeight || 640;
+    popup.style.left = Math.max(8, Math.round((window.innerWidth - popupW) / 2)) + 'px';
+    popup.style.top = Math.max(8, Math.round((window.innerHeight - popupH) / 2)) + 'px';
+}
+
+function openCommandPastePopup() {
+    openCommandCreatePopup();
+    const titleInput = document.getElementById('cmd-popup-title-input');
+    const descInput = document.getElementById('cmd-popup-desc');
+    const commandInput = document.getElementById('cmd-popup-textarea');
+    if (titleInput && !titleInput.value.trim()) {
+        titleInput.value = '快速粘贴命令卡';
+    }
+    if (descInput && !descInput.value.trim()) {
+        descInput.value = '从后台快速粘贴创建';
+    }
+    setTimeout(() => {
+        if (commandInput) commandInput.focus();
+    }, 60);
+}
+
+function toggleCommandPopupFullscreen() {
+    const popup = document.getElementById('cmd-popup');
+    if (!popup) return;
+    _setCommandPopupFullscreenState(!popup.classList.contains('fullscreen'));
+}
+
+function closeCommandPopup() {
+    const popup = document.getElementById('cmd-popup');
+    if (popup) {
+        popup.style.display = 'none';
+    }
+    _setCommandPopupFullscreenState(false);
+    _currentCommandPopupData = null;
+}
+
+function copyCommandPopup() {
+    const ta = document.getElementById('cmd-popup-textarea');
+    if (!ta) return;
+    navigator.clipboard.writeText(ta.value).then(() => {
+        const ok = document.getElementById('cmd-popup-copy-ok');
+        if (ok) {
+            ok.classList.add('show');
+            setTimeout(() => ok.classList.remove('show'), 1500);
+        }
+    });
+}
+
+function copyCommandDirect(idx) {
+    const row = _commandCardRows[idx];
+    if (!row) return;
+    navigator.clipboard.writeText(row.commandTemplate || '').then(() => toast('命令模板已复制', true));
+}
+
+async function sendCommandToMaster(idx) {
+    const row = _commandCardRows[idx];
+    if (!row || !row.commandTemplate) return;
+    try {
+        const r = await fetch('/api/session/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agent_key: 'master', text: row.commandTemplate }),
+        });
+        const j = await r.json();
+        if (j.ok) {
+            toast('已下发到主 Agent', true);
+        } else {
+            await navigator.clipboard.writeText(row.commandTemplate);
+            toast(j.error || '下发失败，已复制到剪贴板', false);
+        }
+    } catch (e) {
+        await navigator.clipboard.writeText(row.commandTemplate);
+        toast('下发接口不可用，已复制到剪贴板', false);
+    }
+}
+
+async function saveCommandPopup(closeAfter = false) {
+    const keyInput = document.getElementById('cmd-popup-key');
+    const titleInput = document.getElementById('cmd-popup-title-input');
+    const riskInput = document.getElementById('cmd-popup-risk');
+    const enabledInput = document.getElementById('cmd-popup-enabled');
+    const descInput = document.getElementById('cmd-popup-desc');
+    const schemaInput = document.getElementById('cmd-popup-args-schema');
+    const commandInput = document.getElementById('cmd-popup-textarea');
+    if (!keyInput || !titleInput || !riskInput || !enabledInput || !descInput || !schemaInput || !commandInput) return;
+
+    let argsSchema = {};
+    try {
+        argsSchema = _parseCommandArgsSchemaInput(schemaInput.value);
+    } catch (e) {
+        toast(e.message, false);
+        return;
+    }
+
+    const payload = {
+        card_key: keyInput.value.trim(),
+        title: titleInput.value.trim(),
+        risk_level: riskInput.value || 'normal',
+        enabled: !!enabledInput.checked,
+        description: descInput.value,
+        args_schema: argsSchema,
+        command_template: commandInput.value,
+        updated_by: 'dashboard',
+    };
+
+    try {
+        const r = await fetch('/api/command-cards', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const j = await r.json();
+        if (j.ok) {
+            toast('命令卡已保存', true);
+            await loadCommandCards();
+            _currentCommandPopupData = j.command_card || null;
+            if (closeAfter) {
+                closeCommandPopup();
+            }
+        } else {
+            toast(j.error || '保存失败', false);
+        }
+    } catch (e) {
+        toast('保存失败: ' + e.message, false);
+    }
+}
+
+async function toggleCommandCardEnabled(idx) {
+    const row = _commandCardRows[idx];
+    if (!row) return;
+    try {
+        const r = await fetch('/api/command-cards/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                card_key: row.cardKey,
+                enabled: !row.enabled,
+                updated_by: 'dashboard',
+            }),
+        });
+        const j = await r.json();
+        if (j.ok) {
+            toast(`命令卡已${!row.enabled ? '启用' : '禁用'}`, true);
+            await loadCommandCards();
+        } else {
+            toast(j.error || '状态更新失败', false);
+        }
+    } catch (e) {
+        toast('状态更新失败: ' + e.message, false);
+    }
+}
+
+function _syncCommandCardSelectionState() {
+    const allChecks = Array.from(document.querySelectorAll('#cmd-card-tbody .cmd-card-select'));
+    const checkedKeys = allChecks
+        .filter((item) => item.checked)
+        .map((item) => String(item.dataset.cardKey || '').trim())
+        .filter(Boolean);
+
+    _selectedCommandCardKeys = new Set(checkedKeys);
+
+    const allBox = document.getElementById('cmd-card-select-all');
+    if (!allBox) return;
+    allBox.checked = allChecks.length > 0 && checkedKeys.length === allChecks.length;
+    allBox.indeterminate = checkedKeys.length > 0 && checkedKeys.length < allChecks.length;
+}
+
+function toggleCommandCardSelectAll(checked) {
+    const allChecks = document.querySelectorAll('#cmd-card-tbody .cmd-card-select');
+    allChecks.forEach((item) => {
+        item.checked = !!checked;
+    });
+    _syncCommandCardSelectionState();
+}
+
+async function deleteSelectedCommandCards() {
+    const keys = Array.from(_selectedCommandCardKeys);
+    if (!keys.length) {
+        toast('请先勾选要删除的命令卡', false);
+        return;
+    }
+
+    const confirmed = await showConfirm(`确认删除已勾选的 ${keys.length} 张命令卡？`);
+    if (!confirmed) return;
+
+    try {
+        const r = await fetch('/api/command-cards/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                card_keys: keys,
+                updated_by: 'dashboard',
+            }),
+        });
+        const j = await r.json();
+        if (!j.ok) {
+            toast(j.error || '删除失败', false);
+            return;
+        }
+
+        const deleted = Number(j.deleted || 0);
+        _selectedCommandCardKeys = new Set();
+        toast(`已删除 ${deleted} 张命令卡`, true);
+        await refreshSections(['command_cards', 'audit', 'system']);
+    } catch (e) {
+        toast('删除失败: ' + e.message, false);
+    }
+}
+
+function renderCommandCards(cards) {
+    const tbody = document.getElementById('cmd-card-tbody');
+    const empty = document.getElementById('cmd-card-empty');
+    if (!tbody) return;
+
+    _commandCardRows = _normalizeCommandCardRows(cards || []);
+
+    if (!_commandCardRows.length) {
+        tbody.innerHTML = '';
+        _selectedCommandCardKeys = new Set();
+        if (empty) {
+            empty.style.display = '';
+            empty.textContent = '暂无命令卡，可点击“新建命令卡”';
+        }
+        _syncCommandCardSelectionState();
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+
+    tbody.innerHTML = _commandCardRows.map((card, idx) => {
+        const rawKey = card.cardKey || '';
+        const key = escapeHtml(rawKey);
+        const title = escapeHtml(card.title || card.cardKey || '');
         const desc = escapeHtml(card.description || '');
-        return `<tr>
-            <td style="font-family:var(--font-mono);font-size:0.75rem">${key}</td>
+        const risk = escapeHtml(card.riskLevel || 'normal');
+        const riskClass = classToken(card.riskLevel || 'normal');
+        const statusBadge = card.enabled
+            ? '<span class="level-badge level-enabled">enabled</span>'
+            : '<span class="level-badge level-disabled">disabled</span>';
+        const updatedAt = escapeHtml(_formatCommandCardTime(card.updatedAt || ''));
+        const runCount = Number(card.runCount || 0);
+        const lastRun = runCount > 0 ? _formatCommandCardTime(card.lastRunAt || '') : '-';
+        const recentExec = escapeHtml(`${lastRun} · ${runCount}次`);
+        const checked = _selectedCommandCardKeys.has(rawKey) ? 'checked' : '';
+        const rowStyle = card.enabled ? '' : ' style="opacity:.68"';
+        return `<tr class="command-row" data-idx="${idx}"${rowStyle}
+                    onclick="copyCommandDirect(${idx})"
+                    ondblclick="sendCommandToMaster(${idx})">
+            <td style="width:34px;text-align:center"><input type="checkbox" class="cmd-card-select" data-card-key="${key}" ${checked} onclick="event.stopPropagation()" onchange="_syncCommandCardSelectionState()"></td>
+            <td style="font-family:var(--font-mono);font-size:0.75rem;color:var(--accent)">${key}</td>
+            <td style="font-size:0.78rem">${title}</td>
             <td><span class="level-badge level-${riskClass}">${risk}</span></td>
-            <td>${enabledText}</td>
-            <td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${desc}</td>
+            <td>${statusBadge}</td>
+            <td style="font-size:0.74rem;color:var(--text-secondary);font-family:var(--font-mono)">${updatedAt || '-'}</td>
+            <td style="font-size:0.74rem;color:var(--text-secondary);font-family:var(--font-mono)">${recentExec}</td>
+            <td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${desc || '-'}</td>
+            <td style="text-align:center;white-space:nowrap">
+                <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openCommandPopup(${idx})" title="编辑" style="cursor:pointer">编辑</button>
+                <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();toggleCommandCardEnabled(${idx})" title="启停" style="cursor:pointer;margin-left:4px">${card.enabled ? '禁用' : '启用'}</button>
+            </td>
         </tr>`;
     }).join('');
+
+    _syncCommandCardSelectionState();
 }
 
 function _runActions(run) {
@@ -925,12 +1493,27 @@ function renderCommandRuns(runs) {
 }
 
 async function loadCommandCards() {
-    const cardSelect = document.getElementById('cmd-card-key');
-    if (!cardSelect) return;
 
-    const r = await fetch('/api/command-cards?limit=200');
-    const j = await r.json();
-    if (j.ok) renderCommandCards(j.cards || []);
+    try {
+        const kw = (document.getElementById('cmd-search')?.value || '').trim();
+        const riskLevel = (document.getElementById('cmd-risk-filter')?.value || '').trim();
+        const enabledOnly = !!document.getElementById('cmd-enabled-only')?.checked;
+        const params = new URLSearchParams();
+        params.set('limit', '500');
+        if (kw) params.set('keyword', kw);
+        if (riskLevel) params.set('risk_level', riskLevel);
+        if (enabledOnly) params.set('enabled_only', '1');
+
+        const r = await fetch('/api/command-cards?' + params.toString());
+        const j = await r.json();
+        if (j.ok) {
+            renderCommandCards(j.cards || []);
+        } else {
+            toast(j.error || '加载命令卡失败', false);
+        }
+    } catch (e) {
+        toast('加载命令卡失败: ' + e.message, false);
+    }
 }
 
 async function loadCommandRuns() {
@@ -1074,6 +1657,7 @@ async function loadApprovals() {
 }
 
 async function refreshSections(scope = ['approvals', 'audit', 'system', 'command_cards', 'agent_status']) {
+    if (_confirmDialogActive) return;   // 确认对话框期间跳过刷新
     const scopes = Array.isArray(scope) ? scope : ['approvals', 'audit', 'system', 'command_cards', 'agent_status'];
     const tasks = [];
 
@@ -1085,6 +1669,9 @@ async function refreshSections(scope = ['approvals', 'audit', 'system', 'command
         tasks.push(loadCommandRuns());
     }
     if (scopes.includes('prompts')) tasks.push(loadPrompts());
+    if (scopes.includes('acks')) tasks.push(loadTaskAcks());
+    if (scopes.includes('dags')) tasks.push(loadTaskDags());
+    if (scopes.includes('traces')) tasks.push(loadTaskTraces());
     if (scopes.includes('agent_status')) tasks.push(loadAgentStatus());
 
     try {
@@ -1344,6 +1931,18 @@ switchPage = function (pageId) {
         tgRefresh();
         const sec = window.__TG_AUTO_REFRESH_SEC || 60;
         if (sec > 0) _tgAutoTimer = setInterval(tgRefresh, sec * 1000);
+    } else if (pageId === 'acks') {
+        loadTaskAcks();
+    } else if (pageId === 'dags') {
+        loadTaskDags();
+    } else if (pageId === 'traces') {
+        loadTaskTraces();
+    } else if (pageId === 'lifecycle') {
+        loadLifecycleStatus();
+        _startLifecycleAutoRefresh();
+    }
+    if (pageId !== 'lifecycle') {
+        _stopLifecycleAutoRefresh();
     }
 };
 
@@ -1494,3 +2093,657 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 });
+
+// ─── 任务管理 (ACK) ──────────────────────────────────────────────────────
+
+let _ackRows = [];
+
+const _ACK_STATUS_COLOR = {
+    pending: '#f59e0b', in_progress: '#8b5cf6', blocked: '#ef4444',
+    done: '#10b981', failed: '#ef4444', cancelled: '#6b7280',
+};
+const _ACK_PRIORITY_COLOR = {
+    critical: '#ef4444', high: '#f59e0b', normal: '#3b82f6', low: '#6b7280',
+};
+
+function _fmtCompact(dt) {
+    if (!dt) return '-';
+    const d = new Date(dt);
+    if (isNaN(d)) return dt;
+    const d8 = _toUTC8(d);
+    return `${d8.getFullYear()}-${String(d8.getMonth() + 1).padStart(2, '0')}-${String(d8.getDate()).padStart(2, '0')} ${String(d8.getHours()).padStart(2, '0')}:${String(d8.getMinutes()).padStart(2, '0')}`;
+}
+
+async function loadTaskAcks() {
+    try {
+        const kw = (document.getElementById('ack-search') || {}).value || '';
+        const st = (document.getElementById('ack-status-filter') || {}).value || '';
+        const pri = (document.getElementById('ack-priority-filter') || {}).value || '';
+        const params = new URLSearchParams();
+        if (kw) params.set('keyword', kw);
+        if (st) params.set('status', st);
+        if (pri) params.set('priority', pri);
+        const resp = await fetch(`/api/task-acks?${params}`);
+        const j = await resp.json();
+        _ackRows = j.acks || [];
+        renderTaskAcks();
+    } catch (e) { console.error('loadTaskAcks', e); }
+}
+
+function renderTaskAcks() {
+    const tbody = document.getElementById('ack-tbody');
+    const empty = document.getElementById('ack-empty');
+    const stats = document.getElementById('ack-stats');
+    if (!tbody) return;
+
+    // stats cards
+    if (stats) {
+        const counts = {};
+        _ackRows.forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
+        const order = ['pending', 'in_progress', 'done', 'failed', 'cancelled'];
+        stats.innerHTML = order.filter(s => counts[s]).map(s =>
+            `<div style="background:${_ACK_STATUS_COLOR[s]}22;color:${_ACK_STATUS_COLOR[s]};padding:4px 12px;border-radius:6px;font-size:.82rem;font-weight:600">${s}: ${counts[s]}</div>`
+        ).join('') + `<div style="padding:4px 12px;font-size:.82rem;font-weight:600;color:var(--text-secondary)">共 ${_ackRows.length} 项</div>`;
+    }
+
+    if (_ackRows.length === 0) {
+        tbody.innerHTML = '';
+        if (empty) { empty.style.display = ''; empty.textContent = '暂无任务记录'; }
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+
+    tbody.innerHTML = _ackRows.map((r, i) => {
+        const priColor = _ACK_PRIORITY_COLOR[r.priority] || '#6b7280';
+        const stColor = _ACK_STATUS_COLOR[r.status] || '#6b7280';
+        const prog = Math.max(0, Math.min(100, r.progress || 0));
+        const deps = (r.depends_on || []);
+        const depsText = deps.length > 0 ? deps.map(d => d.replace(/^T/, '')).join(', ') : '-';
+        const resultText = r.result_summary || '-';
+        return `<tr onclick="copyAckKey(${i})" style="cursor:pointer" title="点击复制 Task ID">
+            <td style="font-family:monospace;font-size:.78rem;font-weight:600">${escapeHtml(r.ack_key)}</td>
+            <td style="font-size:.82rem">${escapeHtml(r.title)}</td>
+            <td style="font-family:monospace;font-size:.75rem;color:var(--text-secondary)">${escapeHtml(r.project_id || '-')}</td>
+            <td style="font-size:.78rem">${escapeHtml(r.assigned_to || '-')}</td>
+            <td><span style="background:${priColor}22;color:${priColor};padding:2px 8px;border-radius:4px;font-size:.72rem;font-weight:600">${r.priority}</span></td>
+            <td><span style="background:${stColor}22;color:${stColor};padding:2px 8px;border-radius:4px;font-size:.72rem;font-weight:600">${r.status}</span></td>
+            <td><div style="background:var(--border);border-radius:3px;height:14px;position:relative;overflow:hidden"><div style="background:${stColor};height:100%;width:${prog}%;transition:width .3s"></div><span style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:.60rem;color:var(--text-primary)">${prog}%</span></div></td>
+            <td style="font-family:monospace;font-size:.70rem;color:var(--text-secondary);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(deps.join(', '))}">${escapeHtml(depsText)}</td>
+            <td style="font-size:.75rem">${_fmtCompact(r.updated_at)}</td>
+            <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.72rem" title="${escapeHtml(resultText)}">${escapeHtml(resultText.length > 60 ? resultText.substring(0, 60) + '…' : resultText)}</td>
+        </tr>`;
+    }).join('');
+}
+
+function toggleAckCheck(key, checked) {
+    if (checked) _selectedAckKeys.add(key); else _selectedAckKeys.delete(key);
+    const allCb = document.getElementById('ack-select-all');
+    if (allCb) allCb.checked = _selectedAckKeys.size === _ackRows.length && _ackRows.length > 0;
+}
+function toggleAckSelectAll(checked) {
+    _selectedAckKeys.clear();
+    if (checked) _ackRows.forEach(r => _selectedAckKeys.add(r.ack_key));
+    renderTaskAcks();
+}
+
+function copyAckKey(idx) {
+    const r = _ackRows[idx]; if (!r) return;
+    navigator.clipboard.writeText(r.ack_key).then(() => toast('已复制: ' + r.ack_key));
+}
+
+async function quickAckStatus(ackKey, status) {
+    if (!status) return;
+    try {
+        await fetch('/api/task-acks/status', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ack_key: ackKey, status }),
+        });
+        toast(`${ackKey} → ${status}`);
+        loadTaskAcks();
+    } catch (e) { toast('状态更新失败: ' + e.message); }
+}
+
+async function deleteSelectedAcks() {
+    if (_selectedAckKeys.size === 0) return toast('请先勾选要删除的 ACK');
+    _confirmDialogActive = true;
+    const ok = await showConfirm(`确认删除 ${_selectedAckKeys.size} 条 ACK？`);
+    _confirmDialogActive = false;
+    if (!ok) return;
+    try {
+        const resp = await fetch('/api/task-acks/delete', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ack_keys: [..._selectedAckKeys] }),
+        });
+        const j = await resp.json();
+        toast(`已删除 ${j.deleted || 0} 条 ACK`);
+        _selectedAckKeys.clear();
+        loadTaskAcks();
+    } catch (e) { toast('删除失败: ' + e.message); }
+}
+
+function openAckPopup(idx) {
+    const popup = document.getElementById('ack-popup');
+    if (!popup) return;
+    const r = idx >= 0 ? _ackRows[idx] : null;
+    document.getElementById('ack-popup-title').textContent = r ? `编辑 ACK: ${r.ack_key}` : '新建 ACK';
+    document.getElementById('ack-popup-key').value = r ? r.ack_key : '';
+    document.getElementById('ack-popup-key').readOnly = !!r;
+    document.getElementById('ack-popup-title-input').value = r ? r.title : '';
+    document.getElementById('ack-popup-desc').value = r ? r.description : '';
+    document.getElementById('ack-popup-assigned').value = r ? r.assigned_to : '';
+    document.getElementById('ack-popup-requested').value = r ? r.requested_by : 'dashboard';
+    document.getElementById('ack-popup-priority').value = r ? r.priority : 'normal';
+    document.getElementById('ack-popup-status').value = r ? r.status : 'pending';
+    document.getElementById('ack-popup-progress').value = r ? r.progress : 0;
+    document.getElementById('ack-popup-message').value = r ? r.ack_message : '';
+    document.getElementById('ack-popup-result').value = r ? r.result_summary : '';
+    const dueInput = document.getElementById('ack-popup-due');
+    if (dueInput) dueInput.value = r && r.due_at ? r.due_at.replace(' ', 'T').substring(0, 16) : '';
+    popup.style.display = '';
+}
+
+async function saveAckPopup(andClose) {
+    const key = document.getElementById('ack-popup-key').value.trim();
+    if (!key) return toast('ACK Key 不能为空');
+    const body = {
+        ack_key: key,
+        title: document.getElementById('ack-popup-title-input').value.trim(),
+        description: document.getElementById('ack-popup-desc').value.trim(),
+        assigned_to: document.getElementById('ack-popup-assigned').value.trim(),
+        requested_by: document.getElementById('ack-popup-requested').value.trim() || 'dashboard',
+        priority: document.getElementById('ack-popup-priority').value,
+        status: document.getElementById('ack-popup-status').value,
+        progress: parseInt(document.getElementById('ack-popup-progress').value) || 0,
+        ack_message: document.getElementById('ack-popup-message').value.trim(),
+        result_summary: document.getElementById('ack-popup-result').value.trim(),
+        due_at: document.getElementById('ack-popup-due').value || null,
+    };
+    try {
+        const resp = await fetch('/api/task-acks/save', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const j = await resp.json();
+        if (j.ok) {
+            toast('ACK 已保存');
+            if (andClose) document.getElementById('ack-popup').style.display = 'none';
+            loadTaskAcks();
+        } else { toast('保存失败: ' + (j.error || '')); }
+    } catch (e) { toast('保存失败: ' + e.message); }
+}
+
+
+// ─── DAG 管理 ──────────────────────────────────────────────────────
+
+let _dagRows = [];
+let _selectedDagKeys = new Set();
+let _dagDetailKey = '';
+
+const _DAG_STATUS_COLOR = {
+    draft: '#6b7280', ready: '#3b82f6', running: '#8b5cf6',
+    paused: '#f59e0b', done: '#10b981', failed: '#ef4444',
+};
+const _NODE_STATUS_COLOR = {
+    pending: '#6b7280', running: '#8b5cf6', done: '#10b981',
+    failed: '#ef4444', skipped: '#f59e0b',
+};
+const _NODE_TYPE_LABEL = { task: '任务', gate: '网关', check: '检查' };
+
+async function loadTaskDags() {
+    try {
+        const kw = (document.getElementById('dag-search') || {}).value || '';
+        const st = (document.getElementById('dag-status-filter') || {}).value || '';
+        const params = new URLSearchParams();
+        if (kw) params.set('keyword', kw);
+        if (st) params.set('status', st);
+        const resp = await fetch(`/api/task-dags?${params}`);
+        const j = await resp.json();
+        _dagRows = j.dags || [];
+        renderTaskDags();
+    } catch (e) { console.error('loadTaskDags', e); }
+}
+
+function renderTaskDags() {
+    const tbody = document.getElementById('dag-tbody');
+    const empty = document.getElementById('dag-empty');
+    if (!tbody) return;
+
+    if (_dagRows.length === 0) {
+        tbody.innerHTML = '';
+        if (empty) { empty.style.display = ''; empty.textContent = '暂无 DAG 记录'; }
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+
+    tbody.innerHTML = _dagRows.map((r, i) => {
+        const checked = _selectedDagKeys.has(r.dag_key) ? ' checked' : '';
+        const stColor = _DAG_STATUS_COLOR[r.status] || '#6b7280';
+        const total = r.node_total || 0;
+        const done = r.node_done || 0;
+        const progText = total > 0 ? `${done}/${total}` : '-';
+        return `<tr onclick="copyDagKey(${i})" style="cursor:pointer">
+            <td style="text-align:center" onclick="event.stopPropagation()"><input type="checkbox"${checked} onchange="toggleDagCheck('${escapeHtml(r.dag_key)}',this.checked)"></td>
+            <td style="font-family:monospace;font-size:.8rem">${escapeHtml(r.dag_key)}</td>
+            <td>${escapeHtml(r.title)}</td>
+            <td><span style="background:${stColor}22;color:${stColor};padding:2px 8px;border-radius:4px;font-size:.75rem;font-weight:600">${r.status}</span></td>
+            <td style="font-weight:600;font-size:.82rem">${progText}</td>
+            <td>${escapeHtml(r.created_by || '-')}</td>
+            <td style="font-size:.78rem">${_fmtCompact(r.started_at)}</td>
+            <td style="font-size:.78rem">${_fmtCompact(r.updated_at)}</td>
+            <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem" title="${escapeHtml(r.description)}">${escapeHtml(r.description || '-')}</td>
+            <td style="text-align:center" onclick="event.stopPropagation()">
+                <button class="btn btn-sm btn-secondary" onclick="showDagDetail('${escapeHtml(r.dag_key)}')" style="margin-right:4px">详情</button>
+                <button class="btn btn-sm btn-secondary" onclick="openDagPopup(${i})">编辑</button>
+            </td>
+        </tr>`;
+    }).join('');
+
+    const allCb = document.getElementById('dag-select-all');
+    if (allCb) allCb.checked = _selectedDagKeys.size > 0 && _selectedDagKeys.size === _dagRows.length;
+}
+
+function toggleDagCheck(key, checked) {
+    if (checked) _selectedDagKeys.add(key); else _selectedDagKeys.delete(key);
+    const allCb = document.getElementById('dag-select-all');
+    if (allCb) allCb.checked = _selectedDagKeys.size === _dagRows.length && _dagRows.length > 0;
+}
+function toggleDagSelectAll(checked) {
+    _selectedDagKeys.clear();
+    if (checked) _dagRows.forEach(r => _selectedDagKeys.add(r.dag_key));
+    renderTaskDags();
+}
+
+function copyDagKey(idx) {
+    const r = _dagRows[idx]; if (!r) return;
+    navigator.clipboard.writeText(r.dag_key).then(() => toast('已复制: ' + r.dag_key));
+}
+
+async function deleteSelectedDags() {
+    if (_selectedDagKeys.size === 0) return toast('请先勾选要删除的 DAG');
+    _confirmDialogActive = true;
+    const ok = await showConfirm(`确认删除 ${_selectedDagKeys.size} 个 DAG 及其所有节点？`);
+    _confirmDialogActive = false;
+    if (!ok) return;
+    try {
+        const resp = await fetch('/api/task-dags/delete', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dag_keys: [..._selectedDagKeys] }),
+        });
+        const j = await resp.json();
+        toast(`已删除 ${j.deleted || 0} 个 DAG`);
+        _selectedDagKeys.clear();
+        if (_dagDetailKey && _selectedDagKeys.has(_dagDetailKey)) closeDagDetail();
+        loadTaskDags();
+    } catch (e) { toast('删除失败: ' + e.message); }
+}
+
+function openDagPopup(idx) {
+    const popup = document.getElementById('dag-popup');
+    if (!popup) return;
+    const r = idx >= 0 ? _dagRows[idx] : null;
+    document.getElementById('dag-popup-title').textContent = r ? `编辑 DAG: ${r.dag_key}` : '新建 DAG';
+    document.getElementById('dag-popup-key').value = r ? r.dag_key : '';
+    document.getElementById('dag-popup-key').readOnly = !!r;
+    document.getElementById('dag-popup-title-input').value = r ? r.title : '';
+    document.getElementById('dag-popup-desc').value = r ? r.description : '';
+    document.getElementById('dag-popup-status').value = r ? r.status : 'draft';
+    document.getElementById('dag-popup-created-by').value = r ? r.created_by : 'dashboard';
+    popup.style.display = '';
+}
+
+async function saveDagPopup(andClose) {
+    const key = document.getElementById('dag-popup-key').value.trim();
+    if (!key) return toast('DAG Key 不能为空');
+    const body = {
+        dag_key: key,
+        title: document.getElementById('dag-popup-title-input').value.trim(),
+        description: document.getElementById('dag-popup-desc').value.trim(),
+        status: document.getElementById('dag-popup-status').value,
+        created_by: document.getElementById('dag-popup-created-by').value.trim() || 'dashboard',
+    };
+    try {
+        const resp = await fetch('/api/task-dags/save', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const j = await resp.json();
+        if (j.ok) {
+            toast('DAG 已保存');
+            if (andClose) document.getElementById('dag-popup').style.display = 'none';
+            loadTaskDags();
+        } else { toast('保存失败: ' + (j.error || '')); }
+    } catch (e) { toast('保存失败: ' + e.message); }
+}
+
+async function showDagDetail(dagKey) {
+    _dagDetailKey = dagKey;
+    try {
+        const resp = await fetch(`/api/task-dags/detail?dag_key=${encodeURIComponent(dagKey)}`);
+        const j = await resp.json();
+        if (!j.ok) return toast('加载失败: ' + (j.error || ''));
+        const dag = j.dag;
+        const nodes = dag.nodes || [];
+        document.getElementById('dag-detail-title').textContent = `节点明细 — ${dag.title || dag.dag_key} (${nodes.length} 个节点)`;
+        const tbody = document.getElementById('dag-node-tbody');
+        if (tbody) {
+            tbody.innerHTML = nodes.map(n => {
+                const nstColor = _NODE_STATUS_COLOR[n.status] || '#6b7280';
+                const deps = (n.depends_on || []).join(', ') || '-';
+                const typeLabel = _NODE_TYPE_LABEL[n.node_type] || n.node_type;
+                return `<tr>
+                    <td style="font-family:monospace;font-size:.8rem">${escapeHtml(n.node_key)}</td>
+                    <td>${escapeHtml(n.title || '-')}</td>
+                    <td><span style="font-size:.75rem">${typeLabel}</span></td>
+                    <td>${escapeHtml(n.assigned_to || '-')}</td>
+                    <td><span style="background:${nstColor}22;color:${nstColor};padding:2px 8px;border-radius:4px;font-size:.75rem;font-weight:600">${n.status}</span></td>
+                    <td style="font-size:.75rem">${escapeHtml(deps)}</td>
+                    <td style="font-size:.75rem;font-family:monospace">${escapeHtml(n.command_ref || '-')}</td>
+                    <td style="font-size:.78rem">${_fmtCompact(n.started_at)}</td>
+                    <td style="font-size:.78rem">${_fmtCompact(n.finished_at)}</td>
+                    <td style="text-align:center">
+                        <select class="input" style="width:80px;font-size:.72rem;padding:2px 4px" onchange="quickNodeStatus('${escapeHtml(dagKey)}','${escapeHtml(n.node_key)}',this.value)">
+                            <option value="">状态...</option>
+                            ${['pending', 'running', 'done', 'failed', 'skipped'].filter(s => s !== n.status).map(s => `<option value="${s}">${s}</option>`).join('')}
+                        </select>
+                    </td>
+                </tr>`;
+            }).join('');
+        }
+        document.getElementById('dag-detail-panel').style.display = '';
+    } catch (e) { toast('加载详情失败: ' + e.message); }
+}
+
+function closeDagDetail() {
+    _dagDetailKey = '';
+    document.getElementById('dag-detail-panel').style.display = 'none';
+}
+
+async function quickNodeStatus(dagKey, nodeKey, status) {
+    if (!status) return;
+    try {
+        await fetch('/api/task-dags/node/status', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dag_key: dagKey, node_key: nodeKey, status }),
+        });
+        toast(`${nodeKey} → ${status}`);
+        showDagDetail(dagKey);
+        loadTaskDags();
+    } catch (e) { toast('节点状态更新失败: ' + e.message); }
+}
+
+// ─── 任务追踪 ──────────────────────────────────────────────────────
+
+const _TRACE_STATUS_COLOR = {
+    running: '#8b5cf6', ok: '#10b981', error: '#ef4444',
+};
+
+let _traceRows = [];
+let _traceDetailTraceId = '';
+
+async function loadTaskTraces() {
+    try {
+        const kw = (document.getElementById('trace-search') || {}).value || '';
+        const st = (document.getElementById('trace-status-filter') || {}).value || '';
+        const comp = (document.getElementById('trace-component-filter') || {}).value || '';
+        const params = new URLSearchParams();
+        if (kw) params.set('trace_id', kw);
+        if (st) params.set('status', st);
+        if (comp) params.set('component', comp);
+        const resp = await fetch(`/api/task-traces?${params}`);
+        const j = await resp.json();
+        _traceRows = j.traces || [];
+        renderTaskTraces();
+    } catch (e) { console.error('loadTaskTraces', e); }
+}
+
+function renderTaskTraces() {
+    const tbody = document.getElementById('trace-tbody');
+    const empty = document.getElementById('trace-empty');
+    const stats = document.getElementById('trace-stats');
+    if (!tbody) return;
+
+    if (stats) {
+        const counts = {};
+        _traceRows.forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
+        const order = ['running', 'ok', 'error'];
+        stats.innerHTML = order.filter(s => counts[s]).map(s =>
+            `<div style="background:${_TRACE_STATUS_COLOR[s]}22;color:${_TRACE_STATUS_COLOR[s]};padding:4px 12px;border-radius:6px;font-size:.82rem;font-weight:600">${s}: ${counts[s]}</div>`
+        ).join('') + `<div style="padding:4px 12px;font-size:.82rem;font-weight:600;color:var(--text-secondary)">共 ${_traceRows.length} 条</div>`;
+    }
+
+    if (_traceRows.length === 0) {
+        tbody.innerHTML = '';
+        if (empty) { empty.style.display = ''; empty.textContent = '暂无追踪记录'; }
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+
+    tbody.innerHTML = _traceRows.map(r => {
+        const stColor = _TRACE_STATUS_COLOR[r.status] || '#6b7280';
+        const comps = (r.components || []).join(', ') || '-';
+        const selected = r.trace_id === _traceDetailTraceId ? 'background:var(--border)' : '';
+        return `<tr onclick="loadTraceSpans('${escapeHtml(r.trace_id)}')" style="cursor:pointer;${selected}" title="点击查看 Span 明细">
+            <td style="font-family:monospace;font-size:.75rem">${escapeHtml(r.trace_id)}</td>
+            <td><span style="background:${stColor}22;color:${stColor};padding:2px 8px;border-radius:4px;font-size:.72rem;font-weight:600">${r.status}</span></td>
+            <td style="text-align:center;font-weight:600">${r.span_count || 0}</td>
+            <td style="font-size:.78rem">${escapeHtml(comps)}</td>
+            <td style="font-size:.78rem">${escapeHtml(r.started_at || '-')}</td>
+            <td style="font-size:.78rem">${escapeHtml(r.finished_at || '-')}</td>
+        </tr>`;
+    }).join('');
+}
+
+async function loadTraceSpans(traceId) {
+    _traceDetailTraceId = traceId;
+    renderTaskTraces(); // highlight selected row
+    const panel = document.getElementById('trace-detail-panel');
+    const title = document.getElementById('trace-detail-title');
+    const tbody = document.getElementById('trace-span-tbody');
+    if (!panel || !tbody) return;
+
+    panel.style.display = '';
+    if (title) title.textContent = `Span 明细 — ${traceId}`;
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:12px">加载中...</td></tr>';
+
+    try {
+        const resp = await fetch(`/api/task-traces/spans?trace_id=${encodeURIComponent(traceId)}`);
+        const j = await resp.json();
+        const spans = j.spans || [];
+
+        if (spans.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:12px;color:var(--text-secondary)">无 Span 数据</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = spans.map(s => {
+            const stColor = _TRACE_STATUS_COLOR[s.status] || '#6b7280';
+            const inputStr = s.input_payload ? JSON.stringify(s.input_payload, null, 1) : '-';
+            const outputStr = s.output_payload ? JSON.stringify(s.output_payload, null, 1) : '-';
+            const errStr = s.error_text ? `<div style="color:#ef4444;margin-top:4px">错误: ${escapeHtml(s.error_text)}</div>` : '';
+            const ioHtml = `<details style="font-size:.72rem;cursor:pointer"><summary style="font-weight:600">展开 I/O</summary><div style="margin-top:4px"><b>Input:</b><pre style="margin:2px 0;max-height:120px;overflow:auto;background:var(--bg-secondary);padding:4px;border-radius:4px;font-size:.68rem">${escapeHtml(inputStr.length > 500 ? inputStr.substring(0, 500) + '…' : inputStr)}</pre><b>Output:</b><pre style="margin:2px 0;max-height:120px;overflow:auto;background:var(--bg-secondary);padding:4px;border-radius:4px;font-size:.68rem">${escapeHtml(outputStr.length > 500 ? outputStr.substring(0, 500) + '…' : outputStr)}</pre>${errStr}</div></details>`;
+            return `<tr>
+                <td style="font-size:.78rem;font-family:monospace">${escapeHtml(s.span_name || '-')}</td>
+                <td style="font-size:.78rem">${escapeHtml(s.component || '-')}</td>
+                <td><span style="background:${stColor}22;color:${stColor};padding:2px 8px;border-radius:4px;font-size:.72rem;font-weight:600">${s.status}</span></td>
+                <td style="text-align:right;font-family:monospace;font-size:.78rem">${s.duration_ms || 0}</td>
+                <td style="font-size:.75rem">${escapeHtml(s.started_at || '-')}</td>
+                <td style="font-size:.75rem">${escapeHtml(s.finished_at || '-')}</td>
+                <td>${ioHtml}</td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#ef4444;padding:12px">加载失败: ${escapeHtml(e.message)}</td></tr>`;
+    }
+}
+
+function closeTraceDetail() {
+    _traceDetailTraceId = '';
+    const panel = document.getElementById('trace-detail-panel');
+    if (panel) panel.style.display = 'none';
+    renderTaskTraces();
+}
+
+// ── Lifecycle 生命周期监控 ──────────────────────────────────────────────
+
+let _lcAutoTimer = null;
+const _LC_POLL_MS = 5000;
+
+const _LC_STATUS_META = {
+    completed: { icon: '✅', label: '已完成', color: 'var(--accent)', cls: 'lc-status-completed' },
+    running: { icon: '●', label: '运行中', color: 'var(--blue)', cls: 'lc-status-running' },
+    errored: { icon: '❌', label: '异常', color: 'var(--red)', cls: 'lc-status-errored' },
+    stalled: { icon: '⚠', label: '停滞', color: 'var(--amber)', cls: 'lc-status-stalled' },
+    unknown: { icon: '?', label: '未知', color: 'var(--text-muted)', cls: 'lc-status-unknown' },
+};
+
+function _startLifecycleAutoRefresh() {
+    _stopLifecycleAutoRefresh();
+    _lcAutoTimer = setInterval(loadLifecycleStatus, _LC_POLL_MS);
+}
+
+function _stopLifecycleAutoRefresh() {
+    if (_lcAutoTimer) { clearInterval(_lcAutoTimer); _lcAutoTimer = null; }
+}
+
+async function loadLifecycleStatus() {
+    try {
+        const r = await fetch('/api/lifecycle/status');
+        const j = await r.json();
+        if (!j.ok) return;
+
+        // update stats
+        const el = (id) => document.getElementById(id);
+        if (el('lc-cycles')) el('lc-cycles').textContent = String(j.cycles || 0);
+        if (el('lc-notified')) el('lc-notified').textContent = String(j.notifications_sent || 0);
+        if (el('lc-errors')) el('lc-errors').textContent = String(j.errors || 0);
+
+        // engine badge
+        const badge = el('lc-engine-badge');
+        if (badge) {
+            if (j.running) {
+                badge.className = 'badge badge-green';
+                badge.textContent = '运行中';
+            } else {
+                badge.className = 'badge badge-gray';
+                badge.textContent = '未启动';
+            }
+        }
+
+        // buttons
+        const startBtn = el('lc-btn-start');
+        const stopBtn = el('lc-btn-stop');
+        if (startBtn) startBtn.disabled = !!j.running;
+        if (stopBtn) stopBtn.disabled = !j.running;
+
+        // cards
+        renderLifecycleCards(j.agents || {});
+
+        // timeline
+        renderLifecycleTimeline(j.timeline || []);
+
+    } catch (e) {
+        console.error('loadLifecycleStatus error:', e);
+    }
+}
+
+function renderLifecycleCards(agentsObj) {
+    const grid = document.getElementById('lc-grid');
+    if (!grid) return;
+
+    const agents = Object.values(agentsObj);
+    if (!agents.length) {
+        grid.innerHTML = '<div class="lifecycle-empty">暂无子 Agent 数据，请先启动监控</div>';
+        return;
+    }
+
+    grid.innerHTML = agents.map(a => {
+        const st = _LC_STATUS_META[a.llm_status] || _LC_STATUS_META.unknown;
+        const conf = Math.min(1, Math.max(0, Number(a.confidence) || 0));
+        const confPct = Math.round(conf * 100);
+        const confBarW = confPct + '%';
+        const reason = escapeHtml(a.reason || '等待分析...');
+        const tail = escapeHtml(String(a.output_tail || '').slice(-80));
+        const runtimeCls = classToken(a.runtime_status || 'unknown');
+
+        return `<div class="lifecycle-card ${st.cls}">
+            <div class="lc-card-header">
+                <span class="lc-card-id">${escapeHtml(a.agent_id)}</span>
+                <span class="lc-card-name">${escapeHtml(a.agent_name || '')}</span>
+                <span class="level-badge level-${runtimeCls}" style="margin-left:auto;font-size:0.68rem">${escapeHtml(a.runtime_status || 'unknown')}</span>
+            </div>
+            <div class="lc-card-decision">
+                <span style="color:${st.color};font-size:0.92rem;font-weight:600">${st.icon} ${st.label}</span>
+                <span style="font-family:var(--font-mono);font-size:0.72rem;color:var(--text-muted)">GPT-5.2</span>
+            </div>
+            <div class="lc-card-reason">${reason}</div>
+            <div class="lc-card-confidence">
+                <div class="lc-conf-bar">
+                    <div class="lc-conf-fill" style="width:${confBarW};background:${st.color}"></div>
+                </div>
+                <span class="lc-conf-value">${conf.toFixed(2)}</span>
+            </div>
+            <div class="lc-card-tail">${tail || '<span style="color:var(--text-muted)">—</span>'}</div>
+        </div>`;
+    }).join('');
+}
+
+function renderLifecycleTimeline(events) {
+    const tl = document.getElementById('lc-timeline');
+    if (!tl) return;
+
+    if (!events.length) {
+        tl.innerHTML = '<div class="lifecycle-empty">暂无通知记录</div>';
+        return;
+    }
+
+    // reverse chronological
+    const items = [...events].reverse();
+    tl.innerHTML = items.map(e => {
+        const ts = String(e.ts || '').replace('T', ' ').slice(11, 19);
+        const icon = escapeHtml(e.icon || '🔔');
+        const text = escapeHtml(e.text || '');
+        return `<div class="lc-tl-item">
+            <span class="lc-tl-ts">${ts}</span>
+            <span class="lc-tl-icon">${icon}</span>
+            <span class="lc-tl-text">${text}</span>
+        </div>`;
+    }).join('');
+}
+
+async function lifecycleWatch(action) {
+    const dryRun = !!document.getElementById('lc-dry-run')?.checked;
+    try {
+        const r = await fetch('/api/lifecycle/watch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, dry_run: dryRun }),
+        });
+        const j = await r.json();
+        if (j.ok) {
+            toast(j.message || (action === 'start' ? '监控已启动' : '监控已停止'), true);
+            setTimeout(loadLifecycleStatus, 800);
+        } else {
+            toast(j.error || '操作失败', false);
+        }
+    } catch (e) { toast('网络错误: ' + e.message, false); }
+}
+
+async function lifecycleSendNotify() {
+    const msg = prompt('输入通知内容 (将发送到主 Agent):');
+    if (!msg) return;
+    try {
+        const r = await fetch('/api/session/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agent_key: 'master', text: msg }),
+        });
+        const j = await r.json();
+        if (j.ok) toast('已通知主 Agent', true);
+        else toast(j.error || '通知失败', false);
+    } catch (e) { toast('网络错误: ' + e.message, false); }
+}
+
+function clearLifecycleTimeline() {
+    const tl = document.getElementById('lc-timeline');
+    if (tl) tl.innerHTML = '<div class="lifecycle-empty">已清空</div>';
+}

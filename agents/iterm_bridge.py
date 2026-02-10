@@ -340,14 +340,14 @@ def _iter_tab_sessions(tab: Any) -> list[Any]:
     return []
 
 
-def _list_live_session_ids(window_id: str = "") -> tuple[str, list[str]]:
+def _list_live_sessions(window_id: str = "") -> tuple[str, list[dict[str, str]]]:
     import iterm2
 
     selected_window_id = ""
-    session_ids: list[str] = []
+    sessions: list[dict[str, str]] = []
 
     async def main(connection):
-        nonlocal selected_window_id, session_ids
+        nonlocal selected_window_id, sessions
 
         app = await iterm2.async_get_app(connection)
         windows = list(getattr(app, "terminal_windows", []) or [])
@@ -376,14 +376,72 @@ def _list_live_session_ids(window_id: str = "") -> tuple[str, list[str]]:
                 if not session_id or session_id in seen:
                     continue
                 seen.add(session_id)
-                session_ids.append(session_id)
+
+                badge = ""
+                agent_id = ""
+                agent_name = ""
+                agent_label = ""
+                get_variable = getattr(session, "async_get_variable", None)
+                if get_variable is not None:
+                    try:
+                        badge_value = await get_variable("user.badge")
+                        badge = str(badge_value or "").strip()
+                    except Exception:
+                        badge = ""
+
+                    try:
+                        agent_id_value = await get_variable("user.agent_id")
+                        agent_id = str(agent_id_value or "").strip()
+                    except Exception:
+                        agent_id = ""
+
+                    try:
+                        agent_name_value = await get_variable("user.agent_name")
+                        agent_name = str(agent_name_value or "").strip()
+                    except Exception:
+                        agent_name = ""
+
+                    try:
+                        agent_label_value = await get_variable("user.agent_label")
+                        agent_label = str(agent_label_value or "").strip()
+                    except Exception:
+                        agent_label = ""
+
+                session_name = str(getattr(session, "name", "") or "").strip()
+                resolved_name = agent_label or agent_name or session_name
+                sessions.append(
+                    {
+                        "session_id": session_id,
+                        "badge": badge,
+                        "agent_id": agent_id,
+                        "agent_name": agent_name,
+                        "agent_label": agent_label,
+                        "name": resolved_name,
+                        "session_name": session_name,
+                    }
+                )
 
     iterm2.run_until_complete(main)
+    return selected_window_id, sessions
+
+
+def _list_live_session_ids(window_id: str = "") -> tuple[str, list[str]]:
+    selected_window_id, sessions = _list_live_sessions(window_id)
+    session_ids = [
+        str(item.get("session_id", "") or "").strip()
+        for item in sessions
+        if str(item.get("session_id", "") or "").strip()
+    ]
     return selected_window_id, session_ids
 
 
 def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str, Any]:
-    selected_window_id, live_session_ids = _list_live_session_ids(str(state.get("window_id", "") or ""))
+    selected_window_id, live_sessions = _list_live_sessions(str(state.get("window_id", "") or ""))
+    live_session_ids = [
+        str(item.get("session_id", "") or "").strip()
+        for item in live_sessions
+        if str(item.get("session_id", "") or "").strip()
+    ]
     if not live_session_ids:
         return {
             "state": state,
@@ -401,24 +459,136 @@ def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str,
         agents = []
         new_state["agents"] = agents
 
+    live_by_id: dict[str, dict[str, str]] = {
+        str(item.get("session_id", "") or "").strip(): item
+        for item in live_sessions
+        if str(item.get("session_id", "") or "").strip()
+    }
+    unassigned_live_ids = set(live_by_id.keys())
+
     rebound_count = 0
-    for index, agent in enumerate(agents):
+
+    def _set_agent_session(agent_row: dict[str, Any], session_id: str) -> None:
+        nonlocal rebound_count
+        old_session_id = str(agent_row.get("session_id", "") or "").strip()
+        new_session_id = str(session_id or "").strip()
+        if old_session_id != new_session_id:
+            rebound_count += 1
+        agent_row["session_id"] = new_session_id
+        if new_session_id:
+            unassigned_live_ids.discard(new_session_id)
+
+    unresolved_agents: list[dict[str, Any]] = []
+
+    # 第一阶段：保留仍然有效的原 session 绑定，避免“按顺序错位”。
+    for agent in agents:
         if not isinstance(agent, dict):
             continue
-        next_session_id = live_session_ids[index] if index < len(live_session_ids) else ""
-        old_session_id = str(agent.get("session_id", "") or "")
-        if next_session_id != old_session_id:
-            rebound_count += 1
-        agent["session_id"] = next_session_id
+
+        old_session_id = str(agent.get("session_id", "") or "").strip()
+        if old_session_id and old_session_id in live_by_id:
+            _set_agent_session(agent, old_session_id)
+            continue
+
+        unresolved_agents.append(agent)
+
+    # 第二阶段：优先按 badge 精确回绑（A01/A02...），可修复错位状态。
+    for agent in unresolved_agents:
+        if not isinstance(agent, dict):
+            continue
+
+        current_session_id = str(agent.get("session_id", "") or "").strip()
+        if current_session_id and current_session_id in live_by_id:
+            continue
+
+        badge = str(agent.get("badge", "") or "").strip()
+        if not badge:
+            continue
+
+        matched_ids = [
+            session_id
+            for session_id in list(unassigned_live_ids)
+            if str(live_by_id.get(session_id, {}).get("badge", "") or "").strip() == badge
+        ]
+        if len(matched_ids) == 1:
+            _set_agent_session(agent, matched_ids[0])
+
+    # 第三阶段：按标签/代理标识兜底（不依赖会被进程覆盖的 session_name）。
+    for agent in unresolved_agents:
+        if not isinstance(agent, dict):
+            continue
+
+        current_session_id = str(agent.get("session_id", "") or "").strip()
+        if current_session_id and current_session_id in live_by_id:
+            continue
+
+        session_label = str(agent.get("session_label", "") or "").strip().lower()
+        agent_id = str(agent.get("agent_id", "") or "").strip().lower()
+        agent_name = str(agent.get("agent_name", "") or "").strip().lower()
+        if not session_label and not agent_id and not agent_name:
+            continue
+
+        matched_ids: list[str] = []
+        for session_id in list(unassigned_live_ids):
+            live_row = live_by_id.get(session_id, {})
+            live_label = str(live_row.get("agent_label", "") or "").strip().lower()
+            live_agent_id = str(live_row.get("agent_id", "") or "").strip().lower()
+            live_agent_name = str(live_row.get("agent_name", "") or "").strip().lower()
+            live_name = str(live_row.get("name", "") or "").strip().lower()
+            live_session_name = str(live_row.get("session_name", "") or "").strip().lower()
+
+            if session_label and live_label and session_label == live_label:
+                matched_ids.append(session_id)
+                continue
+            if agent_id and live_agent_id and agent_id == live_agent_id:
+                matched_ids.append(session_id)
+                continue
+            if agent_name and live_agent_name and agent_name == live_agent_name:
+                matched_ids.append(session_id)
+                continue
+            if session_label and live_name and session_label == live_name:
+                matched_ids.append(session_id)
+                continue
+            if agent_id and live_name and agent_id in live_name:
+                matched_ids.append(session_id)
+                continue
+            if agent_id and live_session_name and agent_id in live_session_name:
+                matched_ids.append(session_id)
+
+        if len(matched_ids) == 1:
+            _set_agent_session(agent, matched_ids[0])
+
+    # 第四阶段：仍未匹配的失效会话统一清空。
+    for agent in unresolved_agents:
+        if not isinstance(agent, dict):
+            continue
+        current_session_id = str(agent.get("session_id", "") or "").strip()
+        if current_session_id and current_session_id not in live_by_id:
+            _set_agent_session(agent, "")
+
+    resolved_session_ids: list[str] = []
+    seen: set[str] = set()
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        session_id = str(agent.get("session_id", "") or "").strip()
+        if not session_id or session_id in seen:
+            continue
+        seen.add(session_id)
+        resolved_session_ids.append(session_id)
 
     existing_session_ids = [str(item).strip() for item in state.get("session_ids", []) if str(item).strip()]
-    if existing_session_ids != live_session_ids:
+    if existing_session_ids != resolved_session_ids:
         rebound_count += 1
 
-    new_state["session_ids"] = live_session_ids
-    new_state["tab_count"] = len(live_session_ids) if live_session_ids else int(new_state.get("tab_count") or len(agents))
-    if selected_window_id:
+    previous_window_id = str(state.get("window_id", "") or "")
+    if selected_window_id and selected_window_id != previous_window_id:
+        rebound_count += 1
         new_state["window_id"] = selected_window_id
+
+    new_state["session_ids"] = resolved_session_ids
+    expected_tab_count = int(new_state.get("count") or len(agents) or len(resolved_session_ids))
+    new_state["tab_count"] = max(len(resolved_session_ids), expected_tab_count)
 
     if rebound_count <= 0:
         return {

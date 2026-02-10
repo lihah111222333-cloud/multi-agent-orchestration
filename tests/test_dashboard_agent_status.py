@@ -46,6 +46,120 @@ class DashboardAgentStatusApiTests(unittest.TestCase):
     def setUp(self) -> None:
         dashboard._AGENT_STATUS_MEMORY.clear()
 
+    def test_api_agent_status_prefers_agent_status_table_when_available(self) -> None:
+        table_rows = [
+            {
+                "agent_id": "agent_01",
+                "agent_name": "Agent 01",
+                "session_id": "s1",
+                "status": "running",
+                "stagnant_sec": 4,
+                "error": "",
+                "output_tail": ["heartbeat ok", "processed 1 item"],
+            },
+            {
+                "agent_id": "agent_02",
+                "agent_name": "Agent 02",
+                "session_id": "s2",
+                "status": "error",
+                "stagnant_sec": 18,
+                "error": "Traceback: boom",
+                "output_tail": ["Traceback: boom"],
+            },
+        ]
+
+        legacy_sessions_payload = {
+            "ok": True,
+            "sessions": [
+                {
+                    "agent_id": "agent_99",
+                    "agent_name": "Legacy Agent",
+                    "session_id": "legacy-s1",
+                }
+            ],
+        }
+        legacy_outputs_payload = {
+            "ok": True,
+            "results": [
+                {
+                    "agent_id": "agent_99",
+                    "output": ["legacy output"],
+                    "error": "",
+                }
+            ],
+        }
+
+        with run_dashboard_server() as base_url:
+            with patch.object(dashboard, "fetch_all", return_value=table_rows, create=True) as fetch_all_mock:
+                with patch.object(dashboard, "list_iterm_agent_sessions", return_value=legacy_sessions_payload):
+                    with patch.object(dashboard, "read_iterm_output", return_value=legacy_outputs_payload):
+                        code, payload = request_json(base_url, "/api/agent-status")
+
+        self.assertTrue(fetch_all_mock.called)
+        self.assertEqual(code, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["summary"]["total"], 2)
+        self.assertEqual(payload["summary"]["healthy"], 1)
+        self.assertEqual(payload["summary"]["unhealthy"], 1)
+
+        by_id = {row["agent_id"]: row for row in payload["agents"]}
+        self.assertIn("agent_01", by_id)
+        self.assertIn("agent_02", by_id)
+        self.assertNotIn("agent_99", by_id)
+        self.assertEqual(by_id["agent_01"]["status"], "running")
+        self.assertEqual(by_id["agent_02"]["status"], "error")
+
+    def test_api_agent_status_falls_back_when_agent_status_table_missing(self) -> None:
+        sessions_payload = {
+            "ok": True,
+            "sessions": [
+                {
+                    "agent_id": "agent_01",
+                    "agent_name": "Agent 01",
+                    "session_id": "s1",
+                },
+                {
+                    "agent_id": "agent_02",
+                    "agent_name": "Agent 02",
+                    "session_id": "s2",
+                },
+            ],
+        }
+        outputs_payload = {
+            "ok": True,
+            "results": [
+                {
+                    "agent_id": "agent_01",
+                    "output": ["heartbeat ok", "processed 1 item"],
+                    "error": "",
+                },
+                {
+                    "agent_id": "agent_02",
+                    "output": ["Traceback: boom"],
+                    "error": "",
+                },
+            ],
+        }
+
+        with run_dashboard_server() as base_url:
+            with patch.object(
+                dashboard,
+                "fetch_all",
+                side_effect=RuntimeError('relation "agent_status" does not exist'),
+                create=True,
+            ) as fetch_all_mock:
+                with patch.object(dashboard, "list_iterm_agent_sessions", return_value=sessions_payload):
+                    with patch.object(dashboard, "read_iterm_output", return_value=outputs_payload):
+                        code, payload = request_json(base_url, "/api/agent-status")
+
+        self.assertTrue(fetch_all_mock.called)
+        self.assertEqual(code, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["summary"]["total"], 2)
+        by_id = {row["agent_id"]: row for row in payload["agents"]}
+        self.assertEqual(by_id["agent_01"]["status"], "running")
+        self.assertEqual(by_id["agent_02"]["status"], "error")
+
     def test_api_agent_status_success(self) -> None:
         sessions_payload = {
             "ok": True,
@@ -79,9 +193,15 @@ class DashboardAgentStatusApiTests(unittest.TestCase):
         }
 
         with run_dashboard_server() as base_url:
-            with patch.object(dashboard, "list_iterm_agent_sessions", return_value=sessions_payload):
-                with patch.object(dashboard, "read_iterm_output", return_value=outputs_payload):
-                    code, payload = request_json(base_url, "/api/agent-status?lines=20")
+            with patch.object(
+                dashboard,
+                "fetch_all",
+                side_effect=RuntimeError('relation "agent_status" does not exist'),
+                create=True,
+            ):
+                with patch.object(dashboard, "list_iterm_agent_sessions", return_value=sessions_payload):
+                    with patch.object(dashboard, "read_iterm_output", return_value=outputs_payload):
+                        code, payload = request_json(base_url, "/api/agent-status?lines=20")
 
         self.assertEqual(code, 200)
         self.assertTrue(payload["ok"])
@@ -94,10 +214,16 @@ class DashboardAgentStatusApiTests(unittest.TestCase):
         with run_dashboard_server() as base_url:
             with patch.object(
                 dashboard,
-                "list_iterm_agent_sessions",
-                return_value={"ok": False, "error": "state file missing"},
+                "fetch_all",
+                side_effect=RuntimeError('relation "agent_status" does not exist'),
+                create=True,
             ):
-                code, payload = request_json(base_url, "/api/agent-status")
+                with patch.object(
+                    dashboard,
+                    "list_iterm_agent_sessions",
+                    return_value={"ok": False, "error": "state file missing"},
+                ):
+                    code, payload = request_json(base_url, "/api/agent-status")
 
         self.assertEqual(code, 503)
         self.assertFalse(payload["ok"])
@@ -116,13 +242,19 @@ class DashboardAgentStatusApiTests(unittest.TestCase):
         }
 
         with run_dashboard_server() as base_url:
-            with patch.object(dashboard, "list_iterm_agent_sessions", return_value=sessions_payload):
-                with patch.object(
-                    dashboard,
-                    "read_iterm_output",
-                    return_value={"ok": False, "error": "iTerm unavailable"},
-                ):
-                    code, payload = request_json(base_url, "/api/agent-status")
+            with patch.object(
+                dashboard,
+                "fetch_all",
+                side_effect=RuntimeError('relation "agent_status" does not exist'),
+                create=True,
+            ):
+                with patch.object(dashboard, "list_iterm_agent_sessions", return_value=sessions_payload):
+                    with patch.object(
+                        dashboard,
+                        "read_iterm_output",
+                        return_value={"ok": False, "error": "iTerm unavailable"},
+                    ):
+                        code, payload = request_json(base_url, "/api/agent-status")
 
         self.assertEqual(code, 503)
         self.assertFalse(payload["ok"])

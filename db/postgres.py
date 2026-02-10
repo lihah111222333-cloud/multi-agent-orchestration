@@ -168,18 +168,18 @@ def _set_search_path(cur: Any) -> None:
 
 
 def _apply_sql_migrations(cur: Any) -> int:
-    """Apply SQL migrations from `db/migrations` if present.
+    """Apply SQL migrations from `db/migrations`.
 
     Migration files must follow `NNNN_name.sql` naming and contiguous ordering.
     """
-    if not MIGRATIONS_DIR.exists():
-        return 0
+    if not MIGRATIONS_DIR.exists() or not MIGRATIONS_DIR.is_dir():
+        raise RuntimeError(f"未找到 SQL migrations 目录: {MIGRATIONS_DIR}")
 
     from db.migrator import discover_migrations
 
     migrations = discover_migrations(MIGRATIONS_DIR)
     if not migrations:
-        return 0
+        raise RuntimeError(f"SQL migrations 目录为空: {MIGRATIONS_DIR}")
 
     cur.execute(
         """
@@ -242,235 +242,8 @@ def ensure_schema() -> None:
                 applied_migrations = _apply_sql_migrations(cur)
                 if applied_migrations:
                     _logger.info("applied %s sql migration(s) from %s", applied_migrations, MIGRATIONS_DIR)
-
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS audit_events (
-                        id BIGSERIAL PRIMARY KEY,
-                        ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        event_type TEXT NOT NULL,
-                        action TEXT NOT NULL,
-                        result TEXT NOT NULL,
-                        actor TEXT NOT NULL DEFAULT '',
-                        target TEXT NOT NULL DEFAULT '',
-                        detail TEXT NOT NULL DEFAULT '',
-                        level TEXT NOT NULL DEFAULT 'INFO',
-                        extra JSONB
-                    )
-                    """
-                )
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_ts ON audit_events (ts DESC)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_event_type ON audit_events (event_type)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events (action)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_result ON audit_events (result)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events (actor)")
-
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS system_logs (
-                        id BIGSERIAL PRIMARY KEY,
-                        ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        level TEXT NOT NULL,
-                        logger TEXT NOT NULL,
-                        message TEXT NOT NULL,
-                        raw TEXT NOT NULL DEFAULT ''
-                    )
-                    """
-                )
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_system_logs_ts ON system_logs (ts DESC)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_system_logs_level ON system_logs (level)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_system_logs_logger ON system_logs (logger)")
-
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS topology_approvals (
-                        id TEXT PRIMARY KEY,
-                        status TEXT NOT NULL,
-                        requested_by TEXT NOT NULL DEFAULT '',
-                        reason TEXT NOT NULL DEFAULT '',
-                        created_at TIMESTAMPTZ NOT NULL,
-                        expire_at TIMESTAMPTZ NOT NULL,
-                        reviewed_at TIMESTAMPTZ,
-                        reviewer TEXT NOT NULL DEFAULT '',
-                        review_note TEXT NOT NULL DEFAULT '',
-                        arch_hash TEXT NOT NULL,
-                        proposed_architecture JSONB NOT NULL
-                    )
-                    """
-                )
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_topology_approvals_status_created_at ON topology_approvals (status, created_at DESC)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_topology_approvals_arch_hash ON topology_approvals (arch_hash)")
-
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS topology_approval_archives (
-                        id TEXT PRIMARY KEY,
-                        status TEXT NOT NULL,
-                        requested_by TEXT NOT NULL DEFAULT '',
-                        reason TEXT NOT NULL DEFAULT '',
-                        created_at TIMESTAMPTZ NOT NULL,
-                        expire_at TIMESTAMPTZ NOT NULL,
-                        reviewed_at TIMESTAMPTZ,
-                        reviewer TEXT NOT NULL DEFAULT '',
-                        review_note TEXT NOT NULL DEFAULT '',
-                        arch_hash TEXT NOT NULL,
-                        proposed_architecture JSONB NOT NULL,
-                        archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    )
-                    """
-                )
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_topology_approval_archives_archived_at ON topology_approval_archives (archived_at DESC)")
-
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS shared_files (
-                        path TEXT PRIMARY KEY,
-                        content TEXT NOT NULL,
-                        updated_by TEXT NOT NULL DEFAULT '',
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    )
-                    """
-                )
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_shared_files_updated_at ON shared_files (updated_at DESC)")
-
-                # Dashboard 提示词配置表
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS prompts (
-                        id BIGSERIAL PRIMARY KEY,
-                        agent_key TEXT NOT NULL,
-                        tool_name TEXT NOT NULL,
-                        prompt_text TEXT NOT NULL DEFAULT '',
-                        is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
-                        sort_order INT NOT NULL DEFAULT 0,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        UNIQUE (agent_key, tool_name)
-                    )
-                    """
-                )
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_prompts_agent_key ON prompts (agent_key)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_prompts_sort_order ON prompts (sort_order, agent_key)")
-
-                # Agent 交互表
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS agent_interactions (
-                        id BIGSERIAL PRIMARY KEY,
-                        thread_id TEXT NOT NULL DEFAULT '',
-                        parent_id BIGINT,
-                        sender TEXT NOT NULL,
-                        receiver TEXT NOT NULL DEFAULT '',
-                        msg_type TEXT NOT NULL DEFAULT 'task',
-                        status TEXT NOT NULL DEFAULT 'pending',
-                        requires_review BOOLEAN NOT NULL DEFAULT FALSE,
-                        reviewed_by TEXT NOT NULL DEFAULT '',
-                        review_note TEXT NOT NULL DEFAULT '',
-                        reviewed_at TIMESTAMPTZ,
-                        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    )
-                    """
-                )
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_interactions_thread_created ON agent_interactions (thread_id, created_at DESC)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_interactions_sender_receiver ON agent_interactions (sender, receiver)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_interactions_status_review ON agent_interactions (status, requires_review, created_at DESC)")
-
-                # Agent 提示词模板表
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS prompt_templates (
-                        id BIGSERIAL PRIMARY KEY,
-                        prompt_key TEXT NOT NULL UNIQUE,
-                        title TEXT NOT NULL DEFAULT '',
-                        agent_key TEXT NOT NULL DEFAULT '',
-                        tool_name TEXT NOT NULL DEFAULT '',
-                        prompt_text TEXT NOT NULL,
-                        variables JSONB,
-                        tags JSONB,
-                        enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                        created_by TEXT NOT NULL DEFAULT '',
-                        updated_by TEXT NOT NULL DEFAULT '',
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    )
-                    """
-                )
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_prompt_templates_agent_tool ON prompt_templates (agent_key, tool_name)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_prompt_templates_enabled ON prompt_templates (enabled, updated_at DESC)")
-
-                # Agent 提示词模板版本归档表
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS prompt_template_versions (
-                        id BIGSERIAL PRIMARY KEY,
-                        prompt_key TEXT NOT NULL,
-                        title TEXT NOT NULL DEFAULT '',
-                        agent_key TEXT NOT NULL DEFAULT '',
-                        tool_name TEXT NOT NULL DEFAULT '',
-                        prompt_text TEXT NOT NULL,
-                        variables JSONB,
-                        tags JSONB,
-                        enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                        created_by TEXT NOT NULL DEFAULT '',
-                        updated_by TEXT NOT NULL DEFAULT '',
-                        source_updated_at TIMESTAMPTZ,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    )
-                    """
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_prompt_template_versions_key_id ON prompt_template_versions (prompt_key, id DESC)"
-                )
-
-                # 命令卡表
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS command_cards (
-                        id BIGSERIAL PRIMARY KEY,
-                        card_key TEXT NOT NULL UNIQUE,
-                        title TEXT NOT NULL,
-                        description TEXT NOT NULL DEFAULT '',
-                        command_template TEXT NOT NULL,
-                        args_schema JSONB,
-                        risk_level TEXT NOT NULL DEFAULT 'normal',
-                        enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                        created_by TEXT NOT NULL DEFAULT '',
-                        updated_by TEXT NOT NULL DEFAULT '',
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    )
-                    """
-                )
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_command_cards_risk_enabled ON command_cards (risk_level, enabled, updated_at DESC)")
-
-                # 命令卡执行流水表
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS command_card_runs (
-                        id BIGSERIAL PRIMARY KEY,
-                        card_key TEXT NOT NULL,
-                        requested_by TEXT NOT NULL DEFAULT '',
-                        params JSONB NOT NULL DEFAULT '{}'::jsonb,
-                        rendered_command TEXT NOT NULL,
-                        risk_level TEXT NOT NULL DEFAULT 'normal',
-                        status TEXT NOT NULL DEFAULT 'pending_review',
-                        requires_review BOOLEAN NOT NULL DEFAULT TRUE,
-                        interaction_id BIGINT,
-                        output TEXT NOT NULL DEFAULT '',
-                        error TEXT NOT NULL DEFAULT '',
-                        exit_code INT,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        executed_at TIMESTAMPTZ
-                    )
-                    """
-                )
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_command_card_runs_status_created ON command_card_runs (status, created_at DESC)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_command_card_runs_card_key ON command_card_runs (card_key, created_at DESC)")
+                else:
+                    _logger.debug("schema already up-to-date, no pending sql migrations in %s", MIGRATIONS_DIR)
 
         _SCHEMA_READY_KEY = key
 

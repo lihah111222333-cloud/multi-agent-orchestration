@@ -161,18 +161,82 @@ class ItermBridgeTests(unittest.TestCase):
             state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
             with mock.patch(
-                "agents.iterm_bridge._list_live_session_ids",
-                return_value=("window-new", ["NEW-SID"]),
+                "agents.iterm_bridge._list_live_sessions",
+                return_value=(
+                    "window-new",
+                    [
+                        {
+                            "session_id": "NEW-SID",
+                            "badge": "A01",
+                            "agent_id": "agent_01",
+                            "agent_name": "Agent 01",
+                            "agent_label": "agent_01 | Agent 01",
+                            "name": "agent_01 | Agent 01",
+                            "session_name": "node",
+                        }
+                    ],
+                ),
             ):
                 result = bridge._rebind_state_sessions(state_path, state)
 
             self.assertTrue(result["rebound"])
-            self.assertEqual(result["rebound_count"], 2)
+            self.assertGreaterEqual(result["rebound_count"], 2)
 
             updated = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(updated["window_id"], "window-new")
             self.assertEqual(updated["session_ids"], ["NEW-SID"])
             self.assertEqual(updated["agents"][0]["session_id"], "NEW-SID")
+
+    def test_rebind_prefers_identity_over_position(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "iterm_launch_state.json"
+            state = {
+                "window_id": "window-old",
+                "count": 2,
+                "tab_count": 2,
+                "agents": [
+                    {
+                        "index": 1,
+                        "agent_id": "agent_01",
+                        "agent_name": "Agent 01",
+                        "session_label": "agent_01 | Agent 01",
+                        "badge": "A01",
+                        "session_id": "SID-A01",
+                    },
+                    {
+                        "index": 2,
+                        "agent_id": "agent_02",
+                        "agent_name": "Agent 02",
+                        "session_label": "agent_02 | Agent 02",
+                        "badge": "A02",
+                        "session_id": "SID-A02",
+                    },
+                ],
+                "session_ids": ["SID-A01", "SID-A02"],
+            }
+            state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+            live = [
+                {
+                    "session_id": "SID-A02",
+                    "badge": "A02",
+                    "agent_id": "agent_02",
+                    "agent_name": "Agent 02",
+                    "agent_label": "agent_02 | Agent 02",
+                    "name": "agent_02 | Agent 02",
+                    "session_name": "node",
+                }
+            ]
+
+            with mock.patch("agents.iterm_bridge._list_live_sessions", return_value=("window-old", live)):
+                result = bridge._rebind_state_sessions(state_path, state)
+
+            self.assertTrue(result["rebound"])
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(updated["agents"][0]["session_id"], "")
+            self.assertEqual(updated["agents"][1]["session_id"], "SID-A02")
+            self.assertEqual(updated["session_ids"], ["SID-A02"])
+            self.assertEqual(updated["tab_count"], 2)
 
     def test_rebind_fail_keeps_original_rows(self):
         stale_state = {

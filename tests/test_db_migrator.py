@@ -1,11 +1,13 @@
+import os
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
 from db import postgres
 from db.migrator import discover_migrations, parse_migration_filename
-from tests.pg_test_helper import isolated_pg_schema
+from tests.pg_test_helper import _resolve_test_conn, isolated_pg_schema
 
 
 class DbMigratorTests(unittest.TestCase):
@@ -89,6 +91,72 @@ class DbMigratorTests(unittest.TestCase):
 
                     migration_row = postgres.fetch_one("SELECT COUNT(*) AS cnt FROM schema_migrations")
                     self.assertEqual(int(migration_row["cnt"]), 1)
+
+    def test_ensure_schema_raises_when_migration_dir_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = Path(tmpdir) / "missing"
+            old_conn = os.getenv("POSTGRES_CONNECTION_STRING")
+            old_schema = os.getenv("POSTGRES_SCHEMA")
+            schema = f"migdirmiss_{uuid.uuid4().hex[:10]}"
+
+            try:
+                os.environ["POSTGRES_CONNECTION_STRING"] = _resolve_test_conn()
+                os.environ["POSTGRES_SCHEMA"] = schema
+                postgres.reset_schema_cache()
+
+                with patch.object(postgres, "MIGRATIONS_DIR", missing):
+                    with self.assertRaisesRegex(RuntimeError, "未找到 SQL migrations 目录"):
+                        postgres.ensure_schema()
+            finally:
+                try:
+                    postgres.drop_schema(schema)
+                except Exception:
+                    pass
+
+                if old_conn is None:
+                    os.environ.pop("POSTGRES_CONNECTION_STRING", None)
+                else:
+                    os.environ["POSTGRES_CONNECTION_STRING"] = old_conn
+
+                if old_schema is None:
+                    os.environ.pop("POSTGRES_SCHEMA", None)
+                else:
+                    os.environ["POSTGRES_SCHEMA"] = old_schema
+
+                postgres.reset_schema_cache()
+
+    def test_ensure_schema_raises_when_migration_dir_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            old_conn = os.getenv("POSTGRES_CONNECTION_STRING")
+            old_schema = os.getenv("POSTGRES_SCHEMA")
+            schema = f"migdirempty_{uuid.uuid4().hex[:10]}"
+
+            try:
+                os.environ["POSTGRES_CONNECTION_STRING"] = _resolve_test_conn()
+                os.environ["POSTGRES_SCHEMA"] = schema
+                postgres.reset_schema_cache()
+
+                with patch.object(postgres, "MIGRATIONS_DIR", folder):
+                    with self.assertRaisesRegex(RuntimeError, "SQL migrations 目录为空"):
+                        postgres.ensure_schema()
+            finally:
+                try:
+                    postgres.drop_schema(schema)
+                except Exception:
+                    pass
+
+                if old_conn is None:
+                    os.environ.pop("POSTGRES_CONNECTION_STRING", None)
+                else:
+                    os.environ["POSTGRES_CONNECTION_STRING"] = old_conn
+
+                if old_schema is None:
+                    os.environ.pop("POSTGRES_SCHEMA", None)
+                else:
+                    os.environ["POSTGRES_SCHEMA"] = old_schema
+
+                postgres.reset_schema_cache()
 
 
 if __name__ == "__main__":

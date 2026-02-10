@@ -39,6 +39,19 @@ python3 run.py "你的任务描述"
 
 # 启动任意动态 Agent
 python3 -m agents.runtime_agent --id agent_13 --name "自定义代理"
+
+# 启动并启用插件
+python3 -m agents.runtime_agent --id agent_13 --name "自定义代理" --plugins http_fetch,db_query
+```
+
+`config.json` 的 agent 节点支持 `plugins` 字段，例如：
+
+```json
+{
+  "id": "agent_13",
+  "name": "动态代理",
+  "plugins": ["http_fetch", "db_query"]
+}
 ```
 
 ## 项目结构
@@ -55,6 +68,10 @@ python3 -m agents.runtime_agent --id agent_13 --name "自定义代理"
 │   ├── runtime_control.py # 单线程执行 + 周期 GC
 │   ├── specs.py           # 默认 Agent 规格
 │   └── runtime_agent.py   # 动态 Agent 运行入口
+├── plugins/
+│   ├── loader.py          # 插件扫描与加载
+│   ├── http_fetch/        # 示例插件：HTTP 获取（受限模拟）
+│   └── db_query/          # 示例插件：只读查询（受限模拟）
 └── gateways/
     └── gateway.py     # Gateway (MCP Client + 路由)
 ```

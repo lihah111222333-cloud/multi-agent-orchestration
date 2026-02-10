@@ -138,6 +138,7 @@ def _build_agent_command(agent: dict) -> dict:
     agent_id = agent["id"]
     agent_name = agent.get("name", "")
     module_name = agent.get("module", "")
+    plugin_names = _as_list(agent.get("plugins", []))
 
     if module_name:
         args = ["-m", module_name]
@@ -150,6 +151,8 @@ def _build_agent_command(agent: dict) -> dict:
         ]
         if agent_name:
             args.extend(["--name", agent_name])
+        if plugin_names:
+            args.extend(["--plugins", ",".join(plugin_names)])
 
     return {
         "command": sys.executable,
@@ -197,6 +200,7 @@ def _build_gateway_map(data: dict) -> dict:
                 "name": agent.get("name", agent_id),
                 "capabilities": _as_list(agent.get("capabilities", [])),
                 "depends_on": _as_list(agent.get("depends_on", [])),
+                "plugins": _as_list(agent.get("plugins", [])),
             }
 
         gateway_capabilities = _as_list(gateway.get("capabilities", []))
@@ -228,4 +232,3 @@ def load_architecture_snapshot() -> dict:
         "hash": f"sha256:{hashlib.sha256(normalized.encode('utf-8')).hexdigest()}",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-

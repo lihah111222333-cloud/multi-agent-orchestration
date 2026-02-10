@@ -24,7 +24,7 @@ def _project_root() -> Path:
 
 
 def _default_template() -> str:
-    return "python3 -m agents.runtime_agent --id {agent_id} --name {agent_name_quoted}"
+    return "codex"
 
 
 def _default_identity_template() -> str:
@@ -69,12 +69,10 @@ def _build_identity_prompt(template: str, index: int, agent_id: str, agent_name:
         raise ValueError(f"identity-template 存在未知变量: {missing}") from exc
 
 
-def _build_shell_command(project_root: Path, start_cmd: str) -> str:
-    root = shlex.quote(str(project_root))
+def _build_shell_command(project_root: Path, start_cmd: str, work_dir: str = "") -> str:
+    target = shlex.quote(work_dir) if work_dir else "$HOME"
     return (
-        f"cd {root}; "
-        "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; "
-        "elif [ -f venv/bin/activate ]; then source venv/bin/activate; fi; "
+        f"cd {target}; "
         f"exec {start_cmd}"
     )
 

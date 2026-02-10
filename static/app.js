@@ -140,35 +140,94 @@ async function loadAgentStatus() {
         if (!j.ok) {
             resetAllAgentChipStatus();
             renderAgentSummary(j.summary || {}, j.ts || '', j.error || 'agent_status_unavailable');
+            renderMonitorTable([], {}, '');
             return;
         }
 
-        const rows = Array.isArray(j.agents) ? j.agents : [];
-        const seen = new Set();
-        rows.forEach((row) => {
-            const agentId = String(row.agent_id || '').trim();
-            if (!agentId) return;
-            seen.add(agentId);
-            setAgentChipStatus(
-                agentId,
-                String(row.status || 'unknown').toLowerCase(),
-                Number(row.stagnant_sec || 0),
-                Boolean(row.error),
-            );
-        });
-
-        document.querySelectorAll('.agent-chip[data-agent-id]').forEach((chip) => {
-            const id = chip.dataset.agentId || '';
-            if (!seen.has(id)) {
-                setAgentChipStatus(id, 'unknown', 0, false);
-            }
-        });
-
-        renderAgentSummary(j.summary || {}, j.ts || '');
+        applyAgentStatusPayload(j);
     } catch (e) {
         resetAllAgentChipStatus();
         renderAgentSummary({}, '', `network_error:${e.message}`);
+        renderMonitorTable([], {}, '');
     }
+}
+
+function applyAgentStatusPayload(payload = {}) {
+    const rows = Array.isArray(payload.agents) ? payload.agents : [];
+    const seen = new Set();
+
+    rows.forEach((row) => {
+        const agentId = String(row.agent_id || '').trim();
+        if (!agentId) return;
+
+        seen.add(agentId);
+        setAgentChipStatus(
+            agentId,
+            String(row.status || 'unknown').toLowerCase(),
+            Number(row.stagnant_sec || 0),
+            Boolean(row.error),
+        );
+    });
+
+    document.querySelectorAll('.agent-chip[data-agent-id]').forEach((chip) => {
+        const id = chip.dataset.agentId || '';
+        if (!seen.has(id)) {
+            setAgentChipStatus(id, 'unknown', 0, false);
+        }
+    });
+
+    renderAgentSummary(payload.summary || {}, payload.ts || '', payload.error || '');
+    renderMonitorTable(rows, payload.summary || {}, payload.ts || '');
+}
+
+function renderMonitorTable(agents, summary, ts) {
+    const tbody = document.getElementById('mon-tbody');
+    const emptyEl = document.getElementById('mon-empty');
+    if (!tbody) return;
+
+    // Update summary badges
+    AGENT_STATUS_CLASSES.forEach(s => {
+        const el = document.getElementById('mon-' + s);
+        if (el) el.textContent = String(Number(summary[s] || 0));
+    });
+
+    // Update timestamp
+    const tsEl = document.getElementById('mon-updated');
+    if (tsEl) {
+        const tsText = String(ts || '').replace('T', ' ').slice(0, 19) || '--';
+        tsEl.textContent = '最后更新: ' + tsText;
+    }
+
+    // Render rows
+    if (!agents.length) {
+        tbody.innerHTML = '';
+        if (emptyEl) emptyEl.style.display = '';
+        return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    tbody.innerHTML = agents.map(row => {
+        const agentId = escapeHtml(row.agent_id || '');
+        const name = escapeHtml(row.agent_name || '');
+        const status = String(row.status || 'unknown').toLowerCase();
+        const statusClass = classToken(status);
+        const stale = Number(row.stagnant_sec || 0);
+        const error = escapeHtml(row.error || '');
+        const output = escapeHtml(String(row.output_tail || '').slice(-120));
+        return `<tr>
+            <td style="font-family:var(--font-mono);font-size:0.75rem">${agentId}</td>
+            <td>${name}</td>
+            <td><span class="level-badge level-${statusClass}">${escapeHtml(status)}</span></td>
+            <td style="text-align:center">${stale > 0 ? stale : '-'}</td>
+            <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--red)">${error}</td>
+            <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:0.72rem;color:var(--text-muted)">${output}</td>
+        </tr>`;
+    }).join('');
+}
+
+async function refreshAgentMonitor() {
+    await loadAgentStatus();
+    toast('Agent 状态已刷新', true);
 }
 
 /* ---- Config ---- */
@@ -747,6 +806,15 @@ function startEventStream() {
         }
     });
 
+    eventSource.addEventListener('agent_status', (evt) => {
+        try {
+            const data = JSON.parse(evt.data || '{}');
+            applyAgentStatusPayload(data.payload || {});
+        } catch (e) {
+            console.error('SSE agent_status event parse failed:', e);
+        }
+    });
+
     eventSource.onerror = () => {
         setLiveStatus('offline');
         startPollingFallback();
@@ -783,3 +851,115 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.head.insertAdjacentHTML('beforeend', '<style>.hidden{display:none!important}</style>');
 });
+
+/* ---- Telegram Bot Management ---- */
+async function tgRefresh() {
+    try {
+        const [infoRes, histRes] = await Promise.all([
+            fetch('/api/tg/info').then(r => r.json()),
+            fetch('/api/tg/history?limit=100').then(r => r.json()),
+        ]);
+        // Status badge
+        const badge = document.getElementById('tg-running-badge');
+        if (badge) {
+            const running = infoRes.running;
+            badge.className = 'badge ' + (running ? 'badge-green' : 'badge-gray');
+            badge.textContent = '状态: ' + (running ? '运行中' : '已停止');
+        }
+        // Bot name
+        const nameEl = document.getElementById('tg-bot-name');
+        if (nameEl) {
+            nameEl.textContent = infoRes.bot_username ? '@' + infoRes.bot_username : (infoRes.bot_name || '');
+        }
+        // Chat ID
+        const chatEl = document.getElementById('tg-chat-id');
+        if (chatEl) {
+            chatEl.textContent = 'Chat ID: ' + (infoRes.chat_id || '未绑定');
+        }
+        // History
+        renderTgChatLog(histRes.history || []);
+    } catch (e) {
+        console.error('tgRefresh error:', e);
+    }
+}
+
+function renderTgChatLog(history) {
+    const container = document.getElementById('tg-chat-log');
+    if (!container) return;
+    if (!history || history.length === 0) {
+        container.innerHTML = '<div class="approval-empty">暂无对话记录</div>';
+        return;
+    }
+    const html = history.map(item => {
+        const ts = (item.ts || '').replace('T', ' ').substring(0, 19);
+        const role = item.role || 'system';
+        let roleLabel, roleColor;
+        if (role === 'user') { roleLabel = '👤 用户'; roleColor = 'var(--blue)'; }
+        else if (role === 'bot') { roleLabel = '🤖 Bot'; roleColor = 'var(--accent)'; }
+        else { roleLabel = '⚙️ 系统'; roleColor = 'var(--text-muted)'; }
+
+        const statusBadge = item.status === 'error'
+            ? ' <span class="level-badge level-error">error</span>'
+            : '';
+
+        return `<div style="margin-bottom:10px;padding:8px 12px;border-radius:var(--radius-xs);background:var(--bg-surface);border-left:3px solid ${roleColor}">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                <span style="font-size:0.78rem;font-weight:600;color:${roleColor}">${roleLabel}${item.user ? ' (' + escapeHtml(item.user) + ')' : ''}${statusBadge}</span>
+                <span style="font-size:0.68rem;color:var(--text-muted);font-family:var(--font-mono)">${ts}</span>
+            </div>
+            <div style="font-size:0.82rem;color:var(--text-primary);white-space:pre-wrap;word-break:break-word">${escapeHtml(item.text)}</div>
+        </div>`;
+    }).join('');
+    container.innerHTML = html;
+    container.scrollTop = container.scrollHeight;
+}
+
+async function tgStartBridge() {
+    try {
+        const res = await fetch('/api/tg/start', { method: 'POST' });
+        const data = await res.json();
+        toast(data.message || (data.ok ? '已启动' : '启动失败'), data.ok);
+        setTimeout(tgRefresh, 1500);
+    } catch (e) { toast('启动失败: ' + e.message, false); }
+}
+
+async function tgStopBridge() {
+    try {
+        const res = await fetch('/api/tg/stop', { method: 'POST' });
+        const data = await res.json();
+        toast(data.message || '已停止', data.ok);
+        setTimeout(tgRefresh, 500);
+    } catch (e) { toast('停止失败: ' + e.message, false); }
+}
+
+async function tgSendTest() {
+    const input = document.getElementById('tg-test-input');
+    const text = (input?.value || '').trim();
+    if (!text) { toast('请输入消息内容', false); return; }
+    try {
+        const res = await fetch('/api/tg/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+        });
+        const data = await res.json();
+        toast(data.message || (data.ok ? '已发送' : '发送失败'), data.ok);
+        if (data.ok) { input.value = ''; setTimeout(tgRefresh, 1000); }
+    } catch (e) { toast('发送失败: ' + e.message, false); }
+}
+
+async function tgClearHistory() {
+    try {
+        const res = await fetch('/api/tg/clear-history', { method: 'POST' });
+        const data = await res.json();
+        toast(data.message || '已清空', data.ok);
+        tgRefresh();
+    } catch (e) { toast('清空失败: ' + e.message, false); }
+}
+
+// Auto-refresh TG when switching to telegram page
+const _origSwitchPage = switchPage;
+switchPage = function (pageId) {
+    _origSwitchPage(pageId);
+    if (pageId === 'telegram') { tgRefresh(); }
+};

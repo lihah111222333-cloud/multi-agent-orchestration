@@ -8,22 +8,37 @@ import json
 import logging
 import os
 import html
+import inspect
 import http.server
 import queue
 import re
 import threading
 import time
 import urllib.parse
+
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import load_dotenv, set_key
 
-from agent_monitor import classify_status
+from agent_ops_store import (
+    get_prompt_template,
+    save_prompt_template,
+    list_prompt_template_versions,
+    list_task_trace_spans,
+    list_task_traces,
+    rollback_prompt_template,
+)
+from agent_monitor import patrol_agents_once
 from agents.iterm_bridge import list_iterm_agent_sessions, read_iterm_output
+from tg_bridge import (
+    start_tg_bridge, stop_tg_bridge, is_tg_bridge_running,
+    get_tg_history, clear_tg_history, send_message_to_tg, get_tg_bridge_info,
+    start_watchdog, stop_watchdog, is_watchdog_running, get_watchdog_info,
+)
 from audit_log import append_event, query_events, list_filter_values as list_audit_filter_values
-from db.postgres import fetch_all, fetch_one
+from db.postgres import fetch_one
 from system_log import query_logs as query_system_logs, list_filter_values as list_system_filter_values
 from topology_approval import approve_approval, is_valid_approval_id, list_approvals, reject_approval
 
@@ -31,10 +46,8 @@ ENV_FILE = Path(__file__).parent / ".env"
 STATIC_DIR = Path(__file__).parent / "static"
 logger = logging.getLogger(__name__)
 
-AGENT_STATUS_STUCK_SEC = 60
-_AGENT_STATUS_MEMORY: dict[str, dict[str, Any]] = {}
-_AGENT_STATUS_LOCK = threading.Lock()
 _AGENT_STATUS_NAMES = ("running", "idle", "stuck", "error", "disconnected", "unknown")
+_AGENT_STATUS_MEMORY: dict[str, dict[str, Any]] = {}
 
 # 配置项定义
 CONFIG_SCHEMA = [
@@ -73,6 +86,25 @@ CONFIG_SCHEMA = [
             {"key": "CONFIG_BACKUP_KEEP", "label": "配置备份保留份数", "type": "number", "desc": "超过后自动清理最旧备份"},
         ],
     },
+    {
+        "group": "Agent 监控",
+        "icon": "eye",
+        "items": [
+            {"key": "AGENT_MONITOR_INTERVAL_SEC", "label": "巡检间隔(秒)", "type": "number", "desc": "后台监控线程轮询周期，1-300"},
+            {"key": "AGENT_MONITOR_READ_LINES", "label": "读取行数", "type": "number", "desc": "每次采集 iTerm 输出的行数，1-200"},
+        ],
+    },
+    {
+        "group": "Telegram Bot",
+        "icon": "send",
+        "items": [
+            {"key": "TG_BOT_TOKEN", "label": "Bot Token", "type": "password", "desc": "@BotFather 获取的 Bot Token"},
+            {"key": "TG_CHAT_ID", "label": "Chat ID", "type": "text", "desc": "允许通信的 Telegram Chat ID（留空则 /start 自动绑定）"},
+            {"key": "TG_MASTER_TAB_NAME", "label": "主 Agent Tab 名", "type": "text", "desc": "iTerm 中主 Agent 终端 tab 名称"},
+            {"key": "TG_WATCHDOG_INTERVAL", "label": "看门狗间隔(秒)", "type": "text", "desc": "定时唤醒 Agent 的间隔秒数（默认120）"},
+            {"key": "TG_WATCHDOG_PROMPT", "label": "唤醒提示词", "type": "text", "desc": "发送给 Agent 的唤醒提示词"},
+        ],
+    },
 ]
 
 DEFAULTS = {
@@ -97,6 +129,13 @@ DEFAULTS = {
     "SYSTEM_LOG_BACKUP_COUNT": "3",
     "CONFIG_BACKUP_ENABLED": "1",
     "CONFIG_BACKUP_KEEP": "5",
+    "AGENT_MONITOR_INTERVAL_SEC": "5",
+    "AGENT_MONITOR_READ_LINES": "30",
+    "TG_BOT_TOKEN": "8411951426:AAGzdMxTUHXhvcj9_3a3iHP2CB3Mvn8oKm8",
+    "TG_CHAT_ID": "",
+    "TG_MASTER_TAB_NAME": "主agnet",
+    "TG_WATCHDOG_INTERVAL": "120",
+    "TG_WATCHDOG_PROMPT": "请继续执行当前任务。如果已完成，请汇报结果。",
 }
 
 CONFIG_TYPE_MAP = {item["key"]: item["type"] for group in CONFIG_SCHEMA for item in group.get("items", [])}
@@ -208,6 +247,9 @@ NAV_ITEMS = [
     ("syslog", "系统日志", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="4,17 10,11 4,5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>'),
     ("commands", "命令卡", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="18" cy="18" r="2"/></svg>'),
     ("prompts", "提示词", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>'),
+    ("traces", "任务追踪", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h5l2-6 4 12 2-6h5"/></svg>'),
+    ("monitor", "Agent 监控", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'),
+    ("telegram", "Telegram", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>'),
 ]
 
 
@@ -309,6 +351,54 @@ def _empty_agent_status_summary() -> dict[str, int]:
     }
 
 
+def _normalize_agent_status_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    ts = datetime.now(timezone.utc).isoformat()
+    by_agent: dict[str, tuple[float, dict[str, Any]]] = {}
+    latest_epoch = 0.0
+    latest_ts = ts
+
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+
+        agent_id = str(row.get("agent_id", "")).strip()
+        if not agent_id:
+            continue
+
+        raw_updated = row.get("updated_at") or row.get("ts") or row.get("created_at")
+        updated_epoch = _to_epoch_seconds(raw_updated)
+        if updated_epoch <= 0:
+            updated_epoch = float(idx + 1)
+
+        if raw_updated is not None:
+            updated_text = str(raw_updated).strip()
+            if updated_text and _to_epoch_seconds(raw_updated) >= latest_epoch:
+                latest_epoch = _to_epoch_seconds(raw_updated)
+                latest_ts = updated_text
+
+        status = str(row.get("status", "unknown")).strip().lower()
+        if status not in _AGENT_STATUS_NAMES:
+            status = "unknown"
+
+        output_source = row.get("output_tail", row.get("output"))
+        normalized_row = {
+            "agent_id": agent_id,
+            "agent_name": str(row.get("agent_name", "")).strip(),
+            "session_id": str(row.get("session_id", "")).strip(),
+            "status": status,
+            "stagnant_sec": _safe_int(row.get("stagnant_sec", 0), 0, 0, 2147483647),
+            "error": str(row.get("error", "") or "").strip(),
+            "output_tail": _normalize_output_tail(output_source),
+        }
+
+        previous = by_agent.get(agent_id)
+        if not previous or updated_epoch >= previous[0]:
+            by_agent[agent_id] = (updated_epoch, normalized_row)
+
+    normalized_rows = [item[1] for item in sorted(by_agent.values(), key=lambda item: item[0], reverse=True)]
+    return normalized_rows, latest_ts
+
+
 def _summarize_agent_status(agents: list[dict[str, Any]]) -> dict[str, int]:
     summary = _empty_agent_status_summary()
     for agent in agents:
@@ -390,201 +480,26 @@ def _normalize_output_tail(raw: Any) -> list[str]:
     return normalized[-20:]
 
 
-def _build_agent_status_snapshot_from_table() -> Optional[dict[str, Any]]:
-    ts = datetime.now(timezone.utc).isoformat()
-
+def _build_agent_status_snapshot(read_lines: int = 30) -> dict[str, Any]:
+    """Build agent status snapshot directly via iTerm API."""
     try:
-        rows = fetch_all("SELECT * FROM agent_status LIMIT 500")
-    except Exception as exc:
-        if _is_agent_status_table_missing_error(exc):
-            return None
-        logger.debug("读取 agent_status 表失败，回退旧状态采集逻辑", exc_info=True)
-        return None
-
-    if not isinstance(rows, list):
-        rows = []
-
-    by_agent: dict[str, tuple[float, dict[str, Any]]] = {}
-    latest_ts = ts
-    latest_epoch = 0.0
-
-    for idx, row in enumerate(rows):
-        if not isinstance(row, dict):
-            continue
-
-        agent_id = str(row.get("agent_id", "")).strip()
-        if not agent_id:
-            continue
-
-        raw_updated = row.get("updated_at") or row.get("ts") or row.get("created_at")
-        updated_epoch = _to_epoch_seconds(raw_updated)
-        if updated_epoch <= 0:
-            updated_epoch = float(idx + 1)
-
-        if raw_updated is not None:
-            updated_text = str(raw_updated).strip()
-            if updated_text and _to_epoch_seconds(raw_updated) >= latest_epoch:
-                latest_epoch = _to_epoch_seconds(raw_updated)
-                latest_ts = updated_text
-
-        status = str(row.get("status", "unknown")).strip().lower()
-        if status not in _AGENT_STATUS_NAMES:
-            status = "unknown"
-
-        output_source = row.get("output_tail", row.get("output"))
-        normalized_row = {
-            "agent_id": agent_id,
-            "agent_name": str(row.get("agent_name", "")).strip(),
-            "session_id": str(row.get("session_id", "")).strip(),
-            "status": status,
-            "stagnant_sec": _safe_int(row.get("stagnant_sec", 0), 0, 0, 2147483647),
-            "error": str(row.get("error", "") or "").strip(),
-            "output_tail": _normalize_output_tail(output_source),
-        }
-
-        previous = by_agent.get(agent_id)
-        if not previous or updated_epoch >= previous[0]:
-            by_agent[agent_id] = (updated_epoch, normalized_row)
-
-    agents = [item[1] for item in sorted(by_agent.values(), key=lambda row: row[0], reverse=True)]
-
-    return {
-        "ok": True,
-        "ts": latest_ts,
-        "summary": _summarize_agent_status(agents),
-        "agents": agents,
-        "source": {
-            "sessions_ok": True,
-            "output_ok": True,
-            "db_ok": True,
-            "mode": "agent_status_table",
-        },
-    }
-
-
-def _build_agent_status_snapshot_legacy(read_lines: int = 30) -> dict[str, Any]:
-    """Collect current iTerm agent status snapshot for dashboard API."""
-    ts = datetime.now(timezone.utc).isoformat()
-
-    sessions_payload = list_iterm_agent_sessions()
-    if not sessions_payload.get("ok"):
+        snapshot = patrol_agents_once(
+            list_sessions_func=list_iterm_agent_sessions,
+            read_output_func=read_iterm_output,
+            read_lines=max(1, read_lines),
+            status_memory=_AGENT_STATUS_MEMORY,
+        )
+    except Exception:
+        logger.debug("iTerm agent status snapshot failed", exc_info=True)
         return {
             "ok": False,
-            "ts": ts,
-            "error": str(sessions_payload.get("error", "list_sessions_failed")),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "error": "iterm_snapshot_failed",
             "summary": _empty_agent_status_summary(),
             "agents": [],
             "source": {"sessions_ok": False, "output_ok": False},
         }
-
-    sessions = sessions_payload.get("sessions", [])
-    if not isinstance(sessions, list):
-        sessions = []
-
-    output_payload = read_iterm_output(all_agents=True, read_lines=max(1, int(read_lines)))
-    if not output_payload.get("ok"):
-        agents = [
-            {
-                "agent_id": str(item.get("agent_id", "")),
-                "agent_name": str(item.get("agent_name", "")),
-                "session_id": str(item.get("session_id", "")),
-                "status": "unknown",
-                "stagnant_sec": 0,
-                "error": str(output_payload.get("error", "read_output_failed")),
-                "output_tail": [],
-            }
-            for item in sessions
-        ]
-        return {
-            "ok": False,
-            "ts": ts,
-            "error": str(output_payload.get("error", "read_output_failed")),
-            "summary": _summarize_agent_status(agents),
-            "agents": agents,
-            "source": {"sessions_ok": True, "output_ok": False},
-        }
-
-    rows = output_payload.get("results", [])
-    if not isinstance(rows, list):
-        rows = []
-    row_by_agent: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        agent_id = str(row.get("agent_id", "")).strip()
-        if agent_id:
-            row_by_agent[agent_id] = row
-
-    now_ts = time.time()
-    agents: list[dict[str, Any]] = []
-
-    with _AGENT_STATUS_LOCK:
-        for item in sessions:
-            if not isinstance(item, dict):
-                continue
-
-            agent_id = str(item.get("agent_id", "")).strip()
-            agent_name = str(item.get("agent_name", "")).strip()
-            session_id = str(item.get("session_id", "")).strip()
-
-            row = row_by_agent.get(agent_id, {})
-            output_tail_raw = row.get("output", [])
-            output_tail = output_tail_raw if isinstance(output_tail_raw, list) else [str(output_tail_raw)]
-            output_tail = [str(line) for line in output_tail if str(line).strip()]
-
-            error_text = str(row.get("error", "")).strip()
-            has_session = bool(session_id) and "session not found" not in error_text.lower()
-
-            fingerprint = "\n".join(output_tail[-6:])
-            memory = _AGENT_STATUS_MEMORY.get(agent_id)
-            if memory and memory.get("fingerprint") == fingerprint:
-                last_change_ts = float(memory.get("last_change_ts", now_ts))
-            else:
-                last_change_ts = now_ts
-
-            _AGENT_STATUS_MEMORY[agent_id] = {
-                "fingerprint": fingerprint,
-                "last_change_ts": last_change_ts,
-            }
-
-            stagnant_sec = max(0, int(now_ts - last_change_ts))
-            status = classify_status(
-                output_tail,
-                has_session=has_session,
-                stagnant_sec=stagnant_sec,
-            )
-
-            if error_text and status not in {"error", "disconnected"}:
-                status = "disconnected"
-            if status not in _AGENT_STATUS_NAMES:
-                status = "unknown"
-
-            agents.append(
-                {
-                    "agent_id": agent_id,
-                    "agent_name": agent_name,
-                    "session_id": session_id,
-                    "status": status,
-                    "stagnant_sec": stagnant_sec,
-                    "error": error_text,
-                    "output_tail": output_tail[-20:],
-                }
-            )
-
-    return {
-        "ok": True,
-        "ts": ts,
-        "summary": _summarize_agent_status(agents),
-        "agents": agents,
-        "source": {"sessions_ok": True, "output_ok": True},
-    }
-
-
-def _build_agent_status_snapshot(read_lines: int = 30) -> dict[str, Any]:
-    table_snapshot = _build_agent_status_snapshot_from_table()
-    if table_snapshot is not None:
-        return table_snapshot
-    return _build_agent_status_snapshot_legacy(read_lines=read_lines)
+    return snapshot
 
 
 def _check_dashboard_ready() -> tuple[bool, str]:
@@ -625,97 +540,160 @@ def _generate_default_prompt(agent_desc: str, tool_name: str, tool_desc: str, pa
             f'使用场景: 当用户需要{tool_desc}时，调用此工具。')
 
 
+# 系统级工具分组定义 — 用于自动生成提示词
+_SYSTEM_TOOL_GROUPS: list[tuple[str, list[str]]] = [
+    ('iTerm 会话管理', ['iterm']),
+    ('共享文件', ['shared_file']),
+    ('Agent 交互', ['interaction']),
+    ('提示词模板', ['prompt_template']),
+    ('命令卡', ['command_card']),
+    ('数据库', ['db']),
+    ('任务管理', ['task']),
+    ('审批/错误处理', ['approval']),
+    ('看门狗', ['agent_watchdog']),
+]
+
+
+def _format_sig_params(fn: Any) -> str:
+    """Extract human-readable parameter string from a function via inspect."""
+    try:
+        sig = inspect.signature(fn)
+    except (ValueError, TypeError):
+        return ''
+    parts: list[str] = []
+    for name, param in sig.parameters.items():
+        ann = param.annotation
+        if ann is inspect.Parameter.empty:
+            type_str = ''
+        elif hasattr(ann, '__name__'):
+            type_str = f': {ann.__name__}'
+        else:
+            type_str = f': {ann}'
+        if param.default is not inspect.Parameter.empty:
+            default_val = param.default
+            if isinstance(default_val, str):
+                parts.append(f'{name}{type_str} = "{default_val}"')
+            elif default_val is None:
+                parts.append(f'{name}{type_str} = None')
+            else:
+                parts.append(f'{name}{type_str} = {default_val}')
+        else:
+            parts.append(f'{name}{type_str}')
+    return ', '.join(parts)
+
+
 def _build_system_prompt() -> dict:
     """Build the pinned system prompt describing all MCP interfaces."""
-    from agents.specs import AGENT_SPECS
-    from agents.factory import MISSING
-
-    lines = ['# 多Agent编排系统 — MCP 工具总览', '',
-             '本系统通过 ACP-BUS 提供以下 MCP 工具接口。',
-             '每个工具以 `{agent_id}__{tool_name}` 格式命名。', '']
-    for spec in AGENT_SPECS.values():
-        lines.append(f'## {spec.key} — {spec.description}')
-        for t in spec.tools:
-            params_parts = []
-            for p in t.params:
-                def_str = '' if p.default is MISSING else f' = "{p.default}"'
-                type_name = p.annotation.__name__ if hasattr(p.annotation, '__name__') else str(p.annotation)
-                params_parts.append(f'{p.name}: {type_name}{def_str}')
-            lines.append(f'- **{spec.key}__{t.name}**({", ".join(params_parts)}): {t.description}')
-        lines.append('')
-
-    lines.append('## 使用方式')
-    lines.append('将以上提示词粘贴到你的 AI Agent 系统提示词中，Agent 即可通过 MCP 协议调用这些工具。')
+    from pathlib import Path
+    doc_path = Path(__file__).resolve().parent / "docs" / "MCP_TOOLS.md"
+    try:
+        prompt_text = doc_path.read_text("utf-8").strip()
+    except Exception:
+        prompt_text = "# MCP 工具总览\n\n请查看 docs/MCP_TOOLS.md"
 
     return {
         'key': '_system',
-        'description': '多Agent编排系统 — 全量 MCP 工具提示词（置顶）',
+        'description': '多Agent编排系统 — MCP 系统级工具提示词（置顶）',
         'is_pinned': True,
         'tools': [{
             'name': 'system_prompt',
             'description': '系统级提示词：描述所有可用 MCP 工具及使用场景',
             'params': [],
         }],
-        'prompt_text': '\n'.join(lines),
+        'prompt_text': prompt_text,
     }
 
 
 def _get_all_agent_specs() -> list[dict]:
-    """Return all agent specs merged with PG-saved prompts, system prompt pinned at top."""
-    from agents.specs import AGENT_SPECS
-    from agents.factory import MISSING
-
-    # Load saved prompts from PG
-    saved_prompts = {}
-    try:
-        from db.postgres import fetch_all
-        rows = fetch_all('SELECT agent_key, tool_name, prompt_text FROM prompts')
-        for row in rows:
-            saved_prompts[(row['agent_key'], row['tool_name'])] = row['prompt_text']
-    except Exception:
-        logger.debug("读取 prompts 表失败，回退默认提示词", exc_info=True)
-
-    # Build agent list
-    result = []
-    for key, spec in AGENT_SPECS.items():
-        tools = []
-        for t in spec.tools:
-            params = []
-            for p in t.params:
-                params.append({
-                    'name': p.name,
-                    'type': p.annotation.__name__ if hasattr(p.annotation, '__name__') else str(p.annotation),
-                    'default': None if p.default is MISSING else p.default,
-                })
-            params_str = ', '.join(f"{p['name']}: {p['type']}" for p in params)
-            saved = saved_prompts.get((spec.key, t.name))
-            prompt = saved if saved else _generate_default_prompt(spec.description, t.name, t.description, params_str)
-            tools.append({'name': t.name, 'description': t.description, 'params': params, 'prompt_text': prompt})
-        result.append({'key': spec.key, 'description': spec.description, 'tools': tools})
-
-    # Pin system prompt at top
+    """Return system prompt as the only spec entry (agents are dynamic)."""
+    # Pin system prompt at top (supports prompt_templates persistence)
     sys_prompt = _build_system_prompt()
-    saved_sys = saved_prompts.get(('_system', 'system_prompt'))
-    if saved_sys:
-        sys_prompt['prompt_text'] = saved_sys
-    result.insert(0, sys_prompt)
+    try:
+        row = get_prompt_template("_system.system_prompt")
+        if row and str(row.get("prompt_text", "")).strip():
+            sys_prompt["prompt_text"] = str(row.get("prompt_text", ""))
+    except Exception:
+        logger.debug("读取 prompt_templates 失败，回退默认提示词", exc_info=True)
 
-    return result
+    return [sys_prompt]
 
 
 def _save_prompt(agent_key: str, tool_name: str, prompt_text: str) -> dict:
-    """Upsert a prompt into PG."""
-    from db.postgres import execute
-    execute(
-        """
-        INSERT INTO prompts (agent_key, tool_name, prompt_text, updated_at)
-        VALUES (%s, %s, %s, NOW())
-        ON CONFLICT (agent_key, tool_name)
-        DO UPDATE SET prompt_text = EXCLUDED.prompt_text, updated_at = NOW()
-        """,
-        (agent_key, tool_name, prompt_text),
+    """Upsert prompt template into prompt_templates table."""
+    key = f"{str(agent_key or '').strip()}.{str(tool_name or '').strip()}"
+    saved = save_prompt_template(
+        prompt_key=key,
+        title=f"{agent_key}/{tool_name}",
+        prompt_text=str(prompt_text or "").strip(),
+        agent_key=str(agent_key or "").strip(),
+        tool_name=str(tool_name or "").strip(),
+        variables={},
+        tags=["dashboard", "prompt"],
+        enabled=True,
+        updated_by="dashboard",
     )
-    return {'ok': True, 'agent_key': agent_key, 'tool_name': tool_name}
+    return {
+        "ok": True,
+        "agent_key": str(agent_key or "").strip(),
+        "tool_name": str(tool_name or "").strip(),
+        "prompt": saved,
+    }
+
+
+def _summarize_traces(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        trace_id = str(row.get("trace_id", "")).strip()
+        if not trace_id:
+            continue
+
+        current = grouped.get(trace_id)
+        if current is None:
+            current = {
+                "trace_id": trace_id,
+                "status": str(row.get("status", "running")),
+                "span_count": 0,
+                "started_at": str(row.get("started_at", "")),
+                "finished_at": str(row.get("finished_at", "")),
+                "components": set(),
+            }
+            grouped[trace_id] = current
+
+        current["span_count"] = int(current.get("span_count", 0)) + 1
+        status = str(row.get("status", "running"))
+        if status == "error":
+            current["status"] = "error"
+        elif current.get("status") != "error" and status == "running":
+            current["status"] = "running"
+        elif current.get("status") not in {"error", "running"}:
+            current["status"] = status
+
+        started_at = str(row.get("started_at", ""))
+        finished_at = str(row.get("finished_at", ""))
+        if not str(current.get("started_at", "")) or started_at < str(current.get("started_at", "")):
+            current["started_at"] = started_at
+        if finished_at and finished_at > str(current.get("finished_at", "")):
+            current["finished_at"] = finished_at
+
+        component = str(row.get("component", "")).strip()
+        if component:
+            current["components"].add(component)
+
+    traces = []
+    for item in grouped.values():
+        traces.append(
+            {
+                "trace_id": str(item.get("trace_id", "")),
+                "status": str(item.get("status", "running")),
+                "span_count": int(item.get("span_count", 0)),
+                "started_at": str(item.get("started_at", "")),
+                "finished_at": str(item.get("finished_at", "")),
+                "components": sorted(str(v) for v in item.get("components", set())),
+            }
+        )
+
+    traces.sort(key=lambda row: str(row.get("started_at", "")), reverse=True)
+    return traces
 
 
 # ─── HTML render ───
@@ -968,6 +946,69 @@ def render_html() -> str:
                 </div>
             </div>
         </div>
+
+        <!-- Agent Monitor Page -->
+        <div id="page-monitor" class="page">
+            <div class="card">
+                <header class="card-header">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    <h2>Agent 健康监控</h2>
+                </header>
+                <div class="card-body">
+                    <div id="agent-status-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+                        <span class="badge badge-green">running: <b id="mon-running">0</b></span>
+                        <span class="badge badge-blue">idle: <b id="mon-idle">0</b></span>
+                        <span class="badge badge-amber">stuck: <b id="mon-stuck">0</b></span>
+                        <span class="badge badge-red">error: <b id="mon-error">0</b></span>
+                        <span class="badge badge-gray">disconnected: <b id="mon-disconnected">0</b></span>
+                        <span class="badge badge-gray">unknown: <b id="mon-unknown">0</b></span>
+                    </div>
+                    <div class="log-toolbar">
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="refreshAgentMonitor()">刷新</button>
+                        <span id="mon-updated" style="font-size:0.78rem;color:var(--text-secondary)">最后更新: --</span>
+                    </div>
+                    <table class="log-table"><thead><tr>
+                        <th>Agent</th><th>名称</th><th>状态</th><th>停滞(秒)</th><th>错误</th><th>最近输出</th>
+                    </tr></thead><tbody id="mon-tbody"></tbody></table>
+                    <div id="mon-empty" class="approval-empty" style="display:none">暂无 Agent 会话</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Telegram Bot Page -->
+        <div id="page-telegram" class="page">
+            <div class="card">
+                <header class="card-header">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                    <h2>Telegram Bot 管理</h2>
+                </header>
+                <div class="card-body">
+                    <div id="tg-status" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;align-items:center">
+                        <span id="tg-running-badge" class="badge badge-gray">状态: 加载中</span>
+                        <span id="tg-bot-name" style="font-size:0.82rem;color:var(--text-secondary)"></span>
+                        <span id="tg-chat-id" style="font-size:0.78rem;color:var(--text-muted);font-family:var(--font-mono)"></span>
+                    </div>
+                    <div class="log-toolbar" style="margin-bottom:16px">
+                        <button type="button" class="btn btn-sm btn-primary" onclick="tgStartBridge()">启动 Bot</button>
+                        <button type="button" class="btn btn-sm btn-danger" onclick="tgStopBridge()">停止 Bot</button>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="tgRefresh()">刷新</button>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="tgClearHistory()">清空记录</button>
+                    </div>
+
+                    <!-- 测试发送 -->
+                    <div style="margin-bottom:20px;display:flex;gap:8px">
+                        <input id="tg-test-input" class="input" style="flex:1" placeholder="输入测试消息，发送到 Telegram..." />
+                        <button type="button" class="btn btn-sm btn-primary" onclick="tgSendTest()">发送</button>
+                    </div>
+
+                    <!-- 对话记录 -->
+                    <h3 style="font-size:0.85rem;font-weight:600;margin-bottom:12px">对话记录</h3>
+                    <div id="tg-chat-log" style="max-height:500px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;background:var(--bg-base)">
+                        <div class="approval-empty">加载中...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </main>
 </div>
 
@@ -1028,6 +1069,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                           headers={"Cache-Control": "no-store"})
 
         elif path == "/api/events/stream":
+
             self._serve_event_stream()
 
         elif path == "/api/config":
@@ -1039,6 +1081,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._respond(200, "application/json", json.dumps(config).encode("utf-8"))
 
         elif path == "/api/agent-status":
+
             lines = _safe_int(params.get("lines", ["30"])[0], 30, 1, 200)
             payload = _build_agent_status_snapshot(read_lines=lines)
             status_code = 200 if payload.get("ok") else 503
@@ -1048,6 +1091,19 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                 headers={"Cache-Control": "no-store"},
             )
+
+        elif path == "/api/tg/info":
+            info = get_tg_bridge_info()
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps({"ok": True, **info}, ensure_ascii=False).encode("utf-8"),
+                          headers={"Cache-Control": "no-store"})
+
+        elif path == "/api/tg/history":
+            limit = _safe_int(params.get("limit", ["50"])[0], 50, 1, 200)
+            history = get_tg_history(limit=limit)
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps({"ok": True, "history": history}, ensure_ascii=False).encode("utf-8"),
+                          headers={"Cache-Control": "no-store"})
 
         elif path == "/api/topology/approvals":
             status = params.get("status", [""])[0]
@@ -1104,6 +1160,60 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self._respond(500, "application/json",
                               json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/task-traces":
+            try:
+                limit = _safe_int(params.get("limit", ["200"])[0], 200, 1, 500)
+                trace_id = str(params.get("trace_id", [""])[0] or "").strip()
+                component = str(params.get("component", [""])[0] or "").strip()
+                status = str(params.get("status", [""])[0] or "").strip()
+
+                rows = list_task_traces(
+                    trace_id=trace_id,
+                    component=component,
+                    status=status,
+                    limit=limit,
+                )
+                traces = _summarize_traces(rows)
+                self._respond(
+                    200,
+                    "application/json",
+                    json.dumps({"ok": True, "traces": traces, "rows": rows}, ensure_ascii=False).encode("utf-8"),
+                )
+            except ValueError as e:
+                self._respond(400, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/task-traces/spans":
+            try:
+                trace_id = str(params.get("trace_id", [""])[0] or "").strip()
+                limit = _safe_int(params.get("limit", ["500"])[0], 500, 1, 1000)
+                rows = list_task_trace_spans(trace_id=trace_id, limit=limit)
+                self._respond(
+                    200,
+                    "application/json",
+                    json.dumps({"ok": True, "trace_id": trace_id, "spans": rows}, ensure_ascii=False).encode("utf-8"),
+                )
+            except ValueError as e:
+                self._respond(400, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/prompt-versions":
+            try:
+                prompt_key = str(params.get("prompt_key", [""])[0] or "").strip()
+                limit = _safe_int(params.get("limit", ["50"])[0], 50, 1, 200)
+                versions = list_prompt_template_versions(prompt_key=prompt_key, limit=limit)
+                self._respond(
+                    200,
+                    "application/json",
+                    json.dumps({"ok": True, "prompt_key": prompt_key, "versions": versions}, ensure_ascii=False).encode("utf-8"),
+                )
+            except ValueError as e:
+                self._respond(400, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
 
         elif path == "/api/command-cards":
             try:
@@ -1315,6 +1425,61 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
 
+        elif path == "/api/tg/start":
+            try:
+                ok = start_tg_bridge()
+                self._respond(200, "application/json",
+                              json.dumps({"ok": ok, "message": "TG bridge 已启动" if ok else "启动失败（检查 TG_BOT_TOKEN）"}, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/tg/stop":
+            try:
+                stop_tg_bridge()
+                self._respond(200, "application/json",
+                              json.dumps({"ok": True, "message": "TG bridge 已停止"}, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/tg/send":
+            body = self.rfile.read(self._safe_content_length())
+            try:
+                data = json.loads(body)
+                text = str(data.get("text", "")).strip()
+                if not text:
+                    raise ValueError("text 不能为空")
+                ok = send_message_to_tg(text)
+                self._respond(200, "application/json",
+                              json.dumps({"ok": ok, "message": "已发送" if ok else "发送失败（检查 Token 和 Chat ID）"}, ensure_ascii=False).encode("utf-8"))
+            except ValueError as e:
+                self._respond(400, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/tg/clear-history":
+            try:
+                clear_tg_history()
+                self._respond(200, "application/json",
+                              json.dumps({"ok": True, "message": "记录已清空"}, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/tg/watchdog/start":
+            try:
+                start_watchdog()
+                self._respond(200, "application/json",
+                              json.dumps({"ok": True, "message": "看门狗已启动"}, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/tg/watchdog/stop":
+            try:
+                stop_watchdog()
+                self._respond(200, "application/json",
+                              json.dumps({"ok": True, "message": "看门狗已停止"}, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
         elif path.startswith("/api/topology/approvals/"):
             parts = path.strip("/").split("/")
             if len(parts) == 5:
@@ -1363,6 +1528,25 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
         try:
             self.wfile.write(_encode_sse_event(connected_event))
+            self.wfile.flush()
+
+            initial_snapshot = _build_agent_status_snapshot()
+            self.wfile.write(
+                _encode_sse_event(
+                    {
+                        "id": "agent_status_init",
+                        "event": "agent_status",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "payload": {
+                            "ok": bool(initial_snapshot.get("ok")),
+                            "summary": initial_snapshot.get("summary", _empty_agent_status_summary()),
+                            "agents": initial_snapshot.get("agents", []),
+                            "source": initial_snapshot.get("source", {}),
+                            "error": str(initial_snapshot.get("error", "") or ""),
+                        },
+                    }
+                )
+            )
             self.wfile.flush()
 
             while True:
@@ -1435,6 +1619,8 @@ def main() -> None:
 
     Path(__file__).parent.joinpath("data").mkdir(exist_ok=True)
 
+    start_tg_bridge()
+
     server = http.server.ThreadingHTTPServer(("0.0.0.0", port), DashboardHandler)
     logger.info("Dashboard v2 已启动: http://localhost:%s", port)
     try:
@@ -1442,6 +1628,7 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.info("Dashboard 已停止")
         server.shutdown()
+
 
 
 if __name__ == "__main__":

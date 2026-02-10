@@ -43,11 +43,8 @@ def request_json(base_url: str, path: str, method: str = "GET", payload: dict | 
 
 
 class DashboardAgentStatusApiTests(unittest.TestCase):
-    def setUp(self) -> None:
-        dashboard._AGENT_STATUS_MEMORY.clear()
-
-    def test_api_agent_status_prefers_agent_status_table_when_available(self) -> None:
-        table_rows = [
+    def test_api_agent_status_reads_agent_status_table(self) -> None:
+        rows = [
             {
                 "agent_id": "agent_01",
                 "agent_name": "Agent 01",
@@ -55,7 +52,8 @@ class DashboardAgentStatusApiTests(unittest.TestCase):
                 "status": "running",
                 "stagnant_sec": 4,
                 "error": "",
-                "output_tail": ["heartbeat ok", "processed 1 item"],
+                "output_tail": ["heartbeat ok"],
+                "updated_at": "2026-02-10T12:00:00+00:00",
             },
             {
                 "agent_id": "agent_02",
@@ -65,201 +63,89 @@ class DashboardAgentStatusApiTests(unittest.TestCase):
                 "stagnant_sec": 18,
                 "error": "Traceback: boom",
                 "output_tail": ["Traceback: boom"],
+                "updated_at": "2026-02-10T12:00:01+00:00",
             },
         ]
 
-        legacy_sessions_payload = {
-            "ok": True,
-            "sessions": [
-                {
-                    "agent_id": "agent_99",
-                    "agent_name": "Legacy Agent",
-                    "session_id": "legacy-s1",
-                }
-            ],
-        }
-        legacy_outputs_payload = {
-            "ok": True,
-            "results": [
-                {
-                    "agent_id": "agent_99",
-                    "output": ["legacy output"],
-                    "error": "",
-                }
-            ],
-        }
-
         with run_dashboard_server() as base_url:
-            with patch.object(dashboard, "fetch_all", return_value=table_rows, create=True) as fetch_all_mock:
-                with patch.object(dashboard, "list_iterm_agent_sessions", return_value=legacy_sessions_payload):
-                    with patch.object(dashboard, "read_iterm_output", return_value=legacy_outputs_payload):
-                        code, payload = request_json(base_url, "/api/agent-status")
+            with patch.object(dashboard, "ensure_agent_monitor_started", return_value=None):
+                with patch.object(dashboard, "query_agent_status", return_value=rows) as query_mock:
+                    code, payload = request_json(base_url, "/api/agent-status")
 
-        self.assertTrue(fetch_all_mock.called)
+        self.assertTrue(query_mock.called)
         self.assertEqual(code, 200)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["summary"]["total"], 2)
         self.assertEqual(payload["summary"]["healthy"], 1)
-        self.assertEqual(payload["summary"]["unhealthy"], 1)
-
-        by_id = {row["agent_id"]: row for row in payload["agents"]}
-        self.assertIn("agent_01", by_id)
-        self.assertIn("agent_02", by_id)
-        self.assertNotIn("agent_99", by_id)
-        self.assertEqual(by_id["agent_01"]["status"], "running")
-        self.assertEqual(by_id["agent_02"]["status"], "error")
-
-    def test_api_agent_status_falls_back_when_agent_status_table_missing(self) -> None:
-        sessions_payload = {
-            "ok": True,
-            "sessions": [
-                {
-                    "agent_id": "agent_01",
-                    "agent_name": "Agent 01",
-                    "session_id": "s1",
-                },
-                {
-                    "agent_id": "agent_02",
-                    "agent_name": "Agent 02",
-                    "session_id": "s2",
-                },
-            ],
-        }
-        outputs_payload = {
-            "ok": True,
-            "results": [
-                {
-                    "agent_id": "agent_01",
-                    "output": ["heartbeat ok", "processed 1 item"],
-                    "error": "",
-                },
-                {
-                    "agent_id": "agent_02",
-                    "output": ["Traceback: boom"],
-                    "error": "",
-                },
-            ],
-        }
-
-        with run_dashboard_server() as base_url:
-            with patch.object(
-                dashboard,
-                "fetch_all",
-                side_effect=RuntimeError('relation "agent_status" does not exist'),
-                create=True,
-            ) as fetch_all_mock:
-                with patch.object(dashboard, "list_iterm_agent_sessions", return_value=sessions_payload):
-                    with patch.object(dashboard, "read_iterm_output", return_value=outputs_payload):
-                        code, payload = request_json(base_url, "/api/agent-status")
-
-        self.assertTrue(fetch_all_mock.called)
-        self.assertEqual(code, 200)
-        self.assertTrue(payload["ok"])
-        self.assertEqual(payload["summary"]["total"], 2)
+        self.assertEqual(payload["summary"]["error"], 1)
         by_id = {row["agent_id"]: row for row in payload["agents"]}
         self.assertEqual(by_id["agent_01"]["status"], "running")
         self.assertEqual(by_id["agent_02"]["status"], "error")
 
-    def test_api_agent_status_success(self) -> None:
-        sessions_payload = {
-            "ok": True,
-            "sessions": [
-                {
-                    "agent_id": "agent_01",
-                    "agent_name": "Agent 01",
-                    "session_id": "s1",
-                },
-                {
-                    "agent_id": "agent_02",
-                    "agent_name": "Agent 02",
-                    "session_id": "s2",
-                },
-            ],
-        }
-        outputs_payload = {
-            "ok": True,
-            "results": [
-                {
-                    "agent_id": "agent_01",
-                    "output": ["heartbeat ok", "processed 1 item"],
-                    "error": "",
-                },
-                {
-                    "agent_id": "agent_02",
-                    "output": ["Traceback: boom"],
-                    "error": "",
-                },
-            ],
-        }
-
+    def test_api_agent_status_returns_503_when_table_missing(self) -> None:
         with run_dashboard_server() as base_url:
-            with patch.object(
-                dashboard,
-                "fetch_all",
-                side_effect=RuntimeError('relation "agent_status" does not exist'),
-                create=True,
-            ):
-                with patch.object(dashboard, "list_iterm_agent_sessions", return_value=sessions_payload):
-                    with patch.object(dashboard, "read_iterm_output", return_value=outputs_payload):
-                        code, payload = request_json(base_url, "/api/agent-status?lines=20")
-
-        self.assertEqual(code, 200)
-        self.assertTrue(payload["ok"])
-        self.assertEqual(payload["summary"]["total"], 2)
-        by_id = {row["agent_id"]: row for row in payload["agents"]}
-        self.assertEqual(by_id["agent_01"]["status"], "running")
-        self.assertEqual(by_id["agent_02"]["status"], "error")
-
-    def test_api_agent_status_returns_503_when_session_list_fails(self) -> None:
-        with run_dashboard_server() as base_url:
-            with patch.object(
-                dashboard,
-                "fetch_all",
-                side_effect=RuntimeError('relation "agent_status" does not exist'),
-                create=True,
-            ):
+            with patch.object(dashboard, "ensure_agent_monitor_started", return_value=None):
                 with patch.object(
                     dashboard,
-                    "list_iterm_agent_sessions",
-                    return_value={"ok": False, "error": "state file missing"},
+                    "query_agent_status",
+                    side_effect=RuntimeError('relation "agent_status" does not exist'),
                 ):
                     code, payload = request_json(base_url, "/api/agent-status")
 
         self.assertEqual(code, 503)
         self.assertFalse(payload["ok"])
-        self.assertIn("state file missing", payload.get("error", ""))
+        self.assertEqual(payload.get("error"), "agent_status_table_unavailable")
+        self.assertEqual(payload["summary"]["total"], 0)
 
-    def test_api_agent_status_returns_503_when_output_read_fails(self) -> None:
-        sessions_payload = {
-            "ok": True,
-            "sessions": [
-                {
-                    "agent_id": "agent_01",
-                    "agent_name": "Agent 01",
-                    "session_id": "s1",
-                }
-            ],
-        }
+    def test_sse_stream_emits_initial_agent_status_event(self) -> None:
+        class _OneShotQueue:
+            def get(self, timeout=None):
+                raise dashboard.queue.Empty
 
-        with run_dashboard_server() as base_url:
-            with patch.object(
-                dashboard,
-                "fetch_all",
-                side_effect=RuntimeError('relation "agent_status" does not exist'),
-                create=True,
-            ):
-                with patch.object(dashboard, "list_iterm_agent_sessions", return_value=sessions_payload):
-                    with patch.object(
-                        dashboard,
-                        "read_iterm_output",
-                        return_value={"ok": False, "error": "iTerm unavailable"},
-                    ):
-                        code, payload = request_json(base_url, "/api/agent-status")
+        class _OneShotWriter:
+            def __init__(self):
+                self.chunks: list[bytes] = []
 
-        self.assertEqual(code, 503)
-        self.assertFalse(payload["ok"])
-        self.assertEqual(payload["summary"]["unknown"], 1)
-        self.assertIn("iTerm unavailable", payload.get("error", ""))
+            def write(self, data: bytes):
+                self.chunks.append(data)
+
+            def flush(self):
+                if len(self.chunks) >= 3:
+                    raise BrokenPipeError("stop after initial events")
+
+        handler = dashboard.DashboardHandler.__new__(dashboard.DashboardHandler)
+        sent_headers: list[tuple[str, str]] = []
+        sent_codes: list[int] = []
+
+        handler.send_response = lambda code: sent_codes.append(int(code))
+        handler.send_header = lambda key, value: sent_headers.append((str(key), str(value)))
+        handler.end_headers = lambda: None
+        handler.wfile = _OneShotWriter()
+
+        table_rows = [
+            {
+                "agent_id": "agent_01",
+                "agent_name": "Agent 01",
+                "session_id": "s1",
+                "status": "running",
+                "stagnant_sec": 1,
+                "error": "",
+                "output_tail": ["heartbeat ok"],
+                "updated_at": "2026-02-10T12:00:01+00:00",
+            }
+        ]
+
+        with patch.object(dashboard.EVENT_BUS, "subscribe", return_value=_OneShotQueue()):
+            with patch.object(dashboard.EVENT_BUS, "unsubscribe", return_value=None):
+                with patch.object(dashboard, "query_agent_status", return_value=table_rows):
+                    with patch.object(dashboard, "_safe_int", return_value=1):
+                        handler._serve_event_stream()
+
+        self.assertIn(200, sent_codes)
+        body = b"".join(handler.wfile.chunks).decode("utf-8")
+        self.assertIn("event: connected\n", body)
+        self.assertIn("event: agent_status\n", body)
+        self.assertIn('"agent_id": "agent_01"', body)
 
 
 if __name__ == "__main__":

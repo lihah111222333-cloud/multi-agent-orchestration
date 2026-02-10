@@ -7,7 +7,7 @@ from hashlib import sha1
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import ModuleType
-from typing import Dict, List, Union
+from typing import Dict, List, Sequence, Union
 
 PluginPath = Union[str, Path]
 _PLUGIN_FILE = "plugin.py"
@@ -42,37 +42,38 @@ def _extract_plugin_name(plugin_file: Path) -> str:
     return plugin_file.parent.name
 
 
-def discover_plugins(base_dir: PluginPath) -> List[str]:
-    """Discover valid plugin files in direct child directories."""
+def discover_plugin_index(base_dir: PluginPath) -> Dict[str, Path]:
+    """Discover plugin directories and return `{plugin_name: plugin_file}` mapping."""
     root = Path(base_dir)
     if not root.exists():
-        return []
+        return {}
     if not root.is_dir():
         raise ValueError(f"base_dir 不是目录: {root}")
 
-    plugin_paths: List[str] = []
-    plugin_names: Dict[str, str] = {}
-
+    plugin_index: Dict[str, Path] = {}
     for child in sorted(root.iterdir(), key=lambda item: item.name):
         if not child.is_dir():
             continue
-
         plugin_file = child / _PLUGIN_FILE
         if not plugin_file.is_file():
             continue
 
         plugin_name = _extract_plugin_name(plugin_file)
-        previous = plugin_names.get(plugin_name)
+        previous = plugin_index.get(plugin_name)
         if previous is not None:
             raise ValueError(
                 f"重复插件名: {plugin_name}"
                 f" (paths: {previous}, {plugin_file})"
             )
+        plugin_index[plugin_name] = plugin_file
 
-        plugin_names[plugin_name] = str(plugin_file)
-        plugin_paths.append(str(plugin_file))
+    return plugin_index
 
-    return plugin_paths
+
+def discover_plugins(base_dir: PluginPath) -> List[str]:
+    """Return all discovered `plugin.py` paths."""
+    plugin_index = discover_plugin_index(base_dir)
+    return [str(plugin_file) for plugin_file in plugin_index.values()]
 
 
 def load_plugin_module(path: PluginPath) -> ModuleType:
@@ -96,3 +97,48 @@ def load_plugin_module(path: PluginPath) -> ModuleType:
         raise RuntimeError(f"加载插件失败: {plugin_file}") from exc
 
     return module
+
+
+def load_plugins(plugin_names: Sequence[str], base_dir: PluginPath) -> Dict[str, ModuleType]:
+    """Load plugin modules by declared names.
+
+    Each module must expose:
+    - `PLUGIN_NAME: str`
+    - `PLUGIN_TOOLS: tuple|list`
+    """
+
+    requested_names: List[str] = []
+    seen_names: set[str] = set()
+    for raw_name in plugin_names:
+        plugin_name = str(raw_name or "").strip()
+        if not plugin_name:
+            raise ValueError("插件名不能为空")
+        if plugin_name in seen_names:
+            raise ValueError(f"重复插件声明: {plugin_name}")
+        seen_names.add(plugin_name)
+        requested_names.append(plugin_name)
+
+    plugin_index = discover_plugin_index(base_dir)
+    loaded: Dict[str, ModuleType] = {}
+    for plugin_name in requested_names:
+        plugin_file = plugin_index.get(plugin_name)
+        if plugin_file is None:
+            raise KeyError(f"插件不存在: {plugin_name}")
+
+        module = load_plugin_module(plugin_file)
+        actual_name = str(getattr(module, "PLUGIN_NAME", "")).strip()
+        if actual_name != plugin_name:
+            raise ValueError(
+                f"插件名不匹配: requested={plugin_name}, "
+                f"actual={actual_name or '<empty>'}, path={plugin_file}"
+            )
+
+        if not hasattr(module, "PLUGIN_TOOLS"):
+            raise ValueError(f"插件缺少 PLUGIN_TOOLS: {plugin_name}")
+        plugin_tools = getattr(module, "PLUGIN_TOOLS")
+        if not isinstance(plugin_tools, (list, tuple)):
+            raise TypeError(f"PLUGIN_TOOLS 类型非法: {plugin_name}")
+
+        loaded[plugin_name] = module
+
+    return loaded

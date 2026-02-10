@@ -1,10 +1,11 @@
-"""Agent 运营数据存储：交互表 / 提示词模板表 / 命令卡表。"""
+"""Agent 运营数据存储：交互 / 任务追踪 / 提示词版本 / 命令卡。"""
 
 from __future__ import annotations
 
 import json
 import os
 import re
+import uuid
 from datetime import datetime
 from typing import Any, Optional
 
@@ -35,6 +36,8 @@ _ALLOWED_EXEC_KEYWORDS = {
 _DB_EXECUTE_ALLOWED_TABLES = {
     "agent_interactions",
     "prompt_templates",
+    "prompt_versions",
+    "task_traces",
     "command_cards",
     "command_card_runs",
 }
@@ -42,6 +45,7 @@ _DML_TARGET_TABLE_RE = re.compile(
     r"\b(?:insert\s+into|update|delete\s+from|merge\s+into)\s+([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\b",
     re.IGNORECASE,
 )
+_TRACE_STATUS_SET = {"running", "ok", "error", "cancelled"}
 
 
 class RowMissingError(RuntimeError):
@@ -228,6 +232,230 @@ def _row_to_prompt_version(row: dict[str, Any]) -> dict[str, Any]:
         "created_at": _fmt_dt(row.get("created_at")),
         "archived_at": _fmt_dt(row.get("archived_at")),
     }
+
+
+def _row_to_task_trace(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": int(row.get("id", 0)),
+        "trace_id": str(row.get("trace_id", "")),
+        "span_id": str(row.get("span_id", "")),
+        "parent_span_id": str(row.get("parent_span_id", "")),
+        "span_name": str(row.get("span_name", "")),
+        "component": str(row.get("component", "")),
+        "status": str(row.get("status", "running")),
+        "input_payload": row.get("input_payload") if isinstance(row.get("input_payload"), (dict, list)) else {},
+        "output_payload": row.get("output_payload") if isinstance(row.get("output_payload"), (dict, list)) else {},
+        "error_text": str(row.get("error_text", "")),
+        "metadata": row.get("metadata") if isinstance(row.get("metadata"), (dict, list)) else {},
+        "started_at": _fmt_dt(row.get("started_at")),
+        "finished_at": _fmt_dt(row.get("finished_at")),
+        "duration_ms": int(row.get("duration_ms", 0) or 0),
+    }
+
+
+def create_trace_id() -> str:
+    return f"trace_{uuid.uuid4().hex}"
+
+
+def create_span_id() -> str:
+    return f"span_{uuid.uuid4().hex}"
+
+
+def _normalize_trace_status(status: str) -> str:
+    value = str(status or "").strip().lower() or "running"
+    if value not in _TRACE_STATUS_SET:
+        raise ValueError(f"trace status 非法: {status}")
+    return value
+
+
+def start_task_trace_span(
+    span_name: str,
+    component: str,
+    trace_id: str = "",
+    parent_span_id: str = "",
+    input_payload: Optional[Any] = None,
+    metadata: Optional[Any] = None,
+    span_id: str = "",
+) -> dict[str, Any]:
+    trace_text = str(trace_id or "").strip() or create_trace_id()
+    span_text = str(span_id or "").strip() or create_span_id()
+    parent_text = str(parent_span_id or "").strip()
+    span_name_text = str(span_name or "").strip()
+    component_text = str(component or "").strip()
+
+    if not span_name_text:
+        raise ValueError("span_name 不能为空")
+    if not component_text:
+        raise ValueError("component 不能为空")
+
+    row = fetch_one(
+        """
+        INSERT INTO task_traces (
+            trace_id, span_id, parent_span_id, span_name, component,
+            status, input_payload, metadata, started_at
+        )
+        VALUES (%s, %s, %s, %s, %s, 'running', %s::jsonb, %s::jsonb, NOW())
+        RETURNING id, trace_id, span_id, parent_span_id, span_name, component,
+                  status, input_payload, output_payload, error_text, metadata,
+                  started_at, finished_at, duration_ms
+        """,
+        (
+            trace_text,
+            span_text,
+            parent_text,
+            span_name_text,
+            component_text,
+            _as_json_text(input_payload),
+            _as_json_text(metadata),
+        ),
+    )
+    result = _row_to_task_trace(_require_row(row, "start_task_trace_span"))
+    append_event(
+        event_type="task_trace",
+        action="start",
+        result="ok",
+        actor=component_text,
+        target=trace_text,
+        detail=span_name_text,
+        extra={"span_id": span_text, "parent_span_id": parent_text},
+    )
+    return result
+
+
+def finish_task_trace_span(
+    span_id: str,
+    status: str = "ok",
+    output_payload: Optional[Any] = None,
+    error_text: str = "",
+    metadata: Optional[Any] = None,
+) -> dict[str, Any]:
+    span_text = str(span_id or "").strip()
+    if not span_text:
+        raise ValueError("span_id 不能为空")
+
+    status_text = _normalize_trace_status(status)
+    existing = fetch_one(
+        """
+        SELECT metadata
+        FROM task_traces
+        WHERE span_id = %s
+        """,
+        (span_text,),
+    )
+    if not existing:
+        return {"ok": False, "message": f"trace span not found: {span_text}"}
+
+    merged_metadata: Any = existing.get("metadata") if isinstance(existing, dict) else {}
+    if isinstance(merged_metadata, dict) and isinstance(metadata, dict):
+        merged_metadata = {**merged_metadata, **metadata}
+    elif metadata is not None:
+        merged_metadata = metadata
+
+    row = fetch_one(
+        """
+        UPDATE task_traces
+        SET status = %s,
+            output_payload = %s::jsonb,
+            error_text = %s,
+            metadata = %s::jsonb,
+            finished_at = NOW(),
+            duration_ms = GREATEST(0, ROUND(EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000)::INT)
+        WHERE span_id = %s
+        RETURNING id, trace_id, span_id, parent_span_id, span_name, component,
+                  status, input_payload, output_payload, error_text, metadata,
+                  started_at, finished_at, duration_ms
+        """,
+        (
+            status_text,
+            _as_json_text(output_payload),
+            str(error_text or ""),
+            _as_json_text(merged_metadata),
+            span_text,
+        ),
+    )
+    if not row:
+        return {"ok": False, "message": f"trace span not found: {span_text}"}
+
+    result = _row_to_task_trace(row)
+    append_event(
+        event_type="task_trace",
+        action="finish",
+        result=status_text,
+        actor=result.get("component", ""),
+        target=result.get("trace_id", ""),
+        detail=result.get("span_name", ""),
+        extra={"span_id": span_text, "duration_ms": result.get("duration_ms", 0)},
+    )
+    return {"ok": True, "span": result}
+
+
+def list_task_traces(
+    trace_id: str = "",
+    component: str = "",
+    status: str = "",
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    where = []
+    params: list[Any] = []
+
+    if trace_id:
+        where.append("trace_id = %s")
+        params.append(str(trace_id).strip())
+    if component:
+        where.append("component = %s")
+        params.append(str(component).strip())
+    if status:
+        where.append("status = %s")
+        params.append(_normalize_trace_status(status))
+
+    sql_text = """
+        SELECT id, trace_id, span_id, parent_span_id, span_name, component,
+               status, input_payload, output_payload, error_text, metadata,
+               started_at, finished_at, duration_ms
+        FROM task_traces
+    """
+    if where:
+        sql_text += " WHERE " + " AND ".join(where)
+    sql_text += " ORDER BY started_at DESC, id DESC LIMIT %s"
+    params.append(normalize_limit(limit))
+
+    return [_row_to_task_trace(row) for row in fetch_all(sql_text, params)]
+
+
+def get_task_trace_span(span_id: str) -> Optional[dict[str, Any]]:
+    span_text = str(span_id or "").strip()
+    if not span_text:
+        raise ValueError("span_id 不能为空")
+    row = fetch_one(
+        """
+        SELECT id, trace_id, span_id, parent_span_id, span_name, component,
+               status, input_payload, output_payload, error_text, metadata,
+               started_at, finished_at, duration_ms
+        FROM task_traces
+        WHERE span_id = %s
+        """,
+        (span_text,),
+    )
+    return _row_to_task_trace(row) if row else None
+
+
+def list_task_trace_spans(trace_id: str, limit: int = 500) -> list[dict[str, Any]]:
+    trace_text = str(trace_id or "").strip()
+    if not trace_text:
+        raise ValueError("trace_id 不能为空")
+    rows = fetch_all(
+        """
+        SELECT id, trace_id, span_id, parent_span_id, span_name, component,
+               status, input_payload, output_payload, error_text, metadata,
+               started_at, finished_at, duration_ms
+        FROM task_traces
+        WHERE trace_id = %s
+        ORDER BY started_at ASC, id ASC
+        LIMIT %s
+        """,
+        (trace_text, normalize_limit(limit, default=500)),
+    )
+    return [_row_to_task_trace(row) for row in rows]
 
 
 def _row_to_card(row: dict[str, Any]) -> dict[str, Any]:
@@ -473,7 +701,7 @@ def save_prompt_template(
     if previous:
         execute(
             """
-            INSERT INTO prompt_template_versions (
+            INSERT INTO prompt_versions (
                 prompt_key, title, agent_key, tool_name, prompt_text,
                 variables, tags, enabled, created_by, updated_by,
                 source_updated_at
@@ -550,7 +778,7 @@ def list_prompt_template_versions(prompt_key: str, limit: int = 20) -> list[dict
         SELECT id, prompt_key, title, agent_key, tool_name, prompt_text,
                variables, tags, enabled, created_by, updated_by,
                source_updated_at, created_at, archived_at
-        FROM prompt_template_versions
+        FROM prompt_versions
         WHERE prompt_key = %s
         ORDER BY id DESC
         LIMIT %s
@@ -574,7 +802,7 @@ def rollback_prompt_template(prompt_key: str, version_id: int, updated_by: str =
         SELECT id, prompt_key, title, agent_key, tool_name, prompt_text,
                variables, tags, enabled, created_by, updated_by,
                source_updated_at, created_at, archived_at
-        FROM prompt_template_versions
+        FROM prompt_versions
         WHERE id = %s AND prompt_key = %s
         """,
         (vid, key),

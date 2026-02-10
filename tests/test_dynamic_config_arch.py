@@ -25,6 +25,7 @@ class DynamicConfigArchitectureTests(unittest.TestCase):
                             "name": "动态代理",
                             "capabilities": ["clean"],
                             "depends_on": ["agent_01"],
+                            "plugins": ["http_fetch", "db_query"],
                         },
                     ],
                 }
@@ -48,7 +49,16 @@ class DynamicConfigArchitectureTests(unittest.TestCase):
         self.assertEqual(agents["agent_01"]["args"], ["-m", "agents.runtime_agent"])
         self.assertEqual(
             agents["agent_13"]["args"],
-            ["-m", "agents.runtime_agent", "--id", "agent_13", "--name", "动态代理"],
+            [
+                "-m",
+                "agents.runtime_agent",
+                "--id",
+                "agent_13",
+                "--name",
+                "动态代理",
+                "--plugins",
+                "http_fetch,db_query",
+            ],
         )
 
         self.assertIn("capabilities", gw_map["gateway_x"])
@@ -57,6 +67,7 @@ class DynamicConfigArchitectureTests(unittest.TestCase):
 
         agent_meta = gw_map["gateway_x"]["agent_meta"]
         self.assertEqual(agent_meta["agent_13"]["depends_on"], ["agent_01"])
+        self.assertEqual(agent_meta["agent_13"]["plugins"], ["http_fetch", "db_query"])
 
 
 if __name__ == "__main__":

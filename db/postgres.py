@@ -9,7 +9,6 @@ import re
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from utils import as_float_env, as_int_env
@@ -45,7 +44,6 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _logger = logging.getLogger(__name__)
 _INIT_LOCK = threading.Lock()
 _SCHEMA_READY_KEY: Optional[tuple[str, str]] = None
-MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 
 _POOL_LOCK = threading.Lock()
 _POOL: Optional[Any] = None
@@ -167,62 +165,8 @@ def _set_search_path(cur: Any) -> None:
     cur.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
 
 
-def _apply_sql_migrations(cur: Any) -> int:
-    """Apply SQL migrations from `db/migrations`.
-
-    Migration files must follow `NNNN_name.sql` naming and contiguous ordering.
-    """
-    if not MIGRATIONS_DIR.exists() or not MIGRATIONS_DIR.is_dir():
-        raise RuntimeError(f"未找到 SQL migrations 目录: {MIGRATIONS_DIR}")
-
-    from db.migrator import discover_migrations
-
-    migrations = discover_migrations(MIGRATIONS_DIR)
-    if not migrations:
-        raise RuntimeError(f"SQL migrations 目录为空: {MIGRATIONS_DIR}")
-
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            version INT PRIMARY KEY,
-            name TEXT NOT NULL,
-            filename TEXT NOT NULL,
-            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-        """
-    )
-
-    cur.execute("SELECT version FROM schema_migrations")
-    applied_rows = cur.fetchall() or []
-    applied_versions = {
-        int(row["version"]) if isinstance(row, dict) else int(row[0])
-        for row in applied_rows
-    }
-
-    applied_count = 0
-    for migration in migrations:
-        if migration.version in applied_versions:
-            continue
-
-        sql_text = migration.path.read_text(encoding="utf-8").strip()
-        if not sql_text:
-            raise ValueError(f"migration SQL 为空: {migration.filename}")
-
-        cur.execute(sql_text)
-        cur.execute(
-            """
-            INSERT INTO schema_migrations (version, name, filename)
-            VALUES (%s, %s, %s)
-            """,
-            (migration.version, migration.name, migration.filename),
-        )
-        applied_count += 1
-
-    return applied_count
-
-
 def ensure_schema() -> None:
-    """Ensure the target schema and all application tables exist (idempotent, thread-safe)."""
+    """Thin wrapper: run schema migrations once per schema key."""
     global _SCHEMA_READY_KEY
 
     _require_driver()
@@ -235,15 +179,11 @@ def ensure_schema() -> None:
         if _SCHEMA_READY_KEY == key:
             return
 
-        with psycopg.connect(get_connection_string(), autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(get_schema_name())))
-                _set_search_path(cur)
-                applied_migrations = _apply_sql_migrations(cur)
-                if applied_migrations:
-                    _logger.info("applied %s sql migration(s) from %s", applied_migrations, MIGRATIONS_DIR)
-                else:
-                    _logger.debug("schema already up-to-date, no pending sql migrations in %s", MIGRATIONS_DIR)
+        from db.migrator import MIGRATIONS_DIR, migrate_up
+
+        applied_migrations = migrate_up()
+        if not applied_migrations:
+            _logger.debug("schema already up-to-date, no pending sql migrations in %s", MIGRATIONS_DIR)
 
         _SCHEMA_READY_KEY = key
 

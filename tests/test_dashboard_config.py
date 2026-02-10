@@ -59,12 +59,36 @@ class DashboardConfigTests(unittest.TestCase):
             text = env_path.read_text(encoding="utf-8")
             self.assertIn("LLM_TIMEOUT='33'", text)
 
-    def test_render_html_contains_agent_chip_placeholders(self):
+    def test_render_html_contains_architecture_section(self):
         html = dashboard.render_html()
-        self.assertIn('data-agent-id="agent_01"', html)
-        self.assertIn('agent-chip-state', html)
         self.assertIn('id="agent-health-stat"', html)
         self.assertIn('id="agent-status-summary"', html)
+
+    def test_build_system_prompt_contains_system_tools(self):
+        result = dashboard._build_system_prompt()
+        text = result['prompt_text']
+        # Should NOT contain agent-prefixed tools
+        self.assertNotIn('agent_01__', text)
+        self.assertNotIn('Agent 专属工具', text)
+        # System-level tools
+        self.assertIn('iterm_list_sessions', text)
+        self.assertIn('write_file', text)
+        self.assertIn('create_interaction', text)
+        self.assertIn('save_prompt_template', text)
+        self.assertIn('save_command_card', text)
+        self.assertIn('execute_command_card', text)
+        self.assertIn('db_query', text)
+        self.assertIn('db_execute', text)
+        # Section header
+        self.assertIn('系统级工具', text)
+
+    def test_build_system_prompt_tool_count(self):
+        result = dashboard._build_system_prompt()
+        text = result['prompt_text']
+        # Count lines starting with "- **" which represent tool entries
+        tool_lines = [line for line in text.splitlines() if line.strip().startswith('- **')]
+        self.assertEqual(len(tool_lines), 26, f"Expected 26 system tools, got {len(tool_lines)}")
+
 
 
 @contextmanager

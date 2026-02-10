@@ -2,7 +2,7 @@ import inspect
 import unittest
 from unittest import mock
 
-from agents.factory import ToolParam, ToolSpec, build_tool_callable, get_agent_spec_by_key
+from agents.factory import AgentSpec, ToolParam, ToolSpec, build_tool_callable, collect_tool_specs, get_agent_spec_by_key
 
 
 class AgentFactoryTests(unittest.TestCase):
@@ -52,6 +52,51 @@ class AgentFactoryTests(unittest.TestCase):
 
         self.assertEqual(output, "done=sync")
         mocked.assert_called_once()
+
+    def test_collect_tool_specs_merges_declared_plugins(self):
+        spec = AgentSpec(
+            key="agent_test",
+            server_name="agent-test",
+            description="for test",
+            tools=(
+                ToolSpec(
+                    name="base_tool",
+                    description="base",
+                    params=(ToolParam("x", str),),
+                    response_template="{x}",
+                ),
+            ),
+            plugins=("http_fetch", "db_query"),
+        )
+
+        tools = collect_tool_specs(spec)
+        tool_names = [tool.name for tool in tools]
+
+        self.assertEqual(tool_names, ["base_tool", "http_fetch", "db_query"])
+
+    def test_collect_tool_specs_rejects_duplicated_tool_name(self):
+        spec = AgentSpec(
+            key="agent_test",
+            server_name="agent-test",
+            description="for test",
+            tools=(
+                ToolSpec(
+                    name="http_fetch",
+                    description="base",
+                    params=(ToolParam("url", str),),
+                    response_template="{url}",
+                ),
+            ),
+            plugins=("http_fetch",),
+        )
+
+        with self.assertRaisesRegex(ValueError, "插件工具名重复"):
+            collect_tool_specs(spec)
+
+    def test_get_agent_spec_by_key_accepts_plugin_names(self):
+        agent_spec = get_agent_spec_by_key("agent_99", agent_name="动态代理", plugin_names=("http_fetch",))
+
+        self.assertEqual(agent_spec.plugins, ("http_fetch",))
 
 
 if __name__ == "__main__":

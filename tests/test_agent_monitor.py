@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from agent_monitor import classify_status, patrol_agents_once
+from agent_monitor import classify_status, patrol_agents_once, patrol_agents_loop, run_patrol_cycle
 
 
 class AgentMonitorTests(unittest.TestCase):
@@ -204,6 +204,153 @@ class AgentMonitorTests(unittest.TestCase):
         )
 
         self.assertEqual(snapshot["agents"][0]["status"], "disconnected")
+
+    def test_run_patrol_cycle_upserts_and_publishes_event(self):
+        list_sessions = Mock(
+            return_value={
+                "ok": True,
+                "sessions": [
+                    {
+                        "agent_id": "agent_01",
+                        "agent_name": "Agent 01",
+                        "session_id": "s1",
+                    }
+                ],
+            }
+        )
+        read_output = Mock(
+            return_value={
+                "ok": True,
+                "results": [
+                    {
+                        "agent_id": "agent_01",
+                        "output": ["heartbeat ok"],
+                        "error": "",
+                    }
+                ],
+            }
+        )
+        upsert = Mock(return_value={"ok": True})
+        publish = Mock()
+
+        snapshot = run_patrol_cycle(
+            list_sessions_func=list_sessions,
+            read_output_func=read_output,
+            upsert_status_func=upsert,
+            publish_event_func=publish,
+            now_ts=100,
+            status_memory={},
+        )
+
+        self.assertTrue(snapshot["ok"])
+        self.assertEqual(snapshot["persisted"], 1)
+        upsert.assert_called_once()
+        self.assertEqual(upsert.call_args.kwargs["agent_id"], "agent_01")
+        publish.assert_called_once()
+        self.assertEqual(publish.call_args.args[0], "agent_status")
+        self.assertIn("summary", publish.call_args.args[1])
+
+    def test_run_patrol_cycle_store_error_marks_cycle_not_ok(self):
+        list_sessions = Mock(
+            return_value={
+                "ok": True,
+                "sessions": [
+                    {
+                        "agent_id": "agent_01",
+                        "agent_name": "Agent 01",
+                        "session_id": "s1",
+                    }
+                ],
+            }
+        )
+        read_output = Mock(
+            return_value={
+                "ok": True,
+                "results": [
+                    {
+                        "agent_id": "agent_01",
+                        "output": ["heartbeat ok"],
+                        "error": "",
+                    }
+                ],
+            }
+        )
+
+        def failing_upsert(**kwargs):
+            raise RuntimeError(f"db down for {kwargs['agent_id']}")
+
+        snapshot = run_patrol_cycle(
+            list_sessions_func=list_sessions,
+            read_output_func=read_output,
+            upsert_status_func=failing_upsert,
+            publish_event_func=None,
+            now_ts=100,
+            status_memory={},
+        )
+
+        self.assertFalse(snapshot["ok"])
+        self.assertEqual(snapshot["persisted"], 0)
+        self.assertIn("db down for agent_01", snapshot.get("error", ""))
+        self.assertFalse(snapshot["source"]["store_ok"])
+
+    def test_patrol_loop_runs_until_stop_event_set(self):
+        list_sessions = Mock(
+            return_value={
+                "ok": True,
+                "sessions": [
+                    {
+                        "agent_id": "agent_01",
+                        "agent_name": "Agent 01",
+                        "session_id": "s1",
+                    }
+                ],
+            }
+        )
+        read_output = Mock(
+            return_value={
+                "ok": True,
+                "results": [
+                    {
+                        "agent_id": "agent_01",
+                        "output": ["heartbeat ok"],
+                        "error": "",
+                    }
+                ],
+            }
+        )
+        upsert = Mock(return_value={"ok": True})
+        publish = Mock()
+        on_cycle = Mock()
+
+        class StopAfterN:
+            def __init__(self, loops: int):
+                self.remaining = loops
+
+            def is_set(self):
+                return self.remaining <= 0
+
+            def wait(self, timeout: float):
+                self.remaining -= 1
+                return self.remaining <= 0
+
+        stop_event = StopAfterN(3)
+        cycles = patrol_agents_loop(
+            list_sessions_func=list_sessions,
+            read_output_func=read_output,
+            upsert_status_func=upsert,
+            publish_event_func=publish,
+            on_cycle_func=on_cycle,
+            interval_sec=0,
+            read_lines=10,
+            stop_event=stop_event,
+            status_memory={},
+            time_func=lambda: 100.0,
+        )
+
+        self.assertEqual(cycles, 3)
+        self.assertEqual(on_cycle.call_count, 3)
+        self.assertEqual(publish.call_count, 3)
+        self.assertEqual(upsert.call_count, 3)
 
 
 if __name__ == "__main__":

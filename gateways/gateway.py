@@ -19,6 +19,7 @@ import logging
 import time
 import traceback
 from dataclasses import dataclass
+from contextlib import suppress
 from typing import Any, Callable, Optional
 
 from config.settings import (
@@ -39,6 +40,25 @@ __all__ = ["Gateway", "GatewayResult", "GatewayExecutionError"]
 
 GATEWAY_POOL_IDLE_SEC = as_int_env("GATEWAY_POOL_IDLE_SEC", 120, min_value=5)
 GATEWAY_HEALTHCHECK_SEC = as_int_env("GATEWAY_HEALTHCHECK_SEC", 20, min_value=5)
+
+
+async def _finish_trace_span_async(
+    span_id: str,
+    status: str,
+    output_payload: Optional[dict[str, Any]] = None,
+    error_text: str = "",
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    with suppress(Exception):
+        from agent_ops_store import finish_task_trace_span
+
+        finish_task_trace_span(
+            span_id=span_id,
+            status=status,
+            output_payload=output_payload,
+            error_text=error_text,
+            metadata=metadata,
+        )
 
 
 class GatewayExecutionError(RuntimeError):
@@ -442,6 +462,40 @@ class Gateway:
 
         self._ensure_async_primitives()
 
+        parent_trace_id = ""
+        parent_span_id = ""
+        if isinstance(task, str):
+            text = task.strip()
+            if text.startswith("["):
+                header, sep, rest = text.partition("\n")
+                if sep and header.startswith("[") and header.endswith("]"):
+                    raw_pairs = header[1:-1]
+                    for pair in raw_pairs.split(";"):
+                        if "=" not in pair:
+                            continue
+                        key, value = pair.split("=", 1)
+                        key = key.strip().lower()
+                        value = value.strip()
+                        if key == "trace_id":
+                            parent_trace_id = value
+                        elif key == "parent_span_id":
+                            parent_span_id = value
+                    task = rest
+
+        span = None
+        if parent_trace_id:
+            with suppress(Exception):
+                from agent_ops_store import start_task_trace_span
+
+                span = start_task_trace_span(
+                    trace_id=parent_trace_id,
+                    parent_span_id=parent_span_id,
+                    span_name="gateway.process",
+                    component=f"gateway:{self.name}",
+                    input_payload={"task": str(task or "")[:1000]},
+                    metadata={"display_name": self.display_name, "max_attempts": self.max_attempts},
+                )
+
         async with self._execute_lock_obj():
             last_error = ""
             last_reason = "unknown"
@@ -449,6 +503,13 @@ class Gateway:
             for attempt in range(1, self.max_attempts + 1):
                 try:
                     output = await asyncio.wait_for(self._do_process(task), timeout=GATEWAY_TIMEOUT)
+                    if span:
+                        await _finish_trace_span_async(
+                            span_id=str(span.get("span_id", "")),
+                            status="ok",
+                            output_payload={"output": output[:4000]},
+                            metadata={"attempt": attempt, "runtime_restarts": self._runtime_restarts},
+                        )
                     return GatewayResult(
                         success=True,
                         output=output,
@@ -482,6 +543,14 @@ class Gateway:
                         attempt,
                         self.max_attempts,
                     )
+
+            if span:
+                await _finish_trace_span_async(
+                    span_id=str(span.get("span_id", "")),
+                    status="error",
+                    error_text=last_error,
+                    metadata={"reason": last_reason, "runtime_restarts": self._runtime_restarts},
+                )
 
             return GatewayResult(
                 success=False,

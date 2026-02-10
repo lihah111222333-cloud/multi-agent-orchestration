@@ -14,6 +14,7 @@ import operator
 import os
 import re
 import traceback
+from contextlib import suppress
 from typing import Annotated, Any, Callable, Coroutine, Optional, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -45,6 +46,56 @@ _ASSIGNMENT_LIST_PREFIX_RE = re.compile(r"^\s*(?:[-*+]|(?:\d+)[\.)])\s*")
 _SUMMARY_UNIT_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]")
 
 
+def _start_trace_span(
+    state: MasterState,
+    span_name: str,
+    component: str,
+    input_payload: Optional[dict[str, Any]] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> Optional[dict[str, Any]]:
+    trace_id = str(state.get("trace_id", "")).strip()
+    if not trace_id:
+        return None
+
+    with suppress(Exception):
+        from agent_ops_store import start_task_trace_span
+
+        return start_task_trace_span(
+            trace_id=trace_id,
+            parent_span_id=str(state.get("root_span_id", "")).strip(),
+            span_name=span_name,
+            component=component,
+            input_payload=input_payload,
+            metadata=metadata,
+        )
+    return None
+
+
+def _finish_trace_span(
+    span: Optional[dict[str, Any]],
+    status: str,
+    output_payload: Optional[dict[str, Any]] = None,
+    error_text: str = "",
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    if not span:
+        return
+    span_id = str(span.get("span_id", "")).strip()
+    if not span_id:
+        return
+
+    with suppress(Exception):
+        from agent_ops_store import finish_task_trace_span
+
+        finish_task_trace_span(
+            span_id=span_id,
+            status=status,
+            output_payload=output_payload,
+            error_text=error_text,
+            metadata=metadata,
+        )
+
+
 def _create_llm() -> Any:
     return build_chat_openai(
         model=LLM_MODEL,
@@ -62,6 +113,8 @@ class MasterState(TypedDict):
     final_answer: str
     dispatch_degraded: bool
     topology_hash: str
+    trace_id: str
+    root_span_id: str
 
 
 def _create_gateways(gateway_agent_map: dict, gateway_cls: type = Gateway) -> dict:
@@ -520,6 +573,13 @@ def _make_dispatcher(
 ) -> Callable[[MasterState], Coroutine[Any, Any, dict]]:
     async def dispatcher(state: MasterState) -> dict:
         task = state["task"]
+        span = _start_trace_span(
+            state,
+            span_name="master.dispatcher",
+            component="master",
+            input_payload={"task": task[:1000]},
+            metadata={"gateway_count": len(gateways)},
+        )
         logger.info("[Master] 收到任务: %s", task)
 
         if TOPOLOGY_PROPOSAL_ENABLED:
@@ -549,12 +609,28 @@ def _make_dispatcher(
             logger.debug(traceback.format_exc())
             assignments = _fallback_assignments(task, gateways)
             dispatch_degraded = True
+            _finish_trace_span(
+                span,
+                status="error",
+                output_payload={"assignment_count": len(assignments)},
+                error_text=str(e),
+                metadata={"dispatch_degraded": dispatch_degraded},
+            )
+        else:
+            _finish_trace_span(
+                span,
+                status="ok",
+                output_payload={"assignment_count": len(assignments), "assignments": assignments},
+                metadata={"dispatch_degraded": dispatch_degraded},
+            )
 
         logger.info("[Master] 分配完成: %s", assignments)
         return {
             "gateway_assignments": assignments,
             "dispatch_degraded": dispatch_degraded,
             "topology_hash": topology_hash,
+            "trace_id": str(state.get("trace_id", "")),
+            "root_span_id": str(state.get("root_span_id", "")),
         }
 
     return dispatcher
@@ -563,7 +639,26 @@ def _make_dispatcher(
 def _make_gateway_node(gw_id: str, gateway_agent_map: dict, gateways: dict) -> Callable[[MasterState], Coroutine[Any, Any, dict]]:
     async def _gateway_node(state: MasterState) -> dict:
         sub_task = (state.get("gateway_assignments") or {}).get(gw_id, state["task"])
-        gateway_result = await gateways[gw_id].process(sub_task)
+        span = _start_trace_span(
+            state,
+            span_name="master.gateway_node",
+            component=f"master:{gw_id}",
+            input_payload={"sub_task": str(sub_task)[:1000]},
+            metadata={"gateway": gw_id},
+        )
+
+        gateway_task = sub_task
+        if span:
+            trace_id = str(state.get("trace_id", "")).strip()
+            parent_span_id = str(span.get("span_id", "")).strip()
+            if trace_id and parent_span_id:
+                gateway_task = f"[trace_id={trace_id};parent_span_id={parent_span_id}]\n{sub_task}"
+
+        try:
+            gateway_result = await gateways[gw_id].process(gateway_task)
+        except Exception as e:
+            _finish_trace_span(span, status="error", error_text=str(e), metadata={"gateway": gw_id})
+            raise
 
         success = bool(gateway_result.get("success", False))
         output = str(gateway_result.get("output", ""))
@@ -583,6 +678,20 @@ def _make_gateway_node(gw_id: str, gateway_agent_map: dict, gateways: dict) -> C
                 detail=f"reason={reason}, attempts={attempts}, error={error[:120]}",
             )
 
+        _finish_trace_span(
+            span,
+            status="ok" if success else "error",
+            output_payload={
+                "success": success,
+                "reason": reason,
+                "attempts": attempts,
+                "quality_score": quality_score,
+                "output": output[:3000],
+            },
+            error_text=error,
+            metadata={"gateway": gw_id},
+        )
+
         return {
             "results": [
                 {
@@ -595,6 +704,7 @@ def _make_gateway_node(gw_id: str, gateway_agent_map: dict, gateways: dict) -> C
                     "attempts": attempts,
                     "quality_score": quality_score,
                     "dispatch_degraded": bool(state.get("dispatch_degraded", False)),
+                    "trace_span_id": str(span.get("span_id", "")) if span else "",
                 }
             ]
         }
@@ -618,6 +728,12 @@ def _dedupe_success_results(rows: list[dict]) -> list[dict]:
 
 def _make_aggregator(llm_factory: Callable[[], Any]) -> Callable[[MasterState], Coroutine[Any, Any, dict]]:
     async def aggregator(state: MasterState) -> dict:
+        span = _start_trace_span(
+            state,
+            span_name="master.aggregator",
+            component="master",
+            input_payload={"result_count": len(list(state.get("results", [])))},
+        )
         logger.info("[Master] 开始聚合结果")
 
         rows = list(state.get("results", []))
@@ -636,7 +752,17 @@ def _make_aggregator(llm_factory: Callable[[], Any]) -> Callable[[MasterState], 
             )
             final = "# 综合报告（所有网关执行失败）\n\n" + (failure_text or "无可用结果")
             logger.warning("[Master] 无成功网关结果，返回失败汇总")
-            return {"final_answer": final}
+            _finish_trace_span(
+                span,
+                status="error",
+                output_payload={"success_rows": 0, "failed_rows": len(failed_rows)},
+                error_text="all gateway failed",
+            )
+            return {
+                "final_answer": final,
+                "trace_id": str(state.get("trace_id", "")),
+                "root_span_id": str(state.get("root_span_id", "")),
+            }
 
         success_text = "\n\n".join(
             f"### {r['name']} (via {r['gateway']}, quality={r.get('quality_score', 0)})\n{r['output']}"
@@ -694,7 +820,20 @@ def _make_aggregator(llm_factory: Callable[[], Any]) -> Callable[[MasterState], 
         final = f"# 综合报告\n\n{summary}{degraded_note}{topology_note}\n\n---\n\n## 详细结果\n\n{details}"
 
         logger.info("[Master] 聚合完成")
-        return {"final_answer": final}
+        _finish_trace_span(
+            span,
+            status="ok",
+            output_payload={
+                "success_rows": len(success_rows),
+                "failed_rows": len(failed_rows),
+                "final_answer": final[:3000],
+            },
+        )
+        return {
+            "final_answer": final,
+            "trace_id": str(state.get("trace_id", "")),
+            "root_span_id": str(state.get("root_span_id", "")),
+        }
 
     return aggregator
 

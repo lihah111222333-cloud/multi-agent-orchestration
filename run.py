@@ -10,7 +10,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from agent_ops_store import create_trace_id, finish_task_trace_span, start_task_trace_span
 from audit_log import append_event
+from db.postgres import ensure_schema
 from master import build_graph
 from logging_setup import setup_global_logging
 from utils import validate_config
@@ -35,6 +37,13 @@ async def run(task: str):
     setup_global_logging()
     logger = logging.getLogger("run")
 
+    # 启动优先执行数据库迁移
+    try:
+        ensure_schema()
+    except Exception as exc:
+        logger.error("数据库迁移失败: %s", exc)
+        raise SystemExit(1) from exc
+
     # 启动前校验配置
     validate_config()
 
@@ -53,11 +62,25 @@ async def run(task: str):
     print("=" * 60)
 
     start_time = time.time()
+    trace_id = create_trace_id()
+    root_span = start_task_trace_span(
+        trace_id=trace_id,
+        span_name="run.session",
+        component="run",
+        input_payload={"task": task[:2000]},
+        metadata={"entry": "cli"},
+    )
 
     try:
         # 构建并运行编排图
         graph = build_graph()
-        result = await graph.ainvoke({"task": task})
+        result = await graph.ainvoke(
+            {
+                "task": task,
+                "trace_id": trace_id,
+                "root_span_id": str(root_span.get("span_id", "")),
+            }
+        )
 
         elapsed = time.time() - start_time
 
@@ -74,6 +97,15 @@ async def run(task: str):
             result="ok",
             detail=f"elapsed={elapsed:.2f}s",
         )
+        finish_task_trace_span(
+            span_id=str(root_span.get("span_id", "")),
+            status="ok",
+            output_payload={
+                "trace_id": trace_id,
+                "final_answer": str(result.get("final_answer", ""))[:4000],
+            },
+            metadata={"elapsed_sec": round(elapsed, 3)},
+        )
         return result
 
     except Exception as e:
@@ -86,6 +118,13 @@ async def run(task: str):
             target="master",
             result="error",
             detail=f"elapsed={elapsed:.2f}s,error={e}",
+        )
+        finish_task_trace_span(
+            span_id=str(root_span.get("span_id", "")),
+            status="error",
+            output_payload={"trace_id": trace_id},
+            error_text=str(e),
+            metadata={"elapsed_sec": round(elapsed, 3)},
         )
         print(f"\n❌ 执行失败: {e}")
         sys.exit(1)

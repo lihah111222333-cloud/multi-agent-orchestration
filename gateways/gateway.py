@@ -4,125 +4,487 @@
 1. 连接 Agent 的 MCP Server
 2. 获取所有可用工具
 3. 使用 LLM 选择合适的工具执行任务
-4. 返回结果
+4. 返回结构化结果（成功/失败、原因、重试次数）
+
+P0 健壮性增强：
+- 连接池复用（避免每次任务冷启动子进程）
+- 依赖 DAG 顺序执行（基于 depends_on）
+- 运行时自愈（心跳探活失败自动重建 runtime）
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import traceback
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import create_react_agent
-from langchain_openai import ChatOpenAI
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
+
 from config.settings import (
-    LLM_MODEL, LLM_TEMPERATURE, OPENAI_BASE_URL,
-    LLM_TIMEOUT, LLM_MAX_RETRIES, GATEWAY_TIMEOUT,
+    GATEWAY_MAX_ATTEMPTS,
+    GATEWAY_TIMEOUT,
+    LLM_MAX_RETRIES,
+    LLM_MODEL,
+    LLM_TEMPERATURE,
+    LLM_TIMEOUT,
+    OPENAI_BASE_URL,
 )
-from utils import extract_text
+from utils import as_int_env, build_chat_openai, extract_text
 
 logger = logging.getLogger(__name__)
+
+__all__ = ["Gateway", "GatewayResult", "GatewayExecutionError"]
+
+
+GATEWAY_POOL_IDLE_SEC = as_int_env("GATEWAY_POOL_IDLE_SEC", 120, min_value=5)
+GATEWAY_HEALTHCHECK_SEC = as_int_env("GATEWAY_HEALTHCHECK_SEC", 20, min_value=5)
+
+
+class GatewayExecutionError(RuntimeError):
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class GatewayResult:
+    success: bool
+    output: str = ""
+    error: str = ""
+    reason: str = "ok"
+    attempts: int = 1
+    runtime_restarts: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "success": self.success,
+            "output": self.output,
+            "error": self.error,
+            "reason": self.reason,
+            "attempts": self.attempts,
+            "runtime_restarts": self.runtime_restarts,
+        }
+
+
+def _default_llm_factory() -> Any:
+    return build_chat_openai(
+        model=LLM_MODEL,
+        temperature=LLM_TEMPERATURE,
+        base_url=OPENAI_BASE_URL,
+        max_retries=LLM_MAX_RETRIES,
+        request_timeout=LLM_TIMEOUT,
+    )
+
+
+def _default_mcp_client_cls() -> type:
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+
+    return MultiServerMCPClient
+
+
+def _default_react_agent_builder(llm: Any, tools: list[Any]) -> Any:
+    from langgraph.prebuilt import create_react_agent
+
+    return create_react_agent(llm, tools)
 
 
 class Gateway:
     """Gateway 管理一组 Agent，将任务路由到合适的 Agent 执行"""
 
-    def __init__(self, name: str, display_name: str, agent_configs: dict):
-        """
-        Args:
-            name: Gateway 标识，如 'gateway_1'
-            display_name: 显示名称，如 '数据分析网关'
-            agent_configs: 该 Gateway 下的 Agent MCP Server 配置
-        """
+    def __init__(
+        self,
+        name: str,
+        display_name: str,
+        agent_configs: dict,
+        agent_meta: Optional[dict[str, dict[str, Any]]] = None,
+        llm_factory: Optional[Callable[[], Any]] = None,
+        mcp_client_cls: Optional[type] = None,
+        react_agent_builder: Optional[Callable[[Any, list], Any]] = None,
+        max_attempts: Optional[int] = None,
+    ):
         self.name = name
         self.display_name = display_name
         self.agent_configs = agent_configs
+        self.agent_meta = agent_meta or {}
+        self.llm_factory = llm_factory or _default_llm_factory
+        self.mcp_client_cls = mcp_client_cls or _default_mcp_client_cls()
+        self.react_agent_builder = react_agent_builder or _default_react_agent_builder
 
-    async def process(self, task: str) -> str:
-        """处理任务（带超时保护）"""
-        try:
-            return await asyncio.wait_for(
-                self._do_process(task),
-                timeout=GATEWAY_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            error_msg = f"[{self.display_name}] 执行超时 ({GATEWAY_TIMEOUT}s)"
-            logger.error(error_msg)
-            return error_msg
-        except Exception as e:
-            error_msg = f"[{self.display_name}] 执行异常: {e}"
-            logger.error(error_msg)
-            logger.debug(traceback.format_exc())
-            return error_msg
+        attempts = max_attempts if max_attempts is not None else GATEWAY_MAX_ATTEMPTS
+        self.max_attempts = max(1, int(attempts))
 
-    async def _do_process(self, task: str) -> str:
-        """实际处理逻辑：连接 Agent → 获取工具 → LLM 选择执行 → 返回结果"""
-        logger.info(f"[{self.display_name}] 开始处理任务: {task}")
+        self._runtime_lock: Optional[asyncio.Lock] = None
+        self._execute_lock: Optional[asyncio.Lock] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
-        client = None
-        try:
-            # 连接所有 Agent MCP Server
-            client = MultiServerMCPClient(self.agent_configs)
-            tools = await client.get_tools()
+        self._client_ctx = None
+        self._client = None
+        self._tools: list[Any] = []
+        self._llm: Optional[Any] = None
 
-            if not tools:
-                raise RuntimeError(f"未能从 {len(self.agent_configs)} 个 Agent 加载任何工具")
+        self._last_used_ts = 0.0
+        self._last_probe_ts = 0.0
+        self._runtime_restarts = 0
 
-            logger.info(
-                f"[{self.display_name}] 已加载 {len(tools)} 个工具 "
-                f"来自 {len(self.agent_configs)} 个 Agent"
-            )
+    def _ensure_async_primitives(self) -> None:
+        loop = asyncio.get_running_loop()
+        if self._loop is loop and self._runtime_lock is not None and self._execute_lock is not None:
+            return
 
-            # 创建 ReAct Agent，使用 LLM 智能选择工具
-            llm = ChatOpenAI(
-                model=LLM_MODEL,
-                temperature=LLM_TEMPERATURE,
-                base_url=OPENAI_BASE_URL,
-                max_retries=LLM_MAX_RETRIES,
-                request_timeout=LLM_TIMEOUT,
-            )
-            agent = create_react_agent(llm, tools)
+        self._loop = loop
+        self._runtime_lock = asyncio.Lock()
+        self._execute_lock = asyncio.Lock()
 
-            # 执行任务
-            result = await agent.ainvoke(
-                {"messages": [{"role": "user", "content": task}]}
-            )
+    def _runtime_lock_obj(self) -> asyncio.Lock:
+        if self._runtime_lock is None:
+            raise RuntimeError("runtime lock is not initialized")
+        return self._runtime_lock
 
-            output = extract_text(result["messages"][-1].content)
-            logger.info(f"[{self.display_name}] 任务完成")
+    def _execute_lock_obj(self) -> asyncio.Lock:
+        if self._execute_lock is None:
+            raise RuntimeError("execute lock is not initialized")
+        return self._execute_lock
+
+    def _get_llm(self) -> Any:
+        if self._llm is None:
+            self._llm = self.llm_factory()
+        return self._llm
+
+    def _dependency_hint(self) -> str:
+        if not self.agent_meta:
+            return ""
+
+        lines = []
+
+        dependency_rows = []
+        for agent_id, meta in self.agent_meta.items():
+            deps = [str(item).strip() for item in meta.get("depends_on", []) if str(item).strip()]
+            if deps:
+                dependency_rows.append(f"- {agent_id} 依赖 {', '.join(deps)}")
+
+        if dependency_rows:
+            lines.append("请尽量遵循以下执行依赖顺序：")
+            lines.extend(dependency_rows)
+
+        capability_rows = []
+        for agent_id, meta in self.agent_meta.items():
+            caps = [str(item).strip() for item in meta.get("capabilities", []) if str(item).strip()]
+            if caps:
+                capability_rows.append(f"- {agent_id}: {', '.join(caps)}")
+
+        if capability_rows:
+            lines.append("可用能力提示：")
+            lines.extend(capability_rows)
+
+        return "\n".join(lines).strip()
+
+    def _build_effective_task(self, task: str) -> str:
+        hint = self._dependency_hint()
+        if not hint:
+            return task
+        return f"{task}\n\n[网关执行约束]\n{hint}"
+
+    def _topological_layers(self, nodes: list[str], depends_map: dict[str, list[str]]) -> list[list[str]]:
+        in_degree: dict[str, int] = {node: 0 for node in nodes}
+        graph: dict[str, list[str]] = {node: [] for node in nodes}
+
+        for node in nodes:
+            for dep in depends_map.get(node, []):
+                if dep not in in_degree:
+                    continue
+                graph[dep].append(node)
+                in_degree[node] += 1
+
+        layers: list[list[str]] = []
+        ready = [node for node, degree in in_degree.items() if degree == 0]
+
+        visited = 0
+        while ready:
+            current_layer = sorted(ready)
+            layers.append(current_layer)
+            next_ready = []
+            for node in current_layer:
+                visited += 1
+                for nxt in graph[node]:
+                    in_degree[nxt] -= 1
+                    if in_degree[nxt] == 0:
+                        next_ready.append(nxt)
+            ready = next_ready
+
+        if visited != len(nodes):
+            return []
+        return layers
+
+    def _extract_tool_agent_id(self, tool: Any) -> str:
+        known_ids = list(self.agent_configs.keys())
+
+        metadata = getattr(tool, "metadata", None)
+        if isinstance(metadata, dict):
+            for key in ("agent_id", "server_name", "mcp_server_name", "server"):
+                value = metadata.get(key)
+                if isinstance(value, str):
+                    value = value.strip()
+                    if value in known_ids:
+                        return value
+
+        name = str(getattr(tool, "name", "") or "")
+        for agent_id in known_ids:
+            if agent_id in name:
+                return agent_id
+
+        desc = str(getattr(tool, "description", "") or "")
+        for agent_id in known_ids:
+            if agent_id in desc:
+                return agent_id
+
+        return ""
+
+    def _group_tools_by_agent(self, tools: list[Any]) -> dict[str, list[Any]]:
+        grouped: dict[str, list[Any]] = {agent_id: [] for agent_id in self.agent_configs.keys()}
+        unknown: list[Any] = []
+
+        for tool in tools:
+            agent_id = self._extract_tool_agent_id(tool)
+            if agent_id and agent_id in grouped:
+                grouped[agent_id].append(tool)
+            else:
+                unknown.append(tool)
+
+        if unknown:
+            logger.debug("[%s] %d tools 无法匹配到具体 agent，分发到所有 agent", self.display_name, len(unknown))
+            for agent_id in grouped:
+                grouped[agent_id].extend(unknown)
+
+        return grouped
+
+    def _build_execution_messages(self, task: str) -> list[dict[str, str]]:
+        hint = self._dependency_hint()
+
+        system_parts = [
+            "你是网关执行代理。请优先调用提供的工具完成任务，并输出可执行结论。",
+            "如工具输出冲突，请标注冲突并给出保守建议。",
+        ]
+        if hint:
+            system_parts.append(f"必须遵循以下执行约束（高优先级）：\n{hint}")
+
+        system_text = "\n\n".join(system_parts)
+        return [
+            {"role": "system", "content": system_text},
+            {"role": "user", "content": str(task or "")},
+        ]
+
+    async def _invoke_with_tools(self, task: str, tools: list[Any]) -> str:
+        if not tools:
+            raise GatewayExecutionError("no_tools", "当前阶段无可用工具")
+
+        llm = self._get_llm()
+        agent = self.react_agent_builder(llm, tools)
+        messages = self._build_execution_messages(task)
+        result = await agent.ainvoke({"messages": messages})
+
+        output_messages = result.get("messages", []) if isinstance(result, dict) else []
+        if not output_messages:
+            raise GatewayExecutionError("empty_response", "LLM 返回为空")
+
+        output = extract_text(output_messages[-1].content)
+        if not output.strip():
+            raise GatewayExecutionError("empty_output", "LLM 返回空文本")
+        return output
+
+    def _select_execution_plan(self, tools: list[Any]) -> list[list[Any]]:
+        if not self.agent_meta:
+            return [tools]
+
+        nodes = list(self.agent_configs.keys())
+        depends_map: dict[str, list[str]] = {}
+        has_dep = False
+        for agent_id in nodes:
+            deps = [
+                str(item).strip()
+                for item in self.agent_meta.get(agent_id, {}).get("depends_on", [])
+                if str(item).strip() in self.agent_configs
+            ]
+            if deps:
+                has_dep = True
+            depends_map[agent_id] = deps
+
+        if not has_dep:
+            return [tools]
+
+        layers = self._topological_layers(nodes, depends_map)
+        if not layers:
+            logger.warning("[%s] agent depends_on 存在环路，回退单阶段执行", self.display_name)
+            return [tools]
+
+        grouped = self._group_tools_by_agent(tools)
+        planned: list[list[Any]] = []
+        for layer in layers:
+            stage_tools: list[Any] = []
+            for agent_id in layer:
+                stage_tools.extend(grouped.get(agent_id, []))
+            if stage_tools:
+                planned.append(stage_tools)
+
+        return planned or [tools]
+
+    async def _open_runtime_locked(self) -> None:
+        if self._client is not None:
+            return
+
+        self._client_ctx = self.mcp_client_cls(self.agent_configs)
+        self._client = await self._client_ctx.__aenter__()
+        self._tools = await self._client.get_tools()
+        self._last_probe_ts = time.monotonic()
+        self._last_used_ts = time.monotonic()
+
+        if not self._tools:
+            await self._close_runtime_locked(reason="no_tools_after_open")
+            raise GatewayExecutionError("no_tools", f"未能从 {len(self.agent_configs)} 个 Agent 加载任何工具")
+
+        logger.info(
+            "[%s] Runtime 已建立: tools=%s agents=%s",
+            self.display_name,
+            len(self._tools),
+            len(self.agent_configs),
+        )
+
+    async def _close_runtime_locked(self, reason: str) -> None:
+        if self._client_ctx is not None:
+            try:
+                await self._client_ctx.__aexit__(None, None, None)
+            except Exception:
+                logger.debug("Runtime 关闭异常", exc_info=True)
+
+        self._client_ctx = None
+        self._client = None
+        self._tools = []
+        self._last_probe_ts = 0.0
+        self._last_used_ts = 0.0
+
+        if reason:
+            logger.info("[%s] Runtime 已关闭: reason=%s", self.display_name, reason)
+
+    async def _refresh_runtime_locked(self, reason: str) -> None:
+        self._runtime_restarts += 1
+        await self._close_runtime_locked(reason=f"restart:{reason}")
+        await self._open_runtime_locked()
+
+    async def _ensure_runtime_locked(self) -> None:
+        now = time.monotonic()
+        if self._client is None:
+            await self._open_runtime_locked()
+            return
+
+        if self._last_used_ts and (now - self._last_used_ts) > GATEWAY_POOL_IDLE_SEC:
+            await self._close_runtime_locked(reason="idle_timeout")
+            await self._open_runtime_locked()
+            return
+
+        if (now - self._last_probe_ts) >= GATEWAY_HEALTHCHECK_SEC:
+            try:
+                tools = await self._client.get_tools()
+                if not tools:
+                    raise RuntimeError("probe returned 0 tools")
+                self._tools = tools
+                self._last_probe_ts = now
+            except Exception as e:
+                logger.warning("[%s] Runtime 探活失败，准备重建: %s", self.display_name, e)
+                await self._refresh_runtime_locked(reason="probe_failed")
+
+    async def _execute_with_plan(self, task: str) -> str:
+        effective_task = self._build_effective_task(task)
+
+        async with self._runtime_lock_obj():
+            await self._ensure_runtime_locked()
+            tools = list(self._tools)
+
+        plan = self._select_execution_plan(tools)
+
+        if len(plan) == 1:
+            output = await self._invoke_with_tools(effective_task, plan[0])
+            async with self._runtime_lock_obj():
+                self._last_used_ts = time.monotonic()
             return output
 
-        except Exception as e:
-            error_msg = f"[{self.display_name}] 任务执行失败: {e}"
-            logger.error(error_msg)
-            logger.debug(traceback.format_exc())
-            return error_msg
-        finally:
-            # 清理 MCP Client 资源（关闭 Agent 子进程）
-            if client is not None:
+        stage_outputs = []
+        for index, stage_tools in enumerate(plan, start=1):
+            stage_prompt = f"{effective_task}\n\n[阶段执行 {index}/{len(plan)}]"
+            if stage_outputs:
+                previous = "\n\n".join(stage_outputs[-2:])
+                stage_prompt += f"\n\n[上阶段结果]\n{previous}"
+
+            stage_output = await self._invoke_with_tools(stage_prompt, stage_tools)
+            stage_outputs.append(f"阶段{index}: {stage_output}")
+
+        async with self._runtime_lock_obj():
+            self._last_used_ts = time.monotonic()
+
+        return "\n\n".join(stage_outputs)
+
+    async def _do_process(self, task: str) -> str:
+        return await self._execute_with_plan(task)
+
+    async def process(self, task: str) -> dict[str, Any]:
+        """处理任务（带超时、重试、自愈保护）"""
+
+        self._ensure_async_primitives()
+
+        async with self._execute_lock_obj():
+            last_error = ""
+            last_reason = "unknown"
+
+            for attempt in range(1, self.max_attempts + 1):
                 try:
-                    await self._cleanup_client(client)
-                except Exception as cleanup_err:
+                    output = await asyncio.wait_for(self._do_process(task), timeout=GATEWAY_TIMEOUT)
+                    return GatewayResult(
+                        success=True,
+                        output=output,
+                        reason="ok",
+                        attempts=attempt,
+                        runtime_restarts=self._runtime_restarts,
+                    ).to_dict()
+                except asyncio.TimeoutError:
+                    last_reason = "timeout"
+                    last_error = f"[{self.display_name}] 执行超时 ({GATEWAY_TIMEOUT}s)"
+                except GatewayExecutionError as e:
+                    last_reason = e.reason
+                    last_error = f"[{self.display_name}] 任务执行失败: {e}"
+                except Exception as e:
+                    last_reason = "exception"
+                    last_error = f"[{self.display_name}] 执行异常: {e}"
+
+                logger.error(last_error)
+                logger.debug(traceback.format_exc())
+
+                try:
+                    async with self._runtime_lock_obj():
+                        await self._refresh_runtime_locked(reason=last_reason)
+                except Exception as refresh_error:
+                    logger.warning("[%s] Runtime 重建失败: %s", self.display_name, refresh_error)
+
+                if attempt < self.max_attempts:
                     logger.warning(
-                        f"[{self.display_name}] MCP Client 清理时出错: {cleanup_err}"
+                        "[%s] 尝试 %s/%s 失败，已触发 runtime 重建",
+                        self.display_name,
+                        attempt,
+                        self.max_attempts,
                     )
 
-    @staticmethod
-    async def _cleanup_client(client: MultiServerMCPClient):
-        """清理 MCP Client 创建的子进程和连接"""
-        # 尝试关闭所有 session
-        if hasattr(client, '_sessions'):
-            for name, session in client._sessions.items():
-                try:
-                    if hasattr(session, 'close'):
-                        await session.close()
-                except Exception:
-                    pass
-        if hasattr(client, '_cleanup'):
-            try:
-                await client._cleanup()
-            except Exception:
-                pass
+            return GatewayResult(
+                success=False,
+                error=last_error,
+                reason=last_reason,
+                attempts=self.max_attempts,
+                runtime_restarts=self._runtime_restarts,
+            ).to_dict()
 
-    def __repr__(self):
+    async def close(self) -> None:
+        self._ensure_async_primitives()
+        async with self._runtime_lock_obj():
+            await self._close_runtime_locked(reason="explicit_close")
+
+    def __repr__(self) -> str:
         return (
             f"Gateway(name={self.name}, display={self.display_name}, "
             f"agents={list(self.agent_configs.keys())})"

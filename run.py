@@ -10,26 +10,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from audit_log import append_event
 from master import build_graph
-from config.settings import LOG_LEVEL
+from logging_setup import setup_global_logging
 from utils import validate_config
 
 
-def setup_logging():
-    """配置日志"""
-    logging.basicConfig(
-        level=getattr(logging, LOG_LEVEL, logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+
 
 
 def setup_signal_handlers():
     """设置信号处理，支持 Ctrl+C 优雅退出"""
+
     def handler(sig, frame):
-        print("\n\n⚠️  收到中断信号，正在退出...")
-        # 给 asyncio 一个机会清理
-        sys.exit(130)
+        print("\n\n⚠️  收到中断信号，正在停止任务并清理资源...")
+        raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, handler)
     signal.signal(signal.SIGTERM, handler)
@@ -37,14 +32,22 @@ def setup_signal_handlers():
 
 async def run(task: str):
     """运行 Master 编排"""
-    setup_logging()
+    setup_global_logging()
     logger = logging.getLogger("run")
 
     # 启动前校验配置
     validate_config()
 
     logger.info("启动多Agent编排系统")
-    logger.info(f"任务: {task}")
+    logger.info("任务: %s", task)
+    append_event(
+        event_type="runtime",
+        action="run_start",
+        actor="cli",
+        target="master",
+        result="ok",
+        detail=f"task={task[:120]}",
+    )
     print("=" * 60)
     print(f"🚀 任务: {task}")
     print("=" * 60)
@@ -63,11 +66,27 @@ async def run(task: str):
         print("=" * 60)
         print(f"\n⏱️  总耗时: {elapsed:.1f}s")
 
+        append_event(
+            event_type="runtime",
+            action="run_finish",
+            actor="cli",
+            target="master",
+            result="ok",
+            detail=f"elapsed={elapsed:.2f}s",
+        )
         return result
 
     except Exception as e:
         elapsed = time.time() - start_time
-        logger.error(f"编排执行失败 ({elapsed:.1f}s): {e}")
+        logger.error("编排执行失败 (%.1fs): %s", elapsed, e)
+        append_event(
+            event_type="runtime",
+            action="run_finish",
+            actor="cli",
+            target="master",
+            result="error",
+            detail=f"elapsed={elapsed:.2f}s,error={e}",
+        )
         print(f"\n❌ 执行失败: {e}")
         sys.exit(1)
 
@@ -81,7 +100,11 @@ def main():
 
     setup_signal_handlers()
     task = " ".join(sys.argv[1:])
-    asyncio.run(run(task))
+    try:
+        asyncio.run(run(task))
+    except KeyboardInterrupt:
+        print("\n🛑 已中断执行")
+        sys.exit(130)
 
 
 if __name__ == "__main__":

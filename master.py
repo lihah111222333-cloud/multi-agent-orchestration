@@ -1,32 +1,52 @@
 """Master 编排器 — LangGraph StateGraph
 
-编排流程:
-1. dispatcher: 接收任务，分配子任务到 3 个 Gateway
-2. gateway_1/2/3: 并行执行，每个 Gateway 调用其管理的 Agent
-3. aggregator: 汇总所有 Gateway 的结果，生成最终输出
+流程: dispatcher → [dynamic gateways] → aggregator
+- 运行拓扑来自任务启动时的快照
+- Master 可自动提出新拓扑草案（需人工审批后生效）
 """
 
+from __future__ import annotations
+
+import asyncio
+import json
 import logging
 import operator
+import os
+import re
 import traceback
-from typing import Annotated, TypedDict
+from typing import Annotated, Any, Callable, Coroutine, Optional, TypedDict
 
-from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
 
-from gateways.gateway import Gateway
+from audit_log import append_event
 from config.settings import (
-    GATEWAY_AGENT_MAP, LLM_MODEL, LLM_TEMPERATURE,
-    OPENAI_BASE_URL, LLM_TIMEOUT, LLM_MAX_RETRIES,
+    LLM_MAX_RETRIES,
+    LLM_MODEL,
+    LLM_TEMPERATURE,
+    LLM_TIMEOUT,
+    OPENAI_BASE_URL,
+    load_architecture_snapshot,
 )
-from utils import extract_text
+from gateways.gateway import Gateway
+from topology_approval import create_approval
+from utils import as_int_env, build_chat_openai, extract_text
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["MasterState", "build_graph", "aggregator"]
 
-def _create_llm() -> ChatOpenAI:
-    """创建带重试和超时的 LLM 实例"""
-    return ChatOpenAI(
+
+TOPOLOGY_PROPOSAL_ENABLED = os.getenv("TOPOLOGY_PROPOSAL_ENABLED", "1") == "1"
+GATEWAY_MIN_QUALITY_SCORE = as_int_env("GATEWAY_MIN_QUALITY_SCORE", 25, min_value=0)
+PROMPT_TASK_MAX_CHARS = as_int_env("PROMPT_TASK_MAX_CHARS", 2000, min_value=200)
+PROMPT_ARCH_MAX_CHARS = as_int_env("PROMPT_ARCH_MAX_CHARS", 6000, min_value=500)
+AGGREGATOR_MAX_WORDS = as_int_env("AGGREGATOR_MAX_WORDS", 800, min_value=200)
+_ASSIGNMENT_LIST_PREFIX_RE = re.compile(r"^\s*(?:[-*+]|(?:\d+)[\.)])\s*")
+_SUMMARY_UNIT_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]")
+
+
+def _create_llm() -> Any:
+    return build_chat_openai(
         model=LLM_MODEL,
         temperature=LLM_TEMPERATURE,
         base_url=OPENAI_BASE_URL,
@@ -35,187 +55,678 @@ def _create_llm() -> ChatOpenAI:
     )
 
 
-# ========================
-# 状态定义
-# ========================
 class MasterState(TypedDict):
-    """Master 编排的全局状态"""
-    task: str                                        # 原始任务
-    gateway_assignments: dict                        # 各 Gateway 的子任务
-    results: Annotated[list, operator.add]            # 聚合结果（自动合并）
-    final_answer: str                                # 最终输出
+    task: str
+    gateway_assignments: dict
+    results: Annotated[list, operator.add]
+    final_answer: str
+    dispatch_degraded: bool
+    topology_hash: str
 
 
-# ========================
-# 初始化 3 个 Gateway
-# ========================
-def _create_gateways() -> dict[str, Gateway]:
-    """根据配置创建 Gateway 实例"""
+def _create_gateways(gateway_agent_map: dict, gateway_cls: type = Gateway) -> dict:
     gateways = {}
-    for gw_name, gw_config in GATEWAY_AGENT_MAP.items():
-        gateways[gw_name] = Gateway(
+    for gw_name, gw_config in gateway_agent_map.items():
+        gateways[gw_name] = gateway_cls(
             name=gw_name,
             display_name=gw_config["name"],
             agent_configs=gw_config["agents"],
+            agent_meta=gw_config.get("agent_meta", {}),
         )
     return gateways
 
 
-GATEWAYS = _create_gateways()
+def _gateway_prompt_brief(gw_id: str, gw: dict) -> str:
+    desc = gw.get("description", "")
+    caps = [str(item) for item in gw.get("capabilities", []) if str(item).strip()]
+    cap_text = ", ".join(caps[:8]) if caps else "未声明"
+
+    agents = gw.get("agent_meta", {})
+    dependency_rows = []
+    for agent_id, meta in agents.items():
+        deps = [str(item).strip() for item in meta.get("depends_on", []) if str(item).strip()]
+        if deps:
+            dependency_rows.append(f"{agent_id}->{'+'.join(deps)}")
+    dep_text = "; ".join(dependency_rows[:6]) if dependency_rows else "无"
+
+    return f"- {gw_id}: {gw['name']} ({desc}) | capabilities={cap_text} | depends={dep_text}"
 
 
-# ========================
-# 节点函数
-# ========================
-async def dispatcher(state: MasterState) -> dict:
-    """Master Dispatcher: 将任务拆解并分配给 3 个 Gateway
+def _trim_task_text(task: str, max_chars: int = PROMPT_TASK_MAX_CHARS) -> str:
+    text = str(task or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n...(任务文本已截断)"
 
-    使用 LLM 智能拆分任务为 3 个子任务，分别对应：
-    - Gateway 1: 数据分析相关
-    - Gateway 2: 内容生成相关
-    - Gateway 3: 系统运维相关
 
-    如果 LLM 返回格式不规范，则将原始任务分配给所有 Gateway（降级策略）。
-    """
-    task = state["task"]
-    logger.info(f"[Master] 收到任务: {task}")
+def _build_dispatcher_prompt(task: str, gateway_agent_map: dict) -> str:
+    lines = [f"任务: {_trim_task_text(task)}", ""]
+    lines.append("可用网关:")
+
+    for gw_id, gw in gateway_agent_map.items():
+        lines.append(_gateway_prompt_brief(gw_id, gw))
+
+    return "\n".join(lines)
+
+
+def _build_dispatcher_messages(task: str, gateway_agent_map: dict) -> list[Any]:
+    system_text = (
+        "你是任务分配器。"
+        "必须将任务拆分给网关，并仅输出多行 `gateway_id|子任务`。"
+        "不要输出解释、代码块或额外标点。"
+        "优先按网关能力拆分，避免重复结论；如有依赖提示，应体现上下游顺序。"
+    )
+    user_text = _build_dispatcher_prompt(task, gateway_agent_map)
+    return [SystemMessage(content=system_text), HumanMessage(content=user_text)]
+
+
+def _trim_architecture_text(current_architecture: dict, max_chars: Optional[int] = None) -> str:
+    limit = PROMPT_ARCH_MAX_CHARS if max_chars is None else int(max_chars)
+    normalized = json.dumps(current_architecture, ensure_ascii=False)
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit] + "\n...(拓扑快照已截断)"
+
+
+def _build_topology_prompt(task: str, current_architecture: dict) -> str:
+    task_text = _trim_task_text(task)
+    architecture_text = _trim_architecture_text(current_architecture)
+
+    return (
+        "任务描述（用户输入）:\n"
+        "<TASK>\n"
+        f"{task_text}\n"
+        "</TASK>\n\n"
+        "当前拓扑快照:\n"
+        "<ARCH>\n"
+        f"{architecture_text}\n"
+        "</ARCH>"
+    )
+
+
+def _build_topology_messages(task: str, current_architecture: dict) -> list[Any]:
+    system_text = (
+        "你是拓扑规划器。请根据任务复杂度给出建议拓扑，仅输出 JSON。"
+        "输出格式必须为 {\"gateways\":[...]}，至少 1 个 gateway，且每个 gateway 至少 1 个 agent。"
+        "gateway/agent id 只能包含小写字母、数字、下划线。"
+        "不要输出解释性文字。"
+    )
+    user_text = _build_topology_prompt(task, current_architecture)
+    return [SystemMessage(content=system_text), HumanMessage(content=user_text)]
+
+
+def _extract_json(text: str) -> Optional[dict]:
+    src = str(text or "")
+
+    for start, ch in enumerate(src):
+        if ch != "{":
+            continue
+
+        stack = ["}"]
+        in_string = False
+        escaped = False
+
+        for idx in range(start + 1, len(src)):
+            current = src[idx]
+
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif current == "\\":
+                    escaped = True
+                elif current == '"':
+                    in_string = False
+                continue
+
+            if current == '"':
+                in_string = True
+                continue
+
+            if current == "{":
+                stack.append("}")
+                continue
+
+            if current == "[":
+                stack.append("]")
+                continue
+
+            if current not in "}]":
+                continue
+
+            expected = stack.pop() if stack else None
+            if current != expected:
+                break
+
+            if stack:
+                continue
+
+            candidate = src[start : idx + 1]
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                break
+
+            if isinstance(parsed, dict):
+                return parsed
+            break
+
+    return None
+
+
+def _aggregator_output_limit() -> int:
+    return max(1, min(int(AGGREGATOR_MAX_WORDS), 800))
+
+
+def _truncate_summary_text(text: str, max_units: int = AGGREGATOR_MAX_WORDS) -> str:
+    normalized = str(text or "").strip()
+    if not normalized or max_units <= 0:
+        return ""
+
+    matches = list(_SUMMARY_UNIT_RE.finditer(normalized))
+    if len(matches) <= max_units:
+        return normalized
+
+    cutoff = matches[max_units - 1].end()
+    clipped = normalized[:cutoff].rstrip()
+    return f"{clipped}\n...(内容已截断，已限制在 {max_units} 字/词以内)"
+
+
+def _sanitize_topology(raw: dict) -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+
+    gateways = raw.get("gateways")
+    if not isinstance(gateways, list) or not gateways:
+        return None
+
+    result_gateways = []
+    gw_ids = set()
+
+    for idx, gw in enumerate(gateways, start=1):
+        if not isinstance(gw, dict):
+            continue
+
+        gw_id = str(gw.get("id", "")).strip() or f"gateway_{idx}"
+        if gw_id in gw_ids:
+            continue
+        gw_ids.add(gw_id)
+
+        gw_name = str(gw.get("name", "")).strip() or gw_id
+        gw_desc = str(gw.get("description", "")).strip()
+        gw_caps = gw.get("capabilities", []) if isinstance(gw.get("capabilities"), list) else []
+
+        agents = gw.get("agents")
+        if not isinstance(agents, list) or not agents:
+            continue
+
+        normalized_agents = []
+        agent_ids = set()
+        for j, agent in enumerate(agents, start=1):
+            if not isinstance(agent, dict):
+                continue
+            agent_id = str(agent.get("id", "")).strip() or f"{gw_id}_agent_{j}"
+            if agent_id in agent_ids:
+                continue
+            agent_ids.add(agent_id)
+
+            agent_name = str(agent.get("name", "")).strip() or agent_id
+            capabilities = agent.get("capabilities", []) if isinstance(agent.get("capabilities"), list) else []
+            depends_on = agent.get("depends_on", []) if isinstance(agent.get("depends_on"), list) else []
+            normalized_agents.append(
+                {
+                    "id": agent_id,
+                    "name": agent_name,
+                    "capabilities": [str(item) for item in capabilities if str(item).strip()],
+                    "depends_on": [str(item) for item in depends_on if str(item).strip()],
+                }
+            )
+
+        if not normalized_agents:
+            continue
+
+        result_gateways.append(
+            {
+                "id": gw_id,
+                "name": gw_name,
+                "description": gw_desc,
+                "capabilities": [str(item) for item in gw_caps if str(item).strip()],
+                "agents": normalized_agents,
+            }
+        )
+
+    if not result_gateways:
+        return None
+    return {"gateways": result_gateways}
+
+
+async def _maybe_submit_topology_proposal(
+    task: str,
+    current_architecture: dict,
+    llm_factory: Callable[[], Any],
+) -> None:
+    if not TOPOLOGY_PROPOSAL_ENABLED:
+        return
 
     try:
-        llm = _create_llm()
-        prompt = f"""你是一个任务分配器。将以下任务拆分为 3 个子任务：
-
-任务: {task}
-
-请分别为以下 3 个团队生成子任务：
-1. 数据分析团队（数据采集、清洗、分析、可视化）
-2. 内容生成团队（文本生成、翻译、代码生成、报告）
-3. 系统运维团队（监控、日志、部署、告警）
-
-格式（严格用 | 分隔，不要有编号，只输出一行）:
-数据分析子任务 | 内容生成子任务 | 系统运维子任务"""
-
-        response = await llm.ainvoke(prompt)
+        llm = llm_factory()
+        messages = _build_topology_messages(task, current_architecture)
+        response = await llm.ainvoke(messages)
         text = extract_text(response.content)
-        parts = text.split("|")
 
-        if len(parts) >= 3:
-            assignments = {
-                "gateway_1": parts[0].strip(),
-                "gateway_2": parts[1].strip(),
-                "gateway_3": parts[2].strip(),
-            }
-        else:
-            # 降级：LLM 返回格式不符，将原始任务发给所有 Gateway
-            logger.warning(
-                f"[Master] LLM 返回格式不规范（期望 3 段，实际 {len(parts)} 段），"
-                f"降级为全量分配。原始响应: {text[:200]}"
+        raw = _extract_json(text)
+        proposed = _sanitize_topology(raw) if raw else None
+        if not proposed:
+            logger.warning("[Master] 拓扑草案解析失败，跳过审批提案")
+            append_event(
+                event_type="topology_proposal",
+                action="submit",
+                result="parse_failed",
+                actor="master",
+                target="architecture",
+                detail=f"task={task[:120]}",
             )
-            assignments = {
-                "gateway_1": task,
-                "gateway_2": task,
-                "gateway_3": task,
-            }
+            return
 
+        res = create_approval(
+            proposed_architecture=proposed,
+            requested_by="master",
+            reason=f"auto proposal for task: {task[:120]}",
+        )
+        if not res.get("ok"):
+            logger.info("[Master] 拓扑提案跳过: %s", res.get('message', res.get('reason')))
+            append_event(
+                event_type="topology_proposal",
+                action="submit",
+                result="skipped",
+                actor="master",
+                target="architecture",
+                detail=res.get("message", res.get("reason", "")),
+            )
+            return
+
+        req = res.get("request", {})
+        deduped = res.get("deduped", False)
+        tag = "复用" if deduped else "新建"
+        logger.info("[Master] 拓扑审批单%s: id=%s", tag, req.get('id', '-'))
+        append_event(
+            event_type="topology_proposal",
+            action="submit",
+            result="deduped" if deduped else "pending",
+            actor="master",
+            target=req.get("id", ""),
+            detail=f"task={task[:120]}",
+        )
     except Exception as e:
-        # 降级：LLM 调用失败，将原始任务发给所有 Gateway
-        logger.error(f"[Master] Dispatcher LLM 调用失败: {e}")
+        logger.warning("[Master] 生成拓扑审批单失败: %s", e)
         logger.debug(traceback.format_exc())
-        assignments = {
-            "gateway_1": task,
-            "gateway_2": task,
-            "gateway_3": task,
+        append_event(
+            event_type="topology_proposal",
+            action="submit",
+            result="error",
+            actor="master",
+            target="architecture",
+            detail=str(e),
+        )
+
+
+def _degraded_task(task: str) -> str:
+    return (
+        f"{task}\n\n"
+        "[降级模式] Dispatcher 失败，请尽量给出互补信息并避免重复结论。"
+    )
+
+
+def _fallback_assignments(task: str, gateways: dict) -> dict:
+    return {gw_id: _degraded_task(task) for gw_id in gateways.keys()}
+
+
+def _spawn_background_task(
+    coro: Coroutine[Any, Any, None],
+    label: str,
+    task_registry: Optional[set[asyncio.Task]] = None,
+) -> None:
+    task = asyncio.create_task(coro)
+
+    if task_registry is not None:
+        task_registry.add(task)
+
+    def _on_done(done: asyncio.Task) -> None:
+        if task_registry is not None:
+            task_registry.discard(done)
+        try:
+            done.result()
+        except Exception as e:
+            logger.warning("[Master] 后台任务失败 (%s): %s", label, e)
+
+    task.add_done_callback(_on_done)
+
+
+def _normalize_assignment_line(line: str) -> str:
+    text = line.strip()
+    if not text:
+        return ""
+
+    if text.startswith("```"):
+        return ""
+
+    text = _ASSIGNMENT_LIST_PREFIX_RE.sub("", text).strip()
+    if text.startswith(">"):
+        text = text[1:].strip()
+        text = _ASSIGNMENT_LIST_PREFIX_RE.sub("", text).strip()
+
+    if text.startswith("`") and text.endswith("`") and len(text) >= 2:
+        text = text[1:-1].strip()
+
+    return text
+
+
+def _parse_assignments(text: str, gateways: dict) -> dict:
+    assignments = {}
+    for raw_line in text.splitlines():
+        line = _normalize_assignment_line(raw_line)
+        if not line or "|" not in line:
+            continue
+
+        gw_id, sub_task = line.split("|", 1)
+        gw_id = gw_id.strip().strip("`")
+        sub_task = sub_task.strip().strip("`")
+
+        if gw_id.endswith(":"):
+            gw_id = gw_id[:-1].strip()
+
+        if gw_id in gateways and sub_task:
+            assignments[gw_id] = sub_task
+    return assignments
+
+
+def _score_output_quality(text: str) -> int:
+    value = str(text or "").strip()
+    if not value:
+        return 0
+
+    score = min(60, len(value) // 20)
+
+    lines = [line for line in value.splitlines() if line.strip()]
+    score += min(20, len(lines) * 2)
+
+    lower = value.lower()
+    for token in ("超时", "失败", "error", "exception", "无法", "unknown"):
+        if token in lower:
+            score -= 20
+            break
+
+    tokens = [item.group(0).lower() for item in _SUMMARY_UNIT_RE.finditer(value)]
+    unique_tokens = set(tokens)
+
+    if len(unique_tokens) >= 20:
+        score += 10
+
+    if len(tokens) >= 20:
+        unique_token_ratio = len(unique_tokens) / len(tokens)
+        if unique_token_ratio < 0.30:
+            score -= 20
+        elif unique_token_ratio < 0.45:
+            score -= 10
+
+    normalized_lines = [" ".join(line.lower().split()) for line in lines]
+    if len(normalized_lines) >= 4:
+        unique_line_ratio = len(set(normalized_lines)) / len(normalized_lines)
+        if unique_line_ratio < 0.50:
+            score -= 20
+        elif unique_line_ratio < 0.70:
+            score -= 10
+
+    return max(0, min(score, 100))
+
+
+def _make_dispatcher(
+    gateway_agent_map: dict,
+    gateways: dict,
+    current_architecture: dict,
+    llm_factory: Callable[[], Any],
+    topology_hash: str,
+    task_registry: Optional[set[asyncio.Task]] = None,
+):
+    async def dispatcher(state: MasterState) -> dict:
+        task = state["task"]
+        logger.info("[Master] 收到任务: %s", task)
+
+        if TOPOLOGY_PROPOSAL_ENABLED:
+            _spawn_background_task(
+                _maybe_submit_topology_proposal(task, current_architecture, llm_factory),
+                label="topology_proposal",
+                task_registry=task_registry,
+            )
+
+        dispatch_degraded = False
+        try:
+            llm = llm_factory()
+            messages = _build_dispatcher_messages(task, gateway_agent_map)
+            response = await llm.ainvoke(messages)
+            text = extract_text(response.content)
+            assignments = _parse_assignments(text, gateways)
+
+            missing = [gw_id for gw_id in gateways if gw_id not in assignments]
+            if missing:
+                logger.warning("[Master] 分配缺失 %s，降级回退", missing)
+                for gw_id in missing:
+                    assignments[gw_id] = _degraded_task(task)
+                dispatch_degraded = True
+
+        except Exception as e:
+            logger.error("[Master] Dispatcher 调用失败: %s", e)
+            logger.debug(traceback.format_exc())
+            assignments = _fallback_assignments(task, gateways)
+            dispatch_degraded = True
+
+        logger.info("[Master] 分配完成: %s", assignments)
+        return {
+            "gateway_assignments": assignments,
+            "dispatch_degraded": dispatch_degraded,
+            "topology_hash": topology_hash,
         }
 
-    logger.info(f"[Master] 任务分配完成: {assignments}")
-    return {"gateway_assignments": assignments}
+    return dispatcher
 
 
-async def gateway_1_node(state: MasterState) -> dict:
-    """Gateway 1 节点: 数据分析"""
-    task = state["gateway_assignments"]["gateway_1"]
-    result = await GATEWAYS["gateway_1"].process(task)
-    return {"results": [{"gateway": "gateway_1", "name": "数据分析", "output": result}]}
+def _make_gateway_node(gw_id: str, gateway_agent_map: dict, gateways: dict):
+    async def _gateway_node(state: MasterState) -> dict:
+        sub_task = state["gateway_assignments"].get(gw_id, state["task"])
+        gateway_result = await gateways[gw_id].process(sub_task)
+
+        success = bool(gateway_result.get("success", False))
+        output = str(gateway_result.get("output", ""))
+        error = str(gateway_result.get("error", ""))
+        reason = str(gateway_result.get("reason", "unknown"))
+        attempts = int(gateway_result.get("attempts", 1))
+
+        quality_score = _score_output_quality(output)
+
+        if not success:
+            append_event(
+                event_type="gateway",
+                action="process",
+                result="error",
+                actor=gw_id,
+                target="task",
+                detail=f"reason={reason}, attempts={attempts}, error={error[:120]}",
+            )
+
+        return {
+            "results": [
+                {
+                    "gateway": gw_id,
+                    "name": gateway_agent_map[gw_id]["name"],
+                    "success": success,
+                    "output": output,
+                    "error": error,
+                    "reason": reason,
+                    "attempts": attempts,
+                    "quality_score": quality_score,
+                    "dispatch_degraded": bool(state.get("dispatch_degraded", False)),
+                }
+            ]
+        }
+
+    return _gateway_node
 
 
-async def gateway_2_node(state: MasterState) -> dict:
-    """Gateway 2 节点: 内容生成"""
-    task = state["gateway_assignments"]["gateway_2"]
-    result = await GATEWAYS["gateway_2"].process(task)
-    return {"results": [{"gateway": "gateway_2", "name": "内容生成", "output": result}]}
+def _dedupe_success_results(rows: list[dict]) -> list[dict]:
+    seen = set()
+    deduped = []
+    for row in rows:
+        normalized = " ".join(str(row.get("output", "")).split())
+        if not normalized:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(row)
+    return deduped
 
 
-async def gateway_3_node(state: MasterState) -> dict:
-    """Gateway 3 节点: 系统运维"""
-    task = state["gateway_assignments"]["gateway_3"]
-    result = await GATEWAYS["gateway_3"].process(task)
-    return {"results": [{"gateway": "gateway_3", "name": "系统运维", "output": result}]}
+def _make_aggregator(llm_factory: Callable[[], Any]):
+    async def aggregator(state: MasterState) -> dict:
+        logger.info("[Master] 开始聚合结果")
+
+        rows = list(state.get("results", []))
+        success_rows = [row for row in rows if row.get("success")]
+        failed_rows = [row for row in rows if not row.get("success")]
+
+        quality_filtered = [row for row in success_rows if int(row.get("quality_score", 0)) >= GATEWAY_MIN_QUALITY_SCORE]
+        selected_success_rows = quality_filtered if quality_filtered else success_rows
+        unique_success_rows = _dedupe_success_results(selected_success_rows)
+
+        if not unique_success_rows:
+            failure_text = "\n".join(
+                f"- {row.get('name', row.get('gateway', 'unknown'))}: "
+                f"{row.get('reason', 'error')} / {row.get('error', '')}"
+                for row in failed_rows
+            )
+            final = "# 综合报告（所有网关执行失败）\n\n" + (failure_text or "无可用结果")
+            logger.warning("[Master] 无成功网关结果，返回失败汇总")
+            return {"final_answer": final}
+
+        success_text = "\n\n".join(
+            f"### {r['name']} (via {r['gateway']}, quality={r.get('quality_score', 0)})\n{r['output']}"
+            for r in unique_success_rows
+        )
+        failure_text = "\n".join(
+            f"- {row.get('name', row.get('gateway', 'unknown'))}: {row.get('reason', 'error')}"
+            for row in failed_rows
+        )
+
+        degraded_note = ""
+        if state.get("dispatch_degraded"):
+            degraded_note = "\n\n备注：本次 Dispatcher 进入降级模式，分配质量可能下降。"
+
+        topology_note = ""
+        if state.get("topology_hash"):
+            topology_note = f"\n\n拓扑快照：`{state.get('topology_hash')}`"
+
+        output_limit = _aggregator_output_limit()
+
+        try:
+            llm = llm_factory()
+            system_text = (
+                "你是聚合器。请将多个团队结果合并为结构化结论。"
+                "输出要简洁，避免重复，明确风险与建议。"
+                "最终输出长度必须 <=800字。"
+                f"若可控，请进一步压缩到 {output_limit} 字以内。"
+            )
+            user_text = (
+                "请将以下多个团队的执行结果整合为一份简洁的综合报告：\n\n"
+                f"{success_text}\n\n"
+                "要求：\n"
+                "1. 提炼关键信息\n"
+                "2. 指出各团队的核心发现\n"
+                "3. 给出综合建议\n"
+                "4. 避免重复结论，优先输出互补信息\n"
+                f"5. 总字数必须 <=800字（硬性约束），并尽量控制在 {output_limit} 字以内"
+            )
+            if failure_text:
+                user_text += f"\n\n以下网关失败，仅供你在结论里说明风险：\n{failure_text}"
+
+            response = await llm.ainvoke([("system", system_text), ("human", user_text)])
+            summary = extract_text(response.content)
+        except Exception as e:
+            logger.error("[Master] Aggregator 调用失败: %s", e)
+            logger.debug(traceback.format_exc())
+            summary = "LLM 汇总失败，已回退为原始结果拼接。"
+
+        summary = _truncate_summary_text(summary, output_limit)
+
+        details = success_text
+        if failure_text:
+            details += f"\n\n## 失败网关\n{failure_text}"
+
+        final = f"# 综合报告\n\n{summary}{degraded_note}{topology_note}\n\n---\n\n## 详细结果\n\n{details}"
+
+        logger.info("[Master] 聚合完成")
+        return {"final_answer": final}
+
+    return aggregator
 
 
 async def aggregator(state: MasterState) -> dict:
-    """聚合器: 汇总所有 Gateway 的结果，生成最终报告"""
-    logger.info("[Master] 开始聚合结果")
+    """Module-level convenience wrapper (used by tests / direct import)."""
+    return await _make_aggregator(_create_llm)(state)
 
-    results_text = "\n\n".join(
-        f"### {r['name']} (via {r['gateway']})\n{r['output']}"
-        for r in state["results"]
+
+def build_graph(
+    llm_factory: Optional[Callable[[], Any]] = None,
+    gateway_cls: type = Gateway,
+):
+    """构建并编译 Master 编排图（完全动态）"""
+
+    from langgraph.graph import END, StateGraph
+
+    snapshot = load_architecture_snapshot()
+    gateway_agent_map = snapshot["gateway_map"]
+    current_architecture = snapshot["raw"]
+    topology_hash = snapshot["hash"]
+
+    gateways = _create_gateways(gateway_agent_map, gateway_cls=gateway_cls)
+    llm_provider = llm_factory or _create_llm
+    background_tasks: set[asyncio.Task] = set()
+
+    if not gateways:
+        raise RuntimeError("没有可用 Gateway，请先提供可审批生效的拓扑")
+
+    append_event(
+        event_type="topology",
+        action="snapshot",
+        result="ok",
+        actor="master",
+        target=topology_hash,
+        detail="build_graph",
     )
 
-    try:
-        llm = _create_llm()
-        prompt = f"""请将以下多个团队的执行结果整合为一份简洁的综合报告：
-
-{results_text}
-
-要求：
-1. 提炼关键信息
-2. 指出各团队的核心发现
-3. 给出综合建议"""
-
-        response = await llm.ainvoke(prompt)
-        summary = extract_text(response.content)
-        final = f"# 综合报告\n\n{summary}\n\n---\n\n## 详细结果\n\n{results_text}"
-
-    except Exception as e:
-        # 降级：LLM 汇总失败，直接返回原始结果
-        logger.error(f"[Master] Aggregator LLM 调用失败: {e}")
-        logger.debug(traceback.format_exc())
-        final = f"# 综合报告（LLM 汇总失败，展示原始结果）\n\n{results_text}"
-
-    logger.info("[Master] 聚合完成")
-    return {"final_answer": final}
-
-
-# ========================
-# 构建 LangGraph
-# ========================
-def build_graph() -> StateGraph:
-    """构建并编译 Master 编排图
-
-    流程: dispatcher → [gateway_1, gateway_2, gateway_3] (并行) → aggregator → END
-    """
     graph = StateGraph(MasterState)
+    graph.add_node(
+        "dispatcher",
+        _make_dispatcher(
+            gateway_agent_map,
+            gateways,
+            current_architecture,
+            llm_provider,
+            topology_hash,
+            task_registry=background_tasks,
+        ),
+    )
+    graph.add_node("aggregator", _make_aggregator(llm_provider))
 
-    # 添加节点
-    graph.add_node("dispatcher", dispatcher)
-    graph.add_node("gateway_1", gateway_1_node)
-    graph.add_node("gateway_2", gateway_2_node)
-    graph.add_node("gateway_3", gateway_3_node)
-    graph.add_node("aggregator", aggregator)
+    gateway_nodes = []
+    for gw_id in gateways.keys():
+        node_name = f"gateway::{gw_id}"
+        graph.add_node(node_name, _make_gateway_node(gw_id, gateway_agent_map, gateways))
+        gateway_nodes.append(node_name)
 
-    # 入口
     graph.set_entry_point("dispatcher")
 
-    # dispatcher 扇出到 3 个 Gateway（并行执行）
-    graph.add_edge("dispatcher", "gateway_1")
-    graph.add_edge("dispatcher", "gateway_2")
-    graph.add_edge("dispatcher", "gateway_3")
+    for node_name in gateway_nodes:
+        graph.add_edge("dispatcher", node_name)
+        graph.add_edge(node_name, "aggregator")
 
-    # 3 个 Gateway 汇聚到 aggregator
-    graph.add_edge("gateway_1", "aggregator")
-    graph.add_edge("gateway_2", "aggregator")
-    graph.add_edge("gateway_3", "aggregator")
-
-    # 终点
     graph.add_edge("aggregator", END)
-
     return graph.compile()

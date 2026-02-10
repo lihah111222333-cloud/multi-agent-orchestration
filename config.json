@@ -1,0 +1,94 @@
+{
+  "gateways": [
+    {
+      "id": "gateway_1",
+      "name": "数据分析网关",
+      "description": "数据采集、清洗、分析、可视化",
+      "capabilities": ["data_pipeline", "analytics"],
+      "agents": [
+        {
+          "id": "agent_01",
+          "name": "数据采集 Agent",
+          "capabilities": ["collect", "crawl"]
+        },
+        {
+          "id": "agent_02",
+          "name": "数据清洗 Agent",
+          "capabilities": ["clean", "normalize"],
+          "depends_on": ["agent_01"]
+        },
+        {
+          "id": "agent_03",
+          "name": "数据分析 Agent",
+          "capabilities": ["analysis", "insight"],
+          "depends_on": ["agent_02"]
+        },
+        {
+          "id": "agent_04",
+          "name": "数据可视化 Agent",
+          "capabilities": ["visualization", "report"],
+          "depends_on": ["agent_03"]
+        }
+      ]
+    },
+    {
+      "id": "gateway_2",
+      "name": "内容生成网关",
+      "description": "文本生成、翻译、代码生成、报告",
+      "capabilities": ["content", "translation", "coding"],
+      "agents": [
+        {
+          "id": "agent_05",
+          "name": "文本生成 Agent",
+          "capabilities": ["writing", "summarization"]
+        },
+        {
+          "id": "agent_06",
+          "name": "翻译 Agent",
+          "capabilities": ["translation"]
+        },
+        {
+          "id": "agent_07",
+          "name": "代码生成 Agent",
+          "capabilities": ["code_generation", "code_review"]
+        },
+        {
+          "id": "agent_08",
+          "name": "报告生成 Agent",
+          "capabilities": ["reporting"],
+          "depends_on": ["agent_05", "agent_06"]
+        }
+      ]
+    },
+    {
+      "id": "gateway_3",
+      "name": "系统运维网关",
+      "description": "监控、日志、部署、告警",
+      "capabilities": ["ops", "monitoring"],
+      "agents": [
+        {
+          "id": "agent_09",
+          "name": "系统监控 Agent",
+          "capabilities": ["monitor", "metrics"]
+        },
+        {
+          "id": "agent_10",
+          "name": "日志分析 Agent",
+          "capabilities": ["log_analysis"],
+          "depends_on": ["agent_09"]
+        },
+        {
+          "id": "agent_11",
+          "name": "部署管理 Agent",
+          "capabilities": ["deploy", "release"]
+        },
+        {
+          "id": "agent_12",
+          "name": "告警管理 Agent",
+          "capabilities": ["alerting"],
+          "depends_on": ["agent_09", "agent_10"]
+        }
+      ]
+    }
+  ]
+}

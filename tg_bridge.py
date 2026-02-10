@@ -533,6 +533,8 @@ async def _bot_main(stop_event: threading.Event) -> None:
                     aid = str(s.get("agent_id", "")).strip()
                     if not sid or sid in seen_session_ids:
                         continue
+                    if aid and aid in seen_agent_ids:
+                        continue  # same agent in another window
                     seen_session_ids.add(sid)
                     if aid:
                         seen_agent_ids.add(aid)

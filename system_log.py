@@ -15,7 +15,7 @@ __all__ = ["append_log", "query_logs", "list_filter_values"]
 
 def _format_ts(value: Any) -> str:
     if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        return value.astimezone().strftime("%Y-%m-%d %H:%M:%S")
     return str(value or "")
 
 

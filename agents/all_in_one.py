@@ -94,16 +94,12 @@ def iterm(
           - "clean"      清理已断开的死会话
           - "unregister" 注销指定 agent（需要 agent_id）
           - "clear_all"  清空所有会话记录
-          - "launch"     一键启动新子 Agent（自动 cd + codex）
         text: 发送的输入内容（send 时必填）
         agent_id: 目标 agent ID（send/read/unregister 时可指定）
-        agent_name: Agent 名称（launch 时用于 tab 标题）
         all_agents: 是否对所有 agent 操作（send/read 时）
         wait_sec: 发送后等待秒数（send 时）
         read_lines: 读取行数（send/read 时）
-        launch_cmd: 启动命令（launch 时，默认 "codex"）
-        work_dir: 工作目录（launch 时，默认项目根目录）
-        task: 启动后发给 Agent 的任务（launch 时）
+        launch_cmd/work_dir/task: 保留入参，仅兼容调用方；请改用 command_card `launch.wjboot.workspace`
     """
     action = action.strip().lower()
 
@@ -149,65 +145,17 @@ def iterm(
 
     # ---- launch ----
     if action == "launch":
-        import subprocess, time as _t
-        from pathlib import Path as _P
-        target_dir = work_dir.strip() or "~"
-        name = agent_name.strip() or f"SubAgent-{int(_t.time()) % 10000}"
-        cmd = launch_cmd.strip() or "codex"
-        agent_id_gen = f"agent_{int(_t.time()) % 100000}"
-
-        # AppleScript: 创建 tab → cd → 启动命令 → 返回 session 的 tty（唯一标识）
-        applescript = f'''
-        tell application "iTerm"
-            tell current window
-                set newTab to (create tab with default profile)
-                tell current session of newTab
-                    set name to "{name}"
-                    write text "cd {target_dir}"
-                    delay 0.3
-                    write text "{cmd}"
-                    delay 2
-                    set name to "{name}"
-                    return unique id
-                end tell
-            end tell
-        end tell
-        '''
-        try:
-            proc = subprocess.run(["osascript", "-e", applescript],
-                           capture_output=True, text=True, timeout=15)
-            session_id = proc.stdout.strip() or f"tab_{name}"
-        except Exception as exc:
-            return json.dumps({"ok": False, "error": f"启动失败: {exc}"}, ensure_ascii=False)
-
-        # 注册到 iterm_launch_state.json
-        sp = _P(__file__).resolve().parents[1] / "data" / "iterm_launch_state.json"
-        sp.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            st = json.loads(sp.read_text("utf-8")) if sp.exists() else {}
-        except Exception:
-            st = {}
-        new_agent = {
-            "agent_id": agent_id_gen,
-            "agent_name": name,
-            "session_id": session_id,
-            "launch_cmd": cmd,
-            "work_dir": target_dir,
-            "launched_at": datetime.now(timezone.utc).isoformat(),
-        }
-        agents_list = st.get("agents", [])
-        agents_list.append(new_agent)
-        st["agents"] = agents_list
-        st["count"] = len(agents_list)
-        st["session_ids"] = [a["session_id"] for a in agents_list if a.get("session_id")]
-        sp.write_text(json.dumps(st, ensure_ascii=False, indent=2), "utf-8")
-
-        result = {"ok": True, "message": f"已启动 {name}",
-                  "agent_id": agent_id_gen, "agent_name": name,
-                  "session_id": session_id, "work_dir": target_dir}
-        if task.strip():
-            result["task_queued"] = task.strip()
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(
+            {
+                "ok": False,
+                "error_code": "iterm_launch_disabled",
+                "error": (
+                    "iterm(action='launch') 已禁用；"
+                    "请使用 command_card: launch.wjboot.workspace"
+                ),
+            },
+            ensure_ascii=False,
+        )
 
     # ---- clean / unregister / clear_all（会话管理）----
     from pathlib import Path

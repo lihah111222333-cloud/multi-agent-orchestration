@@ -14,7 +14,7 @@ except ImportError:
     pass
 
 from agents.all_in_one import (
-    interaction, task, db, command_card, lock, approval,
+    interaction, task, db, command_card, lock, approval, iterm,
 )
 
 
@@ -123,3 +123,11 @@ class TestCommandCard:
         r2 = json.loads(command_card(action="list_runs"))
         assert r2["ok"] is True
         assert "count" in r2
+
+
+class TestIterm:
+    def test_launch_action_is_disabled(self):
+        r = json.loads(iterm(action="launch"))
+        assert r["ok"] is False
+        assert r["error_code"] == "iterm_launch_disabled"
+        assert "launch.wjboot.workspace" in r["error"]

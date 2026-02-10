@@ -53,7 +53,23 @@ def _load_state(path: Path) -> dict[str, Any]:
 
 def _save_state(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    content = json.dumps(payload, ensure_ascii=False, indent=2)
+    temp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    temp_path.write_text(content, encoding="utf-8")
+    os.replace(temp_path, path)
+
+
+def _default_agent_row(index: int) -> dict[str, Any]:
+    agent_id = f"agent_{index:02d}"
+    agent_name = f"Runtime Agent {index:02d}"
+    return {
+        "index": index,
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "session_label": f"{agent_id} | {agent_name}",
+        "badge": f"A{index:02d}",
+        "session_id": "",
+    }
 
 
 def _build_agent_sessions(state: dict[str, Any]) -> list[AgentSession]:
@@ -454,10 +470,46 @@ def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str,
     if not isinstance(new_state, dict):
         new_state = {}
 
-    agents = new_state.get("agents", [])
-    if not isinstance(agents, list):
-        agents = []
-        new_state["agents"] = agents
+    structure_changed = False
+    raw_agents = new_state.get("agents", [])
+    if not isinstance(raw_agents, list):
+        raw_agents = []
+        structure_changed = True
+
+    normalized_agents: list[dict[str, Any]] = []
+    for index, row in enumerate(raw_agents, start=1):
+        defaults = _default_agent_row(index)
+        current = dict(row) if isinstance(row, dict) else {}
+        if not isinstance(row, dict):
+            structure_changed = True
+
+        for field, default_value in defaults.items():
+            existing = current.get(field)
+            if field == "index":
+                if existing is None:
+                    current[field] = default_value
+                    structure_changed = True
+                continue
+
+            if str(existing or "").strip():
+                continue
+
+            current[field] = default_value
+            structure_changed = True
+
+        current["index"] = index
+        normalized_agents.append(current)
+
+    expected_count = int(new_state.get("count") or new_state.get("tab_count") or 0)
+    if expected_count <= 0:
+        expected_count = len(live_session_ids)
+
+    while len(normalized_agents) < expected_count:
+        normalized_agents.append(_default_agent_row(len(normalized_agents) + 1))
+        structure_changed = True
+
+    agents = normalized_agents
+    new_state["agents"] = agents
 
     live_by_id: dict[str, dict[str, str]] = {
         str(item.get("session_id", "") or "").strip(): item
@@ -590,6 +642,9 @@ def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str,
     expected_tab_count = int(new_state.get("count") or len(agents) or len(resolved_session_ids))
     new_state["tab_count"] = max(len(resolved_session_ids), expected_tab_count)
 
+    if structure_changed:
+        rebound_count += 1
+
     if rebound_count <= 0:
         return {
             "state": state,
@@ -614,6 +669,25 @@ def _has_missing_sessions(rows: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _refresh_state_via_rebind(state_path: Path, state: dict[str, Any]) -> tuple[dict[str, Any], bool, int, str]:
+    try:
+        payload = _rebind_state_sessions(state_path, state)
+    except Exception as e:
+        return state, False, 0, f"state rebind failed: {e}"
+
+    if payload.get("rebound"):
+        rebound_state = payload.get("state")
+        if isinstance(rebound_state, dict):
+            return rebound_state, True, int(payload.get("rebound_count") or 0), ""
+        return state, False, 0, "state rebind failed: invalid rebound state"
+
+    reason = str(payload.get("reason", "") or "").strip()
+    if reason:
+        return state, False, 0, f"state rebind skipped: {reason}"
+
+    return state, False, 0, ""
+
+
 def _run_direct_with_optional_rebind(
     *,
     state_path: Path,
@@ -625,8 +699,54 @@ def _run_direct_with_optional_rebind(
     wait_sec: float,
     read_lines: int,
 ) -> dict[str, Any]:
-    sessions = _build_agent_sessions(state)
-    targets = _resolve_targets(sessions, target_agent_ids, all_agents=all_agents)
+    current_state = state
+    state_rebound = False
+    rebound_count = 0
+    rebind_error = ""
+
+    def _apply_rebind() -> bool:
+        nonlocal current_state, state_rebound, rebound_count, rebind_error
+
+        rebound_state, changed, changed_count, error = _refresh_state_via_rebind(state_path, current_state)
+        if changed:
+            current_state = rebound_state
+            state_rebound = True
+            rebound_count += max(1, int(changed_count or 0))
+            rebind_error = ""
+            return True
+
+        if error and not rebind_error:
+            rebind_error = error
+        return False
+
+    precheck_rebind = False
+    try:
+        initial_sessions = _build_agent_sessions(current_state)
+        initial_targets = _resolve_targets(initial_sessions, target_agent_ids, all_agents=all_agents)
+
+        _, live_session_ids = _list_live_session_ids(str(current_state.get("window_id", "") or ""))
+        live_session_set = {sid for sid in live_session_ids if sid}
+        if live_session_set:
+            target_session_ids = {item.session_id for item in initial_targets if item.session_id}
+            if not target_session_ids.issubset(live_session_set):
+                precheck_rebind = True
+    except Exception:
+        precheck_rebind = True
+
+    if precheck_rebind:
+        _apply_rebind()
+
+    try:
+        sessions = _build_agent_sessions(current_state)
+        targets = _resolve_targets(sessions, target_agent_ids, all_agents=all_agents)
+    except ValueError as e:
+        if _apply_rebind():
+            sessions = _build_agent_sessions(current_state)
+            targets = _resolve_targets(sessions, target_agent_ids, all_agents=all_agents)
+        else:
+            if rebind_error:
+                raise ValueError(f"{e} ({rebind_error})") from e
+            raise
 
     rows = _run_iterm_io(
         targets=targets,
@@ -636,35 +756,19 @@ def _run_direct_with_optional_rebind(
         read_lines=read_lines,
     )
 
-    state_rebound = False
-    rebound_count = 0
-    rebind_error = ""
-
     if _has_missing_sessions(rows):
-        try:
-            rebound_payload = _rebind_state_sessions(state_path, state)
-            if rebound_payload.get("rebound"):
-                rebound_state = rebound_payload.get("state")
-                if isinstance(rebound_state, dict):
-                    rebound_sessions = _build_agent_sessions(rebound_state)
-                    rebound_targets = _resolve_targets(rebound_sessions, target_agent_ids, all_agents=all_agents)
-                    rebound_rows = _run_iterm_io(
-                        targets=rebound_targets,
-                        text=text,
-                        append_enter=append_enter,
-                        wait_sec=wait_sec,
-                        read_lines=read_lines,
-                    )
-                    targets = rebound_targets
-                    rows = rebound_rows
-                    state_rebound = True
-                    rebound_count = int(rebound_payload.get("rebound_count") or 0)
-            else:
-                reason = str(rebound_payload.get("reason", "") or "").strip()
-                if reason:
-                    rebind_error = f"state rebind skipped: {reason}"
-        except Exception as e:
-            rebind_error = f"state rebind failed: {e}"
+        if _apply_rebind():
+            rebound_sessions = _build_agent_sessions(current_state)
+            rebound_targets = _resolve_targets(rebound_sessions, target_agent_ids, all_agents=all_agents)
+            rebound_rows = _run_iterm_io(
+                targets=rebound_targets,
+                text=text,
+                append_enter=append_enter,
+                wait_sec=wait_sec,
+                read_lines=read_lines,
+            )
+            targets = rebound_targets
+            rows = rebound_rows
 
     return {
         "targets": targets,
@@ -679,14 +783,21 @@ def list_iterm_agent_sessions(state_file: str = "") -> dict[str, Any]:
     try:
         state_path = _normalize_state_file(state_file)
         state = _load_state(state_path)
+
+        rebound_state, state_rebound, rebound_count, rebind_error = _refresh_state_via_rebind(state_path, state)
+        if state_rebound:
+            state = rebound_state
+
         sessions = _build_agent_sessions(state)
 
-        return {
+        result = {
             "ok": True,
             "ts": _now_iso(),
             "state_file": str(state_path),
             "tab_count": int(state.get("tab_count") or len(sessions)),
             "window_id": state.get("window_id", ""),
+            "state_rebound": state_rebound,
+            "rebound_count": int(rebound_count or 0),
             "sessions": [
                 {
                     "index": item.index,
@@ -697,6 +808,9 @@ def list_iterm_agent_sessions(state_file: str = "") -> dict[str, Any]:
                 for item in sessions
             ],
         }
+        if rebind_error:
+            result["rebind_error"] = rebind_error
+        return result
     except Exception as e:
         return {
             "ok": False,

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def extract_text(content: Any) -> str:
-    """从 LLM 响应中提取文本（兼容 list / str 格式）。"""
+    """从 LLM 响应中提取文本（支持 list / str 格式）。"""
     if content is None:
         return ""
     if isinstance(content, str):
@@ -83,8 +83,8 @@ def validate_config() -> None:
             "请在 .env 文件中配置或设置环境变量。"
         )
 
-    if not (os.getenv("POSTGRES_CONNECTION_STRING") or os.getenv("DATABASE_URL")):
-        errors.append("POSTGRES_CONNECTION_STRING / DATABASE_URL 未设置。")
+    if not os.getenv("POSTGRES_CONNECTION_STRING"):
+        errors.append("POSTGRES_CONNECTION_STRING 未设置。")
 
     if errors:
         logger.error("=" * 50)

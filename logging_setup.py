@@ -12,11 +12,12 @@ from system_log import append_log
 class PostgresLogHandler(logging.Handler):
     """将系统日志写入 PostgreSQL。"""
 
-    _EXCLUDED_LOGGER_PREFIXES = ("psycopg", "db.postgres", "system_log", "logging_setup")
+    _EXCLUDED_LOGGER_PREFIXES = ("psycopg", "db.postgres", "system_log.")
+    _EXCLUDED_LOGGER_EXACT = frozenset({"system_log", "logging_setup"})
 
     def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover - 通过集成测试覆盖
         # 避免日志落库链路上的 logger 触发递归
-        if record.name.startswith(self._EXCLUDED_LOGGER_PREFIXES):
+        if record.name.startswith(self._EXCLUDED_LOGGER_PREFIXES) or record.name in self._EXCLUDED_LOGGER_EXACT:
             return
 
         try:
@@ -36,9 +37,6 @@ class PostgresLogHandler(logging.Handler):
 def setup_global_logging(default_level: str = "INFO"):
     level_name = os.getenv("LOG_LEVEL", default_level).upper()
     level = getattr(logging, level_name, logging.INFO)
-
-    # 启动即校验 DB 可用，避免运行中才报错
-    ensure_schema()
 
     root = logging.getLogger()
     root.setLevel(level)
@@ -60,8 +58,17 @@ def setup_global_logging(default_level: str = "INFO"):
         for handler in root.handlers:
             handler.setLevel(level)
 
+    # D12: DB 不可用时降级为仅控制台日志，不阻塞启动
     if not has_pg:
-        pg_handler = PostgresLogHandler()
-        pg_handler.setFormatter(formatter)
-        pg_handler.setLevel(level)
-        root.addHandler(pg_handler)
+        try:
+            ensure_schema()
+            pg_handler = PostgresLogHandler()
+            pg_handler.setFormatter(formatter)
+            pg_handler.setLevel(level)
+            root.addHandler(pg_handler)
+        except Exception:
+            import sys
+            print(
+                "[WARNING] PostgreSQL 日志初始化失败，降级为仅控制台日志",
+                file=sys.stderr,
+            )

@@ -55,7 +55,6 @@ CONFIG_SCHEMA = [
             {"key": "TOPOLOGY_PROPOSAL_ENABLED", "label": "自动拓扑提案", "type": "select",
              "options": ["1", "0"], "desc": "是否启用 Master 自动提出拓扑变更"},
             {"key": "TOPOLOGY_APPROVAL_TTL_SEC", "label": "审批过期(秒)", "type": "number", "desc": "审批单超时自动过期"},
-            {"key": "DASHBOARD_AUTO_REFRESH_SEC", "label": "面板刷新间隔(秒)", "type": "number", "desc": "兼容保留：轮询周期"},
             {"key": "DASHBOARD_SSE_SYNC_SEC", "label": "实时同步间隔(秒)", "type": "number", "desc": "SSE 心跳同步周期"},
             {"key": "AUDIT_LOG_LIMIT", "label": "审计日志条数", "type": "number", "desc": "面板默认加载条数"},
             {"key": "SYSTEM_LOG_LIMIT", "label": "系统日志条数", "type": "number", "desc": "面板默认加载条数"},
@@ -82,7 +81,6 @@ DEFAULTS = {
     "LOG_LEVEL": "INFO",
     "TOPOLOGY_PROPOSAL_ENABLED": "1",
     "TOPOLOGY_APPROVAL_TTL_SEC": "120",
-    "DASHBOARD_AUTO_REFRESH_SEC": "5",
     "DASHBOARD_SSE_SYNC_SEC": "5",
     "AUDIT_LOG_LIMIT": "100",
     "SYSTEM_LOG_LIMIT": "100",
@@ -123,20 +121,21 @@ class DashboardEventBus:
             self._subscribers.discard(channel)
 
     def _new_event_id(self) -> int:
-        with self._lock:
-            event_id = self._next_id
-            self._next_id += 1
+        # Called under self._lock only
+        event_id = self._next_id
+        self._next_id += 1
         return event_id
 
     def publish(self, event_type: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        event = {
-            "id": self._new_event_id(),
-            "event": str(event_type or "sync"),
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "payload": payload or {},
-        }
+        dead_channels: list[queue.Queue] = []
 
         with self._lock:
+            event = {
+                "id": self._new_event_id(),
+                "event": str(event_type or "sync"),
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "payload": payload or {},
+            }
             subscribers = list(self._subscribers)
 
         for channel in subscribers:
@@ -150,7 +149,15 @@ class DashboardEventBus:
                 try:
                     channel.put_nowait(event)
                 except queue.Full:
+                    dead_channels.append(channel)
                     continue
+
+        # D3/D11: auto-cleanup channels that are permanently full (dead SSE clients)
+        if dead_channels:
+            with self._lock:
+                for ch in dead_channels:
+                    self._subscribers.discard(ch)
+
         return event
 
 
@@ -475,7 +482,7 @@ def render_html() -> str:
 
     gateway_count = len(gateway_agent_map)
     agent_count = sum(len(gw.get("agents", {})) for gw in gateway_agent_map.values())
-    auto_refresh_sec = _safe_int(config.get("DASHBOARD_AUTO_REFRESH_SEC", "5"), 5, 2, 60)
+    sse_sync_sec = _safe_int(config.get("DASHBOARD_SSE_SYNC_SEC", "5"), 5, 1, 60)
 
     # Nav HTML
     nav_html = ""
@@ -664,8 +671,7 @@ def render_html() -> str:
 </div>
 
 <script>
-window.__AUTO_REFRESH_SEC = {auto_refresh_sec};
-window.__SSE_SYNC_SEC = {_safe_int(config.get("DASHBOARD_SSE_SYNC_SEC", str(auto_refresh_sec)), auto_refresh_sec, 1, 60)};
+window.__SSE_SYNC_SEC = {sse_sync_sec};
 window.__AUDIT_LOG_LIMIT = {_safe_int(config.get("AUDIT_LOG_LIMIT", "100"), 100, 10, 500)};
 window.__SYSTEM_LOG_LIMIT = {_safe_int(config.get("SYSTEM_LOG_LIMIT", "100"), 100, 10, 500)};
 </script>
@@ -823,12 +829,20 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def _safe_content_length(self) -> int:
+        """Parse Content-Length defensively; return 0 on invalid input."""
+        raw = self.headers.get("Content-Length", "0")
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 0
+
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
         if path == "/api/config":
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = self.rfile.read(self._safe_content_length())
             try:
                 updates = json.loads(body)
                 saved_keys = save_config(updates)
@@ -859,7 +873,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                                          ensure_ascii=False).encode("utf-8"))
 
         elif path == "/api/prompts":
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = self.rfile.read(self._safe_content_length())
             try:
                 data = json.loads(body)
                 agent_key = str(data.get('agent_key', '')).strip()
@@ -884,7 +898,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                               json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
 
         elif path == "/api/command-cards/execute":
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = self.rfile.read(self._safe_content_length())
             try:
                 from command_card_executor import execute_command_card
 
@@ -928,7 +942,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
 
         elif path == "/api/command-card-runs/review":
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = self.rfile.read(self._safe_content_length())
             try:
                 from command_card_executor import review_command_card_run
 
@@ -959,7 +973,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
 
         elif path == "/api/command-card-runs/execute":
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = self.rfile.read(self._safe_content_length())
             try:
                 from command_card_executor import execute_command_card_run
 
@@ -1016,7 +1030,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
     def _serve_event_stream(self):
-        sync_interval_sec = _safe_int(os.getenv("DASHBOARD_SSE_SYNC_SEC", os.getenv("DASHBOARD_AUTO_REFRESH_SEC", "5")), 5, 1, 60)
+        sync_interval_sec = _safe_int(os.getenv("DASHBOARD_SSE_SYNC_SEC", "5"), 5, 1, 60)
         channel = EVENT_BUS.subscribe()
 
         self.send_response(200)
@@ -1095,7 +1109,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
 
 def main():
-    port = int(os.getenv("DASHBOARD_PORT", "8080"))
+    port = _safe_int(os.getenv("DASHBOARD_PORT", "8080"), 8080, 1, 65535)
 
     from logging_setup import setup_global_logging
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()

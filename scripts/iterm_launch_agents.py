@@ -233,10 +233,7 @@ def _run_iterm_tabs(entries: list[dict[str, Any]], identity_delay_sec: float) ->
         had_window = app.current_terminal_window is not None
         window = app.current_terminal_window
         if window is None:
-            if hasattr(app, "async_create_window"):
-                window = await app.async_create_window()
-            else:
-                window = await iterm2.Window.async_create(connection)
+            window = await app.async_create_window()
 
         session_rows: list[dict[str, Any]] = []
         for idx, entry in enumerate(entries):
@@ -312,10 +309,7 @@ def _run_iterm_panes(entries: list[dict[str, Any]], pane_count: int, identity_de
 
         window = app.current_terminal_window
         if window is None:
-            if hasattr(app, "async_create_window"):
-                window = await app.async_create_window()
-            else:
-                window = await iterm2.Window.async_create(connection)
+            window = await app.async_create_window()
             tab = window.current_tab
         else:
             tab = await window.async_create_tab()

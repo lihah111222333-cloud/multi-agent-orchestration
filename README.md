@@ -149,7 +149,7 @@ python3 scripts/iterm_agent_io.py --action read --agent agent_01 --lines 30
 
 必需环境变量：
 
-- `POSTGRES_CONNECTION_STRING`（或 `DATABASE_URL`）
+- `POSTGRES_CONNECTION_STRING`
 - 可选：`POSTGRES_SCHEMA`（默认 `public`）
 - 可选连接池：`POSTGRES_POOL_ENABLED`、`POSTGRES_POOL_MIN_SIZE`、`POSTGRES_POOL_MAX_SIZE`、`POSTGRES_POOL_TIMEOUT_SEC`
   - 默认开启；若未安装 `psycopg_pool`，自动降级为单连接模式
@@ -196,7 +196,7 @@ Dashboard 新增 `命令卡` 页面：
 - `System Logs` 支持按 `level/logger/keyword` 过滤，并按级别彩色标识
 - `System Logs` 支持导出当前筛选结果（`ndjson`）
 - 日志面板通过 SSE 实时同步（`/api/events/stream`），心跳周期可配置：`DASHBOARD_SSE_SYNC_SEC`
-- 兼容保留轮询参数：`DASHBOARD_AUTO_REFRESH_SEC`（仅 SSE 不可用时启用）
+- 实时同步周期参数：`DASHBOARD_SSE_SYNC_SEC`
 - 日志已落 PostgreSQL，不再依赖本地文件轮转参数
 
 ## 健壮性增强

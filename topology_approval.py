@@ -33,7 +33,7 @@ __all__ = [
     "reject_approval",
 ]
 
-# 兼容保留（仅用于环境文件读取）
+# 环境文件路径（用于动态读取审批 TTL/归档策略）
 ENV_FILE = Path(__file__).parent / ".env"
 
 DEFAULT_TTL_SEC = 120

@@ -369,11 +369,42 @@ def review_command_card_run(run_id: int, decision: str, reviewer: str = "", note
     return {"ok": True, "run": result}
 
 
+def _recover_stale_runs(timeout_sec: Optional[int] = None) -> int:
+    """Mark runs stuck in 'running' beyond 2× timeout as failed (crash recovery)."""
+    timeout = _normalize_timeout(timeout_sec)
+    stale_threshold_sec = max(timeout * 2, 300)  # at least 5 minutes
+    count = execute(
+        """
+        UPDATE command_card_runs
+        SET status = 'failed',
+            error  = '[timeout_recovery] process crash or timeout',
+            exit_code = -3,
+            updated_at = NOW()
+        WHERE status = 'running'
+          AND updated_at < NOW() - INTERVAL '%s seconds'
+        """,
+        (stale_threshold_sec,),
+    )
+    if count:
+        append_event(
+            event_type="command_card_run",
+            action="recover_stale",
+            result="ok",
+            actor="system",
+            target="command_card_runs",
+            detail=f"recovered {count} stale running task(s)",
+        )
+    return count
+
+
 def execute_command_card_run(
     run_id: int,
     actor: str = "agent",
     timeout_sec: Optional[int] = None,
 ) -> dict[str, Any]:
+    # D1: 恢复因进程崩溃而永久卡在 running 的任务
+    _recover_stale_runs(timeout_sec)
+
     run = _get_run(run_id)
     if not run:
         return {"ok": False, "message": f"run 不存在: {run_id}"}

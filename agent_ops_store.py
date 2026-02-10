@@ -14,6 +14,7 @@ from utils import escape_like, normalize_limit
 
 KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{1,127}$")
 MAX_LIMIT = 1000
+MAX_SQL_LENGTH = 4096
 _SQL_WRITE_KEYWORD_RE = re.compile(
     r"\b(insert|update|delete|merge|create|alter|drop|truncate|grant|revoke|comment|copy|vacuum|analyze|refresh|reindex|cluster|call|do)\b",
     re.IGNORECASE,
@@ -64,6 +65,8 @@ def _validate_single_statement(query: str) -> str:
     text = str(query or "").strip()
     if not text:
         raise ValueError("sql 不能为空")
+    if len(text) > MAX_SQL_LENGTH:
+        raise ValueError(f"sql 超过最大长度限制 ({MAX_SQL_LENGTH} 字符)")
 
     body = text.rstrip(";").strip()
     if not body:

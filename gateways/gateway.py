@@ -332,9 +332,21 @@ class Gateway:
         if self._client is not None:
             return
 
-        self._client_ctx = self.mcp_client_cls(self.agent_configs)
-        self._client = await self._client_ctx.__aenter__()
-        self._tools = await self._client.get_tools()
+        ctx = self.mcp_client_cls(self.agent_configs)
+        try:
+            client = await ctx.__aenter__()
+            tools = await client.get_tools()
+        except Exception:
+            # D9: 连接失败时清理半初始化的 context，确保下次重试
+            try:
+                await ctx.__aexit__(None, None, None)
+            except Exception:
+                pass
+            raise
+
+        self._client_ctx = ctx
+        self._client = client
+        self._tools = tools
         self._last_probe_ts = time.monotonic()
         self._last_used_ts = time.monotonic()
 

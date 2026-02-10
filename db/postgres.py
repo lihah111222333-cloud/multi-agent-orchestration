@@ -56,15 +56,15 @@ def _require_driver() -> None:
 
 
 def get_connection_string() -> str:
-    """Return the PostgreSQL connection string from environment variables.
+    """Return the PostgreSQL connection string from POSTGRES_CONNECTION_STRING.
 
     Raises:
-        RuntimeError: If neither POSTGRES_CONNECTION_STRING nor DATABASE_URL is set.
+        RuntimeError: If POSTGRES_CONNECTION_STRING is not set.
     """
-    conn = os.getenv("POSTGRES_CONNECTION_STRING") or os.getenv("DATABASE_URL")
+    conn = os.getenv("POSTGRES_CONNECTION_STRING")
     if conn:
         return conn
-    raise RuntimeError("未配置 POSTGRES_CONNECTION_STRING 或 DATABASE_URL")
+    raise RuntimeError("未配置 POSTGRES_CONNECTION_STRING")
 
 
 def get_schema_name() -> str:
@@ -275,7 +275,7 @@ def ensure_schema() -> None:
                 )
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_shared_files_updated_at ON shared_files (updated_at DESC)")
 
-                # Dashboard 现有提示词配置表（兼容保留）
+                # Dashboard 提示词配置表
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS prompts (

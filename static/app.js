@@ -1,7 +1,7 @@
 /* ===== Dashboard App JS ===== */
 
-const AUTO_REFRESH_MS = (window.__AUTO_REFRESH_SEC || 5) * 1000;
-const SSE_SYNC_MS = (window.__SSE_SYNC_SEC || window.__AUTO_REFRESH_SEC || 5) * 1000;
+const SSE_SYNC_MS = (window.__SSE_SYNC_SEC || 5) * 1000;
+const POLL_REFRESH_MS = SSE_SYNC_MS;
 const AUDIT_LOG_LIMIT = window.__AUDIT_LOG_LIMIT || 100;
 const SYSTEM_LOG_LIMIT = window.__SYSTEM_LOG_LIMIT || 100;
 
@@ -586,7 +586,7 @@ async function refreshSections(scope = ['approvals', 'audit', 'system', 'command
 
 function startPollingFallback() {
     if (refreshTimer) return;
-    refreshTimer = setInterval(() => refreshSections(['approvals', 'audit', 'system', 'command_cards']), AUTO_REFRESH_MS);
+    refreshTimer = setInterval(() => refreshSections(['approvals', 'audit', 'system', 'command_cards']), POLL_REFRESH_MS);
 }
 
 function stopPollingFallback() {

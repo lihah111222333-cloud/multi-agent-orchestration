@@ -19,7 +19,7 @@ from utils import validate_config
 
 
 
-def setup_signal_handlers():
+def setup_signal_handlers() -> None:
     """设置信号处理，支持 Ctrl+C 优雅退出"""
 
     def handler(sig, frame):

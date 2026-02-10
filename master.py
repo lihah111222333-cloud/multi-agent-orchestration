@@ -156,6 +156,16 @@ def _build_topology_messages(task: str, current_architecture: dict) -> list[Any]
 
 
 def _extract_json(text: str) -> Optional[dict]:
+    """从任意文本中提取首个合法 JSON 对象。
+
+    使用括号匹配算法处理嵌套结构，适活于 LLM 输出中常常包含额外文字的场景。
+
+    Args:
+        text: 待提取的原始文本。
+
+    Returns:
+        解析得到的 dict，或未找到时返回 None。
+    """
     src = str(text or "")
 
     for start, ch in enumerate(src):
@@ -232,6 +242,16 @@ def _truncate_summary_text(text: str, max_units: int = AGGREGATOR_MAX_WORDS) -> 
 
 
 def _sanitize_topology(raw: dict) -> Optional[dict]:
+    """清洗和规范化 LLM 返回的拓扑提案。
+
+    去重、补默认 ID、过滤无效条目，确保输出符合系统预期的拓扑格式。
+
+    Args:
+        raw: LLM 生成的原始拓扑字典。
+
+    Returns:
+        规范化后的拓扑字典，或无效时返回 None。
+    """
     if not isinstance(raw, dict):
         return None
 
@@ -440,6 +460,17 @@ def _parse_assignments(text: str, gateways: dict) -> dict:
 
 
 def _score_output_quality(text: str) -> int:
+    """对网关输出文本质量评分（0–100）。
+
+    评分维度包括文本长度、行数、内容多样性、是否含错误关键词。
+    低于 GATEWAY_MIN_QUALITY_SCORE 的输出将在聚合时被过滤。
+
+    Args:
+        text: 网关输出文本。
+
+    Returns:
+        0–100 的质量分数。
+    """
     value = str(text or "").strip()
     if not value:
         return 0
@@ -486,7 +517,7 @@ def _make_dispatcher(
     llm_factory: Callable[[], Any],
     topology_hash: str,
     task_registry: Optional[set[asyncio.Task]] = None,
-):
+) -> Callable[[MasterState], Coroutine[Any, Any, dict]]:
     async def dispatcher(state: MasterState) -> dict:
         task = state["task"]
         logger.info("[Master] 收到任务: %s", task)
@@ -529,7 +560,7 @@ def _make_dispatcher(
     return dispatcher
 
 
-def _make_gateway_node(gw_id: str, gateway_agent_map: dict, gateways: dict):
+def _make_gateway_node(gw_id: str, gateway_agent_map: dict, gateways: dict) -> Callable[[MasterState], Coroutine[Any, Any, dict]]:
     async def _gateway_node(state: MasterState) -> dict:
         sub_task = (state.get("gateway_assignments") or {}).get(gw_id, state["task"])
         gateway_result = await gateways[gw_id].process(sub_task)
@@ -585,7 +616,7 @@ def _dedupe_success_results(rows: list[dict]) -> list[dict]:
     return deduped
 
 
-def _make_aggregator(llm_factory: Callable[[], Any]):
+def _make_aggregator(llm_factory: Callable[[], Any]) -> Callable[[MasterState], Coroutine[Any, Any, dict]]:
     async def aggregator(state: MasterState) -> dict:
         logger.info("[Master] 开始聚合结果")
 
@@ -676,7 +707,7 @@ async def aggregator(state: MasterState) -> dict:
 def build_graph(
     llm_factory: Optional[Callable[[], Any]] = None,
     gateway_cls: type = Gateway,
-):
+) -> Any:
     """构建并编译 Master 编排图（完全动态）"""
 
     from langgraph.graph import END, StateGraph

@@ -16,7 +16,7 @@ import time
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from dotenv import load_dotenv, set_key
 
@@ -692,7 +692,7 @@ MIME_TYPES = {
 
 
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
+    def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         params = urllib.parse.parse_qs(parsed.query)
@@ -837,7 +837,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             return 0
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
@@ -1029,7 +1029,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
-    def _serve_event_stream(self):
+    def _serve_event_stream(self) -> None:
         sync_interval_sec = _safe_int(os.getenv("DASHBOARD_SSE_SYNC_SEC", "5"), 5, 1, 60)
         channel = EVENT_BUS.subscribe()
 
@@ -1076,7 +1076,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         finally:
             EVENT_BUS.unsubscribe(channel)
 
-    def _serve_static(self, path: str):
+    def _serve_static(self, path: str) -> None:
         """Serve files from static/ directory."""
         rel = path.lstrip("/").replace("static/", "", 1)
         safe_rel = Path(rel).name  # prevent path traversal
@@ -1089,7 +1089,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         self._respond(200, content_type, file_path.read_bytes(),
                       headers={"Cache-Control": "public, max-age=300"})
 
-    def _respond(self, code, content_type, body, headers=None):
+    def _respond(self, code: int, content_type: str, body: bytes, headers: Optional[dict[str, str]] = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         if headers:
@@ -1098,17 +1098,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def handle(self):
+    def handle(self) -> None:
         try:
             super().handle()
         except ConnectionResetError:
             return
 
-    def log_message(self, format, *args):
+    def log_message(self, format: str, *args: Any) -> None:
         pass
 
 
-def main():
+def main() -> None:
     port = _safe_int(os.getenv("DASHBOARD_PORT", "8080"), 8080, 1, 65535)
 
     from logging_setup import setup_global_logging

@@ -34,7 +34,7 @@ class PostgresLogHandler(logging.Handler):
             self.handleError(record)
 
 
-def setup_global_logging(default_level: str = "INFO"):
+def setup_global_logging(default_level: str = "INFO") -> None:
     level_name = os.getenv("LOG_LEVEL", default_level).upper()
     level = getattr(logging, level_name, logging.INFO)
 

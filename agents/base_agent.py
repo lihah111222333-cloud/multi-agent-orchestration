@@ -17,6 +17,6 @@ def create_agent_server(name: str, description: str = "") -> FastMCP:
     return server
 
 
-def run_agent(server: FastMCP):
+def run_agent(server: FastMCP) -> None:
     """启动 Agent MCP Server (stdio 传输)"""
     server.run(transport="stdio")

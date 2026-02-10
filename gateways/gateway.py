@@ -341,7 +341,7 @@ class Gateway:
             try:
                 await ctx.__aexit__(None, None, None)
             except Exception:
-                pass
+                logger.debug("清理半初始化 ctx 异常", exc_info=True)
             raise
 
         self._client_ctx = ctx

@@ -271,6 +271,15 @@ def _archive_completed_requests() -> int:
 
 
 def list_approvals(status: str = "", limit: int = 50) -> list[dict]:
+    """查询审批单列表，自动处理过期和归档。
+
+    Args:
+        status: 按状态过滤（pending/approved/rejected/expired）。
+        limit: 返回最大条数。
+
+    Returns:
+        审批单字典列表，按创建时间倒序。
+    """
     _expire_requests()
     _archive_completed_requests()
 
@@ -295,6 +304,16 @@ def list_approvals(status: str = "", limit: int = 50) -> list[dict]:
 
 
 def get_approval(approval_id: str) -> Optional[dict]:
+    """根据 ID 获取单个审批单详情。
+
+    自动处理过期和归档。
+
+    Args:
+        approval_id: 审批单 ID（16 位十六进制字符串）。
+
+    Returns:
+        审批单字典，不存在则返回 None。
+    """
     _expire_requests()
     _archive_completed_requests()
 
@@ -308,6 +327,19 @@ def create_approval(
     reason: str = "",
     ttl_sec: Optional[int] = None,
 ) -> dict:
+    """提交拓扑变更审批申请。
+
+    自动跳过与当前拓扑相同的提案，复用已有的同样哈希待审批单。
+
+    Args:
+        proposed_architecture: 提案拓扑 JSON 结构。
+        requested_by: 申请人标识。
+        reason: 申请原因。
+        ttl_sec: 审批单过期秒数；None 则读取环境变量。
+
+    Returns:
+        包含 ok、deduped、request 等字段的结果字典。
+    """
     _expire_requests()
     _archive_completed_requests()
 

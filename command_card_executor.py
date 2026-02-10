@@ -223,6 +223,17 @@ def prepare_command_card_run(
     requested_by: str = "agent",
     require_review: Optional[bool] = None,
 ) -> dict[str, Any]:
+    """创建命令卡运行实例，渲染模板并决定是否需要人工审批。
+
+    Args:
+        card_key: 命令卡唯一标识。
+        params: 模板参数，dict 或 JSON 字符串。
+        requested_by: 请求人标识。
+        require_review: 强制指定是否需要审批；None 则自动判断。
+
+    Returns:
+        包含 ok、run、needs_review 等字段的结果字典。
+    """
     key = str(card_key or "").strip()
     if not key:
         return {"ok": False, "message": "card_key 不能为空"}
@@ -328,6 +339,17 @@ def prepare_command_card_run(
 
 
 def review_command_card_run(run_id: int, decision: str, reviewer: str = "", note: str = "") -> dict[str, Any]:
+    """对待审批的命令卡运行进行审批决策。
+
+    Args:
+        run_id: 运行记录 ID。
+        decision: 审批决策，'approved' 或 'rejected'。
+        reviewer: 审批人标识。
+        note: 审批备注。
+
+    Returns:
+        包含 ok 和更新后 run 的结果字典。
+    """
     run = _get_run(run_id)
     if not run:
         return {"ok": False, "message": f"run 不存在: {run_id}"}
@@ -410,6 +432,18 @@ def execute_command_card_run(
     actor: str = "agent",
     timeout_sec: Optional[int] = None,
 ) -> dict[str, Any]:
+    """执行已就绪的命令卡运行，返回执行结果。
+
+    自动恢复因崩溃而卡在 running 状态的历史任务。
+
+    Args:
+        run_id: 运行记录 ID。
+        actor: 执行人标识。
+        timeout_sec: 命令执行超时秒数。
+
+    Returns:
+        包含 ok、run、execution_mode 等字段的结果字典。
+    """
     # D1: 恢复因进程崩溃而永久卡在 running 的任务
     _recover_stale_runs(timeout_sec)
 
@@ -529,6 +563,20 @@ def execute_command_card(
     review_note: str = "",
     timeout_sec: Optional[int] = None,
 ) -> dict[str, Any]:
+    """一站式命令卡执行：准备 → 审批（可选）→ 执行。
+
+    Args:
+        card_key: 命令卡唯一标识。
+        params: 模板参数。
+        requested_by: 请求人标识。
+        auto_approve: 是否自动审批（危险命令和高风险卡禁止自动审批）。
+        reviewer: 审批人标识。
+        review_note: 审批备注。
+        timeout_sec: 命令执行超时秒数。
+
+    Returns:
+        包含 ok、run 等字段的结果字典。
+    """
     prepared = prepare_command_card_run(
         card_key=card_key,
         params=params,

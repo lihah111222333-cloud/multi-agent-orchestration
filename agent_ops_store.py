@@ -239,6 +239,25 @@ def create_interaction(
     metadata: Optional[Any] = None,
     status: str = "pending",
 ) -> dict[str, Any]:
+    """创建 Agent 间交互记录并持久化到 PostgreSQL。
+
+    Args:
+        sender: 发送方标识。
+        receiver: 接收方标识。
+        msg_type: 消息类型。
+        content: 消息内容。
+        thread_id: 会话线程 ID。
+        parent_id: 父消息 ID（用于嵌套回复）。
+        requires_review: 是否需要人工审批。
+        metadata: 附加元数据。
+        status: 初始状态，默认 'pending'。
+
+    Returns:
+        标准化后的交互记录字典。
+
+    Raises:
+        RowMissingError: 数据库插入未返回结果时抛出。
+    """
     sender_text = _normalize_key("sender", sender)
     receiver_text = str(receiver or "").strip()
     msg_type_text = _normalize_key("msg_type", msg_type)
@@ -295,6 +314,20 @@ def list_interactions(
     requires_review: Optional[bool] = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
+    """按条件查询交互记录列表。
+
+    Args:
+        thread_id: 按会话线程过滤。
+        sender: 按发送方过滤。
+        receiver: 按接收方过滤。
+        msg_type: 按消息类型过滤。
+        status: 按状态过滤。
+        requires_review: 按是否需审批过滤。
+        limit: 返回最大条数。
+
+    Returns:
+        交互记录字典列表，按创建时间倒序。
+    """
     where = []
     params: list[Any] = []
 
@@ -382,6 +415,25 @@ def save_prompt_template(
     enabled: bool = True,
     updated_by: str = "",
 ) -> dict[str, Any]:
+    """保存或更新提示词模板（按 prompt_key 做 upsert）。
+
+    Args:
+        prompt_key: 提示词唯一标识。
+        title: 提示词标题。
+        prompt_text: 提示词正文。
+        agent_key: 关联的 Agent 标识。
+        tool_name: 关联的工具名称。
+        variables: 模板变量定义。
+        tags: 标签列表。
+        enabled: 是否启用。
+        updated_by: 更新人标识。
+
+    Returns:
+        标准化后的提示词模板字典。
+
+    Raises:
+        ValueError: prompt_text 为空或 prompt_key 格式非法时抛出。
+    """
     key = _normalize_key("prompt_key", prompt_key)
     title_text = str(title or "").strip()
     prompt_body = str(prompt_text or "").strip()
@@ -532,6 +584,24 @@ def save_command_card(
     enabled: bool = True,
     updated_by: str = "",
 ) -> dict[str, Any]:
+    """保存或更新命令卡定义（按 card_key 做 upsert）。
+
+    Args:
+        card_key: 命令卡唯一标识。
+        title: 命令卡标题。
+        command_template: 命令模板（支持 {param} 占位符）。
+        description: 命令卡描述。
+        args_schema: 参数 schema 定义。
+        risk_level: 风险等级（low/normal/high/critical）。
+        enabled: 是否启用。
+        updated_by: 更新人标识。
+
+    Returns:
+        标准化后的命令卡字典。
+
+    Raises:
+        ValueError: title 或 command_template 为空时抛出。
+    """
     key = _normalize_key("card_key", card_key)
     title_text = str(title or "").strip()
     command_text = str(command_template or "").strip()

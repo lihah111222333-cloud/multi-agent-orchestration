@@ -59,6 +59,13 @@ class DashboardConfigTests(unittest.TestCase):
             text = env_path.read_text(encoding="utf-8")
             self.assertIn("LLM_TIMEOUT='33'", text)
 
+    def test_render_html_contains_agent_chip_placeholders(self):
+        html = dashboard.render_html()
+        self.assertIn('data-agent-id="agent_01"', html)
+        self.assertIn('agent-chip-state', html)
+        self.assertIn('id="agent-health-stat"', html)
+        self.assertIn('id="agent-status-summary"', html)
+
 
 @contextmanager
 def run_dashboard_server():

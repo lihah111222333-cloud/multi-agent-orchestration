@@ -9,6 +9,7 @@ let refreshTimer = null;
 let eventSource = null;
 let reconnectTimer = null;
 const commandRunCache = new Map();
+const AGENT_STATUS_CLASSES = ['running', 'idle', 'stuck', 'error', 'disconnected', 'unknown'];
 
 /* ---- Navigation ---- */
 function switchPage(pageId) {
@@ -65,6 +66,109 @@ function setLiveStatus(status, detail = '') {
 
     el.classList.add('live-status-pending');
     el.textContent = detail ? `实时通道连接中 · ${detail}` : '实时通道连接中...';
+}
+
+function renderAgentSummary(summary, ts, error = '') {
+    const summaryEl = document.getElementById('agent-status-summary');
+    const healthEl = document.getElementById('agent-health-stat');
+    if (!summaryEl && !healthEl) return;
+
+    const total = Number(summary?.total || 0);
+    const healthy = Number(summary?.healthy || 0);
+    const unhealthy = Number(summary?.unhealthy || 0);
+    const running = Number(summary?.running || 0);
+    const idle = Number(summary?.idle || 0);
+    const stuck = Number(summary?.stuck || 0);
+    const disconnected = Number(summary?.disconnected || 0);
+    const failed = Number(summary?.error || 0);
+
+    if (healthEl) {
+        healthEl.textContent = total > 0 ? `${healthy}/${total}` : '--';
+        healthEl.classList.remove('green', 'amber', 'red', 'blue', 'cyan');
+        if (total === 0) {
+            healthEl.classList.add('amber');
+        } else if (unhealthy === 0) {
+            healthEl.classList.add('green');
+        } else {
+            healthEl.classList.add('amber');
+        }
+    }
+
+    if (!summaryEl) return;
+
+    const tsText = String(ts || '').replace('T', ' ').slice(0, 19) || '--';
+    const base = `Agents ${healthy}/${total} healthy | running=${running}, idle=${idle}, stuck=${stuck}, error=${failed}, disconnected=${disconnected} | updated=${tsText}`;
+    summaryEl.textContent = error ? `${base} | error=${error}` : base;
+}
+
+function setAgentChipStatus(agentId, status, staleSec, hasError) {
+    const chips = document.querySelectorAll('.agent-chip[data-agent-id]');
+    const normalized = AGENT_STATUS_CLASSES.includes(status) ? status : 'unknown';
+
+    chips.forEach((chip) => {
+        if (chip.dataset.agentId !== agentId) return;
+        AGENT_STATUS_CLASSES.forEach((name) => chip.classList.remove(`agent-chip-status-${name}`));
+        chip.classList.add(`agent-chip-status-${normalized}`);
+
+        const stateEl = chip.querySelector('.agent-chip-state');
+        if (stateEl) {
+            const staleText = Number(staleSec || 0) > 0 ? ` (${Number(staleSec)}s)` : '';
+            stateEl.textContent = `${normalized}${staleText}`;
+        }
+
+        if (hasError) {
+            chip.title = 'agent output read error';
+        }
+    });
+}
+
+function resetAllAgentChipStatus() {
+    const chips = document.querySelectorAll('.agent-chip[data-agent-id]');
+    chips.forEach((chip) => {
+        AGENT_STATUS_CLASSES.forEach((name) => chip.classList.remove(`agent-chip-status-${name}`));
+        chip.classList.add('agent-chip-status-unknown');
+        const stateEl = chip.querySelector('.agent-chip-state');
+        if (stateEl) stateEl.textContent = 'unknown';
+    });
+}
+
+async function loadAgentStatus() {
+    try {
+        const r = await fetch('/api/agent-status?lines=30');
+        const j = await r.json();
+
+        if (!j.ok) {
+            resetAllAgentChipStatus();
+            renderAgentSummary(j.summary || {}, j.ts || '', j.error || 'agent_status_unavailable');
+            return;
+        }
+
+        const rows = Array.isArray(j.agents) ? j.agents : [];
+        const seen = new Set();
+        rows.forEach((row) => {
+            const agentId = String(row.agent_id || '').trim();
+            if (!agentId) return;
+            seen.add(agentId);
+            setAgentChipStatus(
+                agentId,
+                String(row.status || 'unknown').toLowerCase(),
+                Number(row.stagnant_sec || 0),
+                Boolean(row.error),
+            );
+        });
+
+        document.querySelectorAll('.agent-chip[data-agent-id]').forEach((chip) => {
+            const id = chip.dataset.agentId || '';
+            if (!seen.has(id)) {
+                setAgentChipStatus(id, 'unknown', 0, false);
+            }
+        });
+
+        renderAgentSummary(j.summary || {}, j.ts || '');
+    } catch (e) {
+        resetAllAgentChipStatus();
+        renderAgentSummary({}, '', `network_error:${e.message}`);
+    }
 }
 
 /* ---- Config ---- */
@@ -564,8 +668,8 @@ async function loadApprovals() {
     if (j.ok) renderApprovals(j.approvals || []);
 }
 
-async function refreshSections(scope = ['approvals', 'audit', 'system', 'command_cards']) {
-    const scopes = Array.isArray(scope) ? scope : ['approvals', 'audit', 'system', 'command_cards'];
+async function refreshSections(scope = ['approvals', 'audit', 'system', 'command_cards', 'agent_status']) {
+    const scopes = Array.isArray(scope) ? scope : ['approvals', 'audit', 'system', 'command_cards', 'agent_status'];
     const tasks = [];
 
     if (scopes.includes('approvals')) tasks.push(loadApprovals());
@@ -576,6 +680,7 @@ async function refreshSections(scope = ['approvals', 'audit', 'system', 'command
         tasks.push(loadCommandRuns());
     }
     if (scopes.includes('prompts')) tasks.push(loadPrompts());
+    if (scopes.includes('agent_status')) tasks.push(loadAgentStatus());
 
     try {
         if (tasks.length > 0) await Promise.all(tasks);
@@ -586,7 +691,7 @@ async function refreshSections(scope = ['approvals', 'audit', 'system', 'command
 
 function startPollingFallback() {
     if (refreshTimer) return;
-    refreshTimer = setInterval(() => refreshSections(['approvals', 'audit', 'system', 'command_cards']), POLL_REFRESH_MS);
+    refreshTimer = setInterval(() => refreshSections(['approvals', 'audit', 'system', 'command_cards', 'agent_status']), POLL_REFRESH_MS);
 }
 
 function stopPollingFallback() {
@@ -633,7 +738,9 @@ function startEventStream() {
     eventSource.addEventListener('sync', async (evt) => {
         try {
             const data = JSON.parse(evt.data || '{}');
-            const scope = Array.isArray(data?.payload?.scope) ? data.payload.scope : ['approvals', 'audit', 'system', 'command_cards'];
+            const scope = Array.isArray(data?.payload?.scope)
+                ? data.payload.scope
+                : ['approvals', 'audit', 'system', 'command_cards', 'agent_status'];
             await refreshSections(scope);
         } catch (e) {
             console.error('SSE sync event parse failed:', e);
@@ -670,7 +777,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Enter') { e.preventDefault(); loadSystemLogs(); }
     });
 
-    refreshSections(['approvals', 'audit', 'system', 'command_cards']);
+    refreshSections(['approvals', 'audit', 'system', 'command_cards', 'agent_status']);
     loadPrompts();
     startEventStream();
 

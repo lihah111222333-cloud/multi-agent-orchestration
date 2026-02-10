@@ -618,12 +618,18 @@ def render_html() -> str:
     for i, (gw_name, gw_config) in enumerate(gateway_agent_map.items()):
         color = colors[i % len(colors)]
         agents_list = "".join(
-            f'<div class="agent-chip">{ICONS["agent"]}{a}</div>'
+            (
+                f'<div class="agent-chip agent-chip-status-unknown" data-agent-id="{html.escape(str(a), quote=True)}">'
+                f'{ICONS["agent"]}'
+                f'<span class="agent-chip-name">{html.escape(str(a))}</span>'
+                '<span class="agent-chip-state">unknown</span>'
+                '</div>'
+            )
             for a in gw_config["agents"].keys()
         )
         gw_cards += f'''<div class="gw-card" style="--accent-color:{color}; border-left-color:{color}">
-            <h3 class="gw-name">{gw_config['name']}</h3>
-            <span class="gw-id">{gw_name}</span>
+            <h3 class="gw-name">{html.escape(str(gw_config['name']))}</h3>
+            <span class="gw-id">{html.escape(str(gw_name))}</span>
             <div class="gw-agents">{agents_list}</div>
             <div class="gw-count">{len(gw_config['agents'])} agents</div>
         </div>'''
@@ -667,7 +673,7 @@ def render_html() -> str:
             <div class="stat-card"><div class="stat-label">Gateways</div><div class="stat-value green">{gateway_count}</div></div>
             <div class="stat-card"><div class="stat-label">Agents</div><div class="stat-value blue">{agent_count}</div></div>
             <div class="stat-card"><div class="stat-label">Model</div><div class="stat-value cyan" style="font-size:1rem">{html.escape(config.get('LLM_MODEL', ''))}</div></div>
-            <div class="stat-card"><div class="stat-label">Status</div><div class="stat-value green">ONLINE</div></div>
+            <div class="stat-card"><div class="stat-label">Agent Health</div><div id="agent-health-stat" class="stat-value amber">--</div></div>
         </div>
 
         <!-- Config Page -->
@@ -692,6 +698,7 @@ def render_html() -> str:
                 </header>
                 <div class="card-body">
                     <div class="gw-grid">{gw_cards}</div>
+                    <div id="agent-status-summary" class="agent-status-summary">Agent 状态加载中...</div>
                 </div>
             </div>
         </div>
@@ -1221,7 +1228,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                         "event": "sync",
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "payload": {
-                            "scope": ["approvals", "audit", "system", "command_cards"],
+                            "scope": ["approvals", "audit", "system", "command_cards", "agent_status"],
                             "reason": "heartbeat",
                         },
                     }

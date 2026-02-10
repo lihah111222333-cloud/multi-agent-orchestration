@@ -1,8 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from db import postgres
 from db.migrator import discover_migrations, parse_migration_filename
+from tests.pg_test_helper import isolated_pg_schema
 
 
 class DbMigratorTests(unittest.TestCase):
@@ -58,6 +61,34 @@ class DbMigratorTests(unittest.TestCase):
                 discover_migrations(folder)
 
         self.assertIn("expected version 2", str(ctx.exception))
+
+    def test_ensure_schema_applies_sql_migrations_when_present(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            (folder / "0001_create_probe.sql").write_text(
+                """
+                CREATE TABLE IF NOT EXISTS migration_probe (
+                    id INT PRIMARY KEY,
+                    name TEXT NOT NULL
+                );
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            with patch.object(postgres, "MIGRATIONS_DIR", folder):
+                with isolated_pg_schema("migrun"):
+                    probe_row = postgres.fetch_one(
+                        """
+                        SELECT COUNT(*) AS cnt
+                        FROM information_schema.tables
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'migration_probe'
+                        """
+                    )
+                    self.assertEqual(int(probe_row["cnt"]), 1)
+
+                    migration_row = postgres.fetch_one("SELECT COUNT(*) AS cnt FROM schema_migrations")
+                    self.assertEqual(int(migration_row["cnt"]), 1)
 
 
 if __name__ == "__main__":

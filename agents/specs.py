@@ -95,7 +95,7 @@ AGENT_SPECS = {
                 name="summarize_text",
                 description="摘要生成",
                 params=(ToolParam("text", str),),
-                response_builder=lambda values: f"[Agent-05] 已生成摘要: {values['text'][:50]}...",
+                response_builder=lambda values: f"[Agent-05] 已生成摘要: {str(values.get('text', ''))[:50]}...",
             ),
         ),
     ),
@@ -108,7 +108,7 @@ AGENT_SPECS = {
                 name="translate",
                 description="翻译文本",
                 params=(ToolParam("text", str), ToolParam("target_lang", str, "en")),
-                response_builder=lambda values: f"[Agent-06] 已将文本翻译为 {values['target_lang']}: '{values['text'][:30]}...'",
+                response_builder=lambda values: f"[Agent-06] 已将文本翻译为 {values.get('target_lang', 'en')}: '{str(values.get('text', ''))[:30]}...'",
             ),
             ToolSpec(
                 name="detect_language",

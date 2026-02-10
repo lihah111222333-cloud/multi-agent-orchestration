@@ -531,7 +531,7 @@ def _make_dispatcher(
 
 def _make_gateway_node(gw_id: str, gateway_agent_map: dict, gateways: dict):
     async def _gateway_node(state: MasterState) -> dict:
-        sub_task = state["gateway_assignments"].get(gw_id, state["task"])
+        sub_task = (state.get("gateway_assignments") or {}).get(gw_id, state["task"])
         gateway_result = await gateways[gw_id].process(sub_task)
 
         success = bool(gateway_result.get("success", False))

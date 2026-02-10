@@ -12,6 +12,7 @@ __all__ = [
 ]
 
 import json
+import logging
 import os
 import re
 import shlex
@@ -26,6 +27,8 @@ from agent_ops_store import (
 )
 from audit_log import append_event
 from db.postgres import execute, fetch_all, fetch_one
+
+logger = logging.getLogger(__name__)
 
 APPROVAL_REQUIRED_RISKS = {"high", "critical"}
 AUTO_APPROVE_ALLOWED_RISKS = {"low", "normal"}
@@ -329,6 +332,11 @@ def review_command_card_run(run_id: int, decision: str, reviewer: str = "", note
     if not run:
         return {"ok": False, "message": f"run 不存在: {run_id}"}
 
+    # E2: 仅 pending_review 状态允许审批
+    current_status = str(run.get("status", ""))
+    if current_status != "pending_review":
+        return {"ok": False, "message": f"run 当前状态 ({current_status}) 不允许审批，需 pending_review", "run": run}
+
     decision_text = str(decision or "").strip().lower()
     if decision_text not in {"approved", "rejected"}:
         return {"ok": False, "message": "decision 必须是 approved/rejected"}
@@ -422,6 +430,11 @@ def execute_command_card_run(
             "message": "已执行成功，无需重复执行",
             "execution_mode": execution_mode,
         }
+    # E1: 仅 ready 状态允许转入 running
+    if status == "running":
+        return {"ok": False, "message": f"run 正在执行中: {run_id}", "run": run, "execution_mode": execution_mode}
+    if status not in {"ready", ""}:
+        return {"ok": False, "message": f"run 状态 ({status}) 不允许执行", "run": run, "execution_mode": execution_mode}
 
     execute(
         "UPDATE command_card_runs SET status = 'running', updated_at = NOW() WHERE id = %s",
@@ -449,6 +462,7 @@ def execute_command_card_run(
             final_status = "failed"
         else:
             try:
+                logger.info("Executing command_card_run=%s: %s (timeout=%ss)", run_id, cmd[:120], timeout)
                 proc = subprocess.run(
                     argv,
                     capture_output=True,

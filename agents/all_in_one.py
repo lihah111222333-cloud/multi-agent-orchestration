@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import inspect
+import os
+import sys
+from pathlib import Path
 from typing import Any
 from datetime import datetime, date, timezone
 from decimal import Decimal
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None  # type: ignore[assignment]
 
 
 class _SafeEncoder(json.JSONEncoder):
@@ -24,6 +33,67 @@ class _SafeEncoder(json.JSONEncoder):
 def _safe_json(obj, **kw) -> str:
     """json.dumps with safe encoder for DB rows."""
     return json.dumps(obj, ensure_ascii=False, cls=_SafeEncoder, **kw)
+
+
+_SINGLETON_LOCK_HANDLE: Any | None = None
+_SINGLETON_BASE_DIR = Path(__file__).resolve().parents[1] / "data" / "run"
+_SINGLETON_LOCK_FILE = _SINGLETON_BASE_DIR / "acp_bus_singleton.lock"
+_SINGLETON_PID_FILE = _SINGLETON_BASE_DIR / "acp_bus_singleton.pid"
+
+
+def _is_singleton_enabled() -> bool:
+    value = str(os.getenv("ACP_BUS_SINGLETON_ENABLED", "0") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _acquire_singleton_lock_or_exit() -> None:
+    global _SINGLETON_LOCK_HANDLE
+
+    if not _is_singleton_enabled():
+        return
+
+    _SINGLETON_BASE_DIR.mkdir(parents=True, exist_ok=True)
+
+    lock_handle = open(_SINGLETON_LOCK_FILE, "a+", encoding="utf-8")
+
+    if fcntl is not None:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            owner_pid = ""
+            if _SINGLETON_PID_FILE.exists():
+                try:
+                    owner_pid = str(_SINGLETON_PID_FILE.read_text(encoding="utf-8")).strip()
+                except Exception:
+                    owner_pid = ""
+            message = "[acp-bus] singleton lock 已被占用"
+            if owner_pid:
+                message += f" (owner_pid={owner_pid})"
+            message += "，本实例退出"
+            print(message, file=sys.stderr)
+            raise SystemExit(0)
+
+    _SINGLETON_LOCK_HANDLE = lock_handle
+    _SINGLETON_PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+
+    def _cleanup_singleton_lock() -> None:
+        try:
+            if _SINGLETON_PID_FILE.exists():
+                owner_pid = str(_SINGLETON_PID_FILE.read_text(encoding="utf-8")).strip()
+                if owner_pid == str(os.getpid()):
+                    _SINGLETON_PID_FILE.unlink()
+        except Exception:
+            pass
+
+        if fcntl is not None and _SINGLETON_LOCK_HANDLE is not None:
+            try:
+                fcntl.flock(_SINGLETON_LOCK_HANDLE.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+
+    atexit.register(_cleanup_singleton_lock)
+    print(f"[acp-bus] singleton lock acquired pid={os.getpid()}", file=sys.stderr)
+
 
 from agent_ops_store import (
     create_interaction as create_interaction_row,
@@ -103,26 +173,23 @@ def iterm(
     """
     action = action.strip().lower()
 
-    # ---- list (自动清理空 session_id 的死记录) ----
+    # ---- list (只读，不改写 state，避免误清空会话映射) ----
     if action == "list":
         from pathlib import Path as _P
         sp = _P(__file__).resolve().parents[1] / "data" / "iterm_launch_state.json"
         state_file = str(sp)
-        try:
-            if sp.exists():
-                st = json.loads(sp.read_text("utf-8"))
-                before = len(st.get("agents", []))
-                st["agents"] = [a for a in st.get("agents", []) if a.get("session_id", "").strip()]
-                if len(st["agents"]) < before:
-                    st["count"] = len(st["agents"])
-                    st["session_ids"] = [a["session_id"] for a in st["agents"] if a.get("session_id")]
-                    sp.write_text(json.dumps(st, ensure_ascii=False, indent=2), "utf-8")
-        except Exception:
-            pass
-        return json.dumps(
-            list_iterm_sessions(state_file=state_file),
-            ensure_ascii=False,
-        )
+        payload = list_iterm_sessions(state_file=state_file)
+
+        # 兼容处理：某些运行时会出现 event loop 冲突的回绑告警，
+        # 但如果已拿到有效会话，不应让上层误判为“窗口不可用”。
+        if isinstance(payload, dict) and payload.get("ok"):
+            sessions = payload.get("sessions", [])
+            rebind_error = str(payload.get("rebind_error", "") or "")
+            if sessions and "Cannot run the event loop while another loop is running" in rebind_error:
+                payload.pop("rebind_error", None)
+                payload["rebind_warning_suppressed"] = True
+
+        return json.dumps(payload, ensure_ascii=False)
 
     # ---- send ----
     if action == "send":
@@ -347,9 +414,9 @@ def interaction(
         for aid, info in agent_skills.items():
             if aid not in known_ids:
                 roster.append({"agent_id": aid, "agent_name": aid, "skills": info, "source": "registry", "online": False})
-        # 始终包含 master
-        if not any(r.get("agent_id") == "master" for r in roster):
-            roster.insert(0, {"agent_id": "master", "agent_name": "主 Agent", "skills": ["编排", "任务分配", "审批"], "source": "builtin", "online": True})
+        # 始终包含主控角色
+        if not any(r.get("agent_id") == "A0-master" for r in roster):
+            roster.insert(0, {"agent_id": "A0-master", "agent_name": "A0 Master", "skills": ["编排", "任务分配", "审批"], "source": "builtin", "online": True})
         return json.dumps({"ok": True, "count": len(roster), "agents": roster}, ensure_ascii=False)
 
     if action == "create":
@@ -995,20 +1062,19 @@ def _setup_hot_reload():
 
 
 def main() -> None:
-    import os
     # 确保加载 .env，让 MCP 进程获得 DB 连接串等环境变量
     try:
         from dotenv import load_dotenv
-        from pathlib import Path
         env_path = Path(__file__).resolve().parents[1] / ".env"
         load_dotenv(env_path, override=False)
     except ImportError:
         pass
 
+    _acquire_singleton_lock_or_exit()
+
     from agents.base_agent import create_agent_server, run_agent
     from agents.runtime_control import initialize_agent_runtime
 
-    # SIGUSR1 热重载（PID 锁由 acp_bus_run.sh 守护进程管理）
     _setup_hot_reload()
 
     initialize_agent_runtime("all-agents")

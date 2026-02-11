@@ -9,12 +9,21 @@ import scripts.iterm_launch_agents as launcher
 class ItermLaunchAgentsTests(unittest.TestCase):
     def test_build_identity_prompt(self):
         text = launcher._build_identity_prompt(
-            "你是 {agent_id} / {agent_name}，回复 ACK-{index_padded}",
+            "你是 {agent_id} / {agent_name}，回复 {agent_id}",
             index=3,
-            agent_id="agent_03",
+            agent_id="a03",
             agent_name="Codex Agent 03",
         )
-        self.assertEqual(text, "你是 agent_03 / Codex Agent 03，回复 ACK-03")
+        self.assertEqual(text, "你是 a03 / Codex Agent 03，回复 a03")
+
+    def test_default_identity_prompt_uses_agent_id_direct_reply(self):
+        text = launcher._build_identity_prompt(
+            launcher._default_identity_template(),
+            index=1,
+            agent_id="a01",
+            agent_name="Runtime Agent 01",
+        )
+        self.assertEqual(text, "唤醒检查：你的固定身份是 a01（Runtime Agent 01）。现在仅回复 a01。")
 
     def test_build_identity_prompt_unknown_variable(self):
         with self.assertRaises(ValueError):
@@ -32,15 +41,15 @@ class ItermLaunchAgentsTests(unittest.TestCase):
             name_prefix="Codex Agent",
             project_root=Path("/tmp/project"),
             inject_identity=True,
-            identity_template="身份={agent_id};ACK={index_padded}",
+            identity_template="身份={agent_id};回复={agent_id}",
         )
 
         self.assertEqual(len(entries), 2)
-        self.assertEqual(entries[0]["agent_id"], "agent_01")
-        self.assertEqual(entries[0]["session_label"], "agent_01 | Codex Agent 01")
+        self.assertEqual(entries[0]["agent_id"], "a01")
+        self.assertEqual(entries[0]["session_label"], "a01 | Codex Agent 01")
         self.assertEqual(entries[0]["badge"], "A01")
-        self.assertEqual(entries[0]["identity_prompt"], "身份=agent_01;ACK=01")
-        self.assertIn("cd /tmp/project", entries[0]["shell_cmd"])
+        self.assertEqual(entries[0]["identity_prompt"], "身份=a01;回复=a01")
+        self.assertIn("exec codex --no-alt-screen", entries[0]["shell_cmd"])
 
     def test_build_agent_entries_can_disable_identity(self):
         entries = launcher._build_agent_entries(
@@ -58,7 +67,7 @@ class ItermLaunchAgentsTests(unittest.TestCase):
         rows = [
             {
                 "session": object(),
-                "entry": {"agent_id": "agent_01"},
+                "entry": {"agent_id": "a01"},
                 "tab": object(),
                 "label_applied": False,
                 "badge_applied": False,

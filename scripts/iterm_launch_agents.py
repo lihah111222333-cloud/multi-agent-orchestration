@@ -28,7 +28,7 @@ def _default_template() -> str:
 
 
 def _default_identity_template() -> str:
-    return "唤醒检查：你的固定身份是 {agent_id}（{agent_name}）。现在仅回复 ACK-{index_padded}。"
+    return "唤醒检查：你的固定身份是 {agent_id}（{agent_name}）。现在仅回复 {agent_id}。"
 
 
 def _grid_for_count(tab_count: int) -> tuple[int, int]:
@@ -97,7 +97,7 @@ def _build_agent_entries(
     template = str(identity_template or "").strip()
 
     for index in range(1, count + 1):
-        agent_id = f"agent_{index:02d}"
+        agent_id = f"a{index:02d}"
         agent_name = f"{name_prefix} {index:02d}"
         start_cmd = _build_start_command(start_template, index, agent_id, agent_name)
         shell_cmd = _build_shell_command(project_root=project_root, start_cmd=start_cmd)
@@ -473,6 +473,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--name-prefix", default="Runtime Agent", help="Agent 名称前缀")
     parser.add_argument("--start-template", default=_default_template(), help="启动命令模板")
     parser.add_argument("--layout", choices=["panes", "tabs"], default="panes", help="布局模式")
+    parser.add_argument(
+        "--allow-non-equal-layout",
+        action="store_true",
+        help="显式允许非等分布局（默认禁止，防止一窗一代理串行拉起）",
+    )
     parser.add_argument("--dry-run", action="store_true", help="仅打印命令，不实际拉起")
     parser.add_argument(
         "--inject-identity",
@@ -538,6 +543,9 @@ def main() -> int:
     print(f"[Planner] layout={args.layout}")
     print(f"[Planner] identity_inject={'on' if args.inject_identity else 'off'}")
 
+    if args.layout != "panes" and not bool(args.allow_non_equal_layout):
+        raise SystemExit("已禁止非等分布局；如确需非等分，请显式传 --allow-non-equal-layout")
+
     if args.dry_run:
         for entry in entries:
             print(f"\n--- target #{entry['index']} ({entry['agent_id']}) ---")
@@ -548,6 +556,7 @@ def main() -> int:
         return 0
 
     identity_delay_sec = max(0.0, float(args.identity_delay))
+
     if args.layout == "panes":
         if count not in {4, 6, 8, 12}:
             raise SystemExit("panes 布局仅支持 4/6/8/12；若使用 5 个代理请改用 --layout tabs")

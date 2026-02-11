@@ -216,6 +216,15 @@ Dashboard 新增 `命令卡` 页面：
 - 实时同步周期参数：`DASHBOARD_SSE_SYNC_SEC`
 - 日志已落 PostgreSQL，不再依赖本地文件轮转参数
 
+## ACP-BUS 单实例锁
+
+- 默认关闭：`ACP_BUS_SINGLETON_ENABLED=0`（避免 MCP/stdio 多会话握手被误拦截）
+- 锁文件：`data/run/acp_bus_singleton.lock`
+- PID 文件：`data/run/acp_bus_singleton.pid`
+- 启用后，重复启动 `agents.all_in_one` 时后启动实例会直接退出，避免并发读写 `iterm_launch_state.json`
+
+若需要强制单实例守护，可显式开启：`ACP_BUS_SINGLETON_ENABLED=1`
+
 ## 健壮性增强
 
 - Gateway 返回结构化结果：`success/output/error/reason/attempts`

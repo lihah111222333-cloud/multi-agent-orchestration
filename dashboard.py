@@ -80,7 +80,7 @@ _llm_config: dict[str, str] = {
     "timeout": os.getenv("AGENTCTL_LLM_TIMEOUT", "30"),
     "poll_interval": os.getenv("AGENTCTL_POLL_INTERVAL", "8"),
     "cooldown_sec": os.getenv("AGENTCTL_COOLDOWN_SEC", "60"),
-    "master_agent_id": os.getenv("AGENTCTL_MASTER_AGENT_ID", "agent_01"),
+    "master_agent_id": os.getenv("AGENTCTL_MASTER_AGENT_ID", "A0-master"),
 }
 
 # ── Lifecycle 监控状态 (全局) ──
@@ -170,7 +170,7 @@ def _lifecycle_worker(dry_run: bool = False) -> None:
                 pass
 
             # ── 对每个子 Agent 调 GPT-5.2 做决策 ──
-            master_id = _llm_config.get("master_agent_id", "agent_01")
+            master_id = _llm_config.get("master_agent_id", "A0-master")
             for agent in agents:
                 if not isinstance(agent, dict):
                     continue

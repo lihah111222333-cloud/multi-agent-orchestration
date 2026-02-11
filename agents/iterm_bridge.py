@@ -60,7 +60,7 @@ def _save_state(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _default_agent_row(index: int) -> dict[str, Any]:
-    agent_id = f"agent_{index:02d}"
+    agent_id = f"a{index:02d}"
     agent_name = f"Runtime Agent {index:02d}"
     return {
         "index": index,
@@ -88,7 +88,7 @@ def _build_agent_sessions(state: dict[str, Any]) -> list[AgentSession]:
         rows.append(
             AgentSession(
                 index=int(agent.get("index", index) or index),
-                agent_id=str(agent.get("agent_id", "") or f"agent_{index:02d}").strip(),
+                agent_id=str(agent.get("agent_id", "") or f"a{index:02d}").strip(),
                 agent_name=str(agent.get("agent_name", "") or f"Runtime Agent {index:02d}").strip(),
                 session_id=session_id,
             )
@@ -99,7 +99,7 @@ def _build_agent_sessions(state: dict[str, Any]) -> list[AgentSession]:
             rows.append(
                 AgentSession(
                     index=index,
-                    agent_id=f"agent_{index:02d}",
+                    agent_id=f"a{index:02d}",
                     agent_name=f"Runtime Agent {index:02d}",
                     session_id=str(session_id),
                 )
@@ -368,19 +368,16 @@ def _list_live_sessions(window_id: str = "") -> tuple[str, list[dict[str, str]]]
         app = await iterm2.async_get_app(connection)
         windows = list(getattr(app, "terminal_windows", []) or [])
 
-        # Determine which windows to scan
         normalized_window_id = str(window_id or "").strip()
         if normalized_window_id:
-            # Specific window requested — original single-window behavior
             target_windows = []
             for window in windows:
                 if str(getattr(window, "window_id", "") or "") == normalized_window_id:
                     target_windows = [window]
                     break
             if not target_windows:
-                return
+                target_windows = windows
         else:
-            # No window specified — scan ALL windows
             target_windows = windows
 
         if not target_windows:
@@ -785,6 +782,17 @@ def _run_direct_with_optional_rebind(
 
 def list_iterm_agent_sessions(state_file: str = "") -> dict[str, Any]:
     try:
+        if not _is_direct_mode_enabled():
+            return _run_io_via_subprocess(
+                action="list",
+                text=None,
+                agent_id="",
+                all_agents=True,
+                wait_sec=0.0,
+                read_lines=0,
+                state_file=state_file,
+            )
+
         state_path = _normalize_state_file(state_file)
         state = _load_state(state_path)
 
@@ -813,7 +821,10 @@ def list_iterm_agent_sessions(state_file: str = "") -> dict[str, Any]:
             ],
         }
         if rebind_error:
-            result["rebind_error"] = rebind_error
+            if sessions and "Cannot run the event loop while another loop is running" in rebind_error:
+                result["rebind_warning_suppressed"] = True
+            else:
+                result["rebind_error"] = rebind_error
         return result
     except Exception as e:
         return {

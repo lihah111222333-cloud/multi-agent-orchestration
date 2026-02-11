@@ -128,7 +128,27 @@ def _lifecycle_worker(dry_run: bool = False) -> None:
         try:
             # ── 采集数据 ──
             agent_payload = _build_agent_status_snapshot(read_lines=30)
-            agents = agent_payload.get("agents", [])
+            agents = list(agent_payload.get("agents", []))
+
+            # 补充 roster 注册的 agent（可能无 iTerm session）
+            try:
+                from pathlib import Path as _P
+                reg_path = _P(__file__).resolve().parent / "data" / "agent_registry.json"
+                if reg_path.exists():
+                    registry = json.loads(reg_path.read_text("utf-8"))
+                    iterm_ids = {str(a.get("agent_id", "")).strip() for a in agents if isinstance(a, dict)}
+                    for aid, info in registry.items():
+                        if aid not in iterm_ids:
+                            agents.append({
+                                "agent_id": aid,
+                                "agent_name": info.get("agent_name", aid),
+                                "status": "registered",
+                                "output_tail": [],
+                                "source": "registry",
+                                "skills": info.get("skills", []),
+                            })
+            except Exception:
+                pass
             task_ack_list = []
             dag_detail_list = []
             try:
@@ -717,11 +737,46 @@ def _normalize_output_tail(raw: Any) -> list[str]:
     return normalized[-20:]
 
 
+_MASTER_SESSION_NAME_TAG = "主agnet"
+
+
+def _list_sessions_with_master() -> dict[str, Any]:
+    """Wrap list_iterm_agent_sessions and also detect master by session name tag."""
+    result = list_iterm_agent_sessions()
+    if not result.get("ok"):
+        return result
+
+    # Check if master is already in sessions
+    sessions = result.get("sessions", [])
+    known_ids = {s.get("agent_id", "") for s in sessions}
+    if "master" in known_ids:
+        return result
+
+    # Scan live sessions for master by session_name tag
+    try:
+        _, live_sessions = _list_live_sessions()
+        for ls in live_sessions:
+            session_name = str(ls.get("session_name", "") or "").strip()
+            if _MASTER_SESSION_NAME_TAG in session_name:
+                sessions.insert(0, {
+                    "index": 0,
+                    "agent_id": "master",
+                    "agent_name": "主控 Agent",
+                    "session_id": str(ls.get("session_id", "")),
+                })
+                result["sessions"] = sessions
+                break
+    except Exception:
+        logger.debug("detect master session via name tag failed", exc_info=True)
+
+    return result
+
+
 def _build_agent_status_snapshot(read_lines: int = 30) -> dict[str, Any]:
     """Build agent status snapshot directly via iTerm API."""
     try:
         snapshot = patrol_agents_once(
-            list_sessions_func=list_iterm_agent_sessions,
+            list_sessions_func=_list_sessions_with_master,
             read_output_func=read_iterm_output,
             read_lines=max(1, read_lines),
             status_memory=_AGENT_STATUS_MEMORY,
@@ -1094,21 +1149,68 @@ def render_html() -> str:
     gw_cards = ""
     for i, (gw_name, gw_config) in enumerate(gateway_agent_map.items()):
         color = colors[i % len(colors)]
-        agents_list = "".join(
-            (
-                f'<div class="agent-chip agent-chip-status-unknown" data-agent-id="{html.escape(str(a), quote=True)}">'
-                f'{ICONS["agent"]}'
+        agent_meta = gw_config.get("agent_meta", {})
+
+        # Build compact agent rows
+        agents_list = ""
+        for a in gw_config["agents"].keys():
+            meta = agent_meta.get(a, {})
+            display_name = html.escape(str(meta.get("name", a)))
+            agent_id_esc = html.escape(str(a), quote=True)
+
+            # Capabilities tags
+            caps = meta.get("capabilities", [])
+            caps_html = "".join(
+                f'<span class="agent-cap-tag">{html.escape(str(c))}</span>'
+                for c in caps[:5]
+            ) if caps else ""
+
+            # Dependencies
+            deps = meta.get("depends_on", [])
+            deps_html = ""
+            if deps:
+                deps_text = " · ".join(html.escape(str(d)) for d in deps)
+                deps_html = f'<span class="agent-dep-info">← {deps_text}</span>'
+
+            agents_list += (
+                f'<div class="agent-row agent-chip-status-unknown" data-agent-id="{agent_id_esc}">'
+                f'<div class="agent-row-top">'
+                f'<span class="agent-status-dot"></span>'
                 f'<span class="agent-chip-name">{html.escape(str(a))}</span>'
-                '<span class="agent-chip-state">unknown</span>'
-                '</div>'
+                f'<span class="agent-row-label">{display_name}</span>'
+                f'{deps_html}'
+                f'<span class="agent-chip-state">unknown</span>'
+                f'</div>'
+                + (f'<div class="agent-caps">{caps_html}</div>' if caps_html else '')
+                + '</div>'
             )
-            for a in gw_config["agents"].keys()
-        )
+
+        # Gateway capabilities
+        gw_caps = gw_config.get("capabilities", [])
+        gw_caps_html = ""
+        if gw_caps:
+            gw_caps_html = '<div class="gw-caps">' + "".join(
+                f'<span class="gw-cap-tag">{html.escape(str(c))}</span>'
+                for c in gw_caps
+            ) + '</div>'
+
+        # Gateway description
+        gw_desc = gw_config.get("description", "")
+        gw_desc_html = ""
+        if gw_desc:
+            gw_desc_html = f'<div class="gw-desc">{html.escape(str(gw_desc))}</div>'
+
         gw_cards += f'''<div class="gw-card" style="--accent-color:{color}; border-left-color:{color}">
-            <h3 class="gw-name">{html.escape(str(gw_config['name']))}</h3>
-            <span class="gw-id">{html.escape(str(gw_name))}</span>
+            <div class="gw-header-row">
+                <div>
+                    <h3 class="gw-name">{html.escape(str(gw_config['name']))}</h3>
+                    <span class="gw-id">{html.escape(str(gw_name))}</span>
+                </div>
+                <span class="gw-agent-count">{len(gw_config['agents'])}</span>
+            </div>
+            {gw_desc_html}
+            {gw_caps_html}
             <div class="gw-agents">{agents_list}</div>
-            <div class="gw-count">{len(gw_config['agents'])} agents</div>
         </div>'''
 
     gateway_count = len(gateway_agent_map)
@@ -1770,6 +1872,7 @@ def render_html() -> str:
             </div>
         </div>
 
+
         <!-- Telegram Bot Page -->
         <div id="page-telegram" class="page">
             <div class="card">
@@ -1880,6 +1983,32 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
             lines = _safe_int(params.get("lines", ["30"])[0], 30, 1, 200)
             payload = _build_agent_status_snapshot(read_lines=lines)
+
+            # 补充 roster 注册的 agent（可能无 iTerm session）
+            try:
+                from pathlib import Path as _RegP
+                reg_path = _RegP(__file__).resolve().parent / "data" / "agent_registry.json"
+                if reg_path.exists():
+                    registry = json.loads(reg_path.read_text("utf-8"))
+                    existing_ids = {str(a.get("agent_id", "")).strip()
+                                    for a in payload.get("agents", []) if isinstance(a, dict)}
+                    for aid, info in registry.items():
+                        if aid not in existing_ids:
+                            payload.setdefault("agents", []).append({
+                                "agent_id": aid,
+                                "agent_name": info.get("agent_name", aid),
+                                "status": "registered",
+                                "output_tail": [],
+                                "source": "registry",
+                                "skills": info.get("skills", []),
+                            })
+                    # 更新 summary
+                    summary = payload.get("summary", {})
+                    if isinstance(summary, dict):
+                        summary["total"] = len(payload.get("agents", []))
+            except Exception:
+                pass
+
             status_code = 200 if payload.get("ok") else 503
             self._respond(
                 status_code,
@@ -2352,6 +2481,19 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             }
             self._respond(200, "application/json; charset=utf-8",
                           json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                          headers={"Cache-Control": "no-store"})
+
+        elif path == "/api/llm/config":
+            # 返回当前 LLM 配置 (mask API key)
+            cfg = dict(_llm_config)
+            key = cfg.get("api_key", "")
+            if key and len(key) > 12:
+                cfg["api_key"] = key[:8] + "..." + key[-4:]
+            elif key:
+                cfg["api_key"] = "***"
+            cfg["api_key_full_length"] = len(_llm_config.get("api_key", ""))
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps({"ok": True, "config": cfg}, ensure_ascii=False).encode("utf-8"),
                           headers={"Cache-Control": "no-store"})
 
         else:
@@ -3058,6 +3200,73 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 else:
                     self._respond(400, "application/json",
                                   json.dumps({"ok": False, "error": f"未知操作: {action}"}, ensure_ascii=False).encode("utf-8"))
+
+            except Exception as e:
+                self._respond(500, "application/json",
+                              json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/llm/config":
+            body = self.rfile.read(self._safe_content_length())
+            try:
+                data = json.loads(body) if body else {}
+                allowed_keys = {"api_key", "base_url", "model", "reasoning_effort", "timeout", "poll_interval", "cooldown_sec", "master_agent_id"}
+                updated = []
+                for k, v in data.items():
+                    if k in allowed_keys and isinstance(v, str) and v.strip():
+                        _llm_config[k] = v.strip()
+                        updated.append(k)
+                self._respond(200, "application/json",
+                              json.dumps({"ok": True, "updated": updated, "message": f"已更新 {len(updated)} 项配置"}, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json",
+                              json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/llm/test":
+            body = self.rfile.read(self._safe_content_length())
+            try:
+                import httpx
+                api_key = _llm_config.get("api_key", "")
+                base_url = _llm_config.get("base_url", "https://api.gpteamservices.com/v1")
+                model = _llm_config.get("model", "gpt-5.2")
+                effort = _llm_config.get("reasoning_effort", "high")
+                timeout = max(5, int(_llm_config.get("timeout", "30")))
+
+                started = time.perf_counter()
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.post(
+                        f"{base_url}/responses",
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        content=json.dumps({"model": model, "input": "hello", "reasoning": {"effort": effort}}, ensure_ascii=False),
+                    )
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+
+                if resp.status_code == 200:
+                    result = resp.json()
+                    out_text = ""
+                    for item in result.get("output", []):
+                        if item.get("type") == "message":
+                            for c in item.get("content", []):
+                                if c.get("type") == "output_text":
+                                    out_text = c.get("text", "")
+                                    break
+                            break
+                    self._respond(200, "application/json; charset=utf-8",
+                                  json.dumps({
+                                      "ok": True,
+                                      "status_code": resp.status_code,
+                                      "elapsed_ms": elapsed_ms,
+                                      "model": model,
+                                      "response_text": out_text[:500],
+                                      "response_id": result.get("id", ""),
+                                  }, ensure_ascii=False).encode("utf-8"))
+                else:
+                    self._respond(200, "application/json; charset=utf-8",
+                                  json.dumps({
+                                      "ok": False,
+                                      "status_code": resp.status_code,
+                                      "elapsed_ms": elapsed_ms,
+                                      "error": resp.text[:300],
+                                  }, ensure_ascii=False).encode("utf-8"))
 
             except Exception as e:
                 self._respond(500, "application/json",

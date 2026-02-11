@@ -124,7 +124,7 @@ function renderAgentSummary(summary, ts, error = '') {
 }
 
 function setAgentChipStatus(agentId, status, staleSec, hasError) {
-    const chips = document.querySelectorAll('.agent-chip[data-agent-id]');
+    const chips = document.querySelectorAll('.agent-chip[data-agent-id], .agent-card[data-agent-id], .agent-row[data-agent-id]');
     const normalized = AGENT_STATUS_CLASSES.includes(status) ? status : 'unknown';
 
     chips.forEach((chip) => {
@@ -145,7 +145,7 @@ function setAgentChipStatus(agentId, status, staleSec, hasError) {
 }
 
 function resetAllAgentChipStatus() {
-    const chips = document.querySelectorAll('.agent-chip[data-agent-id]');
+    const chips = document.querySelectorAll('.agent-chip[data-agent-id], .agent-card[data-agent-id], .agent-row[data-agent-id]');
     chips.forEach((chip) => {
         AGENT_STATUS_CLASSES.forEach((name) => chip.classList.remove(`agent-chip-status-${name}`));
         chip.classList.add('agent-chip-status-unknown');
@@ -191,7 +191,7 @@ function applyAgentStatusPayload(payload = {}) {
         );
     });
 
-    document.querySelectorAll('.agent-chip[data-agent-id]').forEach((chip) => {
+    document.querySelectorAll('.agent-chip[data-agent-id], .agent-card[data-agent-id], .agent-row[data-agent-id]').forEach((chip) => {
         const id = chip.dataset.agentId || '';
         if (!seen.has(id)) {
             setAgentChipStatus(id, 'unknown', 0, false);
@@ -2746,4 +2746,136 @@ async function lifecycleSendNotify() {
 function clearLifecycleTimeline() {
     const tl = document.getElementById('lc-timeline');
     if (tl) tl.innerHTML = '<div class="lifecycle-empty">已清空</div>';
+}
+
+// ── LLM Config 配置管理 ──────────────────────────────────────────────
+
+async function loadLlmConfig() {
+    try {
+        const r = await fetch('/api/llm/config');
+        const j = await r.json();
+        if (!j.ok) return;
+        const cfg = j.config;
+
+        const el = (id) => document.getElementById(id);
+        if (el('llm-api-key')) el('llm-api-key').value = cfg.api_key || '';
+        if (el('llm-base-url')) el('llm-base-url').value = cfg.base_url || '';
+        if (el('llm-model')) el('llm-model').value = cfg.model || '';
+        if (el('llm-reasoning-effort')) el('llm-reasoning-effort').value = cfg.reasoning_effort || 'high';
+        if (el('llm-timeout')) el('llm-timeout').value = cfg.timeout || '30';
+        if (el('llm-poll-interval')) el('llm-poll-interval').value = cfg.poll_interval || '8';
+        if (el('llm-cooldown')) el('llm-cooldown').value = cfg.cooldown_sec || '60';
+        if (el('llm-master-id')) el('llm-master-id').value = cfg.master_agent_id || 'agent_01';
+
+        // status badge
+        const badge = el('llm-status-badge');
+        if (badge) {
+            const hasKey = (cfg.api_key_full_length || 0) > 0;
+            badge.className = hasKey ? 'badge badge-green' : 'badge badge-red';
+            badge.textContent = hasKey ? `${cfg.model || 'unknown'}` : 'Key 未设置';
+        }
+
+        updateLlmApiExample(cfg);
+    } catch (e) {
+        console.error('loadLlmConfig error:', e);
+    }
+}
+
+async function saveLlmConfig() {
+    const el = (id) => document.getElementById(id);
+    const data = {};
+
+    const apiKey = el('llm-api-key')?.value?.trim();
+    // Only send api_key if user typed a real key (not a masked one)
+    if (apiKey && !apiKey.includes('...') && !apiKey.includes('***')) {
+        data.api_key = apiKey;
+    }
+    const fields = [
+        ['llm-base-url', 'base_url'],
+        ['llm-model', 'model'],
+        ['llm-reasoning-effort', 'reasoning_effort'],
+        ['llm-timeout', 'timeout'],
+        ['llm-poll-interval', 'poll_interval'],
+        ['llm-cooldown', 'cooldown_sec'],
+        ['llm-master-id', 'master_agent_id'],
+    ];
+    for (const [elemId, key] of fields) {
+        const v = el(elemId)?.value?.trim();
+        if (v) data[key] = v;
+    }
+
+    try {
+        const r = await fetch('/api/llm/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+        const j = await r.json();
+        if (j.ok) {
+            toast(j.message || '配置已保存', true);
+            setTimeout(loadLlmConfig, 500);
+        } else {
+            toast(j.error || '保存失败', false);
+        }
+    } catch (e) { toast('网络错误: ' + e.message, false); }
+}
+
+async function testLlmConnection() {
+    const resultEl = document.getElementById('llm-test-result');
+    if (resultEl) {
+        resultEl.style.color = 'var(--amber)';
+        resultEl.textContent = '⏳ 正在测试连接，请稍等...';
+    }
+    try {
+        const r = await fetch('/api/llm/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+        });
+        const j = await r.json();
+        if (resultEl) {
+            if (j.ok) {
+                resultEl.style.color = 'var(--accent)';
+                resultEl.textContent =
+                    `✅ 连接成功!\n` +
+                    `\n模型: ${j.model}` +
+                    `\n响应ID: ${j.response_id}` +
+                    `\n耗时: ${j.elapsed_ms}ms` +
+                    `\n\n--- 回复内容 ---\n${j.response_text || '(空)'}`;
+            } else {
+                resultEl.style.color = 'var(--red)';
+                resultEl.textContent =
+                    `❌ 连接失败\n` +
+                    `\nHTTP ${j.status_code || 'N/A'}` +
+                    `\n耗时: ${j.elapsed_ms || 0}ms` +
+                    `\n错误: ${j.error || '未知错误'}`;
+            }
+        }
+    } catch (e) {
+        if (resultEl) {
+            resultEl.style.color = 'var(--red)';
+            resultEl.textContent = `❌ 网络错误: ${e.message}`;
+        }
+    }
+}
+
+function toggleLlmPw(inputId) {
+    const el = document.getElementById(inputId);
+    if (!el) return;
+    el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+function updateLlmApiExample(cfg) {
+    const el = document.getElementById('llm-api-example');
+    if (!el) return;
+    const baseUrl = cfg.base_url || 'https://api.gpteamservices.com/v1';
+    const model = cfg.model || 'gpt-5.2';
+    const effort = cfg.reasoning_effort || 'high';
+    const keyDisplay = cfg.api_key || 'sk-...';
+
+    el.textContent =
+        `curl -sS -X POST "${baseUrl}/responses" \\\n` +
+        `  -H "Authorization: Bearer ${keyDisplay}" \\\n` +
+        `  -H "Content-Type: application/json" \\\n` +
+        `  -d '{"model":"${model}","input":"hello","reasoning":{"effort":"${effort}"}}'`;
 }

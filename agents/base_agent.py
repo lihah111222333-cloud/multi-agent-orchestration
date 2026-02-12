@@ -15,22 +15,33 @@ def _safe_int_env(key: str, default: int) -> int:
         return default
 
 
-def create_agent_server(name: str, description: str = "") -> FastMCP:
+def create_agent_server(
+    name: str,
+    description: str = "",
+    host: str = "127.0.0.1",
+    port: int = 8000,
+) -> FastMCP:
     """创建一个 MCP Agent Server 实例
 
     Args:
         name: Agent 名称，如 'agent-01'
         description: Agent 描述
+        host: HTTP 模式监听地址（仅 streamable-http 传输时有效）
+        port: HTTP 模式监听端口（仅 streamable-http 传输时有效）
 
     Returns:
         FastMCP 实例，可以在其上注册 tools
     """
-    server = FastMCP(name, instructions=description)
+    server = FastMCP(name, instructions=description, host=host, port=port)
     return server
 
 
-def run_agent(server: FastMCP) -> None:
-    """启动 Agent MCP Server (stdio 传输)，支持崩溃自动重启。
+def run_agent(server: FastMCP, transport: str = "stdio") -> None:
+    """启动 Agent MCP Server，支持崩溃自动重启。
+
+    Args:
+        server: FastMCP 实例
+        transport: 传输协议 ("stdio" | "streamable-http")
 
     - 正常退出 / KeyboardInterrupt / SystemExit 直接退出，不重试
     - 其它异常触发重试，指数退避 (2s → 最大 60s)
@@ -41,7 +52,7 @@ def run_agent(server: FastMCP) -> None:
 
     while True:
         try:
-            server.run(transport="stdio")
+            server.run(transport=transport)
             break  # 正常退出
         except (KeyboardInterrupt, SystemExit):
             break  # 主动退出，不重试

@@ -39,6 +39,7 @@ _DB_EXECUTE_ALLOWED_TABLES = {
     "prompt_versions",
     "task_traces",
     "command_cards",
+    "command_card_versions",
     "command_card_runs",
     "task_acks",
     "task_dags",
@@ -485,6 +486,24 @@ def _row_to_card(row: dict[str, Any]) -> dict[str, Any]:
         "updated_at": _fmt_dt_utc8_iso(row.get("updated_at")),
         "last_run_at": _fmt_dt_utc8_iso(row.get("last_run_at")),
         "run_count": int(row.get("run_count", 0) or 0),
+    }
+
+
+def _row_to_card_version(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": int(row.get("id", 0)),
+        "card_key": str(row.get("card_key", "")),
+        "title": str(row.get("title", "")),
+        "description": str(row.get("description", "")),
+        "command_template": str(row.get("command_template", "")),
+        "args_schema": row.get("args_schema") if isinstance(row.get("args_schema"), (dict, list)) else {},
+        "risk_level": str(row.get("risk_level", "normal")),
+        "enabled": bool(row.get("enabled", True)),
+        "created_by": str(row.get("created_by", "")),
+        "updated_by": str(row.get("updated_by", "")),
+        "source_updated_at": _fmt_dt_utc8_iso(row.get("source_updated_at")),
+        "created_at": _fmt_dt_utc8_iso(row.get("created_at")),
+        "archived_at": _fmt_dt_utc8_iso(row.get("archived_at")),
     }
 
 
@@ -1014,6 +1033,40 @@ def save_command_card(
     if not command_text:
         raise ValueError("command_template 不能为空")
 
+    previous = fetch_one(
+        """
+        SELECT id, card_key, title, description, command_template,
+               args_schema, risk_level, enabled, created_by, updated_by,
+               created_at, updated_at
+        FROM command_cards
+        WHERE card_key = %s
+        """,
+        (key,),
+    )
+
+    if previous:
+        execute(
+            """
+            INSERT INTO command_card_versions (
+                card_key, title, description, command_template, args_schema,
+                risk_level, enabled, created_by, updated_by, source_updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+            """,
+            (
+                str(previous.get("card_key") or ""),
+                str(previous.get("title") or ""),
+                str(previous.get("description") or ""),
+                str(previous.get("command_template") or ""),
+                _as_json_text(previous.get("args_schema")),
+                str(previous.get("risk_level") or "normal"),
+                bool(previous.get("enabled", True)),
+                str(previous.get("created_by") or ""),
+                str(previous.get("updated_by") or ""),
+                previous.get("updated_at"),
+            ),
+        )
+
     row = fetch_one(
         """
         INSERT INTO command_cards (
@@ -1058,6 +1111,66 @@ def save_command_card(
         detail=result.get("risk_level", "normal"),
     )
     return result
+
+
+def list_command_card_versions(card_key: str, limit: int = 20) -> list[dict[str, Any]]:
+    key = _normalize_key("card_key", card_key)
+    rows = fetch_all(
+        """
+        SELECT id, card_key, title, description, command_template,
+               args_schema, risk_level, enabled, created_by, updated_by,
+               source_updated_at, created_at, archived_at
+        FROM command_card_versions
+        WHERE card_key = %s
+        ORDER BY id DESC
+        LIMIT %s
+        """,
+        (key, normalize_limit(limit, default=20)),
+    )
+    return [_row_to_card_version(row) for row in rows]
+
+
+def rollback_command_card(card_key: str, version_id: int, updated_by: str = "") -> dict[str, Any]:
+    key = _normalize_key("card_key", card_key)
+    try:
+        vid = int(version_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("version_id 非法") from exc
+    if vid <= 0:
+        raise ValueError("version_id 非法")
+
+    version_row = fetch_one(
+        """
+        SELECT id, card_key, title, description, command_template,
+               args_schema, risk_level, enabled, created_by, updated_by,
+               source_updated_at, created_at, archived_at
+        FROM command_card_versions
+        WHERE id = %s AND card_key = %s
+        """,
+        (vid, key),
+    )
+    if not version_row:
+        return {"ok": False, "message": f"command card version not found: {key}#{vid}"}
+
+    card = save_command_card(
+        card_key=key,
+        title=str(version_row.get("title") or ""),
+        command_template=str(version_row.get("command_template") or ""),
+        description=str(version_row.get("description") or ""),
+        args_schema=version_row.get("args_schema"),
+        risk_level=str(version_row.get("risk_level") or "normal"),
+        enabled=bool(version_row.get("enabled", True)),
+        updated_by=str(updated_by or ""),
+    )
+    append_event(
+        event_type="command_card",
+        action="rollback",
+        result="ok",
+        actor=str(updated_by or ""),
+        target=key,
+        detail=f"version_id={vid}",
+    )
+    return {"ok": True, "command_card": card, "version": _row_to_card_version(version_row)}
 
 
 def get_command_card(card_key: str) -> Optional[dict[str, Any]]:

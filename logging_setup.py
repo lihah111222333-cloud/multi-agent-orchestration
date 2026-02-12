@@ -35,8 +35,13 @@ class PostgresLogHandler(logging.Handler):
 
 
 def setup_global_logging(default_level: str = "INFO") -> None:
-    level_name = os.getenv("LOG_LEVEL", default_level).upper()
+    # Use the explicit call-site level first; callers can still pass
+    # os.getenv("LOG_LEVEL", "...") when they want env-driven behavior.
+    level_name = str(default_level or "").upper() or os.getenv("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
+
+    # Restore logging if a previous test/runtime called logging.disable(...).
+    logging.disable(logging.NOTSET)
 
     root = logging.getLogger()
     root.setLevel(level)

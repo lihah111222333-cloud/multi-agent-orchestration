@@ -5,12 +5,17 @@ from __future__ import annotations
 import atexit
 import json
 import inspect
+import logging
 import os
 import sys
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator
 from datetime import datetime, date, timezone
 from decimal import Decimal
+
+_logger = logging.getLogger("acp_bus")
 
 try:
     import fcntl
@@ -33,6 +38,59 @@ class _SafeEncoder(json.JSONEncoder):
 def _safe_json(obj, **kw) -> str:
     """json.dumps with safe encoder for DB rows."""
     return json.dumps(obj, ensure_ascii=False, cls=_SafeEncoder, **kw)
+
+
+def _atomic_write_json(path: Path, data: Any) -> None:
+    """原子写入 JSON 文件：先写 tmp 再 os.replace，避免进程崩溃时数据截断。"""
+    content = json.dumps(data, ensure_ascii=False, indent=2)
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+@contextmanager
+def _locked_json_rw(path: Path, default: Any = None) -> Generator[tuple[Any, Any], None, None]:
+    """带 flock 的 JSON 文件读-改-写上下文管理器。
+
+    使用独立 .lock 文件进行 flock，避免 os.replace 导致的 inode 竞争。
+
+    用法::
+
+        with _locked_json_rw(store, default=[]) as (data, save):
+            data.append(item)
+            save(data)
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(f".{path.name}.lock")
+    lock_fd = open(lock_path, "a+", encoding="utf-8")
+    try:
+        if fcntl is not None:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+
+        # 在获取锁之后再读取数据文件，确保看到最新内容
+        if path.exists():
+            raw = path.read_text(encoding="utf-8").strip()
+        else:
+            raw = ""
+        if raw:
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = default() if callable(default) else (default if default is not None else {})
+        else:
+            data = default() if callable(default) else (default if default is not None else {})
+
+        def save(new_data: Any) -> None:
+            _atomic_write_json(path, new_data)
+
+        yield data, save
+    finally:
+        if fcntl is not None:
+            try:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+        lock_fd.close()
 
 
 _SINGLETON_LOCK_HANDLE: Any | None = None
@@ -82,6 +140,10 @@ def _acquire_singleton_lock_or_exit() -> None:
                 owner_pid = str(_SINGLETON_PID_FILE.read_text(encoding="utf-8")).strip()
                 if owner_pid == str(os.getpid()):
                     _SINGLETON_PID_FILE.unlink()
+        except ProcessLookupError:
+            _logger.debug("singleton cleanup: process already exited (No such process)")
+        except OSError as exc:
+            _logger.debug("singleton cleanup OSError: %s", exc)
         except Exception:
             pass
 
@@ -118,7 +180,7 @@ from command_card_executor import (
     prepare_command_card_run as prepare_command_card_run_flow,
     review_command_card_run as review_command_card_run_flow,
 )
-from agents.iterm_bridge import list_iterm_agent_sessions as list_iterm_sessions, read_iterm_output, send_iterm_input
+from agents.iterm_bridge import list_iterm_agent_sessions, read_iterm_output, send_iterm_input
 from shared_file_store import (
     delete_file as delete_shared_file,
     list_files as list_shared_files,
@@ -178,7 +240,7 @@ def iterm(
         from pathlib import Path as _P
         sp = _P(__file__).resolve().parents[1] / "data" / "iterm_launch_state.json"
         state_file = str(sp)
-        payload = list_iterm_sessions(state_file=state_file)
+        payload = list_iterm_agent_sessions(state_file=state_file)
 
         # 兼容处理：某些运行时会出现 event loop 冲突的回绑告警，
         # 但如果已拿到有效会话，不应让上层误判为“窗口不可用”。
@@ -287,13 +349,16 @@ def shared_file(action: str = "list", path: str = "", content: str = "", limit: 
     if action == "write":
         if not path.strip():
             return json.dumps({"ok": False, "error": "write 需要 path"}, ensure_ascii=False)
-        return json.dumps(write_shared_file(path=path, content=content, actor="mcp"), ensure_ascii=False)
+        row = write_shared_file(path=path, content=content, actor="mcp")
+        return json.dumps({"ok": True, **row}, ensure_ascii=False)
 
     if action == "read":
         if not path.strip():
             return json.dumps({"ok": False, "error": "read 需要 path"}, ensure_ascii=False)
         result = read_shared_file(path=path)
-        return json.dumps(result or {"ok": False, "message": "not_found", "path": path}, ensure_ascii=False)
+        if not result:
+            return json.dumps({"ok": False, "message": "not_found", "path": path}, ensure_ascii=False)
+        return json.dumps({"ok": True, **result}, ensure_ascii=False)
 
     if action == "delete":
         if not path.strip():
@@ -351,19 +416,15 @@ def interaction(
             return json.dumps({"ok": False, "error": "register 需要 sender (agent_id)"}, ensure_ascii=False)
         from pathlib import Path as _P
         reg_path = _P(__file__).resolve().parents[1] / "data" / "agent_registry.json"
-        reg_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            registry = json.loads(reg_path.read_text("utf-8")) if reg_path.exists() else {}
-        except Exception:
-            registry = {}
         skills = [s.strip() for s in content.split(",") if s.strip()] if content.strip() else []
-        registry[sender.strip()] = {
-            "agent_id": sender.strip(),
-            "agent_name": receiver.strip() or sender.strip(),
-            "skills": skills,
-            "registered_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
-        }
-        reg_path.write_text(json.dumps(registry, ensure_ascii=False, indent=2), "utf-8")
+        with _locked_json_rw(reg_path, default=dict) as (registry, save_reg):
+            registry[sender.strip()] = {
+                "agent_id": sender.strip(),
+                "agent_name": receiver.strip() or sender.strip(),
+                "skills": skills,
+                "registered_at": datetime.now(timezone.utc).isoformat(),
+            }
+            save_reg(registry)
         return json.dumps({"ok": True, "agent": registry[sender.strip()]}, ensure_ascii=False)
 
     if action == "roster":
@@ -420,11 +481,16 @@ def interaction(
         return json.dumps({"ok": True, "count": len(roster), "agents": roster}, ensure_ascii=False)
 
     if action == "create":
-        row = create_interaction_row(
-            sender=sender, receiver=receiver, msg_type=msg_type, content=content,
-            thread_id=thread_id, parent_id=parent_id, requires_review=requires_review,
-            metadata=_parse_json(metadata_json, {}), status=status or "pending",
-        )
+        if not sender.strip():
+            return json.dumps({"ok": False, "error": "create 需要 sender"}, ensure_ascii=False)
+        try:
+            row = create_interaction_row(
+                sender=sender, receiver=receiver, msg_type=msg_type, content=content,
+                thread_id=thread_id, parent_id=parent_id, requires_review=requires_review,
+                metadata=_parse_json(metadata_json, {}), status=status or "pending",
+            )
+        except ValueError as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
         return json.dumps({"ok": True, "interaction": row}, ensure_ascii=False)
 
     if action == "review":
@@ -683,142 +749,134 @@ def task(
         max_retries: 最大重试次数（0=不重试）
         limit: 列表数量限制
     """
-    from pathlib import Path
-    from datetime import datetime, timezone
     store = Path(__file__).resolve().parents[1] / "data" / "agent_tasks.json"
-    store.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        tasks = json.loads(store.read_text("utf-8")) if store.exists() else []
-    except Exception:
-        tasks = []
-
     action = action.strip().lower()
-    _save = lambda: store.write_text(json.dumps(tasks, ensure_ascii=False, indent=2), "utf-8")
 
-    if action == "create":
-        if not title.strip():
-            return json.dumps({"ok": False, "error": "create 需要 title"}, ensure_ascii=False)
-        # 幂等键防重复
-        ikey = idempotency_key.strip()
-        if ikey:
-            dup = next((t for t in tasks if t.get("idempotency_key") == ikey), None)
-            if dup:
-                return json.dumps({"ok": True, "task": dup, "duplicate": True}, ensure_ascii=False)
-        now = datetime.now(timezone.utc).isoformat()
-        deps = [d.strip() for d in depends_on.split(",") if d.strip()] if depends_on.strip() else []
-        new_task = {
-            "task_id": f"T{int(datetime.now(timezone.utc).timestamp()*1000) % 100000000}",
-            "title": title.strip(),
-            "description": description.strip(),
-            "creator": creator.strip() or "unknown",
-            "assignee": assignee.strip(),
-            "priority": priority.strip() or "normal",
-            "status": "pending",
-            "result": "",
-            "project_id": project_id.strip(),
-            "depends_on": deps,
-            "timeout_sec": max(0, int(timeout_sec)),
-            "max_retries": max(0, int(max_retries)),
-            "retry_count": 0,
-            "idempotency_key": ikey,
-            "created_at": now,
-            "updated_at": now,
-        }
-        tasks.append(new_task)
-        _save()
-        return json.dumps({"ok": True, "task": new_task}, ensure_ascii=False)
+    with _locked_json_rw(store, default=list) as (tasks, _save):
 
-    if action == "get":
-        if not task_id.strip():
-            return json.dumps({"ok": False, "error": "get 需要 task_id"}, ensure_ascii=False)
-        t = next((t for t in tasks if t.get("task_id") == task_id.strip()), None)
-        return json.dumps({"ok": bool(t), "task": t}, ensure_ascii=False)
+        if action == "create":
+            if not title.strip():
+                return json.dumps({"ok": False, "error": "create 需要 title"}, ensure_ascii=False)
+            # 幂等键防重复
+            ikey = idempotency_key.strip()
+            if ikey:
+                dup = next((t for t in tasks if t.get("idempotency_key") == ikey), None)
+                if dup:
+                    return json.dumps({"ok": True, "task": dup, "duplicate": True}, ensure_ascii=False)
+            now = datetime.now(timezone.utc).isoformat()
+            deps = [d.strip() for d in depends_on.split(",") if d.strip()] if depends_on.strip() else []
+            new_task = {
+                "task_id": f"T-{uuid.uuid4().hex[:12]}",
+                "title": title.strip(),
+                "description": description.strip(),
+                "creator": creator.strip() or "unknown",
+                "assignee": assignee.strip(),
+                "priority": priority.strip() or "normal",
+                "status": "pending",
+                "result": "",
+                "project_id": project_id.strip(),
+                "depends_on": deps,
+                "timeout_sec": max(0, int(timeout_sec)),
+                "max_retries": max(0, int(max_retries)),
+                "retry_count": 0,
+                "idempotency_key": ikey,
+                "created_at": now,
+                "updated_at": now,
+            }
+            tasks.append(new_task)
+            _save(tasks)
+            return json.dumps({"ok": True, "task": new_task}, ensure_ascii=False)
 
-    if action == "update":
-        if not task_id.strip():
-            return json.dumps({"ok": False, "error": "update 需要 task_id"}, ensure_ascii=False)
-        for t in tasks:
-            if t.get("task_id") == task_id.strip():
-                auto_retried = False
-                if status.strip():
-                    if status.strip() == "failed" and t.get("max_retries", 0) > t.get("retry_count", 0):
-                        t["retry_count"] = t.get("retry_count", 0) + 1
-                        t["status"] = "pending"
-                        t["result"] = f"[重试 {t['retry_count']}/{t['max_retries']}] {result.strip()}"
-                        auto_retried = True
-                    else:
-                        t["status"] = status.strip()
-                if result.strip() and not auto_retried:
-                    t["result"] = result.strip()
-                if description.strip():
-                    t["description"] = description.strip()
-                t["updated_at"] = datetime.now(timezone.utc).isoformat()
-                _save()
-                return json.dumps({"ok": True, "task": t, "auto_retried": auto_retried}, ensure_ascii=False)
-        return json.dumps({"ok": False, "error": f"未找到 task_id={task_id}"}, ensure_ascii=False)
+        if action == "get":
+            if not task_id.strip():
+                return json.dumps({"ok": False, "error": "get 需要 task_id"}, ensure_ascii=False)
+            t = next((t for t in tasks if t.get("task_id") == task_id.strip()), None)
+            return json.dumps({"ok": bool(t), "task": t}, ensure_ascii=False)
 
-    if action == "assign":
-        if not task_id.strip() or not assignee.strip():
-            return json.dumps({"ok": False, "error": "assign 需要 task_id + assignee"}, ensure_ascii=False)
-        for t in tasks:
-            if t.get("task_id") == task_id.strip():
-                t["assignee"] = assignee.strip()
-                t["updated_at"] = datetime.now(timezone.utc).isoformat()
-                _save()
-                return json.dumps({"ok": True, "task": t}, ensure_ascii=False)
-        return json.dumps({"ok": False, "error": f"未找到 task_id={task_id}"}, ensure_ascii=False)
+        if action == "update":
+            if not task_id.strip():
+                return json.dumps({"ok": False, "error": "update 需要 task_id"}, ensure_ascii=False)
+            for t in tasks:
+                if t.get("task_id") == task_id.strip():
+                    auto_retried = False
+                    if status.strip():
+                        if status.strip() == "failed" and t.get("max_retries", 0) > t.get("retry_count", 0):
+                            t["retry_count"] = t.get("retry_count", 0) + 1
+                            t["status"] = "pending"
+                            t["result"] = f"[重试 {t['retry_count']}/{t['max_retries']}] {result.strip()}"
+                            auto_retried = True
+                        else:
+                            t["status"] = status.strip()
+                    if result.strip() and not auto_retried:
+                        t["result"] = result.strip()
+                    if description.strip():
+                        t["description"] = description.strip()
+                    t["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    _save(tasks)
+                    return json.dumps({"ok": True, "task": t, "auto_retried": auto_retried}, ensure_ascii=False)
+            return json.dumps({"ok": False, "error": f"未找到 task_id={task_id}"}, ensure_ascii=False)
 
-    if action == "cancel":
-        if not task_id.strip():
-            return json.dumps({"ok": False, "error": "cancel 需要 task_id"}, ensure_ascii=False)
-        for t in tasks:
-            if t.get("task_id") == task_id.strip():
-                t["status"] = "cancelled"
-                t["updated_at"] = datetime.now(timezone.utc).isoformat()
-                _save()
-                return json.dumps({"ok": True, "task": t}, ensure_ascii=False)
-        return json.dumps({"ok": False, "error": f"未找到 task_id={task_id}"}, ensure_ascii=False)
+        if action == "assign":
+            if not task_id.strip() or not assignee.strip():
+                return json.dumps({"ok": False, "error": "assign 需要 task_id + assignee"}, ensure_ascii=False)
+            for t in tasks:
+                if t.get("task_id") == task_id.strip():
+                    t["assignee"] = assignee.strip()
+                    t["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    _save(tasks)
+                    return json.dumps({"ok": True, "task": t}, ensure_ascii=False)
+            return json.dumps({"ok": False, "error": f"未找到 task_id={task_id}"}, ensure_ascii=False)
 
-    if action == "ready":
-        done_ids = {t.get("task_id") for t in tasks if t.get("status") in ("done", "cancelled")}
-        ready_tasks = []
-        for t in tasks:
-            if t.get("status") != "pending":
-                continue
-            deps = t.get("depends_on", [])
-            if not deps or all(d in done_ids for d in deps):
-                ready_tasks.append(t)
+        if action == "cancel":
+            if not task_id.strip():
+                return json.dumps({"ok": False, "error": "cancel 需要 task_id"}, ensure_ascii=False)
+            for t in tasks:
+                if t.get("task_id") == task_id.strip():
+                    t["status"] = "cancelled"
+                    t["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    _save(tasks)
+                    return json.dumps({"ok": True, "task": t}, ensure_ascii=False)
+            return json.dumps({"ok": False, "error": f"未找到 task_id={task_id}"}, ensure_ascii=False)
+
+        if action == "ready":
+            done_ids = {t.get("task_id") for t in tasks if t.get("status") in ("done", "cancelled")}
+            ready_tasks = []
+            for t in tasks:
+                if t.get("status") != "pending":
+                    continue
+                deps = t.get("depends_on", [])
+                if not deps or all(d in done_ids for d in deps):
+                    ready_tasks.append(t)
+            if project_id.strip():
+                ready_tasks = [t for t in ready_tasks if t.get("project_id") == project_id.strip()]
+            return json.dumps({"ok": True, "count": len(ready_tasks), "tasks": ready_tasks}, ensure_ascii=False)
+
+        if action == "progress":
+            target = tasks
+            if project_id.strip():
+                target = [t for t in tasks if t.get("project_id") == project_id.strip()]
+            total = len(target)
+            if total == 0:
+                return json.dumps({"ok": True, "total": 0, "message": "无任务"}, ensure_ascii=False)
+            by_status = {}
+            for t in target:
+                s = t.get("status", "unknown")
+                by_status[s] = by_status.get(s, 0) + 1
+            done = by_status.get("done", 0) + by_status.get("cancelled", 0)
+            pct = round(done / total * 100, 1)
+            return json.dumps({"ok": True, "total": total, "progress_pct": pct, "by_status": by_status}, ensure_ascii=False)
+
+        # list (default)
+        filtered = tasks
+        if assignee.strip():
+            filtered = [t for t in filtered if t.get("assignee") == assignee.strip()]
+        if status.strip():
+            filtered = [t for t in filtered if t.get("status") == status.strip()]
+        if priority.strip() and priority.strip() != "normal":
+            filtered = [t for t in filtered if t.get("priority") == priority.strip()]
         if project_id.strip():
-            ready_tasks = [t for t in ready_tasks if t.get("project_id") == project_id.strip()]
-        return json.dumps({"ok": True, "count": len(ready_tasks), "tasks": ready_tasks}, ensure_ascii=False)
-
-    if action == "progress":
-        target = tasks
-        if project_id.strip():
-            target = [t for t in tasks if t.get("project_id") == project_id.strip()]
-        total = len(target)
-        if total == 0:
-            return json.dumps({"ok": True, "total": 0, "message": "无任务"}, ensure_ascii=False)
-        by_status = {}
-        for t in target:
-            s = t.get("status", "unknown")
-            by_status[s] = by_status.get(s, 0) + 1
-        done = by_status.get("done", 0) + by_status.get("cancelled", 0)
-        pct = round(done / total * 100, 1)
-        return json.dumps({"ok": True, "total": total, "progress_pct": pct, "by_status": by_status}, ensure_ascii=False)
-
-    # list (default)
-    filtered = tasks
-    if assignee.strip():
-        filtered = [t for t in filtered if t.get("assignee") == assignee.strip()]
-    if status.strip():
-        filtered = [t for t in filtered if t.get("status") == status.strip()]
-    if priority.strip() and priority.strip() != "normal":
-        filtered = [t for t in filtered if t.get("priority") == priority.strip()]
-    if project_id.strip():
-        filtered = [t for t in filtered if t.get("project_id") == project_id.strip()]
-    return json.dumps({"ok": True, "count": len(filtered[:limit]), "tasks": filtered[:limit]}, ensure_ascii=False)
+            filtered = [t for t in filtered if t.get("project_id") == project_id.strip()]
+        return json.dumps({"ok": True, "count": len(filtered[:limit]), "tasks": filtered[:limit]}, ensure_ascii=False)
 
 
 # ---- 审批/错误处理 ----
@@ -856,71 +914,64 @@ def approval(
         status: 过滤状态（pending/approved/rejected/resolved）
         limit: 列表数量限制
     """
-    from pathlib import Path
-    from datetime import datetime, timezone
     store = Path(__file__).resolve().parents[1] / "data" / "agent_approvals.json"
-    store.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        items = json.loads(store.read_text("utf-8")) if store.exists() else []
-    except Exception:
-        items = []
-
     action = action.strip().lower()
 
-    if action == "request":
-        if not title.strip():
-            return json.dumps({"ok": False, "error": "request 需要 title"}, ensure_ascii=False)
-        if not target_agent.strip():
-            return json.dumps({"ok": False, "error": "request 需要 target_agent（指定谁来审批）"}, ensure_ascii=False)
-        now = datetime.now(timezone.utc).isoformat()
-        new_item = {
-            "approval_id": f"A{int(datetime.now(timezone.utc).timestamp()*1000) % 100000000}",
-            "requester": requester.strip() or "unknown",
-            "target_agent": target_agent.strip(),
-            "title": title.strip(),
-            "description": description.strip(),
-            "options": _parse_json(options_json, []),
-            "status": "pending",
-            "decision": "",
-            "approver": "",
-            "reason": "",
-            "created_at": now,
-            "resolved_at": "",
-        }
-        items.append(new_item)
-        store.write_text(json.dumps(items, ensure_ascii=False, indent=2), "utf-8")
-        return json.dumps({"ok": True, "approval": new_item}, ensure_ascii=False)
+    with _locked_json_rw(store, default=list) as (items, _save):
 
-    if action == "respond":
-        if not approval_id.strip() or not decision.strip():
-            return json.dumps({"ok": False, "error": "respond 需要 approval_id + decision"}, ensure_ascii=False)
-        for item in items:
-            if item.get("approval_id") == approval_id.strip():
-                item["decision"] = decision.strip()
-                item["approver"] = approver.strip() or "unknown"
-                item["reason"] = reason.strip()
-                item["status"] = "resolved"
-                item["resolved_at"] = datetime.now(timezone.utc).isoformat()
-                store.write_text(json.dumps(items, ensure_ascii=False, indent=2), "utf-8")
-                return json.dumps({"ok": True, "approval": item}, ensure_ascii=False)
-        return json.dumps({"ok": False, "error": f"未找到 approval_id={approval_id}"}, ensure_ascii=False)
+        if action == "request":
+            if not title.strip():
+                return json.dumps({"ok": False, "error": "request 需要 title"}, ensure_ascii=False)
+            if not target_agent.strip():
+                return json.dumps({"ok": False, "error": "request 需要 target_agent（指定谁来审批）"}, ensure_ascii=False)
+            now = datetime.now(timezone.utc).isoformat()
+            new_item = {
+                "approval_id": f"A-{uuid.uuid4().hex[:12]}",
+                "requester": requester.strip() or "unknown",
+                "target_agent": target_agent.strip(),
+                "title": title.strip(),
+                "description": description.strip(),
+                "options": _parse_json(options_json, []),
+                "status": "pending",
+                "decision": "",
+                "approver": "",
+                "reason": "",
+                "created_at": now,
+                "resolved_at": "",
+            }
+            items.append(new_item)
+            _save(items)
+            return json.dumps({"ok": True, "approval": new_item}, ensure_ascii=False)
 
-    if action == "get":
-        if not approval_id.strip():
-            return json.dumps({"ok": False, "error": "get 需要 approval_id"}, ensure_ascii=False)
-        item = next((i for i in items if i.get("approval_id") == approval_id.strip()), None)
-        return json.dumps({"ok": bool(item), "approval": item}, ensure_ascii=False)
+        if action == "respond":
+            if not approval_id.strip() or not decision.strip():
+                return json.dumps({"ok": False, "error": "respond 需要 approval_id + decision"}, ensure_ascii=False)
+            for item in items:
+                if item.get("approval_id") == approval_id.strip():
+                    item["decision"] = decision.strip()
+                    item["approver"] = approver.strip() or "unknown"
+                    item["reason"] = reason.strip()
+                    item["status"] = "resolved"
+                    item["resolved_at"] = datetime.now(timezone.utc).isoformat()
+                    _save(items)
+                    return json.dumps({"ok": True, "approval": item}, ensure_ascii=False)
+            return json.dumps({"ok": False, "error": f"未找到 approval_id={approval_id}"}, ensure_ascii=False)
 
-    # list (default)
-    filtered = items
-    if target_agent.strip():
-        filtered = [i for i in filtered if i.get("target_agent") == target_agent.strip()]
-    if requester.strip():
-        filtered = [i for i in filtered if i.get("requester") == requester.strip()]
-    if status.strip():
-        filtered = [i for i in filtered if i.get("status") == status.strip()]
-    return json.dumps({"ok": True, "count": len(filtered[:limit]), "approvals": filtered[:limit]}, ensure_ascii=False)
+        if action == "get":
+            if not approval_id.strip():
+                return json.dumps({"ok": False, "error": "get 需要 approval_id"}, ensure_ascii=False)
+            item = next((i for i in items if i.get("approval_id") == approval_id.strip()), None)
+            return json.dumps({"ok": bool(item), "approval": item}, ensure_ascii=False)
+
+        # list (default)
+        filtered = items
+        if target_agent.strip():
+            filtered = [i for i in filtered if i.get("target_agent") == target_agent.strip()]
+        if requester.strip():
+            filtered = [i for i in filtered if i.get("requester") == requester.strip()]
+        if status.strip():
+            filtered = [i for i in filtered if i.get("status") == status.strip()]
+        return json.dumps({"ok": True, "count": len(filtered[:limit]), "approvals": filtered[:limit]}, ensure_ascii=False)
 
 
 # ---- 资源锁/租约 ----
@@ -942,69 +993,63 @@ def lock(
         owner: 锁持有者 agent_id
         ttl_sec: 锁生存时间（秒），默认 300，到期自动失效
     """
-    from pathlib import Path
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta
     store = Path(__file__).resolve().parents[1] / "data" / "agent_locks.json"
-    store.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        locks = json.loads(store.read_text("utf-8")) if store.exists() else {}
-    except Exception:
-        locks = {}
-
-    now = datetime.now(timezone.utc)
-    now_iso = now.isoformat()
-    # 自动清理过期锁
-    expired = [k for k, v in locks.items()
-               if v.get("expires_at") and datetime.fromisoformat(v["expires_at"]) < now]
-    for k in expired:
-        del locks[k]
-
     action = action.strip().lower()
-    _save = lambda: store.write_text(json.dumps(locks, ensure_ascii=False, indent=2), "utf-8")
 
-    if action == "acquire":
-        if not resource.strip() or not owner.strip():
-            return json.dumps({"ok": False, "error": "acquire 需要 resource + owner"}, ensure_ascii=False)
-        r = resource.strip()
-        existing = locks.get(r)
-        if existing:
-            if existing.get("owner") == owner.strip():
-                existing["expires_at"] = (now + timedelta(seconds=max(30, int(ttl_sec)))).isoformat()
-                existing["renewed_at"] = now_iso
-                _save()
-                return json.dumps({"ok": True, "lock": existing, "renewed": True}, ensure_ascii=False)
-            return json.dumps({"ok": False, "error": f"资源 {r} 已被 {existing['owner']} 锁定",
-                               "lock": existing}, ensure_ascii=False)
-        locks[r] = {"resource": r, "owner": owner.strip(), "acquired_at": now_iso,
-                     "expires_at": (now + timedelta(seconds=max(30, int(ttl_sec)))).isoformat()}
-        _save()
-        return json.dumps({"ok": True, "lock": locks[r]}, ensure_ascii=False)
+    with _locked_json_rw(store, default=dict) as (locks, _save):
 
-    if action == "release":
-        if not resource.strip() or not owner.strip():
-            return json.dumps({"ok": False, "error": "release 需要 resource + owner"}, ensure_ascii=False)
-        r = resource.strip()
-        existing = locks.get(r)
-        if not existing:
-            return json.dumps({"ok": True, "message": f"资源 {r} 未被锁定"}, ensure_ascii=False)
-        if existing.get("owner") != owner.strip():
-            return json.dumps({"ok": False, "error": f"资源 {r} 由 {existing['owner']} 持有"}, ensure_ascii=False)
-        del locks[r]
-        _save()
-        return json.dumps({"ok": True, "message": f"已释放 {r}"}, ensure_ascii=False)
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        # 自动清理过期锁
+        expired = [k for k, v in locks.items()
+                   if v.get("expires_at") and datetime.fromisoformat(v["expires_at"]) < now]
+        for k in expired:
+            del locks[k]
 
-    if action == "force_release":
-        if not resource.strip():
-            return json.dumps({"ok": False, "error": "force_release 需要 resource"}, ensure_ascii=False)
-        removed = locks.pop(resource.strip(), None)
-        _save()
-        return json.dumps({"ok": True, "message": f"已强制释放 {resource.strip()}",
-                           "was_held_by": removed.get("owner") if removed else None}, ensure_ascii=False)
+        if action == "acquire":
+            if not resource.strip() or not owner.strip():
+                return json.dumps({"ok": False, "error": "acquire 需要 resource + owner"}, ensure_ascii=False)
+            r = resource.strip()
+            existing = locks.get(r)
+            if existing:
+                if existing.get("owner") == owner.strip():
+                    existing["expires_at"] = (now + timedelta(seconds=max(30, int(ttl_sec)))).isoformat()
+                    existing["renewed_at"] = now_iso
+                    _save(locks)
+                    return json.dumps({"ok": True, "lock": existing, "renewed": True}, ensure_ascii=False)
+                return json.dumps({"ok": False, "error": f"资源 {r} 已被 {existing['owner']} 锁定",
+                                   "lock": existing}, ensure_ascii=False)
+            locks[r] = {"resource": r, "owner": owner.strip(), "acquired_at": now_iso,
+                         "expires_at": (now + timedelta(seconds=max(30, int(ttl_sec)))).isoformat()}
+            _save(locks)
+            return json.dumps({"ok": True, "lock": locks[r]}, ensure_ascii=False)
 
-    # list (default)
-    _save()
-    return json.dumps({"ok": True, "count": len(locks), "locks": list(locks.values()),
-                        "expired_cleaned": len(expired)}, ensure_ascii=False)
+        if action == "release":
+            if not resource.strip() or not owner.strip():
+                return json.dumps({"ok": False, "error": "release 需要 resource + owner"}, ensure_ascii=False)
+            r = resource.strip()
+            existing = locks.get(r)
+            if not existing:
+                return json.dumps({"ok": True, "message": f"资源 {r} 未被锁定"}, ensure_ascii=False)
+            if existing.get("owner") != owner.strip():
+                return json.dumps({"ok": False, "error": f"资源 {r} 由 {existing['owner']} 持有"}, ensure_ascii=False)
+            del locks[r]
+            _save(locks)
+            return json.dumps({"ok": True, "message": f"已释放 {r}"}, ensure_ascii=False)
+
+        if action == "force_release":
+            if not resource.strip():
+                return json.dumps({"ok": False, "error": "force_release 需要 resource"}, ensure_ascii=False)
+            removed = locks.pop(resource.strip(), None)
+            _save(locks)
+            return json.dumps({"ok": True, "message": f"已强制释放 {resource.strip()}",
+                               "was_held_by": removed.get("owner") if removed else None}, ensure_ascii=False)
+
+        # list (default)
+        _save(locks)
+        return json.dumps({"ok": True, "count": len(locks), "locks": list(locks.values()),
+                            "expired_cleaned": len(expired)}, ensure_ascii=False)
 
 
 # ---- 看门狗定时唤醒 tool ----
@@ -1041,6 +1086,321 @@ def agent_watchdog(action: str = "start", interval_sec: int = 120, prompt: str =
     return json.dumps({"ok": True, "message": f"看门狗已启动，每 {max(30, int(interval_sec))}s 唤醒", **get_watchdog_info()}, ensure_ascii=False)
 
 
+# ---- Backward-compatible wrappers (legacy tool names) ----
+def iterm_list_sessions(state_file: str = "") -> str:
+    return json.dumps(list_iterm_agent_sessions(state_file=state_file), ensure_ascii=False)
+
+
+def iterm_send_input(
+    text: str,
+    agent_id: str = "",
+    all_agents: bool = False,
+    wait_sec: float = 0.4,
+    read_lines: int = 20,
+    state_file: str = "",
+    append_enter: bool = True,
+) -> str:
+    payload = send_iterm_input(
+        text=text,
+        agent_id=agent_id,
+        all_agents=all_agents,
+        wait_sec=wait_sec,
+        read_lines=read_lines,
+        state_file=state_file,
+        append_enter=append_enter,
+    )
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def iterm_read_output(
+    agent_id: str = "",
+    all_agents: bool = False,
+    read_lines: int = 20,
+    state_file: str = "",
+) -> str:
+    payload = read_iterm_output(
+        agent_id=agent_id,
+        all_agents=all_agents,
+        read_lines=read_lines,
+        state_file=state_file,
+    )
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def write_file(path: str, content: str) -> str:
+    return json.dumps(write_shared_file(path=path, content=content, actor="mcp"), ensure_ascii=False)
+
+
+def read_file(path: str) -> str:
+    result = read_shared_file(path=path)
+    payload = result or {"ok": False, "message": "not_found", "path": path}
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def list_files(path: str = "", limit: int = 200) -> str:
+    rows = list_shared_files(prefix=path, limit=limit)
+    return json.dumps({"ok": True, "count": len(rows), "files": rows}, ensure_ascii=False)
+
+
+def delete_file(path: str) -> str:
+    return json.dumps(delete_shared_file(path=path, actor="mcp"), ensure_ascii=False)
+
+
+def create_interaction(
+    sender: str,
+    receiver: str = "",
+    msg_type: str = "task",
+    content: str = "",
+    thread_id: str = "",
+    parent_id: int | None = None,
+    requires_review: bool = False,
+    metadata_json: str = "",
+    status: str = "pending",
+) -> str:
+    row = create_interaction_row(
+        sender=sender,
+        receiver=receiver,
+        msg_type=msg_type,
+        content=content,
+        thread_id=thread_id,
+        parent_id=parent_id,
+        requires_review=requires_review,
+        metadata=_parse_json(metadata_json, {}),
+        status=status,
+    )
+    return json.dumps({"ok": True, "interaction": row}, ensure_ascii=False)
+
+
+def list_interactions(
+    thread_id: str = "",
+    sender: str = "",
+    receiver: str = "",
+    msg_type: str = "",
+    status: str = "",
+    requires_review: bool | None = None,
+    limit: int = 100,
+) -> str:
+    rows = list_interaction_rows(
+        thread_id=thread_id,
+        sender=sender,
+        receiver=receiver,
+        msg_type=msg_type,
+        status=status,
+        requires_review=requires_review,
+        limit=limit,
+    )
+    return json.dumps({"ok": True, "count": len(rows), "rows": rows}, ensure_ascii=False)
+
+
+def review_interaction(interaction_id: int, status: str, reviewer: str = "", note: str = "") -> str:
+    return json.dumps(
+        review_interaction_row(interaction_id=interaction_id, status=status, reviewer=reviewer, note=note),
+        ensure_ascii=False,
+    )
+
+
+def save_prompt_template(
+    prompt_key: str,
+    title: str,
+    prompt_text: str,
+    agent_key: str = "",
+    tool_name: str = "",
+    variables_json: str = "",
+    tags_json: str = "",
+    enabled: bool = True,
+    updated_by: str = "mcp",
+) -> str:
+    row = save_prompt_template_row(
+        prompt_key=prompt_key,
+        title=title,
+        prompt_text=prompt_text,
+        agent_key=agent_key,
+        tool_name=tool_name,
+        variables=_parse_json(variables_json, {}),
+        tags=_parse_json(tags_json, []),
+        enabled=enabled,
+        updated_by=updated_by,
+    )
+    return json.dumps({"ok": True, "prompt": row}, ensure_ascii=False)
+
+
+def get_prompt_template(prompt_key: str) -> str:
+    row = get_prompt_template_row(prompt_key=prompt_key)
+    return json.dumps({"ok": bool(row), "prompt": row}, ensure_ascii=False)
+
+
+def list_prompt_templates(
+    agent_key: str = "",
+    tool_name: str = "",
+    keyword: str = "",
+    enabled_only: bool = False,
+    limit: int = 100,
+) -> str:
+    rows = list_prompt_template_rows(
+        agent_key=agent_key,
+        tool_name=tool_name,
+        keyword=keyword,
+        enabled_only=enabled_only,
+        limit=limit,
+    )
+    return json.dumps({"ok": True, "count": len(rows), "rows": rows}, ensure_ascii=False)
+
+
+def set_prompt_template_enabled(prompt_key: str, enabled: bool, updated_by: str = "mcp") -> str:
+    return json.dumps(
+        set_prompt_template_enabled_row(prompt_key=prompt_key, enabled=enabled, updated_by=updated_by),
+        ensure_ascii=False,
+    )
+
+
+def save_command_card(
+    card_key: str,
+    title: str,
+    command_template: str,
+    description: str = "",
+    args_schema_json: str = "",
+    risk_level: str = "",
+    enabled: bool = True,
+    updated_by: str = "mcp",
+) -> str:
+    row = save_command_card_row(
+        card_key=card_key,
+        title=title,
+        command_template=command_template,
+        description=description,
+        args_schema=_parse_json(args_schema_json, {}),
+        risk_level=risk_level,
+        enabled=enabled,
+        updated_by=updated_by,
+    )
+    return _safe_json({"ok": True, "command_card": row})
+
+
+def get_command_card(card_key: str) -> str:
+    row = get_command_card_row(card_key=card_key)
+    return _safe_json({"ok": bool(row), "command_card": row})
+
+
+def list_command_cards(
+    keyword: str = "",
+    risk_level: str = "",
+    enabled_only: bool = False,
+    limit: int = 100,
+) -> str:
+    rows = list_command_card_rows(
+        keyword=keyword,
+        risk_level=risk_level,
+        enabled_only=enabled_only,
+        limit=limit,
+    )
+    return _safe_json({"ok": True, "count": len(rows), "rows": rows})
+
+
+def set_command_card_enabled(card_key: str, enabled: bool, updated_by: str = "mcp") -> str:
+    return _safe_json(set_command_card_enabled_row(card_key=card_key, enabled=enabled, updated_by=updated_by))
+
+
+def prepare_command_card_run(
+    card_key: str,
+    params_json: str = "",
+    requested_by: str = "",
+    require_review: bool | None = None,
+) -> str:
+    result = prepare_command_card_run_flow(
+        card_key=card_key,
+        params=_parse_json(params_json, {}),
+        requested_by=requested_by,
+        require_review=require_review,
+    )
+    return _safe_json(result)
+
+
+def review_command_card_run(run_id: int, decision: str, reviewer: str = "", note: str = "") -> str:
+    result = review_command_card_run_flow(run_id=run_id, decision=decision, reviewer=reviewer, note=note)
+    return _safe_json(result)
+
+
+def execute_command_card_run(run_id: int, actor: str = "agent", timeout_sec: int | None = None) -> str:
+    result = execute_command_card_run_flow(run_id=run_id, actor=actor, timeout_sec=timeout_sec)
+    return _safe_json(result)
+
+
+def execute_command_card(
+    card_key: str,
+    params_json: str = "",
+    requested_by: str = "",
+    auto_approve: bool = False,
+    reviewer: str = "",
+    review_note: str = "",
+    timeout_sec: int | None = None,
+) -> str:
+    result = execute_command_card_flow(
+        card_key=card_key,
+        params=_parse_json(params_json, {}),
+        requested_by=requested_by,
+        auto_approve=auto_approve,
+        reviewer=reviewer,
+        review_note=review_note,
+        timeout_sec=timeout_sec,
+    )
+    return _safe_json(result)
+
+
+def get_command_card_run(run_id: int) -> str:
+    run = get_command_card_run_row(run_id=run_id)
+    return _safe_json({"ok": bool(run), "run": run})
+
+
+def list_command_card_runs(
+    card_key: str = "",
+    status: str = "",
+    requested_by: str = "",
+    limit: int = 100,
+) -> str:
+    rows = list_command_card_run_rows(
+        card_key=card_key,
+        status=status,
+        requested_by=requested_by,
+        limit=limit,
+    )
+    return _safe_json({"ok": True, "count": len(rows), "rows": rows})
+
+
+def db_query(sql: str, limit: int = 200) -> str:
+    rows = db_query_sql(sql_text=sql, limit=limit)
+    return _safe_json({"ok": True, "count": len(rows), "rows": rows})
+
+
+def db_execute(sql: str) -> str:
+    return _safe_json(db_execute_sql(sql_text=sql))
+
+
+_HOT_RELOAD_TOOL_NAMES: tuple[str, ...] = (
+    'iterm', 'shared_file', 'interaction', 'prompt_template',
+    'command_card', 'db', 'task', 'approval', 'lock', 'agent_watchdog',
+)
+
+
+def _make_hot_reloadable(fn_name: str):
+    """创建一个通过 globals() 查找的包装函数，支持 SIGUSR1 热重载。
+
+    FastMCP 注册的是函数对象引用，importlib.reload 后创建的新函数
+    不会自动替换旧引用。通过此包装器，每次调用时从 globals() 动态
+    查找最新的函数，从而让热重载真正生效。
+    """
+    real_fn = globals()[fn_name]
+    sig = inspect.signature(real_fn)
+
+    def wrapper(*args, **kwargs):
+        return globals()[fn_name](*args, **kwargs)
+
+    wrapper.__name__ = fn_name
+    wrapper.__qualname__ = fn_name
+    wrapper.__doc__ = real_fn.__doc__
+    wrapper.__signature__ = sig  # type: ignore[attr-defined]
+    return wrapper
+
+
 def _setup_hot_reload():
     """设置 SIGUSR1 信号处理器，收到信号时热重载工具代码。"""
     import os, signal, importlib, sys
@@ -1049,8 +1409,7 @@ def _setup_hot_reload():
         try:
             mod = sys.modules[__name__]
             importlib.reload(mod)
-            for name in ('iterm', 'shared_file', 'interaction', 'prompt_template',
-                         'command_card', 'db', 'task', 'approval', 'lock', 'agent_watchdog'):
+            for name in _HOT_RELOAD_TOOL_NAMES:
                 if hasattr(mod, name):
                     globals()[name] = getattr(mod, name)
             print(f"[hot-reload] 重载成功 ✓", file=sys.stderr)
@@ -1079,21 +1438,29 @@ def main() -> None:
 
     initialize_agent_runtime("all-agents")
 
-    server = create_agent_server("acp-bus", "多Agent编排 — 系统级工具集 + iTerm I/O")
+    host = os.environ.get("ACP_BUS_HOST", "127.0.0.1")
+    port = int(os.environ.get("ACP_BUS_PORT", "9100"))
+    transport = os.environ.get("ACP_BUS_TRANSPORT", "streamable-http")
 
-    server.tool()(iterm)
-    server.tool()(shared_file)
-    server.tool()(interaction)
-    server.tool()(prompt_template)
-    server.tool()(command_card)
-    server.tool()(db)
-    server.tool()(task)
-    server.tool()(approval)
-    server.tool()(lock)
-    server.tool()(agent_watchdog)
+    server = create_agent_server(
+        "acp-bus",
+        "多Agent编排 — 系统级工具集 + iTerm I/O",
+        host=host,
+        port=port,
+    )
 
-    run_agent(server)
+    for tool_name in _HOT_RELOAD_TOOL_NAMES:
+        server.tool()(_make_hot_reloadable(tool_name))
+
+    if transport != "stdio":
+        print(
+            f"[acp-bus] serving on http://{host}:{port}/mcp (transport={transport})",
+            file=sys.stderr,
+        )
+
+    run_agent(server, transport=transport)
 
 
 if __name__ == "__main__":
     main()
+

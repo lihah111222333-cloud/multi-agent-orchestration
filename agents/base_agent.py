@@ -1,6 +1,18 @@
-"""Agent 基类 — MCP Server 工厂"""
+"""Agent 基类 — MCP Server 工厂（支持崩溃自动重启）"""
+
+import os
+import sys
+import time
 
 from mcp.server.fastmcp import FastMCP
+
+
+def _safe_int_env(key: str, default: int) -> int:
+    """从环境变量读取整数，异常时返回默认值。"""
+    try:
+        return int(os.getenv(key, str(default)))
+    except (TypeError, ValueError):
+        return default
 
 
 def create_agent_server(name: str, description: str = "") -> FastMCP:
@@ -18,5 +30,33 @@ def create_agent_server(name: str, description: str = "") -> FastMCP:
 
 
 def run_agent(server: FastMCP) -> None:
-    """启动 Agent MCP Server (stdio 传输)"""
-    server.run(transport="stdio")
+    """启动 Agent MCP Server (stdio 传输)，支持崩溃自动重启。
+
+    - 正常退出 / KeyboardInterrupt / SystemExit 直接退出，不重试
+    - 其它异常触发重试，指数退避 (2s → 最大 60s)
+    - 最大重试次数由 ACP_BUS_MAX_RESTARTS 环境变量控制（默认 10）
+    """
+    max_restarts = _safe_int_env("ACP_BUS_MAX_RESTARTS", 10)
+    attempt = 0
+
+    while True:
+        try:
+            server.run(transport="stdio")
+            break  # 正常退出
+        except (KeyboardInterrupt, SystemExit):
+            break  # 主动退出，不重试
+        except Exception as exc:
+            attempt += 1
+            if attempt > max_restarts:
+                print(
+                    f"[acp-bus] exceeded max restarts ({max_restarts}), giving up",
+                    file=sys.stderr,
+                )
+                break
+            delay = min(2 ** attempt, 60)
+            print(
+                f"[acp-bus] crash #{attempt}/{max_restarts}: {exc}, "
+                f"restarting in {delay}s …",
+                file=sys.stderr,
+            )
+            time.sleep(delay)

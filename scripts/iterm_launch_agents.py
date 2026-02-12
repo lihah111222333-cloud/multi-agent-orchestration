@@ -97,7 +97,7 @@ def _build_agent_entries(
     template = str(identity_template or "").strip()
 
     for index in range(1, count + 1):
-        agent_id = f"a{index:02d}"
+        agent_id = f"agent_{index:02d}"
         agent_name = f"{name_prefix} {index:02d}"
         start_cmd = _build_start_command(start_template, index, agent_id, agent_name)
         shell_cmd = _build_shell_command(project_root=project_root, start_cmd=start_cmd)

@@ -5,7 +5,7 @@
 - 群发输入并读取输出：
   python3 scripts/iterm_agent_io.py --action send --all --text "echo hello" --lines 10
 - 对指定 agent 读取输出：
-  python3 scripts/iterm_agent_io.py --action read --agent a01 --agent a02 --lines 20
+  python3 scripts/iterm_agent_io.py --action read --agent agent_01 --agent agent_02 --lines 20
 - 列出会话：
   python3 scripts/iterm_agent_io.py --action list
 """

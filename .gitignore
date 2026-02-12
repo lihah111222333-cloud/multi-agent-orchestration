@@ -30,3 +30,6 @@ Thumbs.db
 *.log
 logs/
 data/
+
+# Local forked repositories
+ast-grep/

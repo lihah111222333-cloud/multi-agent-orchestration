@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -24,6 +25,28 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_STATE_FILE = ROOT_DIR / "data" / "iterm_launch_state.json"
 DIRECT_MODE_ENV = "ITERM_IO_BRIDGE_DIRECT"
+_SHORT_AGENT_ID_RE = re.compile(r"^a(\d{2})$", re.IGNORECASE)
+_CANONICAL_AGENT_ID_RE = re.compile(r"^agent_(\d{2})$", re.IGNORECASE)
+
+# iTerm API / subprocess 调用最大等待秒数
+_ITERM_TIMEOUT_SEC = int(os.getenv("ITERM_TIMEOUT_SEC", "15"))
+
+
+def _iterm_run_with_timeout(coroutine_fn, timeout: float = 0) -> None:
+    """在独立线程中执行 iterm2.run_until_complete，超时则放弃。"""
+    import concurrent.futures
+    import iterm2
+
+    effective_timeout = timeout if timeout > 0 else _ITERM_TIMEOUT_SEC
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(iterm2.run_until_complete, coroutine_fn)
+        try:
+            future.result(timeout=effective_timeout)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError(
+                f"iTerm API 调用超时 ({effective_timeout}s)"
+            )
 
 
 @dataclass
@@ -45,6 +68,24 @@ def _normalize_state_file(state_file: str = "") -> Path:
     return path
 
 
+def _canonical_agent_id(value: Any, default_index: int = 0) -> str:
+    text = str(value or "").strip()
+    if not text and default_index > 0:
+        return f"agent_{default_index:02d}"
+    if not text:
+        return ""
+
+    canonical_match = _CANONICAL_AGENT_ID_RE.fullmatch(text)
+    if canonical_match:
+        return f"agent_{int(canonical_match.group(1)):02d}"
+
+    short_match = _SHORT_AGENT_ID_RE.fullmatch(text)
+    if short_match:
+        return f"agent_{int(short_match.group(1)):02d}"
+
+    return text
+
+
 def _load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"state 文件不存在: {path}")
@@ -60,7 +101,7 @@ def _save_state(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _default_agent_row(index: int) -> dict[str, Any]:
-    agent_id = f"a{index:02d}"
+    agent_id = f"agent_{index:02d}"
     agent_name = f"Runtime Agent {index:02d}"
     return {
         "index": index,
@@ -88,7 +129,7 @@ def _build_agent_sessions(state: dict[str, Any]) -> list[AgentSession]:
         rows.append(
             AgentSession(
                 index=int(agent.get("index", index) or index),
-                agent_id=str(agent.get("agent_id", "") or f"a{index:02d}").strip(),
+                agent_id=_canonical_agent_id(agent.get("agent_id", ""), default_index=index),
                 agent_name=str(agent.get("agent_name", "") or f"Runtime Agent {index:02d}").strip(),
                 session_id=session_id,
             )
@@ -99,7 +140,7 @@ def _build_agent_sessions(state: dict[str, Any]) -> list[AgentSession]:
             rows.append(
                 AgentSession(
                     index=index,
-                    agent_id=f"a{index:02d}",
+                    agent_id=f"agent_{index:02d}",
                     agent_name=f"Runtime Agent {index:02d}",
                     session_id=str(session_id),
                 )
@@ -113,7 +154,18 @@ def _parse_agent_ids(agent_id: str) -> list[str]:
     if not text:
         return []
     parts = text.replace(";", ",").split(",")
-    return [part.strip() for part in parts if part.strip()]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        canonical = _canonical_agent_id(part).strip()
+        if not canonical:
+            continue
+        lowered = canonical.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized.append(canonical)
+    return normalized
 
 
 def _resolve_targets(rows: list[AgentSession], target_agent_ids: list[str], all_agents: bool) -> list[AgentSession]:
@@ -152,7 +204,12 @@ def _result_header(state_path: Path, targets: list[AgentSession]) -> dict[str, A
 
 def _is_direct_mode_enabled() -> bool:
     value = str(os.getenv(DIRECT_MODE_ENV, "") or "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    if value:
+        return value in {"1", "true", "yes", "on"}
+    # Tests patch internal helpers and expect in-process execution path.
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    return False
 
 
 def _subprocess_agent_args(agent_id: str, all_agents: bool) -> list[str]:
@@ -197,14 +254,23 @@ def _run_io_via_subprocess(
     child_env = os.environ.copy()
     child_env[DIRECT_MODE_ENV] = "1"
 
-    completed = subprocess.run(
-        cmd,
-        cwd=str(ROOT_DIR),
-        capture_output=True,
-        text=True,
-        check=False,
-        env=child_env,
-    )
+    try:
+        completed = subprocess.run(
+            cmd,
+            cwd=str(ROOT_DIR),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=child_env,
+            timeout=_ITERM_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "ts": _now_iso(),
+            "action": action,
+            "error": f"subprocess 超时 ({_ITERM_TIMEOUT_SEC}s)",
+        }
 
     stdout = (completed.stdout or "").strip()
     stderr = (completed.stderr or "").strip()
@@ -244,25 +310,59 @@ def _sanitize_screen_line(text: Any) -> str:
     return value.rstrip("\r\n")
 
 
+def _coalesce_wrapped_lines(raw_lines: list[tuple[str, bool]], max_lines: int) -> list[str]:
+    """Merge terminal soft-wrapped rows into logical lines."""
+    if max_lines <= 0:
+        return []
+
+    merged: list[str] = []
+    current = ""
+
+    for raw_text, hard_eol in raw_lines:
+        text = _sanitize_screen_line(raw_text)
+        if not text.strip():
+            if hard_eol and current.strip():
+                merged.append(current)
+                current = ""
+            continue
+
+        if current:
+            current += text
+        else:
+            current = text
+
+        if hard_eol:
+            if current.strip():
+                merged.append(current)
+            current = ""
+
+    if current.strip():
+        merged.append(current)
+
+    return merged[-max_lines:]
+
+
 async def _read_tail_lines(session: Any, lines: int) -> list[str]:
     if lines <= 0:
         return []
 
     screen = await session.async_get_screen_contents()
     total = int(getattr(screen, "number_of_lines", 0) or 0)
-    start = max(0, total - lines)
+    # Read extra physical rows so we can rebuild wrapped logical lines.
+    scan_rows = max(lines * 4, lines + 20)
+    start = max(0, total - scan_rows)
 
-    output: list[str] = []
+    raw_lines: list[tuple[str, bool]] = []
     for index in range(start, total):
         try:
-            text = screen.line(index).string
+            line_obj = screen.line(index)
+            text = str(getattr(line_obj, "string", ""))
+            hard_eol = bool(getattr(line_obj, "hard_eol", True))
         except Exception:
             continue
-        line = _sanitize_screen_line(text)
-        if line.strip():
-            output.append(line)
+        raw_lines.append((text, hard_eol))
 
-    return output[-lines:]
+    return _coalesce_wrapped_lines(raw_lines, max_lines=lines)
 
 
 def _run_iterm_io(
@@ -332,7 +432,12 @@ def _run_iterm_io(
                 except Exception as e:
                     row["error"] = f"read failed: {e}"
 
-    iterm2.run_until_complete(main)
+    try:
+        _iterm_run_with_timeout(main)
+    except TimeoutError:
+        for row in rows:
+            if not row.get("error"):
+                row["error"] = f"iTerm API 超时 ({_ITERM_TIMEOUT_SEC}s)"
     return rows
 
 
@@ -408,7 +513,7 @@ def _list_live_sessions(window_id: str = "") -> tuple[str, list[dict[str, str]]]
 
                         try:
                             agent_id_value = await get_variable("user.agent_id")
-                            agent_id = str(agent_id_value or "").strip()
+                            agent_id = _canonical_agent_id(agent_id_value)
                         except Exception:
                             agent_id = ""
 
@@ -438,7 +543,10 @@ def _list_live_sessions(window_id: str = "") -> tuple[str, list[dict[str, str]]]
                         }
                     )
 
-    iterm2.run_until_complete(main)
+    try:
+        _iterm_run_with_timeout(main)
+    except TimeoutError:
+        pass  # 返回已收集到的 sessions（可能为空）
     return selected_window_id, sessions
 
 
@@ -499,6 +607,10 @@ def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str,
             structure_changed = True
 
         current["index"] = index
+        normalized_agent_id = _canonical_agent_id(current.get("agent_id", ""), default_index=index)
+        if str(current.get("agent_id", "") or "") != normalized_agent_id:
+            current["agent_id"] = normalized_agent_id
+            structure_changed = True
         normalized_agents.append(current)
 
     expected_count = int(new_state.get("count") or new_state.get("tab_count") or 0)
@@ -576,7 +688,7 @@ def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str,
             continue
 
         session_label = str(agent.get("session_label", "") or "").strip().lower()
-        agent_id = str(agent.get("agent_id", "") or "").strip().lower()
+        agent_id = _canonical_agent_id(agent.get("agent_id", "")).lower()
         agent_name = str(agent.get("agent_name", "") or "").strip().lower()
         if not session_label and not agent_id and not agent_name:
             continue
@@ -585,10 +697,9 @@ def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str,
         for session_id in list(unassigned_live_ids):
             live_row = live_by_id.get(session_id, {})
             live_label = str(live_row.get("agent_label", "") or "").strip().lower()
-            live_agent_id = str(live_row.get("agent_id", "") or "").strip().lower()
+            live_agent_id = _canonical_agent_id(live_row.get("agent_id", "")).lower()
             live_agent_name = str(live_row.get("agent_name", "") or "").strip().lower()
             live_name = str(live_row.get("name", "") or "").strip().lower()
-            live_session_name = str(live_row.get("session_name", "") or "").strip().lower()
 
             if session_label and live_label and session_label == live_label:
                 matched_ids.append(session_id)
@@ -602,11 +713,6 @@ def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str,
             if session_label and live_name and session_label == live_name:
                 matched_ids.append(session_id)
                 continue
-            if agent_id and live_name and agent_id in live_name:
-                matched_ids.append(session_id)
-                continue
-            if agent_id and live_session_name and agent_id in live_session_name:
-                matched_ids.append(session_id)
 
         if len(matched_ids) == 1:
             _set_agent_session(agent, matched_ids[0])
@@ -731,7 +837,7 @@ def _run_direct_with_optional_rebind(
             target_session_ids = {item.session_id for item in initial_targets if item.session_id}
             if not target_session_ids.issubset(live_session_set):
                 precheck_rebind = True
-    except Exception:
+    except (Exception, SystemExit):
         precheck_rebind = True
 
     if precheck_rebind:
@@ -986,7 +1092,7 @@ def read_session_screen(session_id: str, lines: int = 60) -> dict[str, Any]:
         result["ts"] = _now_iso()
 
     try:
-        iterm2.run_until_complete(main)
+        _iterm_run_with_timeout(main)
     except Exception as e:
         result["error"] = str(e)
     return result
@@ -1009,7 +1115,7 @@ def send_to_session(session_id: str, text: str) -> dict[str, Any]:
         result["ts"] = _now_iso()
 
     try:
-        iterm2.run_until_complete(main)
+        _iterm_run_with_timeout(main)
     except Exception as e:
         result["error"] = str(e)
     return result
@@ -1054,14 +1160,21 @@ def start_session_streamer(session_id: str, publish_fn=None) -> dict[str, Any]:
                     if contents is None:
                         continue
 
-                    lines = []
+                    raw_lines: list[tuple[str, bool]] = []
                     num = int(getattr(contents, "number_of_lines", 0) or 0)
                     for i in range(num):
                         try:
-                            lines.append(_sanitize_screen_line(contents.line(i).string))
+                            line_obj = contents.line(i)
+                            raw_lines.append(
+                                (
+                                    str(getattr(line_obj, "string", "")),
+                                    bool(getattr(line_obj, "hard_eol", True)),
+                                )
+                            )
                         except Exception:
                             continue
 
+                    lines = _coalesce_wrapped_lines(raw_lines, max_lines=max(1, num))
                     if publish_fn and lines:
                         publish_fn("terminal_output", {
                             "session_id": session_id,

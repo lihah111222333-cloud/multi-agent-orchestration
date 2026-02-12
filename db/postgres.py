@@ -43,6 +43,7 @@ __all__ = [
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _logger = logging.getLogger(__name__)
 _INIT_LOCK = threading.Lock()
+_SCHEMA_READY: bool = False  # fast-path flag (no lock needed for reads)
 _SCHEMA_READY_KEY: Optional[tuple[str, str]] = None
 
 _POOL_LOCK = threading.Lock()
@@ -81,8 +82,9 @@ def get_schema_name() -> str:
 
 def reset_schema_cache() -> None:
     """Clear the schema-ready cache and close the connection pool."""
-    global _SCHEMA_READY_KEY
+    global _SCHEMA_READY, _SCHEMA_READY_KEY
     with _INIT_LOCK:
+        _SCHEMA_READY = False
         _SCHEMA_READY_KEY = None
     close_pool()
 
@@ -167,16 +169,24 @@ def _set_search_path(cur: Any) -> None:
 
 def ensure_schema() -> None:
     """Thin wrapper: run schema migrations once per schema key."""
-    global _SCHEMA_READY_KEY
+    global _SCHEMA_READY, _SCHEMA_READY_KEY
+
+    # Fast path — no lock, no _schema_key() computation
+    if _SCHEMA_READY:
+        return
 
     _require_driver()
     key = _schema_key()
     if _SCHEMA_READY_KEY == key:
+        _SCHEMA_READY = True
         return
 
     with _INIT_LOCK:
+        if _SCHEMA_READY:
+            return
         key = _schema_key()
         if _SCHEMA_READY_KEY == key:
+            _SCHEMA_READY = True
             return
 
         from db.migrator import MIGRATIONS_DIR, migrate_up
@@ -186,6 +196,7 @@ def ensure_schema() -> None:
             _logger.debug("schema already up-to-date, no pending sql migrations in %s", MIGRATIONS_DIR)
 
         _SCHEMA_READY_KEY = key
+        _SCHEMA_READY = True
 
 
 @contextmanager

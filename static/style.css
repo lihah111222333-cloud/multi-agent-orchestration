@@ -1066,6 +1066,33 @@ select.input {
     border-top: 1px solid var(--border);
 }
 
+.prompt-version-popup {
+    width: 980px;
+    height: 640px;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.prompt-version-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+}
+
+.prompt-version-body {
+    flex: 1;
+    overflow: auto;
+    padding: 10px 14px;
+}
+
+.prompt-version-body .log-table {
+    margin: 0;
+}
+
 .prompt-shortcut-tip {
     margin-right: auto;
     color: var(--text-muted);
@@ -1215,6 +1242,33 @@ select.input {
     gap: 8px;
     padding: 10px 16px;
     border-top: 1px solid var(--border);
+}
+
+.command-version-popup {
+    width: 1020px;
+    height: 640px;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.command-version-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+}
+
+.command-version-body {
+    flex: 1;
+    overflow: auto;
+    padding: 10px 14px;
+}
+
+.command-version-body .log-table {
+    margin: 0;
 }
 
 .prompt-header {

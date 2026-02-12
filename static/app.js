@@ -442,6 +442,8 @@ let _selectedPromptKeys = new Set();
 let _popupTimer = null;
 let _currentPopupData = null;
 let _promptPopupHotkeysBound = false;
+let _currentPromptVersionKey = '';
+let _promptVersionRows = [];
 
 function _normalizePromptRows(rows) {
     return (rows || []).map((row) => {
@@ -596,6 +598,7 @@ function renderPromptTable(rows) {
             <td style="font-size:0.74rem;color:var(--text-secondary)">${updated}</td>
             <td style="text-align:center;white-space:nowrap">
                 <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openPromptPopup(${idx})" title="编辑" style="cursor:pointer">编辑</button>
+                <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openPromptVersions(${idx})" title="版本历史" style="cursor:pointer;margin-left:4px">版本</button>
                 <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();togglePromptEnabled(${idx})" title="启停" style="cursor:pointer;margin-left:4px">${row.enabled ? '禁用' : '启用'}</button>
             </td>
         </tr>`;
@@ -966,12 +969,153 @@ async function seedPromptTemplates(overwrite) {
     }
 }
 
+function _normalizePromptVersionRows(rows) {
+    return (rows || []).map((row) => ({
+        id: Number(row.id || 0),
+        promptKey: row.prompt_key || '',
+        title: row.title || '',
+        updatedBy: row.updated_by || '',
+        enabled: !!row.enabled,
+        sourceUpdatedAt: row.source_updated_at || '',
+        archivedAt: row.archived_at || '',
+    }));
+}
+
+function _renderPromptVersionTable(rows) {
+    const tbody = document.getElementById('prompt-version-tbody');
+    const empty = document.getElementById('prompt-version-empty');
+    if (!tbody) return;
+
+    if (!rows.length) {
+        tbody.innerHTML = '';
+        if (empty) {
+            empty.style.display = '';
+            empty.textContent = '暂无历史版本';
+        }
+        return;
+    }
+
+    if (empty) empty.style.display = 'none';
+
+    tbody.innerHTML = rows.map((row) => {
+        const statusBadge = row.enabled
+            ? '<span class="level-badge level-success">enabled</span>'
+            : '<span class="level-badge level-disabled">disabled</span>';
+        return `<tr>
+            <td style="font-family:var(--font-mono);color:var(--accent)">#${escapeHtml(String(row.id || '0'))}</td>
+            <td style="font-size:0.74rem;color:var(--text-secondary)">${escapeHtml(_formatCommandCardTime(row.archivedAt || ''))}</td>
+            <td style="font-size:0.74rem;color:var(--text-secondary)">${escapeHtml(_formatCommandCardTime(row.sourceUpdatedAt || ''))}</td>
+            <td style="font-size:0.74rem;color:var(--text-secondary)">${escapeHtml(row.updatedBy || '-')}</td>
+            <td>${statusBadge}</td>
+            <td style="font-size:0.74rem">${escapeHtml(row.title || '-')}</td>
+            <td style="text-align:center">
+                <button class="btn btn-sm btn-danger" onclick="rollbackPromptVersion(${Number(row.id || 0)})">回滚到此</button>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+async function loadPromptVersions(promptKey = '') {
+    const key = String(promptKey || _currentPromptVersionKey || '').trim();
+    if (!key) {
+        toast('缺少 prompt_key，无法加载版本', false);
+        return;
+    }
+
+    _currentPromptVersionKey = key;
+    const keyEl = document.getElementById('prompt-version-key');
+    const titleEl = document.getElementById('prompt-version-popup-title');
+    if (keyEl) keyEl.textContent = `prompt_key: ${key}`;
+    if (titleEl) titleEl.textContent = `提示词版本历史 · ${key}`;
+
+    try {
+        const params = new URLSearchParams();
+        params.set('prompt_key', key);
+        params.set('limit', '100');
+        const r = await fetch('/api/prompt-versions?' + params.toString());
+        const j = await r.json();
+        if (!j.ok) {
+            toast(j.error || '加载版本失败', false);
+            _promptVersionRows = [];
+            _renderPromptVersionTable(_promptVersionRows);
+            return;
+        }
+
+        _promptVersionRows = _normalizePromptVersionRows(j.versions || []);
+        _renderPromptVersionTable(_promptVersionRows);
+    } catch (e) {
+        toast('加载版本失败: ' + e.message, false);
+    }
+}
+
+function openPromptVersions(idx) {
+    const row = _promptRows[idx];
+    if (!row || !row.promptKey) return;
+
+    _currentPromptVersionKey = row.promptKey;
+    const popup = document.getElementById('prompt-version-popup');
+    if (!popup) return;
+
+    popup.style.display = 'flex';
+    const popupW = popup.offsetWidth || 980;
+    const popupH = popup.offsetHeight || 640;
+    popup.style.left = Math.max(8, Math.round((window.innerWidth - popupW) / 2)) + 'px';
+    popup.style.top = Math.max(8, Math.round((window.innerHeight - popupH) / 2)) + 'px';
+    popup.style.transform = 'none';
+
+    loadPromptVersions(row.promptKey);
+}
+
+function closePromptVersionPopup() {
+    const popup = document.getElementById('prompt-version-popup');
+    if (popup) popup.style.display = 'none';
+    _currentPromptVersionKey = '';
+    _promptVersionRows = [];
+}
+
+async function rollbackPromptVersion(versionId) {
+    const key = String(_currentPromptVersionKey || '').trim();
+    const vid = Number(versionId || 0);
+    if (!key || !vid) {
+        toast('缺少回滚参数', false);
+        return;
+    }
+
+    const confirmed = await showConfirm(`确认将 ${key} 回滚到版本 #${vid} 吗？`);
+    if (!confirmed) return;
+
+    try {
+        const r = await fetch('/api/prompt-templates/rollback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt_key: key,
+                version_id: vid,
+                updated_by: 'dashboard',
+            }),
+        });
+        const j = await r.json();
+        if (!j.ok) {
+            toast(j.error || '回滚失败', false);
+            return;
+        }
+
+        toast(`回滚成功：${key} -> #${vid}`, true);
+        await loadPrompts();
+        await loadPromptVersions(key);
+    } catch (e) {
+        toast('回滚失败: ' + e.message, false);
+    }
+}
+
 /* ---- Command Cards ---- */
 let _commandCardRows = [];
 let _selectedCommandCardKeys = new Set();
 let _currentCommandPopupData = null;
 let _commandPopupHotkeysBound = false;
 let _confirmDialogActive = false;
+let _currentCommandVersionKey = '';
+let _commandVersionRows = [];
 
 function _normalizeCommandCardRows(rows) {
     return (rows || []).map((row) => {
@@ -1386,6 +1530,148 @@ async function deleteSelectedCommandCards() {
     }
 }
 
+function _normalizeCommandVersionRows(rows) {
+    return (rows || []).map((row) => ({
+        id: Number(row.id || 0),
+        cardKey: row.card_key || '',
+        title: row.title || '',
+        updatedBy: row.updated_by || '',
+        riskLevel: row.risk_level || 'normal',
+        enabled: !!row.enabled,
+        sourceUpdatedAt: row.source_updated_at || '',
+        archivedAt: row.archived_at || '',
+    }));
+}
+
+function _renderCommandVersionTable(rows) {
+    const tbody = document.getElementById('command-version-tbody');
+    const empty = document.getElementById('command-version-empty');
+    if (!tbody) return;
+
+    if (!rows.length) {
+        tbody.innerHTML = '';
+        if (empty) {
+            empty.style.display = '';
+            empty.textContent = '暂无历史版本';
+        }
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+
+    tbody.innerHTML = rows.map((row) => {
+        const risk = escapeHtml(row.riskLevel || 'normal');
+        const riskClass = classToken(row.riskLevel || 'normal');
+        const statusBadge = row.enabled
+            ? '<span class="level-badge level-success">enabled</span>'
+            : '<span class="level-badge level-disabled">disabled</span>';
+        return `<tr>
+            <td style="font-family:var(--font-mono);color:var(--accent)">#${escapeHtml(String(row.id || '0'))}</td>
+            <td style="font-size:0.74rem;color:var(--text-secondary)">${escapeHtml(_formatCommandCardTime(row.archivedAt || ''))}</td>
+            <td style="font-size:0.74rem;color:var(--text-secondary)">${escapeHtml(_formatCommandCardTime(row.sourceUpdatedAt || ''))}</td>
+            <td style="font-size:0.74rem;color:var(--text-secondary)">${escapeHtml(row.updatedBy || '-')}</td>
+            <td><span class="level-badge level-${riskClass}">${risk}</span></td>
+            <td>${statusBadge}</td>
+            <td style="font-size:0.74rem">${escapeHtml(row.title || '-')}</td>
+            <td style="text-align:center">
+                <button class="btn btn-sm btn-danger" onclick="rollbackCommandVersion(${Number(row.id || 0)})">回滚到此</button>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+async function loadCommandVersions(cardKey = '') {
+    const key = String(cardKey || _currentCommandVersionKey || '').trim();
+    if (!key) {
+        toast('缺少 card_key，无法加载版本', false);
+        return;
+    }
+
+    _currentCommandVersionKey = key;
+    const keyEl = document.getElementById('command-version-key');
+    const titleEl = document.getElementById('command-version-popup-title');
+    if (keyEl) keyEl.textContent = `card_key: ${key}`;
+    if (titleEl) titleEl.textContent = `命令卡版本历史 · ${key}`;
+
+    try {
+        const params = new URLSearchParams();
+        params.set('card_key', key);
+        params.set('limit', '100');
+        const r = await fetch('/api/command-card-versions?' + params.toString());
+        const j = await r.json();
+        if (!j.ok) {
+            toast(j.error || '加载命令卡版本失败', false);
+            _commandVersionRows = [];
+            _renderCommandVersionTable(_commandVersionRows);
+            return;
+        }
+
+        _commandVersionRows = _normalizeCommandVersionRows(j.versions || []);
+        _renderCommandVersionTable(_commandVersionRows);
+    } catch (e) {
+        toast('加载命令卡版本失败: ' + e.message, false);
+    }
+}
+
+function openCommandVersions(idx) {
+    const row = _commandCardRows[idx];
+    if (!row || !row.cardKey) return;
+
+    _currentCommandVersionKey = row.cardKey;
+    const popup = document.getElementById('command-version-popup');
+    if (!popup) return;
+
+    popup.style.display = 'flex';
+    const popupW = popup.offsetWidth || 1020;
+    const popupH = popup.offsetHeight || 640;
+    popup.style.left = Math.max(8, Math.round((window.innerWidth - popupW) / 2)) + 'px';
+    popup.style.top = Math.max(8, Math.round((window.innerHeight - popupH) / 2)) + 'px';
+    popup.style.transform = 'none';
+
+    loadCommandVersions(row.cardKey);
+}
+
+function closeCommandVersionPopup() {
+    const popup = document.getElementById('command-version-popup');
+    if (popup) popup.style.display = 'none';
+    _currentCommandVersionKey = '';
+    _commandVersionRows = [];
+}
+
+async function rollbackCommandVersion(versionId) {
+    const key = String(_currentCommandVersionKey || '').trim();
+    const vid = Number(versionId || 0);
+    if (!key || !vid) {
+        toast('缺少回滚参数', false);
+        return;
+    }
+
+    const confirmed = await showConfirm(`确认将 ${key} 回滚到版本 #${vid} 吗？`);
+    if (!confirmed) return;
+
+    try {
+        const r = await fetch('/api/command-cards/rollback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                card_key: key,
+                version_id: vid,
+                updated_by: 'dashboard',
+            }),
+        });
+        const j = await r.json();
+        if (!j.ok) {
+            toast(j.error || '命令卡回滚失败', false);
+            return;
+        }
+
+        toast(`命令卡回滚成功：${key} -> #${vid}`, true);
+        await loadCommandCards();
+        await loadCommandVersions(key);
+    } catch (e) {
+        toast('命令卡回滚失败: ' + e.message, false);
+    }
+}
+
 function renderCommandCards(cards) {
     const tbody = document.getElementById('cmd-card-tbody');
     const empty = document.getElementById('cmd-card-empty');
@@ -1434,6 +1720,7 @@ function renderCommandCards(cards) {
             <td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${desc || '-'}</td>
             <td style="text-align:center;white-space:nowrap">
                 <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openCommandPopup(${idx})" title="编辑" style="cursor:pointer">编辑</button>
+                <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openCommandVersions(${idx})" title="版本历史" style="cursor:pointer;margin-left:4px">版本</button>
                 <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();toggleCommandCardEnabled(${idx})" title="启停" style="cursor:pointer;margin-left:4px">${card.enabled ? '禁用' : '启用'}</button>
             </td>
         </tr>`;

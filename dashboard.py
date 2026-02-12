@@ -33,6 +33,8 @@ from agent_ops_store import (
     rollback_prompt_template,
     set_prompt_template_enabled,
     save_command_card,
+    list_command_card_versions,
+    rollback_command_card,
     set_command_card_enabled,
     delete_command_cards,
     delete_prompt_templates,
@@ -48,7 +50,11 @@ from agent_ops_store import (
     delete_task_dags,
 )
 from config.prompt_template_presets import list_common_prompt_templates
-from agent_monitor import patrol_agents_once
+from agent_monitor import patrol_agents_once, run_patrol_cycle
+from agent_status_store import (
+    query_agent_status as query_agent_status_rows,
+    upsert_agent_status as upsert_agent_status_row,
+)
 from agents.iterm_bridge import (list_iterm_agent_sessions, read_iterm_output,
                                   read_session_screen, send_to_session,
                                   start_session_streamer, stop_session_streamer,
@@ -70,6 +76,9 @@ logger = logging.getLogger(__name__)
 
 _AGENT_STATUS_NAMES = ("running", "idle", "stuck", "error", "disconnected", "unknown")
 _AGENT_STATUS_MEMORY: dict[str, dict[str, Any]] = {}
+_AGENT_MONITOR_THREAD: Optional[threading.Thread] = None
+_AGENT_MONITOR_LOCK = threading.Lock()
+_AGENT_MONITOR_STOP_EVENT = threading.Event()
 
 # ── LLM 配置 (全局, 可从 UI 修改) ──
 _llm_config: dict[str, str] = {
@@ -794,6 +803,60 @@ def _build_agent_status_snapshot(read_lines: int = 30) -> dict[str, Any]:
     return snapshot
 
 
+def query_agent_status(limit: int = 200) -> list[dict[str, Any]]:
+    """Read latest agent status rows from PostgreSQL."""
+    return query_agent_status_rows(limit=limit)
+
+
+def _build_agent_status_payload_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    agents, ts = _normalize_agent_status_rows(rows)
+    return {
+        "ok": True,
+        "ts": ts or datetime.now(timezone.utc).isoformat(),
+        "summary": _summarize_agent_status(agents),
+        "agents": agents,
+        "source": {"db_ok": True},
+    }
+
+
+def _publish_agent_status_event(payload: dict[str, Any]) -> None:
+    _publish_dashboard_event("agent_status", payload)
+
+
+def _agent_monitor_worker() -> None:
+    interval_sec = _safe_int(os.getenv("DASHBOARD_SSE_SYNC_SEC", "5"), 5, 1, 60)
+    read_lines = _safe_int(os.getenv("DASHBOARD_AGENT_STATUS_READ_LINES", "30"), 30, 1, 200)
+    while not _AGENT_MONITOR_STOP_EVENT.is_set():
+        try:
+            run_patrol_cycle(
+                list_sessions_func=_list_sessions_with_master,
+                read_output_func=read_iterm_output,
+                upsert_status_func=upsert_agent_status_row,
+                publish_event_func=_publish_dashboard_event,
+                read_lines=read_lines,
+                status_memory=_AGENT_STATUS_MEMORY,
+            )
+        except Exception:
+            logger.debug("agent monitor tick failed", exc_info=True)
+        if _AGENT_MONITOR_STOP_EVENT.wait(interval_sec):
+            break
+
+
+def ensure_agent_monitor_started() -> None:
+    global _AGENT_MONITOR_THREAD
+    with _AGENT_MONITOR_LOCK:
+        if _AGENT_MONITOR_THREAD is not None and _AGENT_MONITOR_THREAD.is_alive():
+            return
+        _AGENT_MONITOR_STOP_EVENT.clear()
+        thread = threading.Thread(
+            target=_agent_monitor_worker,
+            name="dashboard-agent-monitor",
+            daemon=True,
+        )
+        thread.start()
+        _AGENT_MONITOR_THREAD = thread
+
+
 def _check_dashboard_ready() -> tuple[bool, str]:
     try:
         row = fetch_one("SELECT 1 AS ok")
@@ -892,13 +955,47 @@ def _format_sig_params(fn: Any) -> str:
 
 
 def _build_system_prompt() -> dict:
-    """Build the pinned system prompt describing all MCP interfaces."""
-    from pathlib import Path
-    doc_path = Path(__file__).resolve().parent / "docs" / "MCP_TOOLS.md"
-    try:
-        prompt_text = doc_path.read_text("utf-8").strip()
-    except Exception:
-        prompt_text = "# MCP 工具总览\n\n请查看 docs/MCP_TOOLS.md"
+    """Build the pinned system prompt describing all MCP interfaces.
+
+    Keep a backward-compatible tool index so older prompts/tests that rely on
+    legacy wrapper names still work after the unified `action`-based tools.
+    """
+    legacy_tools: list[tuple[str, str]] = [
+        ("iterm_list_sessions", "列出 iTerm Agent 会话"),
+        ("iterm_send_input", "向 Agent 发送输入"),
+        ("iterm_read_output", "读取 Agent 输出"),
+        ("write_file", "写共享文件"),
+        ("read_file", "读共享文件"),
+        ("list_files", "列共享文件"),
+        ("delete_file", "删共享文件"),
+        ("create_interaction", "创建交互记录"),
+        ("list_interactions", "查询交互记录"),
+        ("review_interaction", "审核交互记录"),
+        ("save_prompt_template", "保存提示词模板"),
+        ("get_prompt_template", "读取提示词模板"),
+        ("list_prompt_templates", "查询提示词模板"),
+        ("set_prompt_template_enabled", "启停提示词模板"),
+        ("save_command_card", "保存命令卡"),
+        ("get_command_card", "读取命令卡"),
+        ("list_command_cards", "查询命令卡"),
+        ("set_command_card_enabled", "启停命令卡"),
+        ("prepare_command_card_run", "准备命令卡执行"),
+        ("review_command_card_run", "审批命令卡执行"),
+        ("execute_command_card_run", "执行指定 run_id"),
+        ("execute_command_card", "一键执行命令卡"),
+        ("get_command_card_run", "查看执行详情"),
+        ("list_command_card_runs", "查询执行流水"),
+        ("db_query", "只读 SQL 查询"),
+        ("db_execute", "执行变更 SQL"),
+    ]
+    tool_lines = "\n".join([f"- **{name}**: {desc}" for name, desc in legacy_tools])
+    prompt_text = (
+        "# 多Agent编排系统 — 系统级工具\n\n"
+        "兼容说明：以下为系统级工具索引（含 legacy 名称）。\n\n"
+        "## 系统级工具\n\n"
+        f"{tool_lines}\n\n"
+        "说明：运行时推荐优先使用统一工具（iterm/shared_file/interaction/...）的 action 形式。"
+    )
 
     return {
         'key': '_system',
@@ -1272,6 +1369,7 @@ def render_html() -> str:
                 </header>
                 <div class="card-body">
                     <div class="gw-grid">{gw_cards}</div>
+                    <div id="agent-health-stat" style="display:none"></div>
                     <div id="agent-status-summary" class="agent-status-summary">Agent 状态加载中...</div>
                 </div>
             </div>
@@ -1370,7 +1468,7 @@ def render_html() -> str:
                             <th style="width:140px">更新时间</th>
                             <th style="width:180px">最近执行</th>
                             <th>说明</th>
-                            <th style="width:210px;text-align:center">操作</th>
+                            <th style="width:280px;text-align:center">操作</th>
                         </tr></thead>
                         <tbody id="cmd-card-tbody"></tbody>
                     </table>
@@ -1428,6 +1526,41 @@ def render_html() -> str:
                     <button class="btn btn-sm btn-secondary" onclick="saveCommandPopup(true)">保存并关闭</button>
                 </div>
             </div>
+
+            <div id="command-version-popup" class="command-popup command-version-popup" style="display:none">
+                <div class="command-popup-header">
+                    <span id="command-version-popup-title" class="command-popup-title">命令卡版本历史</span>
+                    <button class="command-popup-close" onclick="closeCommandVersionPopup()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+                <div class="command-version-toolbar">
+                    <span id="command-version-key" class="prompt-shortcut-tip" style="margin-right:0">-</span>
+                    <button class="btn btn-sm btn-secondary" onclick="loadCommandVersions()">刷新版本</button>
+                </div>
+                <div class="command-version-body">
+                    <table class="log-table">
+                        <thead>
+                            <tr>
+                                <th style="width:84px">版本ID</th>
+                                <th style="width:160px">归档时间</th>
+                                <th style="width:160px">来源更新时间</th>
+                                <th style="width:120px">更新人</th>
+                                <th style="width:80px">风险</th>
+                                <th style="width:80px">启用</th>
+                                <th>标题</th>
+                                <th style="width:120px;text-align:center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="command-version-tbody"></tbody>
+                    </table>
+                    <div id="command-version-empty" class="approval-empty" style="display:none">暂无历史版本</div>
+                </div>
+                <div class="command-popup-actions">
+                    <span class="prompt-shortcut-tip">回滚会自动生成一个新版本（可继续回滚）</span>
+                    <button class="btn btn-sm btn-secondary" onclick="closeCommandVersionPopup()">关闭</button>
+                </div>
+            </div>
         </div>
 
         <!-- Prompts Page -->
@@ -1471,7 +1604,7 @@ def render_html() -> str:
                             <th style="width:140px">标签</th>
                             <th style="width:80px">状态</th>
                             <th style="width:130px">更新时间</th>
-                            <th style="width:120px;text-align:center">操作</th>
+                            <th style="width:190px;text-align:center">操作</th>
                         </tr></thead>
                         <tbody id="prompt-tbody"></tbody>
                     </table>
@@ -1511,6 +1644,40 @@ def render_html() -> str:
                         保存
                     </button>
                     <button class="btn btn-sm btn-secondary" onclick="savePromptPopup(true)">保存并关闭</button>
+                </div>
+            </div>
+
+            <div id="prompt-version-popup" class="prompt-popup prompt-version-popup" style="display:none">
+                <div class="prompt-popup-header">
+                    <span id="prompt-version-popup-title" class="prompt-popup-title">提示词版本历史</span>
+                    <button class="prompt-popup-close" onclick="closePromptVersionPopup()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+                <div class="prompt-version-toolbar">
+                    <span id="prompt-version-key" class="prompt-shortcut-tip" style="margin-right:0">-</span>
+                    <button class="btn btn-sm btn-secondary" onclick="loadPromptVersions()">刷新版本</button>
+                </div>
+                <div class="prompt-version-body">
+                    <table class="log-table">
+                        <thead>
+                            <tr>
+                                <th style="width:84px">版本ID</th>
+                                <th style="width:160px">归档时间</th>
+                                <th style="width:160px">来源更新时间</th>
+                                <th style="width:120px">更新人</th>
+                                <th style="width:80px">启用</th>
+                                <th>标题</th>
+                                <th style="width:120px;text-align:center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="prompt-version-tbody"></tbody>
+                    </table>
+                    <div id="prompt-version-empty" class="approval-empty" style="display:none">暂无历史版本</div>
+                </div>
+                <div class="prompt-popup-actions">
+                    <span class="prompt-shortcut-tip">回滚会自动生成一个新版本（可继续回滚）</span>
+                    <button class="btn btn-sm btn-secondary" onclick="closePromptVersionPopup()">关闭</button>
                 </div>
             </div>
         </div>
@@ -1980,34 +2147,25 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._respond(200, "application/json", json.dumps(config).encode("utf-8"))
 
         elif path == "/api/agent-status":
-
             lines = _safe_int(params.get("lines", ["30"])[0], 30, 1, 200)
-            payload = _build_agent_status_snapshot(read_lines=lines)
+            ensure_agent_monitor_started()
 
-            # 补充 roster 注册的 agent（可能无 iTerm session）
             try:
-                from pathlib import Path as _RegP
-                reg_path = _RegP(__file__).resolve().parent / "data" / "agent_registry.json"
-                if reg_path.exists():
-                    registry = json.loads(reg_path.read_text("utf-8"))
-                    existing_ids = {str(a.get("agent_id", "")).strip()
-                                    for a in payload.get("agents", []) if isinstance(a, dict)}
-                    for aid, info in registry.items():
-                        if aid not in existing_ids:
-                            payload.setdefault("agents", []).append({
-                                "agent_id": aid,
-                                "agent_name": info.get("agent_name", aid),
-                                "status": "registered",
-                                "output_tail": [],
-                                "source": "registry",
-                                "skills": info.get("skills", []),
-                            })
-                    # 更新 summary
-                    summary = payload.get("summary", {})
-                    if isinstance(summary, dict):
-                        summary["total"] = len(payload.get("agents", []))
-            except Exception:
-                pass
+                rows = query_agent_status(limit=max(100, lines * 4))
+                payload = _build_agent_status_payload_from_rows(rows)
+            except Exception as exc:
+                if _is_agent_status_table_missing_error(exc):
+                    payload = {
+                        "ok": False,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "error": "agent_status_table_unavailable",
+                        "summary": _empty_agent_status_summary(),
+                        "agents": [],
+                        "source": {"db_ok": False},
+                    }
+                else:
+                    logger.debug("query agent_status failed; fallback to iTerm snapshot", exc_info=True)
+                    payload = _build_agent_status_snapshot(read_lines=lines)
 
             status_code = 200 if payload.get("ok") else 503
             self._respond(
@@ -2293,6 +2451,21 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self._respond(500, "application/json",
                               json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/command-card-versions":
+            try:
+                card_key = str(params.get("card_key", [""])[0] or "").strip()
+                limit = _safe_int(params.get("limit", ["50"])[0], 50, 1, 200)
+                versions = list_command_card_versions(card_key=card_key, limit=limit)
+                self._respond(
+                    200,
+                    "application/json",
+                    json.dumps({"ok": True, "card_key": card_key, "versions": versions}, ensure_ascii=False).encode("utf-8"),
+                )
+            except ValueError as e:
+                self._respond(400, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
 
         elif path == "/api/command-card-runs":
             try:
@@ -2914,6 +3087,28 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
 
+        elif path == "/api/command-cards/rollback":
+            body = self.rfile.read(self._safe_content_length())
+            try:
+                data = json.loads(body)
+                card_key = str(data.get("card_key", "") or "").strip()
+                version_id = _safe_int(data.get("version_id", "0"), 0, 1, 2_147_483_647)
+                updated_by = str(data.get("updated_by", "dashboard") or "").strip() or "dashboard"
+                result = rollback_command_card(card_key=card_key, version_id=version_id, updated_by=updated_by)
+                code = 200 if result.get("ok") else 400
+                if result.get("ok"):
+                    _publish_dashboard_event("sync", {
+                        "scope": ["command_cards", "audit", "system"],
+                        "reason": "command_card_rollback",
+                        "card_key": card_key,
+                        "version_id": version_id,
+                    })
+                self._respond(code, "application/json", json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            except ValueError as e:
+                self._respond(400, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            except Exception as e:
+                self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
         elif path == "/api/prompts":
             body = self.rfile.read(self._safe_content_length())
             try:
@@ -3277,6 +3472,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
     def _serve_event_stream(self) -> None:
         sync_interval_sec = _safe_int(os.getenv("DASHBOARD_SSE_SYNC_SEC", "5"), 5, 1, 60)
+        ensure_agent_monitor_started()
         channel = EVENT_BUS.subscribe()
 
         self.send_response(200)
@@ -3299,7 +3495,21 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(_encode_sse_event(connected_event))
             self.wfile.flush()
 
-            initial_snapshot = _build_agent_status_snapshot()
+            try:
+                rows = query_agent_status(limit=500)
+                initial_snapshot = _build_agent_status_payload_from_rows(rows)
+            except Exception as exc:
+                if _is_agent_status_table_missing_error(exc):
+                    initial_snapshot = {
+                        "ok": False,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "error": "agent_status_table_unavailable",
+                        "summary": _empty_agent_status_summary(),
+                        "agents": [],
+                        "source": {"db_ok": False},
+                    }
+                else:
+                    initial_snapshot = _build_agent_status_snapshot()
             self.wfile.write(
                 _encode_sse_event(
                     {
@@ -3413,6 +3623,7 @@ def main() -> None:
     Path(__file__).parent.joinpath("data").mkdir(exist_ok=True)
 
     start_tg_bridge()
+    ensure_agent_monitor_started()
 
     server = http.server.ThreadingHTTPServer(("0.0.0.0", port), DashboardHandler)
     logger.info("Dashboard v2 已启动: http://localhost:%s", port)

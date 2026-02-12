@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -120,7 +121,7 @@ def get_tg_bridge_info() -> dict[str, Any]:
 
 
 # ---- 主 Agent 发现 ----
-_DEFAULT_MASTER_TAB_NAME = "主agnet"
+_DEFAULT_MASTER_TAB_NAME = "主agent"
 _ITERM_READ_WAIT_SEC = 8.0  # 发送后等待输出的秒数
 _ITERM_READ_LINES = 60      # 读取的行数
 
@@ -803,11 +804,12 @@ def send_message_to_tg(text: str) -> bool:
 # ---- 定时看门狗 ----
 _DEFAULT_WATCHDOG_INTERVAL = 120  # 秒
 _DEFAULT_NUDGE_PROMPT = "请继续执行当前任务。如果已完成，请汇报结果。"
+_WORKER_AGENT_ID_RE = re.compile(r"^agent_\d{2}$", re.IGNORECASE)
 
 _watchdog_thread: Optional[threading.Thread] = None
 _watchdog_stop = threading.Event()
 _watchdog_info: dict[str, Any] = {"running": False, "interval": _DEFAULT_WATCHDOG_INTERVAL,
-                                   "last_nudge": "", "nudge_count": 0}
+                                   "last_nudge": "", "nudge_count": 0, "last_nudge_stats": {}}
 _watchdog_lock = threading.Lock()
 
 
@@ -822,6 +824,15 @@ def _get_nudge_prompt() -> str:
     return os.getenv("TG_WATCHDOG_PROMPT", _DEFAULT_NUDGE_PROMPT).strip()
 
 
+def _should_include_master_watchdog_target() -> bool:
+    text = str(os.getenv("TG_WATCHDOG_INCLUDE_MASTER", "0") or "").strip().lower()
+    return text in {"1", "true", "yes", "on"}
+
+
+def _is_worker_agent_id(value: Any) -> bool:
+    return bool(_WORKER_AGENT_ID_RE.fullmatch(str(value or "").strip()))
+
+
 def _watchdog_loop() -> None:
     """定时巡检：到时间就向主 Agent 和子 Agent 发唤醒提示。"""
     interval = _get_watchdog_interval()
@@ -830,7 +841,7 @@ def _watchdog_loop() -> None:
     _add_history("system", f"⏰ 看门狗启动 — 每 {interval}s 唤醒一次")
 
     with _watchdog_lock:
-        _watchdog_info.update(running=True, interval=interval, nudge_count=0)
+        _watchdog_info.update(running=True, interval=interval, nudge_count=0, last_nudge_stats={})
 
     while not _watchdog_stop.wait(timeout=interval):
         try:
@@ -847,48 +858,111 @@ def _watchdog_loop() -> None:
 def _do_nudge(prompt: str) -> None:
     """执行一次唤醒：发送提示到所有 Agent 会话。"""
     nudged: list[str] = []
+    include_master = _should_include_master_watchdog_target()
+    stats = {
+        "attempted": 0,
+        "success": 0,
+        "failed": 0,
+        "skipped_empty_sid": 0,
+        "skipped_duplicate": 0,
+        "skipped_non_worker": 0,
+        "skipped_master_sid": 0,
+    }
+    master_sid = ""
 
     # 唤醒主 Agent
     master = _find_master_session()
-    if master:
-        sid = master.get("session_id", "")
+    if master and include_master:
+        sid = str(master.get("session_id", "") or "").strip()
         name = master.get("session_name") or master.get("name") or sid
-        try:
-            _send_to_iterm_session(sid, prompt)
-            nudged.append(f"主Agent({name})")
-            logger.info("看门狗唤醒主 Agent: %s", name)
-        except Exception as exc:
-            logger.warning("看门狗唤醒主 Agent 失败: %s", exc)
+        if sid:
+            master_sid = sid
+            try:
+                _send_to_iterm_session(sid, prompt)
+                nudged.append(f"主Agent({name})")
+                logger.info("看门狗唤醒主 Agent: %s", name)
+            except Exception as exc:
+                logger.warning("看门狗唤醒主 Agent 失败: %s", exc)
+        else:
+            logger.warning("看门狗发现主 Agent 但 session_id 为空，已跳过")
+    elif master:
+        master_sid = str(master.get("session_id", "") or "").strip()
+        logger.info("看门狗默认跳过主 Agent（可通过 TG_WATCHDOG_INCLUDE_MASTER=1 开启）")
 
     # 唤醒子 Agent（已注册的 agent 会话）
     try:
-        from agents.iterm_bridge import (
-            _list_live_sessions, _load_state, _normalize_state_file,
-            AgentSession, _run_iterm_io,
-        )
-        state_path = _normalize_state_file()
-        state = _load_state(state_path)
-        for row in state.get("agents", []):
-            sid = str(row.get("session_id", "")).strip()
-            agent_name = row.get("agent_name") or row.get("agent_id") or sid
-            if not sid:
+        from agents.iterm_bridge import AgentSession, _run_iterm_io, list_iterm_agent_sessions
+        payload = list_iterm_agent_sessions()
+        sessions = payload.get("sessions", []) if isinstance(payload, dict) else []
+        seen_sids: set[str] = set()
+        for row in sessions if isinstance(sessions, list) else []:
+            if not isinstance(row, dict):
                 continue
+
+            sid = str(row.get("session_id", "") or "").strip()
+            agent_id = str(row.get("agent_id", "") or "").strip()
+            agent_name = row.get("agent_name") or agent_id or sid
+            if not sid:
+                stats["skipped_empty_sid"] += 1
+                continue
+            if sid in seen_sids:
+                stats["skipped_duplicate"] += 1
+                continue
+            seen_sids.add(sid)
+            if master_sid and sid == master_sid:
+                stats["skipped_master_sid"] += 1
+                logger.info("看门狗跳过主 Agent session_id=%s（避免群发漂移）", sid)
+                continue
+            if not _is_worker_agent_id(agent_id):
+                stats["skipped_non_worker"] += 1
+                logger.info(
+                    "看门狗跳过非 worker 会话: session_id=%s agent_id=%s",
+                    sid,
+                    agent_id,
+                )
+                continue
+
             try:
-                target = AgentSession(index=0, agent_id=row.get("agent_id", ""),
-                                     agent_name=agent_name, session_id=sid)
-                _run_iterm_io(targets=[target], text=prompt,
-                             append_enter=True, wait_sec=0.5, read_lines=0)
+                stats["attempted"] += 1
+                target = AgentSession(
+                    index=0,
+                    agent_id=agent_id,
+                    agent_name=str(agent_name),
+                    session_id=sid,
+                )
+                result_rows = _run_iterm_io(
+                    targets=[target],
+                    text=prompt,
+                    append_enter=True,
+                    wait_sec=0.5,
+                    read_lines=0,
+                )
+                first_row = result_rows[0] if result_rows else {}
+                error_text = str(first_row.get("error", "") or "").strip()
+                if error_text:
+                    stats["failed"] += 1
+                    logger.warning(
+                        "看门狗唤醒 %s 失败: %s (session_id=%s)",
+                        agent_name,
+                        error_text,
+                        sid,
+                    )
+                    continue
+
+                stats["success"] += 1
                 nudged.append(agent_name)
                 logger.info("看门狗唤醒子 Agent: %s", agent_name)
             except Exception as exc:
+                stats["failed"] += 1
                 logger.warning("看门狗唤醒 %s 失败: %s", agent_name, exc)
-    except Exception:
-        pass  # 没有子 Agent 也没关系
+    except Exception as exc:
+        logger.warning("看门狗读取会话失败: %s", exc)
 
     now_iso = datetime.now(timezone.utc).isoformat()
     with _watchdog_lock:
         _watchdog_info["last_nudge"] = now_iso
         _watchdog_info["nudge_count"] = _watchdog_info.get("nudge_count", 0) + 1
+        _watchdog_info["last_nudge_stats"] = dict(stats)
 
     if nudged:
         msg = f"⏰ 看门狗唤醒: {', '.join(nudged)}"
@@ -900,21 +974,36 @@ def _do_nudge(prompt: str) -> None:
 
 def start_watchdog() -> bool:
     global _watchdog_thread
+    interval = _get_watchdog_interval()
     with _watchdog_lock:
         if _watchdog_thread and _watchdog_thread.is_alive():
+            _watchdog_info["running"] = True
             return True
         _watchdog_stop.clear()
-        _watchdog_thread = threading.Thread(
+        _watchdog_info.update(
+            running=True,
+            interval=interval,
+            last_nudge_stats={},
+        )
+        thread = threading.Thread(
             target=_watchdog_loop, name="tg-watchdog", daemon=True,
         )
-        _watchdog_thread.start()
-        return True
+        _watchdog_thread = thread
+    try:
+        thread.start()
+    except Exception:
+        with _watchdog_lock:
+            _watchdog_thread = None
+            _watchdog_info["running"] = False
+        raise
+    return True
 
 
 def stop_watchdog(timeout: float = 3.0) -> None:
     global _watchdog_thread
     with _watchdog_lock:
         _watchdog_stop.set()
+        _watchdog_info["running"] = False
         thread = _watchdog_thread
         _watchdog_thread = None
     if thread and thread.is_alive():
@@ -923,9 +1012,15 @@ def stop_watchdog(timeout: float = 3.0) -> None:
 
 def is_watchdog_running() -> bool:
     with _watchdog_lock:
-        return bool(_watchdog_thread and _watchdog_thread.is_alive())
+        thread_alive = bool(_watchdog_thread and _watchdog_thread.is_alive())
+        if thread_alive and not bool(_watchdog_info.get("running")):
+            _watchdog_info["running"] = True
+        return bool(_watchdog_info.get("running")) or thread_alive
 
 
 def get_watchdog_info() -> dict[str, Any]:
     with _watchdog_lock:
-        return dict(_watchdog_info)
+        info = dict(_watchdog_info)
+        if _watchdog_thread and _watchdog_thread.is_alive():
+            info["running"] = True
+        return info

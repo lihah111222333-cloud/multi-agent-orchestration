@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import patch
 
 import dashboard
 
@@ -104,6 +105,28 @@ class DashboardEventTests(unittest.TestCase):
         finally:
             dashboard.threading.Thread = original_thread_cls
             dashboard._AGENT_MONITOR_THREAD = original_thread
+
+    def test_agent_monitor_worker_runs_patrol_cycle(self):
+        class _StopAfterOne:
+            def __init__(self):
+                self._wait_calls = 0
+
+            def is_set(self):
+                return False
+
+            def wait(self, timeout=None):
+                self._wait_calls += 1
+                return self._wait_calls >= 1
+
+        stop_event = _StopAfterOne()
+        with patch.object(dashboard, "_AGENT_MONITOR_STOP_EVENT", stop_event):
+            with patch.object(dashboard, "run_patrol_cycle", return_value={"ok": True}) as patrol_mock:
+                dashboard._agent_monitor_worker()
+
+        self.assertEqual(patrol_mock.call_count, 1)
+        kwargs = patrol_mock.call_args.kwargs
+        self.assertIs(kwargs["upsert_status_func"], dashboard.upsert_agent_status_row)
+        self.assertIs(kwargs["publish_event_func"], dashboard._publish_dashboard_event)
 
 
 if __name__ == "__main__":

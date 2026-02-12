@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import tempfile
@@ -9,6 +10,21 @@ import agents.iterm_bridge as bridge
 
 
 class ItermBridgeTests(unittest.TestCase):
+    def test_parse_agent_ids_normalizes_legacy_short_form(self):
+        parsed = bridge._parse_agent_ids("a01, agent_02;A03")
+        self.assertEqual(parsed, ["agent_01", "agent_02", "agent_03"])
+
+    def test_build_agent_sessions_normalizes_legacy_state_ids(self):
+        state = {
+            "agents": [
+                {"index": 1, "agent_id": "a01", "agent_name": "Agent 01", "session_id": "SID-01"},
+                {"index": 2, "agent_id": "agent_02", "agent_name": "Agent 02", "session_id": "SID-02"},
+            ]
+        }
+
+        sessions = bridge._build_agent_sessions(state)
+        self.assertEqual([row.agent_id for row in sessions], ["agent_01", "agent_02"])
+
     def test_send_prefers_subprocess_by_default(self):
         with mock.patch.dict(os.environ, {"ITERM_IO_BRIDGE_DIRECT": "0"}, clear=False):
             with mock.patch(
@@ -245,6 +261,47 @@ class ItermBridgeTests(unittest.TestCase):
             self.assertEqual(updated["session_ids"], ["SID-A02"])
             self.assertEqual(updated["tab_count"], 2)
 
+    def test_rebind_does_not_bind_agent_to_master_title_text(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "iterm_launch_state.json"
+            state = {
+                "window_id": "window-old",
+                "count": 1,
+                "tab_count": 1,
+                "agents": [
+                    {
+                        "index": 1,
+                        "agent_id": "agent_01",
+                        "agent_name": "Runtime Agent 01",
+                        "session_label": "agent_01 | Runtime Agent 01",
+                        "badge": "A01",
+                        "session_id": "SID-STALE",
+                    },
+                ],
+                "session_ids": ["SID-STALE"],
+            }
+            state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+            live = [
+                {
+                    "session_id": "SID-MASTER",
+                    "badge": "",
+                    "agent_id": "",
+                    "agent_name": "",
+                    "agent_label": "",
+                    "name": "A0-master 调度 agent_01 恢复",
+                    "session_name": "A0-master 调度 agent_01 恢复",
+                }
+            ]
+
+            with mock.patch("agents.iterm_bridge._list_live_sessions", return_value=("window-old", live)):
+                result = bridge._rebind_state_sessions(state_path, state)
+
+            self.assertTrue(result["rebound"])
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(updated["agents"][0]["session_id"], "")
+            self.assertEqual(updated["session_ids"], [])
+
     def test_rebind_fail_keeps_original_rows(self):
         stale_state = {
             "window_id": "window-1",
@@ -433,6 +490,68 @@ class ItermBridgeTests(unittest.TestCase):
             src, dst = replace_mock.call_args.args
             self.assertTrue(str(src).endswith(".tmp-" + str(os.getpid())))
             self.assertEqual(Path(dst), state_path)
+
+    def test_read_tail_lines_merges_soft_wrapped_rows(self):
+        class _FakeLine:
+            def __init__(self, text: str, hard_eol: bool):
+                self.string = text
+                self.hard_eol = hard_eol
+
+        class _FakeScreen:
+            def __init__(self, rows):
+                self._rows = rows
+                self.number_of_lines = len(rows)
+
+            def line(self, index: int):
+                return self._rows[index]
+
+        class _FakeSession:
+            def __init__(self, screen):
+                self._screen = screen
+
+            async def async_get_screen_contents(self):
+                return self._screen
+
+        rows = [
+            _FakeLine("echo WRAP_MARKER_12345", False),
+            _FakeLine("67890", True),
+            _FakeLine("done", True),
+        ]
+        session = _FakeSession(_FakeScreen(rows))
+        output = asyncio.run(bridge._read_tail_lines(session, lines=10))
+
+        self.assertIn("echo WRAP_MARKER_1234567890", output)
+        self.assertIn("done", output)
+
+    def test_read_tail_lines_keeps_hard_eol_separate(self):
+        class _FakeLine:
+            def __init__(self, text: str, hard_eol: bool):
+                self.string = text
+                self.hard_eol = hard_eol
+
+        class _FakeScreen:
+            def __init__(self, rows):
+                self._rows = rows
+                self.number_of_lines = len(rows)
+
+            def line(self, index: int):
+                return self._rows[index]
+
+        class _FakeSession:
+            def __init__(self, screen):
+                self._screen = screen
+
+            async def async_get_screen_contents(self):
+                return self._screen
+
+        rows = [
+            _FakeLine("line-one", True),
+            _FakeLine("line-two", True),
+        ]
+        session = _FakeSession(_FakeScreen(rows))
+        output = asyncio.run(bridge._read_tail_lines(session, lines=10))
+
+        self.assertEqual(output, ["line-one", "line-two"])
 
 
 if __name__ == "__main__":

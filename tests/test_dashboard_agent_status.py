@@ -139,7 +139,8 @@ class DashboardAgentStatusApiTests(unittest.TestCase):
             with patch.object(dashboard.EVENT_BUS, "unsubscribe", return_value=None):
                 with patch.object(dashboard, "query_agent_status", return_value=table_rows):
                     with patch.object(dashboard, "_safe_int", return_value=1):
-                        handler._serve_event_stream()
+                        with patch.object(dashboard, "ensure_agent_monitor_started", return_value=None):
+                            handler._serve_event_stream()
 
         self.assertIn(200, sent_codes)
         body = b"".join(handler.wfile.chunks).decode("utf-8")

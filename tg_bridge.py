@@ -422,9 +422,11 @@ async def _bot_main(stop_event: threading.Event) -> None:
         else:
             start_watchdog()
             interval = _get_watchdog_interval()
+            waiting_check = "开启" if _is_watchdog_waiting_check_enabled() else "关闭"
             await update.message.reply_text(
                 f"⏰ 看门狗已启动\n"
                 f"📍 每 {interval}s 唤醒 Agent\n"
+                f"🕵️ 等待态检测: {waiting_check}\n"
                 f"📝 提示词: {_get_nudge_prompt()[:60]}\n\n"
                 f"再次发送 /watchdog 关闭"
             )
@@ -811,7 +813,15 @@ def send_message_to_tg(text: str) -> bool:
 # ---- 定时看门狗 ----
 _DEFAULT_WATCHDOG_INTERVAL = 120  # 秒
 _DEFAULT_NUDGE_PROMPT = "请继续执行当前任务。如果已完成，请汇报结果。"
+_DEFAULT_WAITING_NUDGE_PROMPT = "检测到你在等待指令，请继续当前任务；若无任务请回复 READY+agent_id。"
 _WORKER_AGENT_ID_RE = re.compile(r"^agent_\d{2}$", re.IGNORECASE)
+_WAITING_STATE_PATTERNS = (
+    re.compile(r"waiting for inst", re.IGNORECASE),
+    re.compile(r"waiting for instruction", re.IGNORECASE),
+    re.compile(r"waiting for input", re.IGNORECASE),
+    re.compile(r"waiting for task", re.IGNORECASE),
+    re.compile(r"等待.*指令", re.IGNORECASE),
+)
 
 _watchdog_thread: Optional[threading.Thread] = None
 _watchdog_stop = threading.Event()
@@ -843,6 +853,39 @@ def _is_worker_agent_id(value: Any) -> bool:
     return bool(_WORKER_AGENT_ID_RE.fullmatch(str(value or "").strip()))
 
 
+def _is_watchdog_waiting_check_enabled() -> bool:
+    text = str(os.getenv("TG_WATCHDOG_CHECK_WAITING", "1") or "").strip().lower()
+    if not text:
+        return True
+    return text in {"1", "true", "yes", "on"}
+
+
+def _get_watchdog_waiting_prompt() -> str:
+    text = str(os.getenv("TG_WATCHDOG_WAITING_PROMPT", _DEFAULT_WAITING_NUDGE_PROMPT) or "").strip()
+    if text:
+        return text
+    return _DEFAULT_WAITING_NUDGE_PROMPT
+
+
+def _get_watchdog_waiting_read_lines() -> int:
+    try:
+        value = int(os.getenv("TG_WATCHDOG_WAITING_READ_LINES", "35"))
+    except (ValueError, TypeError):
+        value = 35
+    return max(10, min(120, value))
+
+
+def _looks_like_waiting_state(lines: list[Any]) -> bool:
+    if not isinstance(lines, list) or not lines:
+        return False
+    normalized_lines = [str(line or "").strip() for line in lines]
+    normalized_lines = [line for line in normalized_lines if line]
+    if not normalized_lines:
+        return False
+    blob = "\n".join(normalized_lines)
+    return any(pattern.search(blob) for pattern in _WAITING_STATE_PATTERNS)
+
+
 def _watchdog_loop() -> None:
     """定时巡检：到时间就向主 Agent 和子 Agent 发唤醒提示。"""
     interval = _get_watchdog_interval()
@@ -869,6 +912,9 @@ def _do_nudge(prompt: str) -> None:
     """执行一次唤醒：发送提示到所有 Agent 会话。"""
     nudged: list[str] = []
     include_master = _should_include_master_watchdog_target()
+    waiting_check_enabled = _is_watchdog_waiting_check_enabled()
+    waiting_prompt = _get_watchdog_waiting_prompt()
+    waiting_read_lines = _get_watchdog_waiting_read_lines()
     stats = {
         "attempted": 0,
         "success": 0,
@@ -877,6 +923,10 @@ def _do_nudge(prompt: str) -> None:
         "skipped_duplicate": 0,
         "skipped_non_worker": 0,
         "skipped_master_sid": 0,
+        "waiting_probe_ok": 0,
+        "waiting_probe_failed": 0,
+        "waiting_detected": 0,
+        "waiting_nudged": 0,
     }
     master_sid = ""
 
@@ -888,7 +938,22 @@ def _do_nudge(prompt: str) -> None:
         if sid:
             master_sid = sid
             try:
-                _send_to_iterm_session(sid, prompt)
+                target_prompt = prompt
+                if waiting_check_enabled:
+                    try:
+                        from agents.iterm_bridge import read_session_screen
+                        screen_payload = read_session_screen(sid, lines=waiting_read_lines)
+                        stats["waiting_probe_ok"] += 1
+                        if _looks_like_waiting_state(screen_payload.get("lines", [])):
+                            stats["waiting_detected"] += 1
+                            target_prompt = waiting_prompt
+                    except Exception as exc:
+                        stats["waiting_probe_failed"] += 1
+                        logger.debug("看门狗检测主 Agent 等待态失败: %s", exc)
+
+                _send_to_iterm_session(sid, target_prompt)
+                if target_prompt == waiting_prompt:
+                    stats["waiting_nudged"] += 1
                 nudged.append(f"主Agent({name})")
                 logger.info("看门狗唤醒主 Agent: %s", name)
             except Exception as exc:
@@ -904,6 +969,30 @@ def _do_nudge(prompt: str) -> None:
         from agents.iterm_bridge import AgentSession, _run_iterm_io, list_iterm_agent_sessions
         payload = list_iterm_agent_sessions()
         sessions = payload.get("sessions", []) if isinstance(payload, dict) else []
+        waiting_sids: set[str] = set()
+        if waiting_check_enabled:
+            try:
+                from agents.iterm_bridge import read_iterm_output
+
+                waiting_payload = read_iterm_output(
+                    agent_id="",
+                    all_agents=True,
+                    read_lines=waiting_read_lines,
+                )
+                if waiting_payload.get("ok"):
+                    stats["waiting_probe_ok"] += 1
+                    for result_row in waiting_payload.get("results", []):
+                        if not isinstance(result_row, dict):
+                            continue
+                        sid = str(result_row.get("session_id", "") or "").strip()
+                        if sid and _looks_like_waiting_state(result_row.get("output", [])):
+                            waiting_sids.add(sid)
+                else:
+                    stats["waiting_probe_failed"] += 1
+            except Exception as exc:
+                stats["waiting_probe_failed"] += 1
+                logger.debug("看门狗检测子 Agent 等待态失败: %s", exc)
+
         seen_sids: set[str] = set()
         for row in sessions if isinstance(sessions, list) else []:
             if not isinstance(row, dict):
@@ -934,6 +1023,9 @@ def _do_nudge(prompt: str) -> None:
 
             try:
                 stats["attempted"] += 1
+                target_prompt = waiting_prompt if sid in waiting_sids else prompt
+                if sid in waiting_sids:
+                    stats["waiting_detected"] += 1
                 target = AgentSession(
                     index=0,
                     agent_id=agent_id,
@@ -942,7 +1034,7 @@ def _do_nudge(prompt: str) -> None:
                 )
                 result_rows = _run_iterm_io(
                     targets=[target],
-                    text=prompt,
+                    text=target_prompt,
                     append_enter=True,
                     wait_sec=0.5,
                     read_lines=0,
@@ -960,6 +1052,8 @@ def _do_nudge(prompt: str) -> None:
                     continue
 
                 stats["success"] += 1
+                if target_prompt == waiting_prompt:
+                    stats["waiting_nudged"] += 1
                 nudged.append(agent_name)
                 logger.info("看门狗唤醒子 Agent: %s", agent_name)
             except Exception as exc:
@@ -1035,5 +1129,6 @@ def get_watchdog_info() -> dict[str, Any]:
             info["running"] = True
     # 配置态放在锁外读取，避免长时间持锁。
     info["include_master"] = _should_include_master_watchdog_target()
+    info["check_waiting"] = _is_watchdog_waiting_check_enabled()
     info["master_tab_name"] = _get_master_tab_name()
     return info

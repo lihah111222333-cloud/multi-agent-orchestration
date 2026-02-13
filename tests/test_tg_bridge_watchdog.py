@@ -150,7 +150,7 @@ class TgBridgeWatchdogTests(unittest.TestCase):
             ],
         }
 
-        with patch.dict(os.environ, {"TG_WATCHDOG_INCLUDE_MASTER": "0"}, clear=False):
+        with patch.dict(os.environ, {"TG_WATCHDOG_INCLUDE_MASTER": "0", "TG_WATCHDOG_CHECK_WAITING": "0"}, clear=False):
             with patch.object(
                 tg_bridge,
                 "_find_master_session",
@@ -171,6 +171,53 @@ class TgBridgeWatchdogTests(unittest.TestCase):
         stats = info.get("last_nudge_stats", {})
         self.assertEqual(stats.get("skipped_master_sid"), 1)
         self.assertEqual(stats.get("success"), 1)
+
+    def test_looks_like_waiting_state_matches_codex_waiting_text(self) -> None:
+        self.assertTrue(
+            tg_bridge._looks_like_waiting_state(
+                ["•Waiting for instructions(8s)", "100% context left"]
+            )
+        )
+
+    def test_do_nudge_uses_waiting_prompt_for_waiting_worker(self) -> None:
+        sent_prompts: list[str] = []
+
+        def _fake_run_iterm_io(*, targets, text, append_enter, wait_sec, read_lines):
+            sent_prompts.append(str(text))
+            return [{"error": ""}]
+
+        sessions_payload = {
+            "ok": True,
+            "sessions": [
+                {"agent_id": "agent_01", "agent_name": "Runtime Agent 01", "session_id": "SID-WAIT"},
+            ],
+        }
+        waiting_payload = {
+            "ok": True,
+            "results": [
+                {"agent_id": "agent_01", "session_id": "SID-WAIT", "output": ["•Waiting for instructions(5s)"]},
+            ],
+        }
+
+        with patch.dict(
+            os.environ,
+            {
+                "TG_WATCHDOG_CHECK_WAITING": "1",
+                "TG_WATCHDOG_WAITING_PROMPT": "请退出等待并继续执行当前任务",
+            },
+            clear=False,
+        ):
+            with patch.object(tg_bridge, "_find_master_session", return_value=None):
+                with patch("agents.iterm_bridge.list_iterm_agent_sessions", return_value=sessions_payload):
+                    with patch("agents.iterm_bridge.read_iterm_output", return_value=waiting_payload):
+                        with patch("agents.iterm_bridge._run_iterm_io", side_effect=_fake_run_iterm_io):
+                            with patch.object(tg_bridge, "send_message_to_tg"):
+                                tg_bridge._do_nudge("默认唤醒词")
+
+        self.assertEqual(sent_prompts, ["请退出等待并继续执行当前任务"])
+        stats = tg_bridge.get_watchdog_info().get("last_nudge_stats", {})
+        self.assertEqual(stats.get("waiting_detected"), 1)
+        self.assertEqual(stats.get("waiting_nudged"), 1)
 
 
 if __name__ == "__main__":

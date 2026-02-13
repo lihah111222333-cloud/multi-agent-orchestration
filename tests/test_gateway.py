@@ -33,6 +33,22 @@ class _DummyAgent:
         return {"messages": [_DummyMessage(self.content)]}
 
 
+class _DummyAgentMessages:
+    def __init__(self, messages):
+        self.messages = messages
+        self.last_payload = None
+
+    async def ainvoke(self, payload):
+        self.last_payload = payload
+        return {"messages": self.messages}
+
+
+class _DummyLLM:
+    def __init__(self, use_previous_response_id=True, store=False):
+        self.use_previous_response_id = use_previous_response_id
+        self.store = store
+
+
 class GatewayTests(unittest.TestCase):
     def test_process_success_returns_structured_result(self):
         gateway = Gateway(
@@ -134,6 +150,21 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(messages[1]["role"], "user")
         self.assertEqual(messages[1]["content"], "原始任务")
 
+    def test_invoke_with_tools_uses_last_non_empty_message(self):
+        capture_agent = _DummyAgentMessages([_DummyMessage("tool result"), _DummyMessage("")])
+        gateway = Gateway(
+            name="gateway_1",
+            display_name="网关1",
+            agent_configs={"agent_1": {}},
+            llm_factory=lambda: object(),
+            mcp_client_cls=_DummyClient,
+            react_agent_builder=lambda llm, tools: capture_agent,
+            max_attempts=1,
+        )
+
+        output = asyncio.run(gateway._invoke_with_tools("原始任务", ["tool_a"]))
+        self.assertEqual(output, "tool result")
+
     def test_process_failure_after_retries(self):
         class AlwaysFailGateway(Gateway):
             def __init__(self):
@@ -156,6 +187,41 @@ class GatewayTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["reason"], "temporary")
         self.assertEqual(result["attempts"], 2)
+
+    def test_apply_responses_runtime_fallback_disables_previous_response_id(self):
+        gateway = Gateway(
+            name="gateway_1",
+            display_name="网关1",
+            agent_configs={"agent_1": {}},
+            llm_factory=lambda: object(),
+            mcp_client_cls=_DummyClient,
+            react_agent_builder=lambda llm, tools: _DummyAgent("unused"),
+            max_attempts=1,
+        )
+        gateway._llm = _DummyLLM(use_previous_response_id=True, store=True)
+        changed = gateway._apply_responses_runtime_fallback(
+            "No tool call found for function call output with call_id call_123."
+        )
+        self.assertTrue(changed)
+        self.assertFalse(gateway._llm.use_previous_response_id)
+        self.assertTrue(gateway._llm.store)
+
+    def test_apply_responses_runtime_fallback_enables_store(self):
+        gateway = Gateway(
+            name="gateway_1",
+            display_name="网关1",
+            agent_configs={"agent_1": {}},
+            llm_factory=lambda: object(),
+            mcp_client_cls=_DummyClient,
+            react_agent_builder=lambda llm, tools: _DummyAgent("unused"),
+            max_attempts=1,
+        )
+        gateway._llm = _DummyLLM(use_previous_response_id=False, store=False)
+        changed = gateway._apply_responses_runtime_fallback(
+            "Items are not persisted when `store` is set to false."
+        )
+        self.assertTrue(changed)
+        self.assertTrue(gateway._llm.store)
 
 
 if __name__ == "__main__":

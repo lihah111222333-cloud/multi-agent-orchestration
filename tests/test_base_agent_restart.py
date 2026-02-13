@@ -108,6 +108,28 @@ class RunAgentRestartTests(unittest.TestCase):
         self.assertEqual(delays, [2, 4, 8, 16, 32])
         self.assertTrue(all(d <= 60 for d in delays))
 
+    @mock.patch.dict(os.environ, {"ACP_BUS_MAX_RESTARTS": "5"})
+    @mock.patch("agents.base_agent.time.sleep", return_value=None)
+    def test_ebadf_exits_immediately_no_retry(self, mock_sleep):
+        """OSError(EBADF) should exit immediately without retrying."""
+        import errno as _errno
+        ebadf = OSError(_errno.EBADF, "Bad file descriptor")
+        server = _FakeServer(side_effects=[ebadf])
+        run_agent(server)
+        self.assertEqual(server.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"ACP_BUS_MAX_RESTARTS": "5"})
+    @mock.patch("agents.base_agent.time.sleep", return_value=None)
+    def test_non_ebadf_oserror_still_retries(self, mock_sleep):
+        """Other OSErrors (e.g. ECONNRESET) should still trigger retry."""
+        import errno as _errno
+        err = OSError(_errno.ECONNRESET, "Connection reset")
+        server = _FakeServer(side_effects=[err, None])
+        run_agent(server)
+        self.assertEqual(server.call_count, 2)
+        self.assertEqual(mock_sleep.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

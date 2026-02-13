@@ -71,14 +71,17 @@ class DashboardConfigTests(unittest.TestCase):
         self.assertNotIn('agent_01__', text)
         self.assertNotIn('Agent 专属工具', text)
         # System-level tools
-        self.assertIn('iterm_list_sessions', text)
-        self.assertIn('write_file', text)
-        self.assertIn('create_interaction', text)
-        self.assertIn('save_prompt_template', text)
-        self.assertIn('save_command_card', text)
-        self.assertIn('execute_command_card', text)
-        self.assertIn('db_query', text)
-        self.assertIn('db_execute', text)
+        self.assertIn('iterm', text)
+        self.assertIn('shared_file', text)
+        self.assertIn('interaction', text)
+        self.assertIn('prompt_template', text)
+        self.assertIn('command_card', text)
+        self.assertIn('db', text)
+        self.assertIn('task', text)
+        self.assertIn('approval', text)
+        self.assertIn('lock', text)
+        self.assertIn('agent_watchdog', text)
+        self.assertIn('orchestration_tui', text)
         # Section header
         self.assertIn('系统级工具', text)
 
@@ -87,7 +90,7 @@ class DashboardConfigTests(unittest.TestCase):
         text = result['prompt_text']
         # Count lines starting with "- **" which represent tool entries
         tool_lines = [line for line in text.splitlines() if line.strip().startswith('- **')]
-        self.assertEqual(len(tool_lines), 26, f"Expected 26 system tools, got {len(tool_lines)}")
+        self.assertEqual(len(tool_lines), 11, f"Expected 11 system tools, got {len(tool_lines)}")
 
 
 

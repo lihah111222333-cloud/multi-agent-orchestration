@@ -294,6 +294,62 @@ class Gateway:
             {"role": "user", "content": str(task or "")},
         ]
 
+    def _extract_message_text(self, message: Any) -> str:
+        if message is None:
+            return ""
+
+        if isinstance(message, dict):
+            content = message.get("content")
+        else:
+            content = getattr(message, "content", None)
+
+        return extract_text(content).strip()
+
+    def _extract_output_from_messages(self, messages: list[Any]) -> str:
+        """Prefer the latest non-empty message text.
+
+        Some providers/tools return an empty final assistant content while
+        the meaningful text is in an earlier message in the same trace.
+        """
+        for message in reversed(messages):
+            text = self._extract_message_text(message)
+            if text:
+                return text
+        return ""
+
+    def _apply_responses_runtime_fallback(self, error_text: str) -> bool:
+        """对 Responses API 常见兼容错误做保守降级。
+
+        目标是避免第三方网关在 tool-calling 场景下因状态项不持久化导致整次失败。
+        """
+        llm = self._llm
+        if llm is None:
+            return False
+
+        text = str(error_text or "").lower()
+        changed = False
+
+        not_found_item = "items are not persisted when `store` is set to false" in text
+        missing_tool_call = "no tool call found for function call output with call_id" in text
+
+        if (not_found_item or missing_tool_call) and bool(getattr(llm, "use_previous_response_id", False)):
+            try:
+                llm.use_previous_response_id = False
+                changed = True
+                logger.warning("[%s] 已临时关闭 use_previous_response_id 以兼容当前网关", self.display_name)
+            except Exception:
+                logger.debug("关闭 use_previous_response_id 失败", exc_info=True)
+
+        if not_found_item and hasattr(llm, "store") and getattr(llm, "store", None) is not True:
+            try:
+                llm.store = True
+                changed = True
+                logger.warning("[%s] 已临时启用 Responses store 以重试", self.display_name)
+            except Exception:
+                logger.debug("开启 store 失败", exc_info=True)
+
+        return changed
+
     async def _invoke_with_tools(self, task: str, tools: list[Any]) -> str:
         if not tools:
             raise GatewayExecutionError("no_tools", "当前阶段无可用工具")
@@ -307,7 +363,7 @@ class Gateway:
         if not output_messages:
             raise GatewayExecutionError("empty_response", "LLM 返回为空")
 
-        output = extract_text(output_messages[-1].content)
+        output = self._extract_output_from_messages(output_messages)
         if not output.strip():
             raise GatewayExecutionError("empty_output", "LLM 返回空文本")
         return output
@@ -550,9 +606,11 @@ class Gateway:
                 except GatewayExecutionError as e:
                     last_reason = e.reason
                     last_error = f"[{self.display_name}] 任务执行失败: {e}"
+                    self._apply_responses_runtime_fallback(str(e))
                 except Exception as e:
                     last_reason = "exception"
                     last_error = f"[{self.display_name}] 执行异常: {e}"
+                    self._apply_responses_runtime_fallback(str(e))
 
                 logger.error(last_error)
                 logger.debug(traceback.format_exc())

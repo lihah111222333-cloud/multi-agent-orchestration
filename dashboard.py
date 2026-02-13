@@ -66,6 +66,7 @@ from tg_bridge import (
     start_watchdog, stop_watchdog, is_watchdog_running, get_watchdog_info,
 )
 from audit_log import append_event, query_events, list_filter_values as list_audit_filter_values
+from ai_log import query_ai_logs, list_ai_filter_values
 from db.postgres import fetch_one
 from system_log import query_logs as query_system_logs, list_filter_values as list_system_filter_values
 from topology_approval import approve_approval, is_valid_approval_id, list_approvals, reject_approval
@@ -98,6 +99,57 @@ _lifecycle_state: dict[str, Any] = {"cycles": 0, "notifications_sent": 0, "error
 _lifecycle_timeline: list[dict[str, Any]] = []
 _lifecycle_thread: Optional[threading.Thread] = None
 _lifecycle_stop_event = threading.Event()
+
+# ── 编排引擎 (run.py integration) ──
+_orchestration_lock = threading.Lock()
+_orchestration_state: dict[str, Any] = {
+    "status": "idle",       # idle | running | done | error
+    "task": "",
+    "started_at": "",
+    "finished_at": "",
+    "elapsed_sec": 0.0,
+    "result": "",
+    "error": "",
+    "trace_id": "",
+}
+
+
+def _run_orchestration_worker(task_desc: str) -> None:
+    """后台线程: 运行编排引擎 (来自 run.py 的 async run 函数)"""
+    global _orchestration_state
+    import asyncio as _aio
+    try:
+        from run import run as _run_task
+        result = _aio.run(_run_task(task_desc))
+        with _orchestration_lock:
+            _orchestration_state["status"] = "done"
+            _orchestration_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+            _orchestration_state["elapsed_sec"] = round(
+                (datetime.now(timezone.utc) - datetime.fromisoformat(_orchestration_state["started_at"])).total_seconds(), 2
+            )
+            _orchestration_state["result"] = str(result.get("final_answer", ""))[:4000] if result else ""
+        _publish_dashboard_event("sync", {
+            "scope": ["orchestration", "audit"],
+            "reason": "orchestration_done",
+            "task": task_desc[:120],
+        })
+    except Exception as exc:
+        with _orchestration_lock:
+            _orchestration_state["status"] = "error"
+            _orchestration_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+            _orchestration_state["error"] = str(exc)[:2000]
+            try:
+                _orchestration_state["elapsed_sec"] = round(
+                    (datetime.now(timezone.utc) - datetime.fromisoformat(_orchestration_state["started_at"])).total_seconds(), 2
+                )
+            except Exception:
+                pass
+        _publish_dashboard_event("sync", {
+            "scope": ["orchestration", "audit"],
+            "reason": "orchestration_error",
+            "task": task_desc[:120],
+            "error": str(exc)[:200],
+        })
 
 
 def _lifecycle_add_timeline(icon: str, text: str) -> None:
@@ -319,6 +371,10 @@ CONFIG_SCHEMA = [
             {"key": "OPENAI_API_KEY", "label": "API Key", "type": "password", "desc": "OpenAI / 第三方 API Key"},
             {"key": "OPENAI_BASE_URL", "label": "API Base URL", "type": "text", "desc": "留空使用 OpenAI 官方"},
             {"key": "LLM_MODEL", "label": "模型", "type": "text", "desc": "如 gpt-4o, deepseek-chat"},
+            {"key": "OPENAI_USE_PREVIOUS_RESPONSE_ID", "label": "串联上下文 previous_response_id", "type": "select",
+             "options": ["0", "1"], "desc": "0=关闭（推荐第三方网关），1=开启多轮串联"},
+            {"key": "OPENAI_RESPONSES_CONVERSATION_ID", "label": "持久会话 conversation_id", "type": "text",
+             "desc": "可选，会话 ID（如 conv_xxx）"},
             {"key": "LLM_TEMPERATURE", "label": "Temperature", "type": "number", "desc": "0-2，越低越确定"},
             {"key": "LLM_TIMEOUT", "label": "LLM 超时(秒)", "type": "number", "desc": "单次 LLM 请求超时"},
             {"key": "LLM_MAX_RETRIES", "label": "LLM 重试次数", "type": "number", "desc": "失败后重试次数"},
@@ -365,6 +421,7 @@ CONFIG_SCHEMA = [
             {"key": "TG_MASTER_TAB_NAME", "label": "主 Agent Tab 名", "type": "text", "desc": "iTerm 中主 Agent 终端 tab 名称"},
             {"key": "TG_WATCHDOG_INTERVAL", "label": "看门狗间隔(秒)", "type": "text", "desc": "定时唤醒 Agent 的间隔秒数（默认120）"},
             {"key": "TG_WATCHDOG_PROMPT", "label": "唤醒提示词", "type": "text", "desc": "发送给 Agent 的唤醒提示词"},
+            {"key": "TG_WATCHDOG_INCLUDE_MASTER", "label": "看门狗包含主Agent", "type": "select", "options": ["1", "0"], "desc": "1=定时唤醒主 Agent，0=仅唤醒子 Agent"},
         ],
     },
 ]
@@ -373,6 +430,8 @@ DEFAULTS = {
     "OPENAI_API_KEY": "",
     "OPENAI_BASE_URL": "",
     "LLM_MODEL": "gpt-4o",
+    "OPENAI_USE_PREVIOUS_RESPONSE_ID": "0",
+    "OPENAI_RESPONSES_CONVERSATION_ID": "",
     "LLM_TEMPERATURE": "0.7",
     "LLM_TIMEOUT": "120",
     "LLM_MAX_RETRIES": "3",
@@ -396,9 +455,10 @@ DEFAULTS = {
     "AGENT_MONITOR_READ_LINES": "30",
     "TG_BOT_TOKEN": "8411951426:AAGzdMxTUHXhvcj9_3a3iHP2CB3Mvn8oKm8",
     "TG_CHAT_ID": "",
-    "TG_MASTER_TAB_NAME": "主agnet",
+    "TG_MASTER_TAB_NAME": "主agent",
     "TG_WATCHDOG_INTERVAL": "120",
     "TG_WATCHDOG_PROMPT": "请继续执行当前任务。如果已完成，请汇报结果。",
+    "TG_WATCHDOG_INCLUDE_MASTER": "1",
 }
 
 CONFIG_TYPE_MAP = {item["key"]: item["type"] for group in CONFIG_SCHEMA for item in group.get("items", [])}
@@ -508,6 +568,7 @@ NAV_ITEMS = [
     ("approvals", "拓扑审批", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>'),
     ("audit", "审计日志", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>'),
     ("syslog", "系统日志", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="4,17 10,11 4,5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>'),
+    ("ailog", "AI 日志", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9" cy="10" r="1.2"/><circle cx="15" cy="10" r="1.2"/><path d="M8 15c1 .9 2.3 1.3 4 1.3s3-.4 4-1.3"/><path d="M12 4V2"/><path d="M4 12H2"/><path d="M22 12h-2"/></svg>'),
     ("commands", "命令卡", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="18" cy="18" r="2"/></svg>'),
     ("prompts", "提示词", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>'),
     ("acks", "任务管理", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>'),
@@ -956,45 +1017,27 @@ def _format_sig_params(fn: Any) -> str:
 
 def _build_system_prompt() -> dict:
     """Build the pinned system prompt describing all MCP interfaces.
-
-    Keep a backward-compatible tool index so older prompts/tests that rely on
-    legacy wrapper names still work after the unified `action`-based tools.
     """
-    legacy_tools: list[tuple[str, str]] = [
-        ("iterm_list_sessions", "列出 iTerm Agent 会话"),
-        ("iterm_send_input", "向 Agent 发送输入"),
-        ("iterm_read_output", "读取 Agent 输出"),
-        ("write_file", "写共享文件"),
-        ("read_file", "读共享文件"),
-        ("list_files", "列共享文件"),
-        ("delete_file", "删共享文件"),
-        ("create_interaction", "创建交互记录"),
-        ("list_interactions", "查询交互记录"),
-        ("review_interaction", "审核交互记录"),
-        ("save_prompt_template", "保存提示词模板"),
-        ("get_prompt_template", "读取提示词模板"),
-        ("list_prompt_templates", "查询提示词模板"),
-        ("set_prompt_template_enabled", "启停提示词模板"),
-        ("save_command_card", "保存命令卡"),
-        ("get_command_card", "读取命令卡"),
-        ("list_command_cards", "查询命令卡"),
-        ("set_command_card_enabled", "启停命令卡"),
-        ("prepare_command_card_run", "准备命令卡执行"),
-        ("review_command_card_run", "审批命令卡执行"),
-        ("execute_command_card_run", "执行指定 run_id"),
-        ("execute_command_card", "一键执行命令卡"),
-        ("get_command_card_run", "查看执行详情"),
-        ("list_command_card_runs", "查询执行流水"),
-        ("db_query", "只读 SQL 查询"),
-        ("db_execute", "执行变更 SQL"),
+    tool_index: list[tuple[str, str]] = [
+        ("iterm", "iTerm 会话统一管理（list/send/read/clean/unregister/clear_all）"),
+        ("shared_file", "共享文件管理（write/read/list/delete）"),
+        ("interaction", "Agent 交互记录（register/roster/create/list/review）"),
+        ("prompt_template", "提示词模板管理（save/get/list/toggle）"),
+        ("command_card", "命令卡管理与执行（save/get/list/toggle/prepare/review/exec_run/exec）"),
+        ("db", "数据库读写（query/execute）"),
+        ("task", "任务管理（create/list/get/update/assign/ready/progress/cancel）"),
+        ("approval", "审批流（request/respond/list/get）"),
+        ("lock", "资源锁（acquire/release/list/force_release）"),
+        ("agent_watchdog", "看门狗（start/stop/status）"),
+        ("orchestration_tui", "Codex TUI 编排状态总线（begin/update/end/warning/snapshot/events/reset）"),
     ]
-    tool_lines = "\n".join([f"- **{name}**: {desc}" for name, desc in legacy_tools])
+    tool_lines = "\n".join([f"- **{name}**: {desc}" for name, desc in tool_index])
     prompt_text = (
         "# 多Agent编排系统 — 系统级工具\n\n"
-        "兼容说明：以下为系统级工具索引（含 legacy 名称）。\n\n"
+        "以下为当前系统级工具索引（统一 action 风格）。\n\n"
         "## 系统级工具\n\n"
         f"{tool_lines}\n\n"
-        "说明：运行时推荐优先使用统一工具（iterm/shared_file/interaction/...）的 action 形式。"
+        "说明：优先使用 action 参数在单工具内切换操作。"
     )
 
     return {
@@ -1429,6 +1472,31 @@ def render_html() -> str:
                     <table class="log-table"><thead><tr>
                         <th>时间</th><th>级别</th><th>模块</th><th>消息</th>
                     </tr></thead><tbody id="system-tbody"></tbody></table>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Log Page -->
+        <div id="page-ailog" class="page">
+            <div class="card">
+                <header class="card-header">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9" cy="10" r="1.2"/><circle cx="15" cy="10" r="1.2"/><path d="M8 15c1 .9 2.3 1.3 4 1.3s3-.4 4-1.3"/></svg>
+                    <h2>AI 日志</h2>
+                </header>
+                <div class="card-body">
+                    <div class="log-toolbar">
+                        <select id="ai-level" class="input"><option value="">级别</option></select>
+                        <select id="ai-logger" class="input"><option value="">模块</option></select>
+                        <select id="ai-category" class="input"><option value="">类别</option></select>
+                        <select id="ai-endpoint" class="input"><option value="">端点</option></select>
+                        <select id="ai-status" class="input"><option value="">状态码</option></select>
+                        <input type="text" id="ai-keyword" class="input" placeholder="搜索关键词..." style="max-width:200px">
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="loadAiLogs()">刷新</button>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="exportAiLogs()">导出</button>
+                    </div>
+                    <table class="log-table"><thead><tr>
+                        <th>时间</th><th>级别</th><th>类别</th><th>模块</th><th>端点</th><th>状态</th><th>消息</th>
+                    </tr></thead><tbody id="ai-tbody"></tbody></table>
                 </div>
             </div>
         </div>
@@ -2286,6 +2354,38 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                           headers={"Content-Disposition": f"attachment; filename=system-log-{ts}.ndjson",
                                    "Cache-Control": "no-store"})
 
+        elif path == "/api/ai-log":
+            limit = _safe_int(params.get("limit", ["100"])[0], 100, 1, 500)
+            logs = query_ai_logs(
+                limit=limit,
+                level=params.get("level", [""])[0],
+                logger_name=params.get("logger", [""])[0],
+                keyword=params.get("keyword", [""])[0],
+                category=params.get("category", [""])[0],
+                endpoint=params.get("endpoint", [""])[0],
+                status_code=params.get("status_code", [""])[0],
+            )
+            filters = list_ai_filter_values()
+            self._respond(200, "application/json",
+                          json.dumps({"ok": True, "logs": logs, "filters": filters}, ensure_ascii=False).encode("utf-8"))
+
+        elif path == "/api/ai-log/export":
+            limit = _safe_int(params.get("limit", ["200"])[0], 200, 1, 2000)
+            logs = query_ai_logs(
+                limit=limit,
+                level=params.get("level", [""])[0],
+                logger_name=params.get("logger", [""])[0],
+                keyword=params.get("keyword", [""])[0],
+                category=params.get("category", [""])[0],
+                endpoint=params.get("endpoint", [""])[0],
+                status_code=params.get("status_code", [""])[0],
+            )
+            payload = "\n".join(json.dumps(row, ensure_ascii=False) for row in logs) + ("\n" if logs else "")
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            self._respond(200, "application/x-ndjson; charset=utf-8", payload.encode("utf-8"),
+                          headers={"Content-Disposition": f"attachment; filename=ai-log-{ts}.ndjson",
+                                   "Cache-Control": "no-store"})
+
         elif path == "/api/prompt-templates":
             try:
                 limit = _safe_int(params.get("limit", ["200"])[0], 200, 1, 500)
@@ -2667,6 +2767,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             cfg["api_key_full_length"] = len(_llm_config.get("api_key", ""))
             self._respond(200, "application/json; charset=utf-8",
                           json.dumps({"ok": True, "config": cfg}, ensure_ascii=False).encode("utf-8"),
+                          headers={"Cache-Control": "no-store"})
+
+        elif path == "/api/run/status":
+            with _orchestration_lock:
+                payload = {"ok": True, **dict(_orchestration_state)}
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                           headers={"Cache-Control": "no-store"})
 
         else:
@@ -3463,6 +3570,48 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                                       "error": resp.text[:300],
                                   }, ensure_ascii=False).encode("utf-8"))
 
+            except Exception as e:
+                self._respond(500, "application/json",
+                              json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+
+        elif path == "/api/run":
+            body = self.rfile.read(self._safe_content_length())
+            try:
+                data = json.loads(body) if body else {}
+                task_desc = str(data.get("task", "") or "").strip()
+                if not task_desc:
+                    raise ValueError("task 不能为空")
+                with _orchestration_lock:
+                    if _orchestration_state["status"] == "running":
+                        self._respond(409, "application/json",
+                                      json.dumps({"ok": False, "error": "已有编排任务在运行中",
+                                                  "task": _orchestration_state["task"]},
+                                                 ensure_ascii=False).encode("utf-8"))
+                        return
+                    _orchestration_state.update({
+                        "status": "running",
+                        "task": task_desc,
+                        "started_at": datetime.now(timezone.utc).isoformat(),
+                        "finished_at": "",
+                        "elapsed_sec": 0.0,
+                        "result": "",
+                        "error": "",
+                        "trace_id": "",
+                    })
+                t = threading.Thread(target=_run_orchestration_worker, args=(task_desc,), daemon=True)
+                t.start()
+                _publish_dashboard_event("sync", {
+                    "scope": ["orchestration", "audit"],
+                    "reason": "orchestration_start",
+                    "task": task_desc[:120],
+                })
+                self._respond(200, "application/json",
+                              json.dumps({"ok": True, "message": "编排任务已启动",
+                                          "task": task_desc[:200]},
+                                         ensure_ascii=False).encode("utf-8"))
+            except ValueError as e:
+                self._respond(400, "application/json",
+                              json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
             except Exception as e:
                 self._respond(500, "application/json",
                               json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))

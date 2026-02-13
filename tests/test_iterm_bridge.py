@@ -37,6 +37,22 @@ class ItermBridgeTests(unittest.TestCase):
         run_sub.assert_called_once()
         self.assertEqual(run_sub.call_args.kwargs["action"], "send")
 
+    def test_send_subprocess_retries_on_http_401(self):
+        with mock.patch.dict(os.environ, {"ITERM_IO_BRIDGE_DIRECT": "0"}, clear=False):
+            with mock.patch(
+                "agents.iterm_bridge._run_io_via_subprocess",
+                side_effect=[
+                    {"ok": False, "action": "send", "error": "server rejected WebSocket connection: HTTP 401"},
+                    {"ok": True, "action": "send"},
+                ],
+            ) as run_sub:
+                with mock.patch("agents.iterm_bridge._time_mod.sleep"):
+                    result = bridge.send_iterm_input(text="hello", all_agents=True, read_lines=5)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result.get("auth_retry_count"), 1)
+        self.assertEqual(run_sub.call_count, 2)
+
     def test_read_prefers_subprocess_by_default(self):
         with mock.patch.dict(os.environ, {"ITERM_IO_BRIDGE_DIRECT": "0"}, clear=False):
             with mock.patch(
@@ -48,6 +64,22 @@ class ItermBridgeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         run_sub.assert_called_once()
         self.assertEqual(run_sub.call_args.kwargs["action"], "read")
+
+    def test_read_subprocess_retries_on_http_401(self):
+        with mock.patch.dict(os.environ, {"ITERM_IO_BRIDGE_DIRECT": "0"}, clear=False):
+            with mock.patch(
+                "agents.iterm_bridge._run_io_via_subprocess",
+                side_effect=[
+                    {"ok": False, "action": "read", "error": "HTTP 401 unauthorized"},
+                    {"ok": True, "action": "read"},
+                ],
+            ) as run_sub:
+                with mock.patch("agents.iterm_bridge._time_mod.sleep"):
+                    result = bridge.read_iterm_output(all_agents=True, read_lines=5)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result.get("auth_retry_count"), 1)
+        self.assertEqual(run_sub.call_count, 2)
 
     def test_send_direct_mode_uses_iterm_api_path(self):
         session = bridge.AgentSession(index=1, agent_id="agent_01", agent_name="Agent 01", session_id="SID")
@@ -74,6 +106,40 @@ class ItermBridgeTests(unittest.TestCase):
         self.assertFalse(result["state_rebound"])
         self.assertEqual(result["rebound_count"], 0)
         run_sub.assert_not_called()
+
+    def test_send_direct_retries_on_http_401(self):
+        session = bridge.AgentSession(index=1, agent_id="agent_01", agent_name="Agent 01", session_id="SID")
+        first_rows = [{"agent_id": "agent_01", "error": "send failed: server rejected WebSocket connection: HTTP 401", "sent": False, "read": False, "output": []}]
+        second_rows = [{"agent_id": "agent_01", "error": "", "sent": True, "read": True, "output": []}]
+
+        with mock.patch.dict(os.environ, {"ITERM_IO_BRIDGE_DIRECT": "1"}, clear=False):
+            with mock.patch("agents.iterm_bridge._normalize_state_file", return_value=Path("/tmp/state.json")):
+                with mock.patch("agents.iterm_bridge._load_state", return_value={"tab_count": 1}):
+                    with mock.patch(
+                        "agents.iterm_bridge._run_direct_with_optional_rebind",
+                        side_effect=[
+                            {
+                                "targets": [session],
+                                "rows": first_rows,
+                                "state_rebound": False,
+                                "rebound_count": 0,
+                                "rebind_error": "",
+                            },
+                            {
+                                "targets": [session],
+                                "rows": second_rows,
+                                "state_rebound": False,
+                                "rebound_count": 0,
+                                "rebind_error": "",
+                            },
+                        ],
+                    ) as run_direct:
+                        with mock.patch("agents.iterm_bridge._time_mod.sleep"):
+                            result = bridge.send_iterm_input(text="hello", all_agents=True, read_lines=5)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result.get("auth_retry_count"), 1)
+        self.assertEqual(run_direct.call_count, 2)
 
     def test_send_rebinds_when_session_stale(self):
         state_path = Path("/tmp/state.json")
@@ -749,6 +815,22 @@ class ItermBridgeTests(unittest.TestCase):
         with mock.patch("orchestration_tui_bus.publish_binding_warning") as publish:
             bridge._sync_tui_binding_warning("state rebind skipped: no_state_change")
         publish.assert_called_once_with(None, source="iterm_bridge")
+
+    def test_direct_mode_blocked_in_acp_bus_process(self):
+        """_is_direct_mode_enabled() must return False inside ACP-BUS, even if
+        ITERM_IO_BRIDGE_DIRECT=1 is set."""
+        env = {"_ACP_BUS_PROCESS": "1", "ITERM_IO_BRIDGE_DIRECT": "1"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertFalse(bridge._is_direct_mode_enabled())
+
+    def test_direct_mode_allowed_outside_acp_bus(self):
+        """_is_direct_mode_enabled() should return True when ITERM_IO_BRIDGE_DIRECT=1
+        and not in ACP-BUS process."""
+        env = {"ITERM_IO_BRIDGE_DIRECT": "1"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            # Make sure _ACP_BUS_PROCESS is not set
+            os.environ.pop("_ACP_BUS_PROCESS", None)
+            self.assertTrue(bridge._is_direct_mode_enabled())
 
 
 if __name__ == "__main__":

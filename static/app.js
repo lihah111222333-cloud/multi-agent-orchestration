@@ -4,6 +4,7 @@ const SSE_SYNC_MS = (window.__SSE_SYNC_SEC || 5) * 1000;
 const POLL_REFRESH_MS = SSE_SYNC_MS;
 const AUDIT_LOG_LIMIT = window.__AUDIT_LOG_LIMIT || 100;
 const SYSTEM_LOG_LIMIT = window.__SYSTEM_LOG_LIMIT || 100;
+const AI_LOG_LIMIT = window.__SYSTEM_LOG_LIMIT || 100;
 
 let refreshTimer = null;
 let eventSource = null;
@@ -434,6 +435,73 @@ function exportSystemLogs() {
     const params = new URLSearchParams();
     params.set('limit', String(SYSTEM_LOG_LIMIT));
     window.location.href = '/api/system-log/export?' + params;
+}
+
+/* ---- AI Logs ---- */
+function renderAiRows(logs) {
+    const tbody = document.getElementById('ai-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = logs.map(e => {
+        const ts = escapeHtml(e.ts || '');
+        const level = escapeHtml(e.level || '');
+        const levelClass = classToken(e.level || '');
+        const category = escapeHtml(e.category || '');
+        const categoryClass = classToken(e.category || '');
+        const loggerName = escapeHtml(e.logger || '');
+        const method = escapeHtml(e.method || '');
+        const endpoint = escapeHtml(e.endpoint || '');
+        const statusCode = escapeHtml(e.status_code || '');
+        const statusText = escapeHtml(e.status_text || '');
+        const statusLabel = [statusCode, statusText].filter(Boolean).join(' ');
+        const message = escapeHtml(e.message || '');
+        const endpointLabel = [method, endpoint].filter(Boolean).join(' ');
+        return `<tr>
+            <td style="font-family:var(--font-mono);font-size:0.72rem;color:var(--text-muted)">${ts}</td>
+            <td><span class="level-badge level-${levelClass}">${level}</span></td>
+            <td><span class="level-badge level-${categoryClass}">${category}</span></td>
+            <td style="font-family:var(--font-mono);font-size:0.75rem">${loggerName}</td>
+            <td style="font-family:var(--font-mono);font-size:0.72rem;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${endpointLabel}</td>
+            <td style="font-family:var(--font-mono);font-size:0.72rem">${statusLabel}</td>
+            <td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${message}</td>
+        </tr>`;
+    }).join('');
+}
+
+function buildAiLogParams(limit) {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    const level = document.getElementById('ai-level')?.value;
+    const logger = document.getElementById('ai-logger')?.value;
+    const category = document.getElementById('ai-category')?.value;
+    const endpoint = document.getElementById('ai-endpoint')?.value;
+    const statusCode = document.getElementById('ai-status')?.value;
+    const keyword = document.getElementById('ai-keyword')?.value?.trim();
+    if (level) params.set('level', level);
+    if (logger) params.set('logger', logger);
+    if (category) params.set('category', category);
+    if (endpoint) params.set('endpoint', endpoint);
+    if (statusCode) params.set('status_code', statusCode);
+    if (keyword) params.set('keyword', keyword);
+    return params;
+}
+
+async function loadAiLogs() {
+    const r = await fetch('/api/ai-log?' + buildAiLogParams(AI_LOG_LIMIT));
+    const j = await r.json();
+    if (j.ok) {
+        renderAiRows(j.logs || []);
+        const f = j.filters || {};
+        renderFilterOptions('ai-level', f.levels || []);
+        renderFilterOptions('ai-logger', f.loggers || []);
+        renderFilterOptions('ai-category', f.categories || []);
+        renderFilterOptions('ai-endpoint', f.endpoints || []);
+        renderFilterOptions('ai-status', f.status_codes || []);
+    }
+}
+
+function exportAiLogs() {
+    const params = buildAiLogParams(Math.max(AI_LOG_LIMIT, 200));
+    window.location.href = '/api/ai-log/export?' + params;
 }
 
 /* ---- Prompts (Template Management + Popup) ---- */
@@ -1943,14 +2011,15 @@ async function loadApprovals() {
     if (j.ok) renderApprovals(j.approvals || []);
 }
 
-async function refreshSections(scope = ['approvals', 'audit', 'system', 'command_cards', 'agent_status']) {
+async function refreshSections(scope = ['approvals', 'audit', 'system', 'ai', 'command_cards', 'agent_status']) {
     if (_confirmDialogActive) return;   // 确认对话框期间跳过刷新
-    const scopes = Array.isArray(scope) ? scope : ['approvals', 'audit', 'system', 'command_cards', 'agent_status'];
+    const scopes = Array.isArray(scope) ? scope : ['approvals', 'audit', 'system', 'ai', 'command_cards', 'agent_status'];
     const tasks = [];
 
     if (scopes.includes('approvals')) tasks.push(loadApprovals());
     if (scopes.includes('audit')) tasks.push(loadAuditLogs());
     if (scopes.includes('system')) tasks.push(loadSystemLogs());
+    if (scopes.includes('ai') || scopes.includes('system')) tasks.push(loadAiLogs());
     if (scopes.includes('command_cards')) {
         tasks.push(loadCommandCards());
         tasks.push(loadCommandRuns());
@@ -1970,7 +2039,7 @@ async function refreshSections(scope = ['approvals', 'audit', 'system', 'command
 
 function startPollingFallback() {
     if (refreshTimer) return;
-    refreshTimer = setInterval(() => refreshSections(['approvals', 'audit', 'system', 'command_cards', 'agent_status']), POLL_REFRESH_MS);
+    refreshTimer = setInterval(() => refreshSections(['approvals', 'audit', 'system', 'ai', 'command_cards', 'agent_status']), POLL_REFRESH_MS);
 }
 
 function stopPollingFallback() {
@@ -2019,7 +2088,7 @@ function startEventStream() {
             const data = JSON.parse(evt.data || '{}');
             const scope = Array.isArray(data?.payload?.scope)
                 ? data.payload.scope
-                : ['approvals', 'audit', 'system', 'command_cards', 'agent_status'];
+                : ['approvals', 'audit', 'system', 'ai', 'command_cards', 'agent_status'];
             await refreshSections(scope);
         } catch (e) {
             console.error('SSE sync event parse failed:', e);
@@ -2080,14 +2149,20 @@ document.addEventListener('DOMContentLoaded', () => {
     ['system-level', 'system-logger'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', loadSystemLogs);
     });
+    ['ai-level', 'ai-logger', 'ai-category', 'ai-endpoint', 'ai-status'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', loadAiLogs);
+    });
     document.getElementById('audit-keyword')?.addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); loadAuditLogs(); }
     });
     document.getElementById('system-keyword')?.addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); loadSystemLogs(); }
     });
+    document.getElementById('ai-keyword')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); loadAiLogs(); }
+    });
 
-    refreshSections(['approvals', 'audit', 'system', 'command_cards', 'agent_status']);
+    refreshSections(['approvals', 'audit', 'system', 'ai', 'command_cards', 'agent_status']);
     loadPrompts();
     startEventStream();
 

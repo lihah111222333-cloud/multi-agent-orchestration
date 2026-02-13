@@ -13,8 +13,11 @@ import logging
 import operator
 import os
 import re
+import subprocess
+import sys
 import traceback
 from contextlib import suppress
+from pathlib import Path
 from typing import Annotated, Any, Callable, Coroutine, Optional, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -44,6 +47,21 @@ PROMPT_ARCH_MAX_CHARS = as_int_env("PROMPT_ARCH_MAX_CHARS", 6000, min_value=500)
 AGGREGATOR_MAX_WORDS = as_int_env("AGGREGATOR_MAX_WORDS", 800, min_value=200)
 _ASSIGNMENT_LIST_PREFIX_RE = re.compile(r"^\s*(?:[-*+]|(?:\d+)[\.)])\s*")
 _SUMMARY_UNIT_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]")
+_LOW_SIGNAL_OUTPUT_RE = re.compile(r"^\s*\[[^\]]+\]\s*已处理任务[:：]")
+_PYTEST_SUMMARY_RE = re.compile(
+    r"(\d+\s+passed(?:,\s*\d+\s+warnings?)?.*|no tests ran.*|FAILED.*|ERROR.*)",
+    re.IGNORECASE,
+)
+_CODECHECK_KEYWORDS = (
+    "代码检查",
+    "code check",
+    "code review",
+    "审查代码",
+    "静态检查",
+    "测试覆盖",
+    "lint",
+    "review",
+)
 
 
 def _start_trace_span(

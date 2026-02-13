@@ -117,6 +117,25 @@ class AllInOneItermToolTests(unittest.TestCase):
             data = json.loads(text)
             self.assertEqual(data["rowcount"], 2)
 
+    def test_orchestration_tui_wrapper(self):
+        with mock.patch(
+            "agents.all_in_one.publish_orchestration_tui_begin",
+            return_value={"ok": True, "event": "BeginOrchestrationTaskState"},
+        ):
+            begin_text = aio.orchestration_tui(action="begin", run_id="run-001", status_header="Running")
+            begin_data = json.loads(begin_text)
+            self.assertTrue(begin_data["ok"])
+            self.assertEqual(begin_data["event"], "BeginOrchestrationTaskState")
+
+        with mock.patch(
+            "agents.all_in_one.get_orchestration_tui_snapshot",
+            return_value={"ok": True, "running": False, "active_count": 0},
+        ):
+            snap_text = aio.orchestration_tui(action="snapshot")
+            snap_data = json.loads(snap_text)
+            self.assertTrue(snap_data["ok"])
+            self.assertFalse(snap_data["running"])
+
 
 if __name__ == "__main__":
     unittest.main()

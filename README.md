@@ -194,6 +194,20 @@ Dashboard 新增 `命令卡` 页面：
 - 高风险进入待审批，支持在线批准/拒绝/执行
 - 页面通过 SSE 实时同步执行流水
 
+## Codex TUI 状态总线适配
+
+为对齐 Codex TUI 新增的 run_id 生命周期接口，项目新增本地状态总线：
+
+- 存储文件：`data/orchestration_tui_bus.json`
+- 核心模块：`orchestration_tui_bus.py`
+- MCP 工具：`orchestration_tui(action=...)`（已注册在 `agents/all_in_one.py`）
+
+接入策略：
+
+- `run.py` 在一次编排执行中自动发送 begin/update/end
+- `agents/iterm_bridge.py` 在检测到回绑异常时同步 `binding warning`
+- 通过 `orchestration_tui(action="snapshot")`/`events` 可查询当前状态和事件流
+
 ## Agent 数据表设计
 
 为便于主 Agent/子 Agent 编排，新增三类核心表：

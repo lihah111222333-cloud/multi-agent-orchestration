@@ -25,11 +25,17 @@ class RunStartupTests(unittest.TestCase):
                 with patch("run.validate_config", side_effect=_mark_validate):
                     with patch("run.build_graph", return_value=_DummyGraph()):
                         with patch("run.append_event", return_value=None):
-                            with patch("run.time.time", side_effect=[100.0, 100.5]):
-                                result = asyncio.run(run_module.run("demo task"))
+                            with patch("run.publish_begin") as begin_mock:
+                                with patch("run.publish_update") as update_mock:
+                                    with patch("run.publish_end") as end_mock:
+                                        with patch("run.time.time", side_effect=[100.0, 100.5]):
+                                            result = asyncio.run(run_module.run("demo task"))
 
         self.assertEqual(result["final_answer"], "ok")
         self.assertEqual(call_order[:2], ["migrate", "validate"])
+        begin_mock.assert_called_once()
+        end_mock.assert_called_once()
+        self.assertGreaterEqual(update_mock.call_count, 2)
 
     def test_run_stops_when_migration_fails(self):
         with patch("run.setup_global_logging", return_value=None):

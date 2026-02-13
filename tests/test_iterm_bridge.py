@@ -553,6 +553,203 @@ class ItermBridgeTests(unittest.TestCase):
 
         self.assertEqual(output, ["line-one", "line-two"])
 
+    def test_rebind_preserves_sessions_when_api_returns_partial(self):
+        """When live API returns fewer sessions than agents hold, don't clear."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "iterm_launch_state.json"
+            state = {
+                "window_id": "window-old",
+                "count": 4,
+                "tab_count": 4,
+                "agents": [
+                    {"index": i, "agent_id": f"agent_{i:02d}",
+                     "agent_name": f"Agent {i:02d}",
+                     "session_label": f"agent_{i:02d} | Agent {i:02d}",
+                     "badge": f"A{i:02d}",
+                     "session_id": f"SID-{i:02d}"}
+                    for i in range(1, 5)
+                ],
+                "session_ids": [f"SID-{i:02d}" for i in range(1, 5)],
+            }
+            state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+            # API returns only 1 session (partial / incomplete result)
+            live = [
+                {
+                    "session_id": "SID-NEW-01",
+                    "badge": "",
+                    "agent_id": "",
+                    "agent_name": "",
+                    "agent_label": "",
+                    "name": "zsh",
+                    "session_name": "zsh",
+                }
+            ]
+
+            with mock.patch("agents.iterm_bridge._list_live_sessions",
+                            return_value=("window-old", live)):
+                result = bridge._rebind_state_sessions(state_path, state)
+
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+            # Agents should retain their original SIDs (not cleared)
+            for i, agent in enumerate(updated["agents"], 1):
+                self.assertEqual(
+                    agent["session_id"], f"SID-{i:02d}",
+                    f"agent_{i:02d} session_id should be preserved, not cleared"
+                )
+
+    def test_rebind_prefers_tab_count_over_count(self):
+        """When count=0 but tab_count=4, expected_count should use tab_count."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "iterm_launch_state.json"
+            state = {
+                "window_id": "window-old",
+                "count": 0,
+                "tab_count": 4,
+                "agents": [
+                    {"index": i, "agent_id": f"agent_{i:02d}",
+                     "agent_name": f"Agent {i:02d}",
+                     "session_label": f"agent_{i:02d} | Agent {i:02d}",
+                     "badge": f"A{i:02d}",
+                     "session_id": f"SID-{i:02d}"}
+                    for i in range(1, 5)
+                ],
+                "session_ids": [f"SID-{i:02d}" for i in range(1, 5)],
+            }
+            state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+            live = [
+                {
+                    "session_id": f"SID-{i:02d}",
+                    "badge": f"A{i:02d}",
+                    "agent_id": f"agent_{i:02d}",
+                    "agent_name": f"Agent {i:02d}",
+                    "agent_label": f"agent_{i:02d} | Agent {i:02d}",
+                    "name": f"agent_{i:02d} | Agent {i:02d}",
+                    "session_name": "node",
+                }
+                for i in range(1, 5)
+            ]
+
+            with mock.patch("agents.iterm_bridge._list_live_sessions",
+                            return_value=("window-old", live)):
+                result = bridge._rebind_state_sessions(state_path, state)
+
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+            # tab_count should be preserved at 4 (not dropped to 0)
+            self.assertGreaterEqual(updated["tab_count"], 4)
+            self.assertEqual(len(updated["agents"]), 4)
+
+    def test_rebind_position_fallback_on_mass_restart(self):
+        """When all sessions change (iTerm restart) and variables are lost,
+        position-based Phase 2.5 should rebind by order instead of clearing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "iterm_launch_state.json"
+            state = {
+                "window_id": "window-old",
+                "count": 4,
+                "tab_count": 4,
+                "agents": [
+                    {"index": i, "agent_id": f"agent_{i:02d}",
+                     "agent_name": f"Agent {i:02d}",
+                     "session_label": f"agent_{i:02d} | Agent {i:02d}",
+                     "badge": f"A{i:02d}",
+                     "session_id": f"OLD-SID-{i:02d}"}
+                    for i in range(1, 5)
+                ],
+                "session_ids": [f"OLD-SID-{i:02d}" for i in range(1, 5)],
+            }
+            state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+            # All sessions changed (new UUIDs), no user variables set
+            live = [
+                {
+                    "session_id": f"NEW-SID-{i:02d}",
+                    "badge": "",
+                    "agent_id": "",
+                    "agent_name": "",
+                    "agent_label": "",
+                    "name": "zsh",
+                    "session_name": "zsh",
+                }
+                for i in range(1, 5)
+            ]
+
+            with mock.patch("agents.iterm_bridge._list_live_sessions",
+                            return_value=("window-old", live)), \
+                 mock.patch("agents.iterm_bridge._async_reinject_variables"):
+                result = bridge._rebind_state_sessions(state_path, state)
+
+            self.assertTrue(result["rebound"])
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+
+            # Agents should be bound to new SIDs by position order
+            for i, agent in enumerate(updated["agents"], 1):
+                self.assertEqual(
+                    agent["session_id"], f"NEW-SID-{i:02d}",
+                    f"agent_{i:02d} should be position-matched to NEW-SID-{i:02d}"
+                )
+
+    def test_rebind_position_skipped_when_few_unresolved(self):
+        """When only 1 of 4 agents is unresolved, position matching should NOT
+        activate (minority unresolved)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "iterm_launch_state.json"
+            # 3 agents still have valid live sessions; only agent_04 is stale
+            state = {
+                "window_id": "window-old",
+                "count": 4,
+                "tab_count": 4,
+                "agents": [
+                    {"index": i, "agent_id": f"agent_{i:02d}",
+                     "agent_name": f"Agent {i:02d}",
+                     "session_label": f"agent_{i:02d} | Agent {i:02d}",
+                     "badge": f"A{i:02d}",
+                     "session_id": f"SID-{i:02d}"}
+                    for i in range(1, 5)
+                ],
+                "session_ids": [f"SID-{i:02d}" for i in range(1, 5)],
+            }
+            state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+            # 3 of 4 sessions are still alive; SID-04 is gone, NEW-EXTRA is new
+            live = [
+                {"session_id": f"SID-{i:02d}", "badge": f"A{i:02d}",
+                 "agent_id": f"agent_{i:02d}", "agent_name": f"Agent {i:02d}",
+                 "agent_label": f"agent_{i:02d} | Agent {i:02d}",
+                 "name": f"agent_{i:02d}", "session_name": "node"}
+                for i in range(1, 4)  # only SID-01..03 alive
+            ] + [
+                {"session_id": "NEW-EXTRA", "badge": "", "agent_id": "",
+                 "agent_name": "", "agent_label": "", "name": "zsh",
+                 "session_name": "zsh"}
+            ]
+
+            with mock.patch("agents.iterm_bridge._list_live_sessions",
+                            return_value=("window-old", live)), \
+                 mock.patch("agents.iterm_bridge._async_reinject_variables"):
+                result = bridge._rebind_state_sessions(state_path, state)
+
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+
+            # agent_01..03 should keep their SIDs
+            for i in range(1, 4):
+                self.assertEqual(updated["agents"][i-1]["session_id"], f"SID-{i:02d}")
+
+            # agent_04: stale SID-04 should be cleared (Phase 4), NOT
+            # position-matched to NEW-EXTRA
+            self.assertEqual(updated["agents"][3]["session_id"], "")
+
+    def test_sync_tui_binding_warning_for_error(self):
+        with mock.patch("orchestration_tui_bus.publish_binding_warning") as publish:
+            bridge._sync_tui_binding_warning("state rebind failed: timeout")
+        publish.assert_called_once_with("state rebind failed: timeout", source="iterm_bridge")
+
+    def test_sync_tui_binding_warning_clears_on_skip_reason(self):
+        with mock.patch("orchestration_tui_bus.publish_binding_warning") as publish:
+            bridge._sync_tui_binding_warning("state rebind skipped: no_state_change")
+        publish.assert_called_once_with(None, source="iterm_bridge")
+
 
 if __name__ == "__main__":
     unittest.main()

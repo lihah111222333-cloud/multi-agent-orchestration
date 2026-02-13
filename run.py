@@ -15,6 +15,7 @@ from audit_log import append_event
 from db.postgres import ensure_schema
 from master import build_graph
 from logging_setup import setup_global_logging
+from orchestration_tui_bus import publish_begin, publish_end, publish_update
 from utils import validate_config
 
 
@@ -63,6 +64,7 @@ async def run(task: str):
 
     start_time = time.time()
     trace_id = create_trace_id()
+    run_id = f"run-{trace_id}"
     root_span = start_task_trace_span(
         trace_id=trace_id,
         span_name="run.session",
@@ -71,9 +73,43 @@ async def run(task: str):
         metadata={"entry": "cli"},
     )
 
+    def _publish_tui_status(
+        action: str,
+        *,
+        status_header: str | None = None,
+        status_details: str | None = None,
+    ) -> None:
+        try:
+            if action == "begin":
+                publish_begin(
+                    run_id=run_id,
+                    status_header=status_header,
+                    status_details=status_details,
+                    source="run.py",
+                )
+            elif action == "update":
+                publish_update(
+                    run_id=run_id,
+                    status_header=status_header,
+                    status_details=status_details,
+                    source="run.py",
+                )
+            elif action == "end":
+                publish_end(run_id=run_id, source="run.py")
+        except Exception as exc:
+            logger.debug("publish_tui_status ignored: %s", exc)
+
+    _publish_tui_status(
+        "begin",
+        status_header="Running orchestration",
+        status_details=f"task={task[:120]}",
+    )
+
     try:
         # 构建并运行编排图
+        _publish_tui_status("update", status_details="phase=build_graph")
         graph = build_graph()
+        _publish_tui_status("update", status_details="phase=invoke_graph")
         result = await graph.ainvoke(
             {
                 "task": task,
@@ -106,6 +142,11 @@ async def run(task: str):
             },
             metadata={"elapsed_sec": round(elapsed, 3)},
         )
+        _publish_tui_status(
+            "update",
+            status_header="Orchestration completed",
+            status_details=f"elapsed={elapsed:.2f}s",
+        )
         return result
 
     except Exception as e:
@@ -126,8 +167,14 @@ async def run(task: str):
             error_text=str(e),
             metadata={"elapsed_sec": round(elapsed, 3)},
         )
-        print(f"\n❌ 执行失败: {e}")
-        sys.exit(1)
+        _publish_tui_status(
+            "update",
+            status_header="Orchestration failed",
+            status_details=f"elapsed={elapsed:.2f}s,error={str(e)[:200]}",
+        )
+        raise RuntimeError(str(e)) from e
+    finally:
+        _publish_tui_status("end")
 
 
 def main():
@@ -144,6 +191,9 @@ def main():
     except KeyboardInterrupt:
         print("\n🛑 已中断执行")
         sys.exit(130)
+    except Exception as exc:
+        print(f"\n❌ 执行失败: {exc}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

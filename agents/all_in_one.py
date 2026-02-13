@@ -187,6 +187,16 @@ from shared_file_store import (
     read_file as read_shared_file,
     write_file as write_shared_file,
 )
+from orchestration_tui_bus import (
+    get_snapshot as get_orchestration_tui_snapshot,
+    list_events as list_orchestration_tui_events,
+    publish_begin as publish_orchestration_tui_begin,
+    publish_binding_warning as publish_orchestration_tui_binding_warning,
+    publish_end as publish_orchestration_tui_end,
+    publish_legacy_state as publish_orchestration_tui_legacy_state,
+    publish_update as publish_orchestration_tui_update,
+    reset_state as reset_orchestration_tui_state,
+)
 
 
 def _parse_json(value: str, fallback: Any) -> Any:
@@ -1086,6 +1096,104 @@ def agent_watchdog(action: str = "start", interval_sec: int = 120, prompt: str =
     return json.dumps({"ok": True, "message": f"看门狗已启动，每 {max(30, int(interval_sec))}s 唤醒", **get_watchdog_info()}, ensure_ascii=False)
 
 
+def orchestration_tui(
+    action: str = "snapshot",
+    run_id: str = "",
+    status_header: str = "",
+    status_details: str = "",
+    running: bool = False,
+    warning: str = "",
+    source: str = "acp-bus",
+    limit: int = 100,
+    since_seq: int = 0,
+) -> str:
+    """Codex TUI 编排状态总线适配工具（run_id 生命周期）。
+
+    Args:
+        action:
+          - "begin"         发送 BeginOrchestrationTaskState
+          - "update"        发送 UpdateOrchestrationTaskState
+          - "end"           发送 EndOrchestrationTaskState
+          - "legacy"        发送 SetOrchestrationTaskState（兼容布尔接口）
+          - "warning"       设置 SetOrchestrationBindingWarning
+          - "clear_warning" 清空 binding warning
+          - "snapshot"      查看当前聚合状态
+          - "events"        查看最近事件（支持 since_seq + limit）
+          - "reset"         清空状态与事件（调试）
+        run_id: 运行 ID（begin/update/end 必填）
+        status_header: 状态标题（begin/update/legacy 可选）
+        status_details: 状态详情（begin/update 可选）
+        running: legacy 模式运行标记
+        warning: 绑定告警文本（warning 动作使用）
+        source: 事件来源标识
+        limit: events 返回条数
+        since_seq: events 最小序号（仅返回 seq > since_seq）
+    """
+    normalized_action = action.strip().lower()
+
+    if normalized_action == "begin":
+        if not str(run_id or "").strip():
+            return json.dumps({"ok": False, "error": "begin 需要 run_id"}, ensure_ascii=False)
+        result = publish_orchestration_tui_begin(
+            run_id=run_id,
+            status_header=status_header,
+            status_details=status_details,
+            source=source,
+        )
+        return _safe_json(result)
+
+    if normalized_action == "update":
+        if not str(run_id or "").strip():
+            return json.dumps({"ok": False, "error": "update 需要 run_id"}, ensure_ascii=False)
+        result = publish_orchestration_tui_update(
+            run_id=run_id,
+            status_header=status_header,
+            status_details=status_details,
+            source=source,
+        )
+        return _safe_json(result)
+
+    if normalized_action == "end":
+        if not str(run_id or "").strip():
+            return json.dumps({"ok": False, "error": "end 需要 run_id"}, ensure_ascii=False)
+        result = publish_orchestration_tui_end(run_id=run_id, source=source)
+        return _safe_json(result)
+
+    if normalized_action == "legacy":
+        result = publish_orchestration_tui_legacy_state(
+            running=running,
+            status_header=status_header,
+            source=source,
+        )
+        return _safe_json(result)
+
+    if normalized_action == "warning":
+        result = publish_orchestration_tui_binding_warning(
+            warning=warning,
+            source=source,
+        )
+        return _safe_json(result)
+
+    if normalized_action == "clear_warning":
+        result = publish_orchestration_tui_binding_warning(
+            warning=None,
+            source=source,
+        )
+        return _safe_json(result)
+
+    if normalized_action == "events":
+        result = list_orchestration_tui_events(limit=limit, since_seq=since_seq)
+        return _safe_json(result)
+
+    if normalized_action == "reset":
+        result = reset_orchestration_tui_state(source=source)
+        return _safe_json(result)
+
+    # snapshot (default)
+    result = get_orchestration_tui_snapshot()
+    return _safe_json(result)
+
+
 # ---- Backward-compatible wrappers (legacy tool names) ----
 def iterm_list_sessions(state_file: str = "") -> str:
     return json.dumps(list_iterm_agent_sessions(state_file=state_file), ensure_ascii=False)
@@ -1378,6 +1486,7 @@ def db_execute(sql: str) -> str:
 _HOT_RELOAD_TOOL_NAMES: tuple[str, ...] = (
     'iterm', 'shared_file', 'interaction', 'prompt_template',
     'command_card', 'db', 'task', 'approval', 'lock', 'agent_watchdog',
+    'orchestration_tui',
 )
 
 
@@ -1463,4 +1572,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

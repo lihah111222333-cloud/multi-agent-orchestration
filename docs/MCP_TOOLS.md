@@ -1,6 +1,6 @@
 # 多Agent编排系统 — MCP 工具总览 (v2)
 
-ACP-BUS 提供 **9 个统一工具**，每个工具通过 `action` 参数切换操作。
+ACP-BUS 提供 **10 个统一工具**，每个工具通过 `action` 参数切换操作。
 Agent 由动态拓扑自动创建和管理，无需预定义。
 
 ---
@@ -149,6 +149,26 @@ Agent 遇到错误或需要决策时，向指定审批 Agent 发起请求，等�
 | `status` | `agent_watchdog(action="status")` | 查看当前状态 |
 
 **关键参数：** `interval_sec`(间隔秒数,最小30), `prompt`(唤醒提示词)
+
+---
+
+## 10. `orchestration_tui` — Codex TUI 编排状态总线
+
+对齐 Codex TUI run_id 生命周期接口，支持并发 run 跟踪与 iTerm 绑定告警。
+
+| Action | 调用示例 | 场景 |
+|--------|---------|------|
+| `begin` | `orchestration_tui(action="begin", run_id="run-001", status_header="Running orchestration", status_details="phase=plan")` | 编排任务开始 |
+| `update` | `orchestration_tui(action="update", run_id="run-001", status_details="phase=execute")` | 更新阶段/详情 |
+| `end` | `orchestration_tui(action="end", run_id="run-001")` | 编排任务结束（成功/失败都要调用） |
+| `legacy` | `orchestration_tui(action="legacy", running=true, status_header="Running legacy orchestration")` | 兼容旧布尔接口 |
+| `warning` | `orchestration_tui(action="warning", warning="session rebound detected")` | 设置 iTerm 绑定告警 |
+| `clear_warning` | `orchestration_tui(action="clear_warning")` | 清空绑定告警 |
+| `snapshot` | `orchestration_tui(action="snapshot")` | 查看当前聚合状态 |
+| `events` | `orchestration_tui(action="events", since_seq=120, limit=50)` | 拉取增量事件 |
+| `reset` | `orchestration_tui(action="reset")` | 清空状态（调试） |
+
+**关键参数：** `run_id`, `status_header`, `status_details`, `warning`, `since_seq`, `limit`
 
 ---
 

@@ -32,6 +32,26 @@ _CANONICAL_AGENT_ID_RE = re.compile(r"^agent_(\d{2})$", re.IGNORECASE)
 _ITERM_TIMEOUT_SEC = int(os.getenv("ITERM_TIMEOUT_SEC", "15"))
 
 
+def _sync_tui_binding_warning(rebind_error: str = "", *, warning_suppressed: bool = False) -> None:
+    """将 iTerm 回绑异常同步到 TUI 绑定告警（best-effort）。"""
+    try:
+        from orchestration_tui_bus import publish_binding_warning
+
+        text = str(rebind_error or "").strip()
+        if warning_suppressed:
+            publish_binding_warning(None, source="iterm_bridge")
+            return
+        if not text:
+            publish_binding_warning(None, source="iterm_bridge")
+            return
+        if text.lower().startswith("state rebind skipped:"):
+            publish_binding_warning(None, source="iterm_bridge")
+            return
+        publish_binding_warning(text[:300], source="iterm_bridge")
+    except Exception:
+        pass
+
+
 def _iterm_run_with_timeout(coroutine_fn, timeout: float = 0) -> None:
     """在独立线程中执行 iterm2.run_until_complete，超时则放弃。"""
     import concurrent.futures
@@ -560,6 +580,51 @@ def _list_live_session_ids(window_id: str = "") -> tuple[str, list[str]]:
     return selected_window_id, session_ids
 
 
+def _async_reinject_variables(agents: list[dict[str, Any]], live_by_id: dict[str, dict[str, str]]) -> None:
+    """在位置回绑后，将 badge/agent_id/agent_name 重新注入到 live session，
+    以便后续 rebind 可直接走 badge 匹配快路径。"""
+    import iterm2
+
+    pairs: list[tuple[str, dict[str, Any]]] = []
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        sid = str(agent.get("session_id", "") or "").strip()
+        if not sid or sid not in live_by_id:
+            continue
+        pairs.append((sid, agent))
+
+    if not pairs:
+        return
+
+    async def _inject(connection):
+        app = await iterm2.async_get_app(connection)
+        for sid, agent in pairs:
+            session = app.get_session_by_id(sid)
+            if session is None:
+                continue
+            badge = str(agent.get("badge", "") or "").strip()
+            agent_id = str(agent.get("agent_id", "") or "").strip()
+            agent_name = str(agent.get("agent_name", "") or "").strip()
+            agent_label = str(agent.get("session_label", "") or "").strip()
+            try:
+                if badge:
+                    await session.async_set_variable("user.badge", badge)
+                if agent_id:
+                    await session.async_set_variable("user.agent_id", agent_id)
+                if agent_name:
+                    await session.async_set_variable("user.agent_name", agent_name)
+                if agent_label:
+                    await session.async_set_variable("user.agent_label", agent_label)
+            except Exception:
+                pass
+
+    try:
+        _iterm_run_with_timeout(_inject, timeout=5.0)
+    except Exception:
+        pass  # best-effort，不影响 rebind 主流程
+
+
 def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str, Any]:
     selected_window_id, live_sessions = _list_live_sessions(str(state.get("window_id", "") or ""))
     live_session_ids = [
@@ -613,7 +678,7 @@ def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str,
             structure_changed = True
         normalized_agents.append(current)
 
-    expected_count = int(new_state.get("count") or new_state.get("tab_count") or 0)
+    expected_count = int(new_state.get("tab_count") or new_state.get("count") or 0)
     if expected_count <= 0:
         expected_count = len(live_session_ids)
 
@@ -678,6 +743,39 @@ def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str,
         if len(matched_ids) == 1:
             _set_agent_session(agent, matched_ids[0])
 
+    # 第 2.5 阶段：按位置顺序回绑（iTerm 重启后 pane 布局通常不变）。
+    # 仅当大多数 agent 的 badge 匹配都失败时启用（表明发生了整体重启
+    # 而非个别 session 丢失），避免少量丢失时错位。
+    still_unresolved_count = sum(
+        1 for a in unresolved_agents
+        if isinstance(a, dict)
+        and not (
+            str(a.get("session_id", "") or "").strip()
+            and str(a.get("session_id", "") or "").strip() in live_by_id
+        )
+    )
+    majority_unresolved = still_unresolved_count >= max(2, len(agents) // 2)
+    enough_live_for_position = len(unassigned_live_ids) >= still_unresolved_count
+    if majority_unresolved and enough_live_for_position and unassigned_live_ids:
+        ordered_unassigned = [
+            str(item.get("session_id", "") or "").strip()
+            for item in live_sessions
+            if str(item.get("session_id", "") or "").strip() in unassigned_live_ids
+        ]
+        position_idx = 0
+        for agent in unresolved_agents:
+            if not isinstance(agent, dict):
+                continue
+            cur = str(agent.get("session_id", "") or "").strip()
+            if cur and cur in live_by_id:
+                continue
+            if position_idx < len(ordered_unassigned):
+                _set_agent_session(agent, ordered_unassigned[position_idx])
+                position_idx += 1
+
+        # 回注 user 变量以便后续 rebind 可直接 badge 匹配
+        _async_reinject_variables(agents, live_by_id)
+
     # 第三阶段：按标签/代理标识兜底（不依赖会被进程覆盖的 session_name）。
     for agent in unresolved_agents:
         if not isinstance(agent, dict):
@@ -718,11 +816,22 @@ def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str,
             _set_agent_session(agent, matched_ids[0])
 
     # 第四阶段：仍未匹配的失效会话统一清空。
+    # 安全守卫：如果 live sessions 数量远少于已知 agent 数量，
+    # 说明 iTerm API 可能返回了不完整结果，避免误清。
+    # 阈值：live 数量至少为已知含 SID 的 agent 数的一半。
+    total_agents_with_sid = sum(
+        1 for a in agents if isinstance(a, dict)
+        and str(a.get("session_id", "") or "").strip()
+    )
+    api_seems_complete = (
+        total_agents_with_sid == 0
+        or len(live_by_id) >= max(1, total_agents_with_sid // 2)
+    )
     for agent in unresolved_agents:
         if not isinstance(agent, dict):
             continue
         current_session_id = str(agent.get("session_id", "") or "").strip()
-        if current_session_id and current_session_id not in live_by_id:
+        if current_session_id and current_session_id not in live_by_id and api_seems_complete:
             _set_agent_session(agent, "")
 
     resolved_session_ids: list[str] = []
@@ -929,8 +1038,12 @@ def list_iterm_agent_sessions(state_file: str = "") -> dict[str, Any]:
         if rebind_error:
             if sessions and "Cannot run the event loop while another loop is running" in rebind_error:
                 result["rebind_warning_suppressed"] = True
+                _sync_tui_binding_warning(rebind_error, warning_suppressed=True)
             else:
                 result["rebind_error"] = rebind_error
+                _sync_tui_binding_warning(rebind_error)
+        else:
+            _sync_tui_binding_warning("")
         return result
     except Exception as e:
         return {
@@ -995,6 +1108,9 @@ def send_iterm_input(
         rebind_error = str(direct_result.get("rebind_error", "") or "").strip()
         if rebind_error:
             result["rebind_error"] = rebind_error
+            _sync_tui_binding_warning(rebind_error)
+        else:
+            _sync_tui_binding_warning("")
         return result
     except Exception as e:
         return {
@@ -1054,6 +1170,9 @@ def read_iterm_output(
         rebind_error = str(direct_result.get("rebind_error", "") or "").strip()
         if rebind_error:
             result["rebind_error"] = rebind_error
+            _sync_tui_binding_warning(rebind_error)
+        else:
+            _sync_tui_binding_warning("")
         return result
     except Exception as e:
         return {

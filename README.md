@@ -82,6 +82,36 @@ python3 -m agents.runtime_agent --id agent_13 --name "自定义代理" --plugins
 - **MCP (Model Context Protocol)** — Agent 工具协议
 - **langchain-mcp-adapters** — LangChain ↔ MCP 桥接
 
+## Responses API 优化（GPT-5 / Codex）
+
+项目已针对 Responses API 做兼容增强，适配 OpenAI 与第三方中转：
+
+- GPT-5 / Codex 模型默认走 `/responses`（可用 `OPENAI_USE_RESPONSES_API` 覆盖）
+- 支持 `reasoning`（`OPENAI_REASONING_EFFORT`）、`store`（`OPENAI_RESPONSES_STORE`）
+- 支持 `previous_response_id` 串联（`OPENAI_USE_PREVIOUS_RESPONSE_ID=1`）
+- 支持 Conversations 会话绑定（`OPENAI_RESPONSES_CONVERSATION_ID=conv_xxx`）
+- 支持 Background mode（`OPENAI_RESPONSES_BACKGROUND=1`）
+- 支持 include/context-management/verbosity：
+  - `OPENAI_RESPONSES_INCLUDE`（逗号分隔）
+  - `OPENAI_RESPONSES_CONTEXT_MANAGEMENT`（JSON）
+  - `OPENAI_RESPONSES_VERBOSITY`（`low|medium|high`）
+
+第三方网关兼容性策略（默认仅在非 `api.openai.com` 开启）：
+
+- 自动清洗 `input` 中的 item `id`，避免引用不可持久化的历史项导致 404
+- 可选丢弃历史 `reasoning` item，降低 `rs_* not found` 风险
+- 若 `previous_response_id + tools` 触发 `No tool call found...`，Gateway 会自动降级并关闭 `use_previous_response_id` 后重试
+- 相关开关：
+  - `OPENAI_RESPONSES_SANITIZE_INPUT`
+  - `OPENAI_RESPONSES_STRIP_INPUT_IDS`
+  - `OPENAI_RESPONSES_DROP_REASONING_INPUT`
+
+配置入口：
+- `.env` 直接配置（推荐发布环境）
+- Dashboard「配置管理 -> LLM 设置」可在线切换：
+  - `OPENAI_USE_PREVIOUS_RESPONSE_ID`（0/1）
+  - `OPENAI_RESPONSES_CONVERSATION_ID`（`conv_xxx`）
+
 ## iTerm 启动与 I/O
 
 - 启动脚本：`scripts/iterm_launch_agents.py`
@@ -128,6 +158,13 @@ python3 scripts/iterm_agent_io.py --action read --agent agent_01 --lines 30
 - 为避免空白 shell 窗口，`--start-template` 禁止使用 shell-only 命令：`zsh/bash/sh/fish`
 - 推荐使用可见前台程序，例如：`codex --no-alt-screen "..."`
 - `agents/all_in_one.py` 已注册统一 iTerm MCP 工具：`iterm(action="list"|"send"|"read"|...)`
+
+等待态看门狗（生产推荐）：
+- `TG_WATCHDOG_INTERVAL=60`（每 60 秒巡检）
+- `TG_WATCHDOG_CHECK_WAITING=1`（开启 `Waiting for instructions` 检测）
+- `TG_WATCHDOG_WAITING_READ_LINES=40`（检测窗口最近 40 行）
+- `TG_WATCHDOG_WAITING_PROMPT=检测到你在 Waiting for instructions，请继续当前任务；若无任务请回复 READY+agent_id。`
+- `TG_WATCHDOG_INCLUDE_MASTER=1`（主会话也纳入巡检，避免主窗口长期挂起）
 
 ## Agent 运行时（单线程 + 周期 GC）
 
@@ -238,7 +275,9 @@ Dashboard 新增 `命令卡` 页面：
 
 - 全局运行日志写入 PostgreSQL `system_logs`
 - 结构化审计日志写入 PostgreSQL `audit_events`
+- AI 专项日志面板（`AI 日志`）从 `system_logs` 派生，独立展示 `/responses` 调用、状态码与兼容降级事件
 - Dashboard 的 `Logs` 区域并排展示 `Audit Logs` 与 `System Logs`
+- Dashboard 新增 `AI 日志` 页面，支持按 `level/logger/category/endpoint/status_code/keyword` 过滤并导出 `ndjson`
 - `Audit Logs` 支持按 `event_type/action/result/actor/keyword` 过滤
 - `System Logs` 支持按 `level/logger/keyword` 过滤，并按级别彩色标识
 - `System Logs` 支持导出当前筛选结果（`ndjson`）

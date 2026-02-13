@@ -1440,18 +1440,61 @@ _HOT_RELOAD_TOOL_NAMES: tuple[str, ...] = (
 )
 
 
-def _make_hot_reloadable(fn_name: str):
-    """创建一个通过 globals() 查找的包装函数，支持 SIGUSR1 热重载。
+_TOOL_TIMEOUT_SEC = int(os.environ.get("ACP_BUS_TOOL_TIMEOUT_SEC", "90"))
+_TOOL_SLOW_THRESHOLD_SEC = float(os.environ.get("ACP_BUS_TOOL_SLOW_SEC", "5.0"))
 
-    FastMCP 注册的是函数对象引用，importlib.reload 后创建的新函数
-    不会自动替换旧引用。通过此包装器，每次调用时从 globals() 动态
-    查找最新的函数，从而让热重载真正生效。
+
+def _make_hot_reloadable(fn_name: str):
+    """创建一个异步包装函数，支持 SIGUSR1 热重载 + asyncio.to_thread 非阻塞。
+
+    关键改进：
+    1. FastMCP 对 sync 工具直接在事件循环中调用（阻塞），改为 async wrapper
+       内部 asyncio.to_thread()，让阻塞 I/O（subprocess.run 等）在线程池执行。
+    2. 支持可配置的 per-tool 超时（ACP_BUS_TOOL_TIMEOUT_SEC，默认 90s）。
+    3. 慢调用自动 warning（ACP_BUS_TOOL_SLOW_SEC，默认 5s）。
     """
+    import asyncio as _asyncio
+    import functools
+    import time as _time
+
     real_fn = globals()[fn_name]
     sig = inspect.signature(real_fn)
 
-    def wrapper(*args, **kwargs):
-        return globals()[fn_name](*args, **kwargs)
+    @functools.wraps(real_fn)
+    async def wrapper(*args, **kwargs):
+        t0 = _time.monotonic()
+        try:
+            result = await _asyncio.wait_for(
+                _asyncio.to_thread(lambda: globals()[fn_name](*args, **kwargs)),
+                timeout=_TOOL_TIMEOUT_SEC,
+            )
+            elapsed = _time.monotonic() - t0
+            if elapsed > _TOOL_SLOW_THRESHOLD_SEC:
+                _logger.warning(
+                    "[acp-bus] slow tool %s  elapsed=%.1fs",
+                    fn_name, elapsed,
+                )
+            return result
+        except _asyncio.TimeoutError:
+            elapsed = _time.monotonic() - t0
+            _logger.error(
+                "[acp-bus] tool %s TIMEOUT after %.1fs (limit=%ds)",
+                fn_name, elapsed, _TOOL_TIMEOUT_SEC,
+            )
+            return json.dumps(
+                {"ok": False, "error": f"工具 {fn_name} 超时 ({_TOOL_TIMEOUT_SEC}s)"},
+                ensure_ascii=False,
+            )
+        except Exception as exc:
+            elapsed = _time.monotonic() - t0
+            _logger.error(
+                "[acp-bus] tool %s ERROR after %.1fs: %s",
+                fn_name, elapsed, exc,
+            )
+            return json.dumps(
+                {"ok": False, "error": f"工具 {fn_name} 异常: {exc}"},
+                ensure_ascii=False,
+            )
 
     wrapper.__name__ = fn_name
     wrapper.__qualname__ = fn_name
@@ -1479,7 +1522,91 @@ def _setup_hot_reload():
     print(f"[acp-bus] PID={os.getpid()} SIGUSR1 热重载已注册", file=sys.stderr)
 
 
+def _patch_session_auto_rebind(server) -> None:
+    """补丁 MCP session manager：对过期 session ID 自动重建连接而非返回 404。
+
+    策略：
+    - initialize 请求 + 过期 session → 剥离旧 header，走新建路径
+    - 非 initialize 请求 + 过期 session → 直接返回 JSON-RPC error（不创建 transport）
+    """
+    # 触发 lazy init 以获取 session_manager
+    _ = server.streamable_http_app()
+    mgr = server._session_manager
+    if mgr is None:
+        return
+
+    _original_handle_request = mgr.handle_request
+    _stale_warned: set[str] = set()  # 避免日志洪水，每个过期 session 只警告一次
+
+    async def _auto_rebind_handle_request(scope, receive, send):
+        from starlette.requests import Request
+        from starlette.responses import JSONResponse
+
+        request = Request(scope, receive)
+        session_id = request.headers.get("mcp-session-id")
+
+        # 仅处理过期 session
+        if not session_id or session_id in mgr._server_instances:
+            await _original_handle_request(scope, receive, send)
+            return
+
+        # 读取 body 判断是否为 initialize 请求
+        try:
+            body = await request.body()
+            body_json = json.loads(body) if body else {}
+        except Exception:
+            body_json = {}
+
+        method = body_json.get("method", "")
+
+        if method == "initialize":
+            # initialize 请求：剥离旧 header，让 manager 创建新 session
+            _logger.info(
+                "[acp-bus] stale session %s → auto-rebind (initialize)",
+                session_id[:16],
+            )
+            _stale_warned.discard(session_id)
+            raw_headers = [
+                (k, v) for k, v in scope.get("headers", [])
+                if k.lower() != b"mcp-session-id"
+            ]
+            new_scope = dict(scope, headers=raw_headers)
+
+            # 重新构造 receive 让 body 可以再次被读取
+            body_bytes = body
+
+            async def _replay_receive():
+                return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+            await _original_handle_request(new_scope, _replay_receive, send)
+        else:
+            # 非 initialize 请求：直接返回 JSON-RPC error，不创建 transport
+            if session_id not in _stale_warned:
+                _stale_warned.add(session_id)
+                _logger.warning(
+                    "[acp-bus] stale session %s → rejected (method=%s), client should re-initialize",
+                    session_id[:16], method or "unknown",
+                )
+            resp = JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": body_json.get("id", "server-error"),
+                    "error": {
+                        "code": -32600,
+                        "message": "Session expired. Please re-initialize.",
+                    },
+                },
+                status_code=404,
+            )
+            await resp(scope, receive, send)
+
+    mgr.handle_request = _auto_rebind_handle_request
+    _logger.info("[acp-bus] session auto-rebind 补丁已安装")
+
 def main() -> None:
+    # 标识本进程为 ACP-BUS，让 iterm_bridge 强制走 subprocess 隔离
+    os.environ["_ACP_BUS_PROCESS"] = "1"
+
     # 确保加载 .env，让 MCP 进程获得 DB 连接串等环境变量
     try:
         from dotenv import load_dotenv

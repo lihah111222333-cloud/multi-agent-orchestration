@@ -46,10 +46,18 @@ def _join_agent_args(agent_args: list[str]) -> str:
 
 
 def main() -> int:
+    import time as _t
+    _t0 = _t.monotonic()
     args = parse_args()
+    print(f"[iterm-io-perf] args parsed  elapsed={_t.monotonic()-_t0:.3f}s", file=sys.stderr, flush=True)
+    # 关键环境变量诊断
+    for _k in ("ITERM_IO_BRIDGE_DIRECT", "_ACP_BUS_PROCESS", "ITERM2_COOKIE", "ITERM2_KEY", "TERM_SESSION_ID"):
+        print(f"[iterm-io-perf]   env {_k}={os.environ.get(_k, '<unset>')}", file=sys.stderr, flush=True)
 
     if args.action == "list":
+        _ta = _t.monotonic()
         result = list_iterm_agent_sessions(state_file=args.state_file)
+        print(f"[iterm-io-perf] list done  elapsed={_t.monotonic()-_ta:.3f}s  total={_t.monotonic()-_t0:.3f}s", file=sys.stderr, flush=True)
     elif args.action == "read":
         result = read_iterm_output(
             agent_id=_join_agent_args(args.agent),

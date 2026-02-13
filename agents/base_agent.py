@@ -1,5 +1,6 @@
 """Agent 基类 — MCP Server 工厂（支持崩溃自动重启）"""
 
+import errno
 import os
 import sys
 import time
@@ -20,6 +21,7 @@ def create_agent_server(
     description: str = "",
     host: str = "127.0.0.1",
     port: int = 8000,
+    stateless_http: bool = True,
 ) -> FastMCP:
     """创建一个 MCP Agent Server 实例
 
@@ -28,11 +30,12 @@ def create_agent_server(
         description: Agent 描述
         host: HTTP 模式监听地址（仅 streamable-http 传输时有效）
         port: HTTP 模式监听端口（仅 streamable-http 传输时有效）
+        stateless_http: 无状态模式，每个请求独立处理（默认 True，避免重启后 session 过期）
 
     Returns:
         FastMCP 实例，可以在其上注册 tools
     """
-    server = FastMCP(name, instructions=description, host=host, port=port)
+    server = FastMCP(name, instructions=description, host=host, port=port, stateless_http=stateless_http)
     return server
 
 
@@ -44,6 +47,7 @@ def run_agent(server: FastMCP, transport: str = "stdio") -> None:
         transport: 传输协议 ("stdio" | "streamable-http")
 
     - 正常退出 / KeyboardInterrupt / SystemExit 直接退出，不重试
+    - OSError(EBADF) 等 fd 表损坏直接退出，不重试（重启无法恢复）
     - 其它异常触发重试，指数退避 (2s → 最大 60s)
     - 最大重试次数由 ACP_BUS_MAX_RESTARTS 环境变量控制（默认 10）
     """
@@ -57,6 +61,13 @@ def run_agent(server: FastMCP, transport: str = "stdio") -> None:
         except (KeyboardInterrupt, SystemExit):
             break  # 主动退出，不重试
         except Exception as exc:
+            # fd 表损坏不可恢复，不浪费重启配额
+            if isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.EBADF:
+                print(
+                    "[acp-bus] fatal: Bad file descriptor – fd table corrupted, not retrying",
+                    file=sys.stderr,
+                )
+                break
             attempt += 1
             if attempt > max_restarts:
                 print(

@@ -13,23 +13,30 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
+import time as _time_mod
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_perf_log = logging.getLogger("iterm_bridge.perf")
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_STATE_FILE = ROOT_DIR / "data" / "iterm_launch_state.json"
 DIRECT_MODE_ENV = "ITERM_IO_BRIDGE_DIRECT"
 _SHORT_AGENT_ID_RE = re.compile(r"^a(\d{2})$", re.IGNORECASE)
 _CANONICAL_AGENT_ID_RE = re.compile(r"^agent_(\d{2})$", re.IGNORECASE)
+_AUTH_401_RE = re.compile(r"(http\s*401|status\s*code\s*401|invalidstatuscode\s*\(?401\)?)", re.IGNORECASE)
 
 # iTerm API / subprocess 调用最大等待秒数
 _ITERM_TIMEOUT_SEC = int(os.getenv("ITERM_TIMEOUT_SEC", "60"))
+_ITERM_AUTH_RETRY_MAX = max(0, int(os.getenv("ITERM_AUTH_RETRY_MAX", "1")))
+_ITERM_AUTH_RETRY_SLEEP_SEC = max(0.0, float(os.getenv("ITERM_AUTH_RETRY_SLEEP_SEC", "0.35")))
 
 
 def _sync_tui_binding_warning(rebind_error: str = "", *, warning_suppressed: bool = False) -> None:
@@ -56,6 +63,8 @@ def _iterm_run_with_timeout(coroutine_fn, timeout: float = 0) -> None:
     """在独立线程中执行 iterm2.run_until_complete，超时则放弃。
 
     关键安全措施：
+    - 连接前清除旧 ITERM2_COOKIE/KEY（防止 one-time-use cookie 过期导致 401）
+    - 401 时自动重试 1 次（重新获取 cookie）
     - 超时后通过 cancel_futures 取消挂起的 Future
     - 工作线程中创建的 event loop 在 finally 中被强制关闭
     - 避免 fd 泄漏到主进程（websocket / unix socket）
@@ -65,20 +74,60 @@ def _iterm_run_with_timeout(coroutine_fn, timeout: float = 0) -> None:
     import iterm2
 
     effective_timeout = timeout if timeout > 0 else _ITERM_TIMEOUT_SEC
+    _t0 = _time_mod.monotonic()
+    _perf_log.info("[iterm-perf] _iterm_run_with_timeout START  timeout=%.1fs  coro=%s", effective_timeout, getattr(coroutine_fn, "__qualname__", repr(coroutine_fn)))
+
+    _MAX_AUTH_RETRIES = 2  # 最多尝试 2 次（首次 + 1 次重试）
 
     def _guarded_run(coro_fn):
         """在工作线程中运行 iterm2，结束后关闭 event loop。"""
-        try:
-            iterm2.run_until_complete(coro_fn)
-        finally:
-            # 无论成功/失败/取消，确保关闭本线程的 event loop 及其 fd
+        _t_thread = _time_mod.monotonic()
+        _perf_log.info("[iterm-perf]   _guarded_run entered  thread_setup=%.3fs", _t_thread - _t0)
+        last_err = None
+        for attempt in range(_MAX_AUTH_RETRIES):
+            # 每次连接前清除可能过期的 cookie，强制重新获取
+            os.environ.pop("ITERM2_COOKIE", None)
+            os.environ.pop("ITERM2_KEY", None)
             try:
-                loop = asyncio.get_event_loop()
-                if loop and not loop.is_closed():
-                    loop.call_soon_threadsafe(loop.stop)
-                    loop.close()
-            except Exception:
-                pass
+                iterm2.run_until_complete(coro_fn)
+                return  # 成功
+            except Exception as e:
+                err_str = str(e)
+                _perf_log.info("[iterm-perf]   _guarded_run attempt=%d  error=%s", attempt + 1, err_str)
+                # 只对 401 auth 错误重试
+                if "401" in err_str and attempt < _MAX_AUTH_RETRIES - 1:
+                    last_err = e
+                    _perf_log.info("[iterm-perf]   _guarded_run retrying after 401...")
+                    continue
+                raise
+            finally:
+                # 优雅关闭 event loop：先取消所有 pending 任务（含 websocket dispatch），
+                # 等待清理完成，再关闭 loop。避免 "Task was destroyed but it is pending" 警告。
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop and not loop.is_closed():
+                        # 取消所有 pending 任务
+                        pending = asyncio.all_tasks(loop)
+                        for task in pending:
+                            task.cancel()
+                        # 让取消的任务完成清理（websocket.close 等）
+                        if pending:
+                            loop.run_until_complete(
+                                asyncio.gather(*pending, return_exceptions=True)
+                            )
+                        loop.run_until_complete(loop.shutdown_asyncgens())
+                        loop.close()
+                except Exception:
+                    # 兜底：如果优雅关闭失败，强制关闭
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop and not loop.is_closed():
+                            loop.close()
+                    except Exception:
+                        pass
+        if last_err:
+            raise last_err
+        _perf_log.info("[iterm-perf]   _guarded_run done     elapsed=%.3fs", _time_mod.monotonic() - _t_thread)
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     future = pool.submit(_guarded_run, coroutine_fn)
@@ -86,8 +135,10 @@ def _iterm_run_with_timeout(coroutine_fn, timeout: float = 0) -> None:
         future.result(timeout=effective_timeout)
     except concurrent.futures.TimeoutError:
         future.cancel()
+        _perf_log.warning("[iterm-perf] _iterm_run_with_timeout TIMEOUT  elapsed=%.3fs", _time_mod.monotonic() - _t0)
         raise TimeoutError(f"iTerm API 调用超时 ({effective_timeout}s)")
     finally:
+        _perf_log.info("[iterm-perf] _iterm_run_with_timeout END  elapsed=%.3fs", _time_mod.monotonic() - _t0)
         pool.shutdown(wait=False, cancel_futures=True)
 
 
@@ -258,6 +309,75 @@ def _is_direct_mode_enabled() -> bool:
     return False
 
 
+def _contains_http_401(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return bool(_AUTH_401_RE.search(text))
+
+
+def _rows_have_http_401(rows: list[dict[str, Any]]) -> bool:
+    for row in rows:
+        if _contains_http_401(row.get("error")):
+            return True
+    return False
+
+
+def _result_has_http_401(result: dict[str, Any]) -> bool:
+    if _contains_http_401(result.get("error")):
+        return True
+    rows = result.get("results")
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict) and _contains_http_401(row.get("error")):
+                return True
+    return False
+
+
+def _run_subprocess_with_http_401_retry(
+    *,
+    action: str,
+    text: str | None,
+    agent_id: str,
+    all_agents: bool,
+    wait_sec: float,
+    read_lines: int,
+    state_file: str,
+) -> tuple[dict[str, Any], int]:
+    """调用 subprocess I/O，遇到 iTerm 401 间歇错误时自动重试。"""
+    attempts = 0
+    result = _run_io_via_subprocess(
+        action=action,
+        text=text,
+        agent_id=agent_id,
+        all_agents=all_agents,
+        wait_sec=wait_sec,
+        read_lines=read_lines,
+        state_file=state_file,
+    )
+
+    while attempts < _ITERM_AUTH_RETRY_MAX and _result_has_http_401(result):
+        attempts += 1
+        _perf_log.warning(
+            "[iterm-perf] subprocess %s hit HTTP401, retry=%d/%d",
+            action,
+            attempts,
+            _ITERM_AUTH_RETRY_MAX,
+        )
+        _time_mod.sleep(_ITERM_AUTH_RETRY_SLEEP_SEC * attempts)
+        result = _run_io_via_subprocess(
+            action=action,
+            text=text,
+            agent_id=agent_id,
+            all_agents=all_agents,
+            wait_sec=wait_sec,
+            read_lines=read_lines,
+            state_file=state_file,
+        )
+
+    return result, attempts
+
+
 def _subprocess_agent_args(agent_id: str, all_agents: bool) -> list[str]:
     if all_agents:
         return ["--all"]
@@ -278,6 +398,7 @@ def _run_io_via_subprocess(
     read_lines: int,
     state_file: str,
 ) -> dict[str, Any]:
+    _t0 = _time_mod.monotonic()
     script = ROOT_DIR / "scripts" / "iterm_agent_io.py"
     cmd = [
         sys.executable,
@@ -299,10 +420,16 @@ def _run_io_via_subprocess(
 
     child_env = os.environ.copy()
     child_env[DIRECT_MODE_ENV] = "1"
+    # 关键：移除 _ACP_BUS_PROCESS，否则子进程也会认为自己是 ACP 主进程，
+    # 导致 _is_direct_mode_enabled() 返回 False → 递归生成子进程 → 无限挂起。
+    child_env.pop("_ACP_BUS_PROCESS", None)
 
     # 子进程内部可能执行多次 iTerm API 调用（precheck + rebind + 实际操作 + 可能的重试），
     # 每次最多 _ITERM_TIMEOUT_SEC 秒。subprocess 超时必须大于内部总耗时。
     subprocess_timeout = _ITERM_TIMEOUT_SEC * 3 + max(0.0, float(wait_sec)) + 10
+
+    _perf_log.info("[iterm-perf] _run_io_via_subprocess START  action=%s  cmd=%s", action, " ".join(cmd[-4:]))
+    _perf_log.info("[iterm-perf]   subprocess python=%s  timeout=%.0fs", sys.executable, subprocess_timeout)
 
     try:
         completed = subprocess.run(
@@ -315,6 +442,7 @@ def _run_io_via_subprocess(
             timeout=subprocess_timeout,
         )
     except subprocess.TimeoutExpired:
+        _perf_log.warning("[iterm-perf] _run_io_via_subprocess TIMEOUT  elapsed=%.3fs", _time_mod.monotonic() - _t0)
         return {
             "ok": False,
             "ts": _now_iso(),
@@ -322,8 +450,13 @@ def _run_io_via_subprocess(
             "error": f"subprocess 超时 ({subprocess_timeout:.0f}s)",
         }
 
+    _elapsed = _time_mod.monotonic() - _t0
     stdout = (completed.stdout or "").strip()
     stderr = (completed.stderr or "").strip()
+    _perf_log.info("[iterm-perf] _run_io_via_subprocess END  elapsed=%.3fs  rc=%d  stdout_len=%d  stderr_len=%d", _elapsed, completed.returncode, len(stdout), len(stderr))
+    if stderr:
+        _perf_log.info("[iterm-perf]   subprocess stderr:\n%s", stderr)
+
     if not stdout:
         return {
             "ok": False,
@@ -514,14 +647,19 @@ def _iter_tab_sessions(tab: Any) -> list[Any]:
 def _list_live_sessions(window_id: str = "") -> tuple[str, list[dict[str, str]]]:
     import iterm2
 
+    _t0 = _time_mod.monotonic()
+    _perf_log.info("[iterm-perf] _list_live_sessions START  window_id=%r", window_id)
     selected_window_id = ""
     sessions: list[dict[str, str]] = []
 
     async def main(connection):
         nonlocal selected_window_id, sessions
 
+        _ta = _time_mod.monotonic()
         app = await iterm2.async_get_app(connection)
+        _perf_log.info("[iterm-perf]   async_get_app          elapsed=%.3fs", _time_mod.monotonic() - _ta)
         windows = list(getattr(app, "terminal_windows", []) or [])
+        _perf_log.info("[iterm-perf]   windows_count=%d", len(windows))
 
         normalized_window_id = str(window_id or "").strip()
         if normalized_window_id:
@@ -541,6 +679,8 @@ def _list_live_sessions(window_id: str = "") -> tuple[str, list[dict[str, str]]]
         selected_window_id = str(getattr(target_windows[0], "window_id", "") or "")
 
         seen: set[str] = set()
+        _session_count = 0
+        _var_total = 0.0
         for target_window in target_windows:
             for tab in list(getattr(target_window, "tabs", []) or []):
                 for session in _iter_tab_sessions(tab):
@@ -548,6 +688,7 @@ def _list_live_sessions(window_id: str = "") -> tuple[str, list[dict[str, str]]]
                     if not session_id or session_id in seen:
                         continue
                     seen.add(session_id)
+                    _session_count += 1
 
                     badge = ""
                     agent_id = ""
@@ -555,6 +696,7 @@ def _list_live_sessions(window_id: str = "") -> tuple[str, list[dict[str, str]]]
                     agent_label = ""
                     get_variable = getattr(session, "async_get_variable", None)
                     if get_variable is not None:
+                        _tv = _time_mod.monotonic()
                         try:
                             badge_value = await get_variable("user.badge")
                             badge = str(badge_value or "").strip()
@@ -578,6 +720,9 @@ def _list_live_sessions(window_id: str = "") -> tuple[str, list[dict[str, str]]]
                             agent_label = str(agent_label_value or "").strip()
                         except Exception:
                             agent_label = ""
+                        _var_elapsed = _time_mod.monotonic() - _tv
+                        _var_total += _var_elapsed
+                        _perf_log.info("[iterm-perf]   session %s vars  elapsed=%.3fs", session_id, _var_elapsed)
 
                     session_name = str(getattr(session, "name", "") or "").strip()
                     resolved_name = agent_label or agent_name or session_name
@@ -592,11 +737,13 @@ def _list_live_sessions(window_id: str = "") -> tuple[str, list[dict[str, str]]]
                             "session_name": session_name,
                         }
                     )
+        _perf_log.info("[iterm-perf]   sessions_found=%d  vars_total=%.3fs", _session_count, _var_total)
 
     try:
         _iterm_run_with_timeout(main)
     except TimeoutError:
         pass  # 返回已收集到的 sessions（可能为空）
+    _perf_log.info("[iterm-perf] _list_live_sessions END  elapsed=%.3fs  sessions=%d", _time_mod.monotonic() - _t0, len(sessions))
     return selected_window_id, sessions
 
 
@@ -615,6 +762,9 @@ def _async_reinject_variables(agents: list[dict[str, Any]], live_by_id: dict[str
     以便后续 rebind 可直接走 badge 匹配快路径。"""
     import iterm2
 
+    _t0 = _time_mod.monotonic()
+    _perf_log.info("[iterm-perf] _async_reinject_variables START  agents=%d  live=%d", len(agents), len(live_by_id))
+
     pairs: list[tuple[str, dict[str, Any]]] = []
     for agent in agents:
         if not isinstance(agent, dict):
@@ -625,6 +775,7 @@ def _async_reinject_variables(agents: list[dict[str, Any]], live_by_id: dict[str
         pairs.append((sid, agent))
 
     if not pairs:
+        _perf_log.info("[iterm-perf] _async_reinject_variables SKIP (no pairs)")
         return
 
     async def _inject(connection):
@@ -653,10 +804,14 @@ def _async_reinject_variables(agents: list[dict[str, Any]], live_by_id: dict[str
         _iterm_run_with_timeout(_inject, timeout=5.0)
     except Exception:
         pass  # best-effort，不影响 rebind 主流程
+    _perf_log.info("[iterm-perf] _async_reinject_variables END  pairs=%d  elapsed=%.3fs", len(pairs), _time_mod.monotonic() - _t0)
 
 
 def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str, Any]:
+    _t0 = _time_mod.monotonic()
+    _perf_log.info("[iterm-perf] _rebind_state_sessions START")
     selected_window_id, live_sessions = _list_live_sessions(str(state.get("window_id", "") or ""))
+    _perf_log.info("[iterm-perf] _rebind_state_sessions after _list_live_sessions  elapsed=%.3fs  live=%d", _time_mod.monotonic() - _t0, len(live_sessions))
     live_session_ids = [
         str(item.get("session_id", "") or "").strip()
         for item in live_sessions
@@ -900,6 +1055,7 @@ def _rebind_state_sessions(state_path: Path, state: dict[str, Any]) -> dict[str,
         }
 
     _save_state(state_path, new_state)
+    _perf_log.info("[iterm-perf] _rebind_state_sessions END (rebound)  elapsed=%.3fs  rebound_count=%d", _time_mod.monotonic() - _t0, rebound_count)
     return {
         "state": new_state,
         "rebound": True,
@@ -916,21 +1072,28 @@ def _has_missing_sessions(rows: list[dict[str, Any]]) -> bool:
 
 
 def _refresh_state_via_rebind(state_path: Path, state: dict[str, Any]) -> tuple[dict[str, Any], bool, int, str]:
+    _t0 = _time_mod.monotonic()
+    _perf_log.info("[iterm-perf] _refresh_state_via_rebind START")
     try:
         payload = _rebind_state_sessions(state_path, state)
     except Exception as e:
+        _perf_log.info("[iterm-perf] _refresh_state_via_rebind END (exception)  elapsed=%.3fs  err=%s", _time_mod.monotonic() - _t0, e)
         return state, False, 0, f"state rebind failed: {e}"
 
     if payload.get("rebound"):
         rebound_state = payload.get("state")
         if isinstance(rebound_state, dict):
+            _perf_log.info("[iterm-perf] _refresh_state_via_rebind END (rebound)  elapsed=%.3fs", _time_mod.monotonic() - _t0)
             return rebound_state, True, int(payload.get("rebound_count") or 0), ""
+        _perf_log.info("[iterm-perf] _refresh_state_via_rebind END (invalid)  elapsed=%.3fs", _time_mod.monotonic() - _t0)
         return state, False, 0, "state rebind failed: invalid rebound state"
 
     reason = str(payload.get("reason", "") or "").strip()
     if reason:
+        _perf_log.info("[iterm-perf] _refresh_state_via_rebind END (skipped: %s)  elapsed=%.3fs", reason, _time_mod.monotonic() - _t0)
         return state, False, 0, f"state rebind skipped: {reason}"
 
+    _perf_log.info("[iterm-perf] _refresh_state_via_rebind END  elapsed=%.3fs", _time_mod.monotonic() - _t0)
     return state, False, 0, ""
 
 
@@ -1026,9 +1189,12 @@ def _run_direct_with_optional_rebind(
 
 
 def list_iterm_agent_sessions(state_file: str = "") -> dict[str, Any]:
+    _t0 = _time_mod.monotonic()
+    _perf_log.info("[iterm-perf] === list_iterm_agent_sessions START ===")
     try:
         if not _is_direct_mode_enabled():
-            return _run_io_via_subprocess(
+            _perf_log.info("[iterm-perf]   direct_mode=OFF → subprocess")
+            result, retry_count = _run_subprocess_with_http_401_retry(
                 action="list",
                 text=None,
                 agent_id="",
@@ -1037,11 +1203,19 @@ def list_iterm_agent_sessions(state_file: str = "") -> dict[str, Any]:
                 read_lines=0,
                 state_file=state_file,
             )
+            if retry_count > 0 and isinstance(result, dict):
+                result["auth_retry_count"] = retry_count
+            _perf_log.info("[iterm-perf] === list_iterm_agent_sessions END (subprocess)  elapsed=%.3fs ===", _time_mod.monotonic() - _t0)
+            return result
 
         state_path = _normalize_state_file(state_file)
+        _t1 = _time_mod.monotonic()
         state = _load_state(state_path)
+        _perf_log.info("[iterm-perf]   _load_state  elapsed=%.3fs", _time_mod.monotonic() - _t1)
 
+        _t2 = _time_mod.monotonic()
         rebound_state, state_rebound, rebound_count, rebind_error = _refresh_state_via_rebind(state_path, state)
+        _perf_log.info("[iterm-perf]   _refresh_state_via_rebind  elapsed=%.3fs  rebound=%s  count=%d  err=%r", _time_mod.monotonic() - _t2, state_rebound, rebound_count, rebind_error)
         if state_rebound:
             state = rebound_state
 
@@ -1074,8 +1248,10 @@ def list_iterm_agent_sessions(state_file: str = "") -> dict[str, Any]:
                 _sync_tui_binding_warning(rebind_error)
         else:
             _sync_tui_binding_warning("")
+        _perf_log.info("[iterm-perf] === list_iterm_agent_sessions END  elapsed=%.3fs  sessions=%d ===", _time_mod.monotonic() - _t0, len(sessions))
         return result
     except Exception as e:
+        _perf_log.info("[iterm-perf] === list_iterm_agent_sessions END (error)  elapsed=%.3fs  err=%s ===", _time_mod.monotonic() - _t0, e)
         return {
             "ok": False,
             "ts": _now_iso(),
@@ -1098,7 +1274,7 @@ def send_iterm_input(
         normalized_read_lines = max(0, int(read_lines))
 
         if not _is_direct_mode_enabled():
-            return _run_io_via_subprocess(
+            result, retry_count = _run_subprocess_with_http_401_retry(
                 action="send",
                 text=normalized_text,
                 agent_id=agent_id,
@@ -1107,14 +1283,19 @@ def send_iterm_input(
                 read_lines=normalized_read_lines,
                 state_file=state_file,
             )
+            if retry_count > 0 and isinstance(result, dict):
+                result["auth_retry_count"] = retry_count
+            return result
 
         state_path = _normalize_state_file(state_file)
+        target_agent_ids = _parse_agent_ids(agent_id)
         state = _load_state(state_path)
+        auth_retry_count = 0
 
         direct_result = _run_direct_with_optional_rebind(
             state_path=state_path,
             state=state,
-            target_agent_ids=_parse_agent_ids(agent_id),
+            target_agent_ids=target_agent_ids,
             all_agents=all_agents,
             text=normalized_text,
             append_enter=bool(append_enter),
@@ -1123,6 +1304,29 @@ def send_iterm_input(
         )
         rows = direct_result["rows"]
         targets = direct_result["targets"]
+
+        while auth_retry_count < _ITERM_AUTH_RETRY_MAX and _rows_have_http_401(rows):
+            auth_retry_count += 1
+            _perf_log.warning(
+                "[iterm-perf] direct send hit HTTP401, retry=%d/%d",
+                auth_retry_count,
+                _ITERM_AUTH_RETRY_MAX,
+            )
+            _time_mod.sleep(_ITERM_AUTH_RETRY_SLEEP_SEC * auth_retry_count)
+            state = _load_state(state_path)
+            direct_result = _run_direct_with_optional_rebind(
+                state_path=state_path,
+                state=state,
+                target_agent_ids=target_agent_ids,
+                all_agents=all_agents,
+                text=normalized_text,
+                append_enter=bool(append_enter),
+                wait_sec=normalized_wait_sec,
+                read_lines=normalized_read_lines,
+            )
+            rows = direct_result["rows"]
+            targets = direct_result["targets"]
+
         ok = all(not row.get("error") for row in rows)
 
         result = {
@@ -1135,6 +1339,8 @@ def send_iterm_input(
             "rebound_count": int(direct_result.get("rebound_count") or 0),
             "results": rows,
         }
+        if auth_retry_count > 0:
+            result["auth_retry_count"] = auth_retry_count
         rebind_error = str(direct_result.get("rebind_error", "") or "").strip()
         if rebind_error:
             result["rebind_error"] = rebind_error
@@ -1161,7 +1367,7 @@ def read_iterm_output(
         normalized_read_lines = max(0, int(read_lines))
 
         if not _is_direct_mode_enabled():
-            return _run_io_via_subprocess(
+            result, retry_count = _run_subprocess_with_http_401_retry(
                 action="read",
                 text=None,
                 agent_id=agent_id,
@@ -1170,14 +1376,19 @@ def read_iterm_output(
                 read_lines=normalized_read_lines,
                 state_file=state_file,
             )
+            if retry_count > 0 and isinstance(result, dict):
+                result["auth_retry_count"] = retry_count
+            return result
 
         state_path = _normalize_state_file(state_file)
+        target_agent_ids = _parse_agent_ids(agent_id)
         state = _load_state(state_path)
+        auth_retry_count = 0
 
         direct_result = _run_direct_with_optional_rebind(
             state_path=state_path,
             state=state,
-            target_agent_ids=_parse_agent_ids(agent_id),
+            target_agent_ids=target_agent_ids,
             all_agents=all_agents,
             text=None,
             append_enter=True,
@@ -1186,6 +1397,29 @@ def read_iterm_output(
         )
         rows = direct_result["rows"]
         targets = direct_result["targets"]
+
+        while auth_retry_count < _ITERM_AUTH_RETRY_MAX and _rows_have_http_401(rows):
+            auth_retry_count += 1
+            _perf_log.warning(
+                "[iterm-perf] direct read hit HTTP401, retry=%d/%d",
+                auth_retry_count,
+                _ITERM_AUTH_RETRY_MAX,
+            )
+            _time_mod.sleep(_ITERM_AUTH_RETRY_SLEEP_SEC * auth_retry_count)
+            state = _load_state(state_path)
+            direct_result = _run_direct_with_optional_rebind(
+                state_path=state_path,
+                state=state,
+                target_agent_ids=target_agent_ids,
+                all_agents=all_agents,
+                text=None,
+                append_enter=True,
+                wait_sec=0.0,
+                read_lines=normalized_read_lines,
+            )
+            rows = direct_result["rows"]
+            targets = direct_result["targets"]
+
         ok = all(not row.get("error") for row in rows)
 
         result = {
@@ -1197,6 +1431,8 @@ def read_iterm_output(
             "rebound_count": int(direct_result.get("rebound_count") or 0),
             "results": rows,
         }
+        if auth_retry_count > 0:
+            result["auth_retry_count"] = auth_retry_count
         rebind_error = str(direct_result.get("rebind_error", "") or "").strip()
         if rebind_error:
             result["rebind_error"] = rebind_error

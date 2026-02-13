@@ -130,6 +130,13 @@ def _get_master_tab_name() -> str:
     return os.getenv("TG_MASTER_TAB_NAME", _DEFAULT_MASTER_TAB_NAME).strip()
 
 
+def _normalize_master_name(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    # 兼容常见拼写误差：agent / agnet / agenr
+    text = text.replace("agenr", "agent").replace("agnet", "agent")
+    return text
+
+
 def _find_master_session() -> dict[str, Any] | None:
     """3 步发现主 Agent 会话:
     1. 按 tab 名匹配
@@ -152,9 +159,9 @@ def _find_master_session() -> dict[str, Any] | None:
         return None
 
     # Step 1: 按 tab 名称匹配
-    tab_name = _get_master_tab_name().lower()
+    tab_name = _normalize_master_name(_get_master_tab_name())
     for s in sessions:
-        sname = (s.get("session_name") or s.get("name") or "").lower()
+        sname = _normalize_master_name(s.get("session_name") or s.get("name") or "")
         if tab_name and tab_name in sname:
             logger.info("主 Agent 发现 (tab 名匹配): session=%s name=%s",
                         s.get("session_id"), s.get("session_name"))
@@ -182,8 +189,8 @@ def _find_master_session() -> dict[str, Any] | None:
     # 多个未绑定会话时，优先选名称含 agent 关键词的
     if unbound:
         for s in unbound:
-            sname = (s.get("session_name") or s.get("name") or "").lower()
-            if any(kw in sname for kw in ("agent", "master", "codex", "claude", "主")):
+            sname = _normalize_master_name(s.get("session_name") or s.get("name") or "")
+            if any(kw in sname for kw in ("master", "codex", "claude", "主", "a0")):
                 logger.info("主 Agent 发现 (关键词匹配): session=%s name=%s",
                             s.get("session_id"), s.get("session_name"))
                 return s
@@ -825,7 +832,10 @@ def _get_nudge_prompt() -> str:
 
 
 def _should_include_master_watchdog_target() -> bool:
-    text = str(os.getenv("TG_WATCHDOG_INCLUDE_MASTER", "0") or "").strip().lower()
+    # 默认包含主 Agent，避免只有主会话时看门狗“看起来没生效”。
+    text = str(os.getenv("TG_WATCHDOG_INCLUDE_MASTER", "1") or "").strip().lower()
+    if not text:
+        return True
     return text in {"1", "true", "yes", "on"}
 
 
@@ -887,7 +897,7 @@ def _do_nudge(prompt: str) -> None:
             logger.warning("看门狗发现主 Agent 但 session_id 为空，已跳过")
     elif master:
         master_sid = str(master.get("session_id", "") or "").strip()
-        logger.info("看门狗默认跳过主 Agent（可通过 TG_WATCHDOG_INCLUDE_MASTER=1 开启）")
+        logger.info("看门狗已配置跳过主 Agent（可通过 TG_WATCHDOG_INCLUDE_MASTER=1 开启）")
 
     # 唤醒子 Agent（已注册的 agent 会话）
     try:
@@ -1023,4 +1033,7 @@ def get_watchdog_info() -> dict[str, Any]:
         info = dict(_watchdog_info)
         if _watchdog_thread and _watchdog_thread.is_alive():
             info["running"] = True
-        return info
+    # 配置态放在锁外读取，避免长时间持锁。
+    info["include_master"] = _should_include_master_watchdog_target()
+    info["master_tab_name"] = _get_master_tab_name()
+    return info

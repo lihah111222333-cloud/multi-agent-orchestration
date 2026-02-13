@@ -56,6 +56,7 @@ class TgBridgeWatchdogTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertTrue(info["running"])
         self.assertEqual(info["interval"], 45)
+        self.assertTrue(info["include_master"])
         self.assertTrue(tg_bridge.is_watchdog_running())
 
     def test_stop_watchdog_clears_running_flag(self) -> None:
@@ -84,8 +85,8 @@ class TgBridgeWatchdogTests(unittest.TestCase):
         self.assertFalse(tg_bridge.get_watchdog_info()["running"])
         self.assertFalse(tg_bridge.is_watchdog_running())
 
-    def test_do_nudge_skips_master_by_default(self) -> None:
-        with patch.dict(os.environ, {"TG_WATCHDOG_INCLUDE_MASTER": "0"}, clear=False):
+    def test_do_nudge_includes_master_by_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
             with patch.object(
                 tg_bridge,
                 "_find_master_session",
@@ -99,11 +100,11 @@ class TgBridgeWatchdogTests(unittest.TestCase):
                         with patch.object(tg_bridge, "send_message_to_tg") as tg_send_mock:
                             tg_bridge._do_nudge("hello")
 
-        send_mock.assert_not_called()
-        tg_send_mock.assert_not_called()
+        send_mock.assert_called_once_with("SID-ACTIVE", "hello")
+        tg_send_mock.assert_called_once()
 
-    def test_do_nudge_can_include_master_when_enabled(self) -> None:
-        with patch.dict(os.environ, {"TG_WATCHDOG_INCLUDE_MASTER": "1"}, clear=False):
+    def test_do_nudge_can_skip_master_when_disabled(self) -> None:
+        with patch.dict(os.environ, {"TG_WATCHDOG_INCLUDE_MASTER": "0"}, clear=False):
             with patch.object(
                 tg_bridge,
                 "_find_master_session",
@@ -116,7 +117,22 @@ class TgBridgeWatchdogTests(unittest.TestCase):
                     with patch.object(tg_bridge, "_send_to_iterm_session") as send_mock:
                         tg_bridge._do_nudge("hello")
 
-        send_mock.assert_called_once_with("SID-ACTIVE", "hello")
+        send_mock.assert_not_called()
+
+    def test_include_master_treats_empty_env_as_enabled(self) -> None:
+        with patch.dict(os.environ, {"TG_WATCHDOG_INCLUDE_MASTER": ""}, clear=False):
+            self.assertTrue(tg_bridge._should_include_master_watchdog_target())
+
+    def test_find_master_session_matches_agent_typo_variants(self) -> None:
+        live_sessions = [
+            {"session_id": "SID-MASTER", "session_name": "主agnet", "name": "主agnet"},
+        ]
+        with patch.dict(os.environ, {"TG_MASTER_TAB_NAME": "主agent"}, clear=False):
+            with patch("agents.iterm_bridge._list_live_sessions", return_value=("WIN-1", live_sessions)):
+                found = tg_bridge._find_master_session()
+
+        self.assertIsNotNone(found)
+        self.assertEqual(found["session_id"], "SID-MASTER")
 
     def test_do_nudge_skips_worker_row_with_master_session_id(self) -> None:
         captured_targets: list[str] = []

@@ -158,7 +158,6 @@ def _build_agent_command(agent: dict) -> dict:
         "command": sys.executable,
         "args": args,
         "transport": "stdio",
-        "name": agent_name,
     }
 
 

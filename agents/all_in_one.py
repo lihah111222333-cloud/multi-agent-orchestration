@@ -193,7 +193,6 @@ from orchestration_tui_bus import (
     publish_begin as publish_orchestration_tui_begin,
     publish_binding_warning as publish_orchestration_tui_binding_warning,
     publish_end as publish_orchestration_tui_end,
-    publish_legacy_state as publish_orchestration_tui_legacy_state,
     publish_update as publish_orchestration_tui_update,
     reset_state as reset_orchestration_tui_state,
 )
@@ -1101,7 +1100,6 @@ def orchestration_tui(
     run_id: str = "",
     status_header: str = "",
     status_details: str = "",
-    running: bool = False,
     warning: str = "",
     source: str = "acp-bus",
     limit: int = 100,
@@ -1114,16 +1112,14 @@ def orchestration_tui(
           - "begin"         发送 BeginOrchestrationTaskState
           - "update"        发送 UpdateOrchestrationTaskState
           - "end"           发送 EndOrchestrationTaskState
-          - "legacy"        发送 SetOrchestrationTaskState（兼容布尔接口）
           - "warning"       设置 SetOrchestrationBindingWarning
           - "clear_warning" 清空 binding warning
           - "snapshot"      查看当前聚合状态
           - "events"        查看最近事件（支持 since_seq + limit）
           - "reset"         清空状态与事件（调试）
         run_id: 运行 ID（begin/update/end 必填）
-        status_header: 状态标题（begin/update/legacy 可选）
+        status_header: 状态标题（begin/update 可选）
         status_details: 状态详情（begin/update 可选）
-        running: legacy 模式运行标记
         warning: 绑定告警文本（warning 动作使用）
         source: 事件来源标识
         limit: events 返回条数
@@ -1159,14 +1155,6 @@ def orchestration_tui(
         result = publish_orchestration_tui_end(run_id=run_id, source=source)
         return _safe_json(result)
 
-    if normalized_action == "legacy":
-        result = publish_orchestration_tui_legacy_state(
-            running=running,
-            status_header=status_header,
-            source=source,
-        )
-        return _safe_json(result)
-
     if normalized_action == "warning":
         result = publish_orchestration_tui_binding_warning(
             warning=warning,
@@ -1189,50 +1177,12 @@ def orchestration_tui(
         result = reset_orchestration_tui_state(source=source)
         return _safe_json(result)
 
+    if normalized_action not in {"snapshot", ""}:
+        return json.dumps({"ok": False, "error": f"unknown action: {normalized_action}"}, ensure_ascii=False)
+
     # snapshot (default)
     result = get_orchestration_tui_snapshot()
     return _safe_json(result)
-
-
-# ---- Backward-compatible wrappers (legacy tool names) ----
-def iterm_list_sessions(state_file: str = "") -> str:
-    return json.dumps(list_iterm_agent_sessions(state_file=state_file), ensure_ascii=False)
-
-
-def iterm_send_input(
-    text: str,
-    agent_id: str = "",
-    all_agents: bool = False,
-    wait_sec: float = 0.4,
-    read_lines: int = 20,
-    state_file: str = "",
-    append_enter: bool = True,
-) -> str:
-    payload = send_iterm_input(
-        text=text,
-        agent_id=agent_id,
-        all_agents=all_agents,
-        wait_sec=wait_sec,
-        read_lines=read_lines,
-        state_file=state_file,
-        append_enter=append_enter,
-    )
-    return json.dumps(payload, ensure_ascii=False)
-
-
-def iterm_read_output(
-    agent_id: str = "",
-    all_agents: bool = False,
-    read_lines: int = 20,
-    state_file: str = "",
-) -> str:
-    payload = read_iterm_output(
-        agent_id=agent_id,
-        all_agents=all_agents,
-        read_lines=read_lines,
-        state_file=state_file,
-    )
-    return json.dumps(payload, ensure_ascii=False)
 
 
 def write_file(path: str, content: str) -> str:

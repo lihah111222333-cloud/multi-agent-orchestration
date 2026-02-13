@@ -127,7 +127,7 @@ python3 scripts/iterm_agent_io.py --action read --agent agent_01 --lines 30
 - 可用 `--start-template` 自定义启动命令模板
 - 为避免空白 shell 窗口，`--start-template` 禁止使用 shell-only 命令：`zsh/bash/sh/fish`
 - 推荐使用可见前台程序，例如：`codex --no-alt-screen "..."`
-- `agents/all_in_one.py` 已注册 iTerm MCP 工具：`iterm_list_sessions`、`iterm_send_input`、`iterm_read_output`
+- `agents/all_in_one.py` 已注册统一 iTerm MCP 工具：`iterm(action="list"|"send"|"read"|...)`
 
 ## Agent 运行时（单线程 + 周期 GC）
 
@@ -207,6 +207,22 @@ Dashboard 新增 `命令卡` 页面：
 - `run.py` 在一次编排执行中自动发送 begin/update/end
 - `agents/iterm_bridge.py` 在检测到回绑异常时同步 `binding warning`
 - 通过 `orchestration_tui(action="snapshot")`/`events` 可查询当前状态和事件流
+
+首验与运维建议（已落地）：
+
+- 全链路首验脚本：`scripts/verify_master_tui_roundtrip.py`
+  - 通过主 Agent iTerm 会话下发 `run.py` 命令
+  - 自动校验同一 `run_id` 的 begin/update/end 事件闭环
+  - 校验主 Agent 回执 `DONE <marker>`
+- 总线观测脚本：`scripts/show_tui_bus.py`
+  - 输出 snapshot + events，便于排查卡住/漏 end/告警残留
+- 推荐命令卡：
+  - `verify.multi.tui_chain.master_roundtrip`
+  - `inspect.multi.tui_bus.snapshot`
+- 推荐提示词模板：
+  - `master.tui.lifecycle.strict`
+  - `master.tui.roundtrip.verify`
+  - `master.init.backend_tdd.strict` 已追加 TUI 首轮验证与生命周期约束
 
 ## Agent 数据表设计
 

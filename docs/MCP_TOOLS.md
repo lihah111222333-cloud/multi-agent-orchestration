@@ -161,7 +161,6 @@ Agent 遇到错误或需要决策时，向指定审批 Agent 发起请求，等�
 | `begin` | `orchestration_tui(action="begin", run_id="run-001", status_header="Running orchestration", status_details="phase=plan")` | 编排任务开始 |
 | `update` | `orchestration_tui(action="update", run_id="run-001", status_details="phase=execute")` | 更新阶段/详情 |
 | `end` | `orchestration_tui(action="end", run_id="run-001")` | 编排任务结束（成功/失败都要调用） |
-| `legacy` | `orchestration_tui(action="legacy", running=true, status_header="Running legacy orchestration")` | 兼容旧布尔接口 |
 | `warning` | `orchestration_tui(action="warning", warning="session rebound detected")` | 设置 iTerm 绑定告警 |
 | `clear_warning` | `orchestration_tui(action="clear_warning")` | 清空绑定告警 |
 | `snapshot` | `orchestration_tui(action="snapshot")` | 查看当前聚合状态 |

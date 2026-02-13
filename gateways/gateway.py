@@ -352,19 +352,19 @@ class Gateway:
         if self._client is not None:
             return
 
-        ctx = self.mcp_client_cls(self.agent_configs)
+        client = self.mcp_client_cls(self.agent_configs)
         try:
-            client = await ctx.__aenter__()
+            # langchain-mcp-adapters>=0.1.0 推荐直接实例化后调用 get_tools。
             tools = await client.get_tools()
         except Exception:
-            # D9: 连接失败时清理半初始化的 context，确保下次重试
+            # D9: 连接失败时清理半初始化的 runtime，确保下次重试
             try:
-                await ctx.__aexit__(None, None, None)
+                await self._close_client_like(client)
             except Exception:
-                logger.debug("清理半初始化 ctx 异常", exc_info=True)
+                logger.debug("清理半初始化 client 异常", exc_info=True)
             raise
 
-        self._client_ctx = ctx
+        self._client_ctx = None
         self._client = client
         self._tools = tools
         self._last_probe_ts = time.monotonic()
@@ -381,10 +381,37 @@ class Gateway:
             len(self.agent_configs),
         )
 
+    async def _close_client_like(self, client: Any) -> None:
+        if client is None:
+            return
+
+        aclose = getattr(client, "aclose", None)
+        if callable(aclose):
+            result = aclose()
+            if asyncio.iscoroutine(result):
+                await result
+            return
+
+        close = getattr(client, "close", None)
+        if callable(close):
+            result = close()
+            if asyncio.iscoroutine(result):
+                await result
+            return
+
+        aexit = getattr(client, "__aexit__", None)
+        if callable(aexit):
+            await aexit(None, None, None)
+
     async def _close_runtime_locked(self, reason: str) -> None:
         if self._client_ctx is not None:
             try:
                 await self._client_ctx.__aexit__(None, None, None)
+            except Exception:
+                logger.debug("Runtime 关闭异常", exc_info=True)
+        elif self._client is not None:
+            try:
+                await self._close_client_like(self._client)
             except Exception:
                 logger.debug("Runtime 关闭异常", exc_info=True)
 

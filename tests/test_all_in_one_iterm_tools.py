@@ -6,27 +6,6 @@ import agents.all_in_one as aio
 
 
 class AllInOneItermToolTests(unittest.TestCase):
-    def test_iterm_list_sessions_wrapper(self):
-        with mock.patch("agents.all_in_one.list_iterm_agent_sessions", return_value={"ok": True, "count": 4}):
-            text = aio.iterm_list_sessions()
-        data = json.loads(text)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["count"], 4)
-
-    def test_iterm_send_input_wrapper(self):
-        with mock.patch("agents.all_in_one.send_iterm_input", return_value={"ok": True, "target_count": 2}):
-            text = aio.iterm_send_input(text="hello", agent_id="agent_01,agent_02")
-        data = json.loads(text)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["target_count"], 2)
-
-    def test_iterm_read_output_wrapper(self):
-        with mock.patch("agents.all_in_one.read_iterm_output", return_value={"ok": True, "results": []}):
-            text = aio.iterm_read_output(all_agents=True)
-        data = json.loads(text)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["results"], [])
-
     def test_shared_file_wrappers(self):
         with mock.patch("agents.all_in_one.write_shared_file", return_value={"ok": True, "path": "a.txt"}):
             write_text = aio.write_file(path="a.txt", content="x")
@@ -135,6 +114,11 @@ class AllInOneItermToolTests(unittest.TestCase):
             snap_data = json.loads(snap_text)
             self.assertTrue(snap_data["ok"])
             self.assertFalse(snap_data["running"])
+
+    def test_orchestration_tui_rejects_unknown_action(self):
+        data = json.loads(aio.orchestration_tui(action="legacy", run_id="run-001"))
+        self.assertFalse(data["ok"])
+        self.assertIn("unknown action", data["error"])
 
 
 if __name__ == "__main__":

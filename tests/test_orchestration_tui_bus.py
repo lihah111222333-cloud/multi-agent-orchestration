@@ -52,32 +52,6 @@ class OrchestrationTuiBusTests(unittest.TestCase):
                 cleared = bus.get_snapshot()
                 self.assertIsNone(cleared["binding_warning"])
 
-    def test_legacy_running_maps_to_legacy_run_id(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            state_path = Path(tmpdir) / "orchestration_tui_bus.json"
-            lock_path = Path(tmpdir) / ".orchestration_tui_bus.lock"
-            with mock.patch.object(bus, "STATE_PATH", state_path), mock.patch.object(bus, "LOCK_PATH", lock_path):
-                bus.reset_state(source="test")
-                bus.publish_legacy_state(True, status_header="Legacy run", source="test")
-                snapshot = bus.get_snapshot()
-                self.assertTrue(snapshot["running"])
-                self.assertEqual(snapshot["active_runs"][0]["run_id"], bus.LEGACY_RUN_ID)
-
-                bus.publish_legacy_state(False, source="test")
-                ended = bus.get_snapshot()
-                self.assertFalse(ended["running"])
-
-    def test_legacy_bool_string_false_is_treated_as_false(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            state_path = Path(tmpdir) / "orchestration_tui_bus.json"
-            lock_path = Path(tmpdir) / ".orchestration_tui_bus.lock"
-            with mock.patch.object(bus, "STATE_PATH", state_path), mock.patch.object(bus, "LOCK_PATH", lock_path):
-                bus.reset_state(source="test")
-                bus.publish_legacy_state(True, status_header="Legacy run", source="test")
-                bus.publish_legacy_state("false", source="test")
-                snapshot = bus.get_snapshot()
-                self.assertFalse(snapshot["running"])
-
     def test_list_events_tolerates_invalid_limit_and_since(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             state_path = Path(tmpdir) / "orchestration_tui_bus.json"

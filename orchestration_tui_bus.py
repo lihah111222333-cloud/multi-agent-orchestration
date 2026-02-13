@@ -6,7 +6,6 @@
 - BeginOrchestrationTaskState
 - UpdateOrchestrationTaskState
 - EndOrchestrationTaskState
-- SetOrchestrationTaskState (legacy)
 - SetOrchestrationBindingWarning
 """
 
@@ -27,14 +26,12 @@ except ImportError:  # pragma: no cover
 ROOT_DIR = Path(__file__).resolve().parent
 STATE_PATH = ROOT_DIR / "data" / "orchestration_tui_bus.json"
 LOCK_PATH = ROOT_DIR / "data" / ".orchestration_tui_bus.lock"
-LEGACY_RUN_ID = "__legacy__"
 MAX_EVENTS = 2000
 
 __all__ = [
     "publish_begin",
     "publish_update",
     "publish_end",
-    "publish_legacy_state",
     "publish_binding_warning",
     "get_snapshot",
     "list_events",
@@ -63,22 +60,7 @@ def _normalize_text(value: Any) -> str | None:
 
 def _normalize_run_id(run_id: Any) -> str:
     text = str(run_id or "").strip()
-    return text or LEGACY_RUN_ID
-
-
-def _normalize_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return int(value) != 0
-    text = str(value or "").strip().lower()
-    if not text:
-        return False
-    if text in {"1", "true", "yes", "on"}:
-        return True
-    if text in {"0", "false", "no", "off"}:
-        return False
-    return True
+    return text or "__missing__"
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -198,20 +180,6 @@ def _append_event(
         run_id = _normalize_run_id(normalized_payload.get("run_id"))
         runs = state.setdefault("active_runs", {})
         runs.pop(run_id, None)
-    elif event == "SetOrchestrationTaskState":
-        running = _normalize_bool(normalized_payload.get("running"))
-        if running:
-            _upsert_run(
-                state,
-                run_id=LEGACY_RUN_ID,
-                status_header=_normalize_text(normalized_payload.get("status_header")),
-                status_details=None,
-                seq=seq,
-                ts=ts,
-            )
-        else:
-            runs = state.setdefault("active_runs", {})
-            runs.pop(LEGACY_RUN_ID, None)
     elif event == "SetOrchestrationBindingWarning":
         state["binding_warning"] = _normalize_text(normalized_payload.get("warning"))
 
@@ -276,25 +244,6 @@ def publish_end(run_id: str, source: str = "multi") -> dict[str, Any]:
             state,
             event="EndOrchestrationTaskState",
             payload={"run_id": _normalize_run_id(run_id)},
-            source=source,
-        )
-        save(state)
-        return result
-
-
-def publish_legacy_state(
-    running: Any,
-    status_header: str | None = None,
-    source: str = "multi",
-) -> dict[str, Any]:
-    with _locked_state_rw() as (state, save):
-        result = _append_event(
-            state,
-            event="SetOrchestrationTaskState",
-            payload={
-                "running": running,
-                "status_header": _normalize_text(status_header),
-            },
             source=source,
         )
         save(state)

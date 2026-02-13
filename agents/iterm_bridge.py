@@ -29,7 +29,7 @@ _SHORT_AGENT_ID_RE = re.compile(r"^a(\d{2})$", re.IGNORECASE)
 _CANONICAL_AGENT_ID_RE = re.compile(r"^agent_(\d{2})$", re.IGNORECASE)
 
 # iTerm API / subprocess 调用最大等待秒数
-_ITERM_TIMEOUT_SEC = int(os.getenv("ITERM_TIMEOUT_SEC", "15"))
+_ITERM_TIMEOUT_SEC = int(os.getenv("ITERM_TIMEOUT_SEC", "60"))
 
 
 def _sync_tui_binding_warning(rebind_error: str = "", *, warning_suppressed: bool = False) -> None:
@@ -53,20 +53,42 @@ def _sync_tui_binding_warning(rebind_error: str = "", *, warning_suppressed: boo
 
 
 def _iterm_run_with_timeout(coroutine_fn, timeout: float = 0) -> None:
-    """在独立线程中执行 iterm2.run_until_complete，超时则放弃。"""
+    """在独立线程中执行 iterm2.run_until_complete，超时则放弃。
+
+    关键安全措施：
+    - 超时后通过 cancel_futures 取消挂起的 Future
+    - 工作线程中创建的 event loop 在 finally 中被强制关闭
+    - 避免 fd 泄漏到主进程（websocket / unix socket）
+    """
+    import asyncio
     import concurrent.futures
     import iterm2
 
     effective_timeout = timeout if timeout > 0 else _ITERM_TIMEOUT_SEC
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(iterm2.run_until_complete, coroutine_fn)
+    def _guarded_run(coro_fn):
+        """在工作线程中运行 iterm2，结束后关闭 event loop。"""
         try:
-            future.result(timeout=effective_timeout)
-        except concurrent.futures.TimeoutError:
-            raise TimeoutError(
-                f"iTerm API 调用超时 ({effective_timeout}s)"
-            )
+            iterm2.run_until_complete(coro_fn)
+        finally:
+            # 无论成功/失败/取消，确保关闭本线程的 event loop 及其 fd
+            try:
+                loop = asyncio.get_event_loop()
+                if loop and not loop.is_closed():
+                    loop.call_soon_threadsafe(loop.stop)
+                    loop.close()
+            except Exception:
+                pass
+
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(_guarded_run, coroutine_fn)
+    try:
+        future.result(timeout=effective_timeout)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        raise TimeoutError(f"iTerm API 调用超时 ({effective_timeout}s)")
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 @dataclass
@@ -223,6 +245,10 @@ def _result_header(state_path: Path, targets: list[AgentSession]) -> dict[str, A
 
 
 def _is_direct_mode_enabled() -> bool:
+    # ACP-BUS 主进程绝不走 direct mode（防止 iterm2 fd 泄漏杀死服务）
+    if os.getenv("_ACP_BUS_PROCESS") == "1":
+        return False
+    # 显式设置的 ITERM_IO_BRIDGE_DIRECT 优先级最高
     value = str(os.getenv(DIRECT_MODE_ENV, "") or "").strip().lower()
     if value:
         return value in {"1", "true", "yes", "on"}
@@ -274,6 +300,10 @@ def _run_io_via_subprocess(
     child_env = os.environ.copy()
     child_env[DIRECT_MODE_ENV] = "1"
 
+    # 子进程内部可能执行多次 iTerm API 调用（precheck + rebind + 实际操作 + 可能的重试），
+    # 每次最多 _ITERM_TIMEOUT_SEC 秒。subprocess 超时必须大于内部总耗时。
+    subprocess_timeout = _ITERM_TIMEOUT_SEC * 3 + max(0.0, float(wait_sec)) + 10
+
     try:
         completed = subprocess.run(
             cmd,
@@ -282,14 +312,14 @@ def _run_io_via_subprocess(
             text=True,
             check=False,
             env=child_env,
-            timeout=_ITERM_TIMEOUT_SEC,
+            timeout=subprocess_timeout,
         )
     except subprocess.TimeoutExpired:
         return {
             "ok": False,
             "ts": _now_iso(),
             "action": action,
-            "error": f"subprocess 超时 ({_ITERM_TIMEOUT_SEC}s)",
+            "error": f"subprocess 超时 ({subprocess_timeout:.0f}s)",
         }
 
     stdout = (completed.stdout or "").strip()
@@ -1306,6 +1336,13 @@ def start_session_streamer(session_id: str, publish_fn=None) -> dict[str, Any]:
         except Exception:
             pass
         finally:
+            # 清理本线程的 event loop，防止 fd 泄漏到主进程
+            try:
+                loop = asyncio.get_event_loop()
+                if loop and not loop.is_closed():
+                    loop.close()
+            except Exception:
+                pass
             with _streamer_lock:
                 _active_streamers.pop(session_id, None)
 

@@ -79,54 +79,69 @@ def _iterm_run_with_timeout(coroutine_fn, timeout: float = 0) -> None:
 
     _MAX_AUTH_RETRIES = 2  # 最多尝试 2 次（首次 + 1 次重试）
 
+    def _force_close_loop():
+        """强制关闭当前线程的 event loop，带超时保护。"""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            return
+        if loop is None or loop.is_closed():
+            return
+        # 先取消所有 pending 任务
+        try:
+            pending = asyncio.all_tasks(loop)
+            for t in pending:
+                t.cancel()
+            # 限时等待取消完成（防止 websocket 清理卡死）
+            if pending:
+                loop.run_until_complete(
+                    asyncio.wait_for(
+                        asyncio.gather(*pending, return_exceptions=True),
+                        timeout=3.0,
+                    )
+                )
+        except Exception:
+            pass
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        try:
+            loop.close()
+        except Exception:
+            pass
+
     def _guarded_run(coro_fn):
         """在工作线程中运行 iterm2，结束后关闭 event loop。"""
         _t_thread = _time_mod.monotonic()
         _perf_log.info("[iterm-perf]   _guarded_run entered  thread_setup=%.3fs", _t_thread - _t0)
         last_err = None
-        for attempt in range(_MAX_AUTH_RETRIES):
-            # 每次连接前清除可能过期的 cookie，强制重新获取
-            os.environ.pop("ITERM2_COOKIE", None)
-            os.environ.pop("ITERM2_KEY", None)
-            try:
-                iterm2.run_until_complete(coro_fn)
-                return  # 成功
-            except Exception as e:
-                err_str = str(e)
-                _perf_log.info("[iterm-perf]   _guarded_run attempt=%d  error=%s", attempt + 1, err_str)
-                # 只对 401 auth 错误重试
-                if "401" in err_str and attempt < _MAX_AUTH_RETRIES - 1:
-                    last_err = e
-                    _perf_log.info("[iterm-perf]   _guarded_run retrying after 401...")
-                    continue
-                raise
-            finally:
-                # 优雅关闭 event loop：先取消所有 pending 任务（含 websocket dispatch），
-                # 等待清理完成，再关闭 loop。避免 "Task was destroyed but it is pending" 警告。
+        try:
+            for attempt in range(_MAX_AUTH_RETRIES):
+                # 每次连接前清除可能过期的 cookie，强制重新获取
+                os.environ.pop("ITERM2_COOKIE", None)
+                os.environ.pop("ITERM2_KEY", None)
+                # 401 重试前需要新 event loop（旧的已被 iterm2 关闭或损坏）
+                if attempt > 0:
+                    _force_close_loop()
+                    # iterm2 库会自行创建新 loop，无需手动 new_event_loop
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop and not loop.is_closed():
-                        # 取消所有 pending 任务
-                        pending = asyncio.all_tasks(loop)
-                        for task in pending:
-                            task.cancel()
-                        # 让取消的任务完成清理（websocket.close 等）
-                        if pending:
-                            loop.run_until_complete(
-                                asyncio.gather(*pending, return_exceptions=True)
-                            )
-                        loop.run_until_complete(loop.shutdown_asyncgens())
-                        loop.close()
-                except Exception:
-                    # 兜底：如果优雅关闭失败，强制关闭
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop and not loop.is_closed():
-                            loop.close()
-                    except Exception:
-                        pass
-        if last_err:
-            raise last_err
+                    iterm2.run_until_complete(coro_fn)
+                    return  # 成功
+                except Exception as e:
+                    err_str = str(e)
+                    _perf_log.info("[iterm-perf]   _guarded_run attempt=%d  error=%s", attempt + 1, err_str)
+                    # 只对 401 auth 错误重试
+                    if "401" in err_str and attempt < _MAX_AUTH_RETRIES - 1:
+                        last_err = e
+                        _perf_log.info("[iterm-perf]   _guarded_run retrying after 401...")
+                        continue
+                    raise
+            if last_err:
+                raise last_err
+        finally:
+            # 所有重试结束后统一清理 event loop（仅执行一次，不会阻塞重试）
+            _force_close_loop()
         _perf_log.info("[iterm-perf]   _guarded_run done     elapsed=%.3fs", _time_mod.monotonic() - _t_thread)
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -424,9 +439,13 @@ def _run_io_via_subprocess(
     # 导致 _is_direct_mode_enabled() 返回 False → 递归生成子进程 → 无限挂起。
     child_env.pop("_ACP_BUS_PROCESS", None)
 
-    # 子进程内部可能执行多次 iTerm API 调用（precheck + rebind + 实际操作 + 可能的重试），
-    # 每次最多 _ITERM_TIMEOUT_SEC 秒。subprocess 超时必须大于内部总耗时。
-    subprocess_timeout = _ITERM_TIMEOUT_SEC * 3 + max(0.0, float(wait_sec)) + 10
+    # subprocess 超时必须小于 MCP 工具超时（默认 90s），否则 MCP tool timeout
+    # 后线程仍在等待 subprocess，造成资源泄漏和服务假死。
+    _mcp_tool_timeout = int(os.environ.get("ACP_BUS_TOOL_TIMEOUT_SEC", "90"))
+    subprocess_timeout = min(
+        _ITERM_TIMEOUT_SEC + max(0.0, float(wait_sec)) + 10,
+        max(30, _mcp_tool_timeout - 15),  # 留 15s 余量给 MCP wrapper
+    )
 
     _perf_log.info("[iterm-perf] _run_io_via_subprocess START  action=%s  cmd=%s", action, " ".join(cmd[-4:]))
     _perf_log.info("[iterm-perf]   subprocess python=%s  timeout=%.0fs", sys.executable, subprocess_timeout)
@@ -559,9 +578,14 @@ def _run_iterm_io(
     import iterm2
 
     rows: list[dict[str, Any]] = []
+    _t0 = _time_mod.monotonic()
+    _action = "send" if text is not None else "read"
+    _perf_log.info("[iterm-perf] _run_iterm_io START  action=%s  targets=%d  wait=%.1fs  lines=%d", _action, len(targets), wait_sec, read_lines)
 
     async def main(connection):
+        _tc = _time_mod.monotonic()
         app = await iterm2.async_get_app(connection)
+        _perf_log.info("[iterm-perf]   _run_iterm_io connect+get_app  elapsed=%.3fs", _time_mod.monotonic() - _tc)
         session_rows: list[tuple[Any, dict[str, Any]]] = []
 
         for target in targets:
@@ -585,15 +609,18 @@ def _run_iterm_io(
             session_rows.append((session, row))
 
         if text is not None:
+            _ts = _time_mod.monotonic()
             for session, row in session_rows:
                 try:
                     await session.async_send_text(text)
                     row["sent"] = True
                 except Exception as e:
                     row["error"] = f"send failed: {e}"
+            _perf_log.info("[iterm-perf]   _run_iterm_io send_text  elapsed=%.3fs  targets=%d", _time_mod.monotonic() - _ts, len(session_rows))
 
             if append_enter:
                 await asyncio.sleep(0.2)
+                _te = _time_mod.monotonic()
                 for session, row in session_rows:
                     if row["error"]:
                         continue
@@ -601,11 +628,15 @@ def _run_iterm_io(
                         await session.async_send_text("\r")
                     except Exception as e:
                         row["error"] = f"submit failed: {e}"
+                _perf_log.info("[iterm-perf]   _run_iterm_io send_enter  elapsed=%.3fs", _time_mod.monotonic() - _te)
 
         if text is not None and read_lines > 0 and wait_sec > 0:
+            _perf_log.info("[iterm-perf]   _run_iterm_io wait_start  wait_sec=%.1fs", wait_sec)
             await asyncio.sleep(wait_sec)
+            _perf_log.info("[iterm-perf]   _run_iterm_io wait_done")
 
         if read_lines > 0:
+            _tr = _time_mod.monotonic()
             for session, row in session_rows:
                 if row["error"]:
                     continue
@@ -614,6 +645,7 @@ def _run_iterm_io(
                     row["read"] = True
                 except Exception as e:
                     row["error"] = f"read failed: {e}"
+            _perf_log.info("[iterm-perf]   _run_iterm_io read_output  elapsed=%.3fs  targets=%d", _time_mod.monotonic() - _tr, len(session_rows))
 
     try:
         _iterm_run_with_timeout(main)
@@ -621,6 +653,7 @@ def _run_iterm_io(
         for row in rows:
             if not row.get("error"):
                 row["error"] = f"iTerm API 超时 ({_ITERM_TIMEOUT_SEC}s)"
+    _perf_log.info("[iterm-perf] _run_iterm_io END  action=%s  total_elapsed=%.3fs", _action, _time_mod.monotonic() - _t0)
     return rows
 
 
@@ -1268,6 +1301,8 @@ def send_iterm_input(
     state_file: str = "",
     append_enter: bool = True,
 ) -> dict[str, Any]:
+    _t0 = _time_mod.monotonic()
+    _perf_log.info("[iterm-perf] === send_iterm_input START  agent=%s all=%s wait=%.1fs ===", agent_id or "*", all_agents, wait_sec)
     try:
         normalized_text = str(text)
         normalized_wait_sec = max(0.0, float(wait_sec))
@@ -1285,6 +1320,7 @@ def send_iterm_input(
             )
             if retry_count > 0 and isinstance(result, dict):
                 result["auth_retry_count"] = retry_count
+            _perf_log.info("[iterm-perf] === send_iterm_input END (subprocess)  elapsed=%.3fs ===", _time_mod.monotonic() - _t0)
             return result
 
         state_path = _normalize_state_file(state_file)
@@ -1349,6 +1385,7 @@ def send_iterm_input(
             _sync_tui_binding_warning("")
         return result
     except Exception as e:
+        _perf_log.info("[iterm-perf] === send_iterm_input END (error)  elapsed=%.3fs  err=%s ===", _time_mod.monotonic() - _t0, e)
         return {
             "ok": False,
             "ts": _now_iso(),
@@ -1363,6 +1400,8 @@ def read_iterm_output(
     read_lines: int = 20,
     state_file: str = "",
 ) -> dict[str, Any]:
+    _t0 = _time_mod.monotonic()
+    _perf_log.info("[iterm-perf] === read_iterm_output START  agent=%s all=%s ===", agent_id or "*", all_agents)
     try:
         normalized_read_lines = max(0, int(read_lines))
 
@@ -1378,6 +1417,7 @@ def read_iterm_output(
             )
             if retry_count > 0 and isinstance(result, dict):
                 result["auth_retry_count"] = retry_count
+            _perf_log.info("[iterm-perf] === read_iterm_output END (subprocess)  elapsed=%.3fs ===", _time_mod.monotonic() - _t0)
             return result
 
         state_path = _normalize_state_file(state_file)
@@ -1441,6 +1481,7 @@ def read_iterm_output(
             _sync_tui_binding_warning("")
         return result
     except Exception as e:
+        _perf_log.info("[iterm-perf] === read_iterm_output END (error)  elapsed=%.3fs  err=%s ===", _time_mod.monotonic() - _t0, e)
         return {
             "ok": False,
             "ts": _now_iso(),

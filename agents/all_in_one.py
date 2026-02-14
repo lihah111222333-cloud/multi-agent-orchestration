@@ -1615,6 +1615,10 @@ def main() -> None:
     except ImportError:
         pass
 
+    # 初始化全局日志（控制台 + PostgreSQL 落盘）
+    from logging_setup import setup_global_logging
+    setup_global_logging()
+
     _acquire_singleton_lock_or_exit()
 
     from agents.base_agent import create_agent_server, run_agent

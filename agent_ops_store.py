@@ -1312,7 +1312,10 @@ def delete_command_cards(card_keys: list[str], updated_by: str = "") -> dict[str
 # 便捷：允许 Agent 执行只读查询
 def db_query(sql_text: str, limit: int = 200) -> list[dict[str, Any]]:
     query = _validate_read_only_query(sql_text)
-    wrapped = f"SELECT * FROM ({query}) AS t LIMIT %s"
+    # psycopg3 将 % 视为参数占位符前缀，Agent SQL 中的 literal %（如 LIKE '%foo%'）
+    # 必须转义为 %%，否则会触发 "only '%s' ... are allowed as placeholders" 错误。
+    escaped = query.replace("%", "%%")
+    wrapped = f"SELECT * FROM ({escaped}) AS t LIMIT %s"
     with connect_cursor(row_as_dict=True, autocommit=False) as cur:
         cur.execute("SET LOCAL transaction_read_only = on")
         cur.execute(wrapped, (normalize_limit(limit, default=200),))

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import shlex
 import sys
 from datetime import datetime, timezone
@@ -38,15 +39,27 @@ def _grid_for_count(tab_count: int) -> tuple[int, int]:
         8: (4, 2),
         12: (4, 3),
     }
-    if tab_count not in grid_map:
-        raise ValueError(f"不支持的 pane 数量: {tab_count}")
-    return grid_map[tab_count]
+    if tab_count in grid_map:
+        return grid_map[tab_count]
+
+    # 通用兜底：按接近正方形网格分配，支持任意 pane 数。
+    cols = max(1, math.ceil(math.sqrt(max(1, int(tab_count)))))
+    rows = max(1, math.ceil(max(1, int(tab_count)) / cols))
+    return cols, rows
 
 
-def _build_start_command(template: str, index: int, agent_id: str, agent_name: str) -> str:
+def _build_start_command(
+    template: str,
+    index: int,
+    local_index: int,
+    agent_id: str,
+    agent_name: str,
+) -> str:
     values = {
         "index": index,
         "index_padded": f"{index:02d}",
+        "local_index": local_index,
+        "local_index_padded": f"{local_index:02d}",
         "agent_id": agent_id,
         "agent_id_quoted": shlex.quote(agent_id),
         "agent_name": agent_name,
@@ -55,10 +68,18 @@ def _build_start_command(template: str, index: int, agent_id: str, agent_name: s
     return template.format(**values)
 
 
-def _build_identity_prompt(template: str, index: int, agent_id: str, agent_name: str) -> str:
+def _build_identity_prompt(
+    template: str,
+    index: int,
+    local_index: int,
+    agent_id: str,
+    agent_name: str,
+) -> str:
     values = {
         "index": index,
         "index_padded": f"{index:02d}",
+        "local_index": local_index,
+        "local_index_padded": f"{local_index:02d}",
         "agent_id": agent_id,
         "agent_name": agent_name,
     }
@@ -87,6 +108,7 @@ def _build_badge(index: int) -> str:
 
 def _build_agent_entries(
     count: int,
+    start_index: int,
     start_template: str,
     name_prefix: str,
     project_root: Path,
@@ -96,26 +118,42 @@ def _build_agent_entries(
     entries: list[dict[str, Any]] = []
     template = str(identity_template or "").strip()
 
-    for index in range(1, count + 1):
-        agent_id = f"agent_{index:02d}"
-        agent_name = f"{name_prefix} {index:02d}"
-        start_cmd = _build_start_command(start_template, index, agent_id, agent_name)
+    base = max(1, int(start_index))
+    for offset in range(count):
+        local_index = offset + 1
+        logical_index = base + offset
+        agent_id = f"agent_{logical_index:02d}"
+        agent_name = f"{name_prefix} {logical_index:02d}"
+        start_cmd = _build_start_command(
+            start_template,
+            logical_index,
+            local_index,
+            agent_id,
+            agent_name,
+        )
         shell_cmd = _build_shell_command(project_root=project_root, start_cmd=start_cmd)
 
         identity_prompt = ""
         if inject_identity and template:
-            identity_prompt = _build_identity_prompt(template, index, agent_id, agent_name)
+            identity_prompt = _build_identity_prompt(
+                template,
+                logical_index,
+                local_index,
+                agent_id,
+                agent_name,
+            )
 
         entries.append(
             {
-                "index": index,
+                "index": logical_index,
+                "local_index": local_index,
                 "agent_id": agent_id,
                 "agent_name": agent_name,
                 "start_cmd": start_cmd,
                 "shell_cmd": shell_cmd,
                 "session_label": _build_session_label(agent_id, agent_name),
                 "tab_label": _build_session_label(agent_id, agent_name),
-                "badge": _build_badge(index),
+                "badge": _build_badge(logical_index),
                 "identity_prompt": identity_prompt,
             }
         )
@@ -466,9 +504,10 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description="iTerm 动态启动 Agent")
     parser.add_argument("--task", default="", help="任务描述（用于自动决定数量）")
-    parser.add_argument("--tabs", type=int, default=None, help="手动指定数量，只允许 4/5/6/8/12")
+    parser.add_argument("--tabs", type=int, default=None, help="手动指定数量（正整数）")
     parser.add_argument("--min-tabs", type=int, default=4, help="最小数量（默认 4）")
     parser.add_argument("--max-tabs", type=int, default=12, help="最大数量（默认 12）")
+    parser.add_argument("--start-index", type=int, default=1, help="Agent 编号起始值（默认 1）")
     parser.add_argument("--config", default=str(root / "config.json"), help="拓扑配置路径")
     parser.add_argument("--name-prefix", default="Runtime Agent", help="Agent 名称前缀")
     parser.add_argument("--start-template", default=_default_template(), help="启动命令模板")
@@ -495,7 +534,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--identity-template",
         default=_default_identity_template(),
-        help="身份注入提示词模板，可用变量: {index}/{index_padded}/{agent_id}/{agent_name}",
+        help="身份注入提示词模板，可用变量: {index}/{index_padded}/{local_index}/{local_index_padded}/{agent_id}/{agent_name}",
     )
     parser.add_argument("--identity-delay", type=float, default=1.6, help="身份注入前等待秒数（默认 1.6）")
     parser.add_argument(
@@ -512,6 +551,8 @@ def parse_args() -> argparse.Namespace:
 
     if float(args.identity_delay) < 0:
         parser.error("identity-delay 不能小于 0")
+    if int(args.start_index) < 1:
+        parser.error("start-index 必须 >= 1")
 
     return args
 
@@ -531,6 +572,7 @@ def main() -> int:
     count = int(decision["tab_count"])
     entries = _build_agent_entries(
         count,
+        start_index=int(args.start_index),
         start_template=args.start_template,
         name_prefix=args.name_prefix,
         project_root=root,
@@ -558,8 +600,6 @@ def main() -> int:
     identity_delay_sec = max(0.0, float(args.identity_delay))
 
     if args.layout == "panes":
-        if count not in {4, 6, 8, 12}:
-            raise SystemExit("panes 布局仅支持 4/6/8/12；若使用 5 个代理请改用 --layout tabs")
         launch_meta = _run_iterm_panes(entries, pane_count=count, identity_delay_sec=identity_delay_sec)
     else:
         launch_meta = _run_iterm_tabs(entries, identity_delay_sec=identity_delay_sec)

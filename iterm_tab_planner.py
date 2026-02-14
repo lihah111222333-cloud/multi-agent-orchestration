@@ -1,8 +1,8 @@
 """iTerm Agent Tab 数量规划器
 
 规则：
-- 只允许 4/5/6/8/12
-- 最少 4
+- 手动指定 tabs 时允许任意正整数（受 min/max 约束）
+- 自动决策仍沿用推荐档位 4/6/8/12
 - 可根据任务描述 + 当前拓扑自动决策
 """
 
@@ -12,13 +12,15 @@ import json
 from pathlib import Path
 from typing import Optional
 
-ALLOWED_TAB_COUNTS = (4, 5, 6, 8, 12)
+RECOMMENDED_TAB_COUNTS = (4, 5, 6, 8, 12)
 
 
 def _allowed_in_range(min_tabs: int, max_tabs: int) -> list[int]:
-    values = [x for x in ALLOWED_TAB_COUNTS if min_tabs <= x <= max_tabs]
+    values = [x for x in RECOMMENDED_TAB_COUNTS if min_tabs <= x <= max_tabs]
     if not values:
-        return [4]
+        if min_tabs == max_tabs:
+            return [min_tabs]
+        return [min_tabs, max_tabs]
     return values
 
 
@@ -44,8 +46,8 @@ def _pick_by_score(score: int, min_tabs: int, max_tabs: int) -> int:
 
 
 def normalize_requested_tabs(requested_tabs: int, min_tabs: int = 4, max_tabs: int = 12) -> int:
-    if requested_tabs not in ALLOWED_TAB_COUNTS:
-        raise ValueError("tabs 仅允许 4/5/6/8/12")
+    if requested_tabs <= 0:
+        raise ValueError("tabs 必须是正整数")
     if requested_tabs < min_tabs:
         raise ValueError(f"tabs 不可小于最小值: {min_tabs}")
     if requested_tabs > max_tabs:
@@ -125,8 +127,8 @@ def planner_decide_tab_count(
 ) -> dict:
     """返回 {tab_count, reason, task_tabs, arch_tabs}。"""
 
-    min_tabs = max(min_tabs, 4)
-    max_tabs = min(max_tabs, 12)
+    min_tabs = max(1, int(min_tabs))
+    max_tabs = max(min_tabs, int(max_tabs))
 
     if requested_tabs is not None:
         tabs = normalize_requested_tabs(requested_tabs, min_tabs=min_tabs, max_tabs=max_tabs)

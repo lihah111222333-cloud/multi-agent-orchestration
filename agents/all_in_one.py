@@ -8,6 +8,7 @@ import inspect
 import logging
 import os
 import sys
+import traceback as _traceback_mod
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,6 +17,30 @@ from datetime import datetime, date, timezone
 from decimal import Decimal
 
 _logger = logging.getLogger("acp_bus")
+
+
+def _record_bus_exc(
+    category: str,
+    severity: str,
+    source: str,
+    message: str,
+    tool_name: str = "",
+    extra: dict | None = None,
+) -> None:
+    """Best-effort write to bus_exception_logs (never raises)."""
+    try:
+        from bus_log import record_bus_exception
+        record_bus_exception(
+            category=category,
+            severity=severity,
+            source=source,
+            message=message,
+            traceback=_traceback_mod.format_exc(),
+            tool_name=tool_name,
+            extra=extra,
+        )
+    except Exception:
+        pass
 
 try:
     import fcntl
@@ -1481,6 +1506,14 @@ def _make_hot_reloadable(fn_name: str):
                 "[acp-bus] tool %s TIMEOUT after %.1fs (limit=%ds)",
                 fn_name, elapsed, _TOOL_TIMEOUT_SEC,
             )
+            _record_bus_exc(
+                category="tool_timeout",
+                severity="error",
+                source="_make_hot_reloadable",
+                message=f"tool {fn_name} timeout after {elapsed:.1f}s (limit={_TOOL_TIMEOUT_SEC}s)",
+                tool_name=fn_name,
+                extra={"elapsed_sec": round(elapsed, 2), "limit_sec": _TOOL_TIMEOUT_SEC},
+            )
             return json.dumps(
                 {"ok": False, "error": f"工具 {fn_name} 超时 ({_TOOL_TIMEOUT_SEC}s)"},
                 ensure_ascii=False,
@@ -1490,6 +1523,14 @@ def _make_hot_reloadable(fn_name: str):
             _logger.error(
                 "[acp-bus] tool %s ERROR after %.1fs: %s",
                 fn_name, elapsed, exc,
+            )
+            _record_bus_exc(
+                category="tool_error",
+                severity="error",
+                source="_make_hot_reloadable",
+                message=f"tool {fn_name} error after {elapsed:.1f}s: {exc}",
+                tool_name=fn_name,
+                extra={"elapsed_sec": round(elapsed, 2), "error_type": type(exc).__name__},
             )
             return json.dumps(
                 {"ok": False, "error": f"工具 {fn_name} 异常: {exc}"},
@@ -1550,9 +1591,16 @@ def _patch_session_auto_rebind(server) -> None:
         if not session_id or session_id in mgr._server_instances:
             try:
                 await _original_handle_request(scope, receive, send)
-            except (ClientDisconnect, ConnectionError, OSError):
+            except (ClientDisconnect, ConnectionError, OSError) as _disc_exc:
                 _logger.debug(
                     "[acp-bus] client disconnected (active session), ignoring"
+                )
+                _record_bus_exc(
+                    category="client_disconnect",
+                    severity="warning",
+                    source="_patch_session_auto_rebind",
+                    message=f"client disconnected (active session): {_disc_exc}",
+                    extra={"session_id": (session_id or "")[:16]},
                 )
             return
 
@@ -1603,6 +1651,13 @@ def _patch_session_auto_rebind(server) -> None:
                 _logger.warning(
                     "[acp-bus] stale session %s → rejected (method=%s), client should re-initialize",
                     session_id[:16], method or "unknown",
+                )
+                _record_bus_exc(
+                    category="session_stale",
+                    severity="warning",
+                    source="_patch_session_auto_rebind",
+                    message=f"stale session {session_id[:16]} rejected (method={method or 'unknown'})",
+                    extra={"session_id": session_id[:16], "method": method or "unknown"},
                 )
             resp = JSONResponse(
                 {

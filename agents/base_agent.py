@@ -93,4 +93,17 @@ def run_agent(server: FastMCP, transport: str = "stdio") -> None:
                 )
             except Exception:
                 pass
+            # 写入消息总线异常日志
+            try:
+                from bus_log import record_bus_exception
+                record_bus_exception(
+                    category="crash_restart",
+                    severity="critical",
+                    source="run_agent",
+                    message=f"crash #{attempt}/{max_restarts}: {exc}",
+                    traceback=traceback.format_exc(),
+                    extra={"attempt": attempt, "max_restarts": max_restarts, "delay_sec": delay},
+                )
+            except Exception:
+                pass
             time.sleep(delay)

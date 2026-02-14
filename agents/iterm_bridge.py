@@ -59,12 +59,39 @@ def _sync_tui_binding_warning(rebind_error: str = "", *, warning_suppressed: boo
         pass
 
 
+def _pre_acquire_iterm_cookie() -> bool:
+    """通过 AppleScript 预获取 iTerm cookie，设置到 os.environ 中。
+
+    Returns:
+        True  — 成功获取了新鲜 cookie
+        False — 获取失败（后续 iterm2 库仍会尝试）
+    """
+    _t0 = _time_mod.monotonic()
+    try:
+        import iterm2.auth
+        result = iterm2.auth.authenticate()
+        _perf_log.info(
+            "[iterm-perf]   _pre_acquire_iterm_cookie  ok=%s  elapsed=%.3fs  cookie=%s",
+            result,
+            _time_mod.monotonic() - _t0,
+            "set" if os.environ.get("ITERM2_COOKIE") else "unset",
+        )
+        return bool(result)
+    except Exception as e:
+        _perf_log.info(
+            "[iterm-perf]   _pre_acquire_iterm_cookie  FAILED  elapsed=%.3fs  err=%s",
+            _time_mod.monotonic() - _t0,
+            e,
+        )
+        return False
+
+
 def _iterm_run_with_timeout(coroutine_fn, timeout: float = 0) -> None:
     """在独立线程中执行 iterm2.run_until_complete，超时则放弃。
 
     关键安全措施：
-    - 连接前清除旧 ITERM2_COOKIE/KEY（防止 one-time-use cookie 过期导致 401）
-    - 401 时自动重试 1 次（重新获取 cookie）
+    - 首次连接时预获取 cookie（通过 AppleScript），避免无凭证连接
+    - 401 时清除旧 cookie 并重新获取，带递增退避
     - 超时后通过 cancel_futures 取消挂起的 Future
     - 工作线程中创建的 event loop 在 finally 中被强制关闭
     - 避免 fd 泄漏到主进程（websocket / unix socket）
@@ -77,7 +104,7 @@ def _iterm_run_with_timeout(coroutine_fn, timeout: float = 0) -> None:
     _t0 = _time_mod.monotonic()
     _perf_log.info("[iterm-perf] _iterm_run_with_timeout START  timeout=%.1fs  coro=%s", effective_timeout, getattr(coroutine_fn, "__qualname__", repr(coroutine_fn)))
 
-    _MAX_AUTH_RETRIES = 2  # 最多尝试 2 次（首次 + 1 次重试）
+    _MAX_AUTH_RETRIES = 3  # 最多尝试 3 次（首次 + 2 次重试）
 
     def _force_close_loop():
         """强制关闭当前线程的 event loop，带超时保护。"""
@@ -118,15 +145,23 @@ def _iterm_run_with_timeout(coroutine_fn, timeout: float = 0) -> None:
         last_err = None
         try:
             for attempt in range(_MAX_AUTH_RETRIES):
-                # 每次连接前清除可能过期的 cookie，强制重新获取
-                os.environ.pop("ITERM2_COOKIE", None)
-                os.environ.pop("ITERM2_KEY", None)
-                # 401 重试前需要新 event loop（旧的已被 iterm2 关闭或损坏）
-                if attempt > 0:
+                if attempt == 0:
+                    # 首次：保留已有 cookie 或预获取新 cookie
+                    if not os.environ.get("ITERM2_COOKIE"):
+                        _pre_acquire_iterm_cookie()
+                else:
+                    # 重试：清除旧 cookie，等待后重新获取
+                    os.environ.pop("ITERM2_COOKIE", None)
+                    os.environ.pop("ITERM2_KEY", None)
+                    backoff = 0.5 * attempt
+                    _perf_log.info("[iterm-perf]   _guarded_run retry backoff=%.1fs", backoff)
+                    _time_mod.sleep(backoff)
+                    _pre_acquire_iterm_cookie()
                     _force_close_loop()
                     # iterm2 库会自行创建新 loop，无需手动 new_event_loop
                 try:
                     iterm2.run_until_complete(coro_fn)
+                    _perf_log.info("[iterm-perf]   _guarded_run done  attempt=%d  elapsed=%.3fs", attempt + 1, _time_mod.monotonic() - _t_thread)
                     return  # 成功
                 except Exception as e:
                     err_str = str(e)
@@ -142,7 +177,6 @@ def _iterm_run_with_timeout(coroutine_fn, timeout: float = 0) -> None:
         finally:
             # 所有重试结束后统一清理 event loop（仅执行一次，不会阻塞重试）
             _force_close_loop()
-        _perf_log.info("[iterm-perf]   _guarded_run done     elapsed=%.3fs", _time_mod.monotonic() - _t_thread)
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     future = pool.submit(_guarded_run, coroutine_fn)

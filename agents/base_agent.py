@@ -1,9 +1,11 @@
 """Agent 基类 — MCP Server 工厂（支持崩溃自动重启）"""
 
 import errno
+import logging
 import os
 import sys
 import time
+import traceback
 
 from mcp.server.fastmcp import FastMCP
 
@@ -81,4 +83,14 @@ def run_agent(server: FastMCP, transport: str = "stdio") -> None:
                 f"restarting in {delay}s …",
                 file=sys.stderr,
             )
+            # 结构化日志（PostgreSQL 落盘），方便事后排查
+            try:
+                _crash_logger = logging.getLogger("acp_bus")
+                _crash_logger.error(
+                    "[acp-bus] crash #%d/%d: %s\n%s",
+                    attempt, max_restarts, exc,
+                    traceback.format_exc(),
+                )
+            except Exception:
+                pass
             time.sleep(delay)

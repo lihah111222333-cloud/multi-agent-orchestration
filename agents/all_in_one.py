@@ -1536,10 +1536,11 @@ def _patch_session_auto_rebind(server) -> None:
         return
 
     _original_handle_request = mgr.handle_request
+    _STALE_WARNED_MAX = 2048  # 防止长期运行时内存泄漏
     _stale_warned: set[str] = set()  # 避免日志洪水，每个过期 session 只警告一次
 
     async def _auto_rebind_handle_request(scope, receive, send):
-        from starlette.requests import Request
+        from starlette.requests import Request, ClientDisconnect
         from starlette.responses import JSONResponse
 
         request = Request(scope, receive)
@@ -1547,13 +1548,22 @@ def _patch_session_auto_rebind(server) -> None:
 
         # 仅处理过期 session
         if not session_id or session_id in mgr._server_instances:
-            await _original_handle_request(scope, receive, send)
+            try:
+                await _original_handle_request(scope, receive, send)
+            except (ClientDisconnect, ConnectionError, OSError):
+                _logger.debug(
+                    "[acp-bus] client disconnected (active session), ignoring"
+                )
             return
 
         # 读取 body 判断是否为 initialize 请求
         try:
             body = await request.body()
             body_json = json.loads(body) if body else {}
+        except ClientDisconnect:
+            # 客户端在 body 传输中断连，安全忽略
+            _logger.debug("[acp-bus] client disconnected during body read")
+            return
         except Exception:
             body_json = {}
 
@@ -1578,10 +1588,17 @@ def _patch_session_auto_rebind(server) -> None:
             async def _replay_receive():
                 return {"type": "http.request", "body": body_bytes, "more_body": False}
 
-            await _original_handle_request(new_scope, _replay_receive, send)
+            try:
+                await _original_handle_request(new_scope, _replay_receive, send)
+            except (ClientDisconnect, ConnectionError, OSError):
+                _logger.debug(
+                    "[acp-bus] client disconnected during re-initialize"
+                )
         else:
             # 非 initialize 请求：直接返回 JSON-RPC error，不创建 transport
             if session_id not in _stale_warned:
+                if len(_stale_warned) >= _STALE_WARNED_MAX:
+                    _stale_warned.clear()  # 简单重置，避免无限增长
                 _stale_warned.add(session_id)
                 _logger.warning(
                     "[acp-bus] stale session %s → rejected (method=%s), client should re-initialize",
@@ -1598,7 +1615,12 @@ def _patch_session_auto_rebind(server) -> None:
                 },
                 status_code=404,
             )
-            await resp(scope, receive, send)
+            try:
+                await resp(scope, receive, send)
+            except (ClientDisconnect, ConnectionError, OSError):
+                _logger.debug(
+                    "[acp-bus] client disconnected during stale-session error response"
+                )
 
     mgr.handle_request = _auto_rebind_handle_request
     _logger.info("[acp-bus] session auto-rebind 补丁已安装")

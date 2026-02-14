@@ -1696,6 +1696,10 @@ def main() -> None:
     from logging_setup import setup_global_logging
     setup_global_logging()
 
+    # 应用 MCP 库运行时补丁（修复 ClientDisconnect 崩溃）
+    from mcp_patches import apply_mcp_patches
+    apply_mcp_patches()
+
     _acquire_singleton_lock_or_exit()
 
     from agents.base_agent import create_agent_server, run_agent

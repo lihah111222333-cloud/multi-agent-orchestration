@@ -176,6 +176,14 @@ def ensure_schema() -> None:
         return
 
     _require_driver()
+
+    # 本地 PG 未运行时自动启动（仅 localhost，幂等）
+    try:
+        from db.pg_autostart import auto_start_postgres
+        auto_start_postgres()
+    except Exception as _auto_err:
+        _logger.debug("pg_autostart 跳过: %s", _auto_err)
+
     key = _schema_key()
     if _SCHEMA_READY_KEY == key:
         _SCHEMA_READY = True
@@ -189,11 +197,14 @@ def ensure_schema() -> None:
             _SCHEMA_READY = True
             return
 
-        from db.migrator import MIGRATIONS_DIR, migrate_up
+        from db.migrator import MIGRATIONS_DIR, migrate_up, resync_sequences
 
         applied_migrations = migrate_up()
         if not applied_migrations:
             _logger.debug("schema already up-to-date, no pending sql migrations in %s", MIGRATIONS_DIR)
+            # migrate_up 内部已调用 resync_sequences，但当无新迁移时也需要修复
+            # （如 backup restore 后 schema 版本不变但序列已错位）
+            resync_sequences()
 
         _SCHEMA_READY_KEY = key
         _SCHEMA_READY = True

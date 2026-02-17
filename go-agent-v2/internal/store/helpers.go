@@ -118,15 +118,15 @@ func (q *QueryBuilder) WhereClause() string {
 // collectRows — 泛型行扫描
 // ========================================
 
-// collectRows 使用 pgx.CollectRows + RowToStructByName 扫描行到 struct slice。
+// collectRows 使用 pgx.CollectRows + RowToStructByNameLax 扫描行到 struct slice。
 // 消除 Python 中 9 个 _row_to_* 转换函数 (~156 行)。
 func collectRows[T any](rows pgx.Rows) ([]T, error) {
-	return pgx.CollectRows(rows, pgx.RowToStructByName[T])
+	return pgx.CollectRows(rows, pgx.RowToStructByNameLax[T])
 }
 
 // collectOne 扫描单行，无结果返回 nil。
 func collectOne[T any](rows pgx.Rows) (*T, error) {
-	items, err := pgx.CollectRows(rows, pgx.RowToStructByName[T])
+	items, err := pgx.CollectRows(rows, pgx.RowToStructByNameLax[T])
 	if err != nil {
 		return nil, err
 	}

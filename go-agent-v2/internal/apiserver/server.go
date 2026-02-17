@@ -65,11 +65,12 @@ type Server struct {
 	msgStore *store.AgentMessageStore
 
 	// 资源 Store (编排工具依赖)
-	dagStore    *store.TaskDAGStore
-	cmdStore    *store.CommandCardStore
-	promptStore *store.PromptTemplateStore
-	fileStore   *store.SharedFileStore
-	sysLogStore *store.SystemLogStore
+	dagStore          *store.TaskDAGStore
+	cmdStore          *store.CommandCardStore
+	promptStore       *store.PromptTemplateStore
+	fileStore         *store.SharedFileStore
+	workspaceRunStore *store.WorkspaceRunStore
+	sysLogStore       *store.SystemLogStore
 
 	// Dashboard Store (JSON-RPC dashboard/* 方法)
 	agentStatusStore *store.AgentStatusStore
@@ -79,6 +80,7 @@ type Server struct {
 	taskAckStore     *store.TaskAckStore
 	taskTraceStore   *store.TaskTraceStore
 	skillSvc         *service.SkillService
+	workspaceMgr     *service.WorkspaceManager
 
 	// 连接管理 (支持多 IDE 同时连接)
 	mu     sync.RWMutex
@@ -100,9 +102,21 @@ type Server struct {
 	toolCallMu    sync.Mutex
 	toolCallCount map[string]int64 // toolName → count
 
+	// 文件变更跟踪 (threadId → 当前变更文件列表)
+	fileChangeMu       sync.Mutex
+	fileChangeByThread map[string][]string
+
 	// Per-session 技能配置 (agentID → skills 列表)
 	skillsMu    sync.RWMutex
-	agentSkills map[string][]string // agentID → [“skill1”, “skill2”]
+	agentSkills map[string][]string // agentID → ["skill1", "skill2"]
+
+	// SSE 客户端 (debug 模式浏览器事件推送)
+	sseMu      sync.RWMutex
+	sseClients map[chan []byte]struct{}
+
+	// 通知钩子 (给桌面端桥接使用)
+	notifyHookMu sync.RWMutex
+	notifyHook   func(method string, params any)
 
 	upgrader websocket.Upgrader
 }
@@ -119,15 +133,17 @@ type Deps struct {
 // New 创建服务器。
 func New(deps Deps) *Server {
 	s := &Server{
-		mgr:           deps.Manager,
-		lsp:           deps.LSP,
-		cfg:           deps.Config,
-		methods:       make(map[string]Handler),
-		conns:         make(map[string]*connEntry),
-		pending:       make(map[int64]chan *Response),
-		diagCache:     make(map[string][]lsp.Diagnostic),
-		toolCallCount: make(map[string]int64),
-		agentSkills:   make(map[string][]string),
+		mgr:                deps.Manager,
+		lsp:                deps.LSP,
+		cfg:                deps.Config,
+		methods:            make(map[string]Handler),
+		conns:              make(map[string]*connEntry),
+		pending:            make(map[int64]chan *Response),
+		diagCache:          make(map[string][]lsp.Diagnostic),
+		toolCallCount:      make(map[string]int64),
+		fileChangeByThread: make(map[string][]string),
+		agentSkills:        make(map[string][]string),
+		sseClients:         make(map[chan []byte]struct{}),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: checkLocalOrigin,
 		},
@@ -138,6 +154,7 @@ func New(deps Deps) *Server {
 		s.cmdStore = store.NewCommandCardStore(deps.DB)
 		s.promptStore = store.NewPromptTemplateStore(deps.DB)
 		s.fileStore = store.NewSharedFileStore(deps.DB)
+		s.workspaceRunStore = store.NewWorkspaceRunStore(deps.DB)
 		s.sysLogStore = store.NewSystemLogStore(deps.DB)
 		// Dashboard stores
 		s.agentStatusStore = store.NewAgentStatusStore(deps.DB)
@@ -146,6 +163,24 @@ func New(deps Deps) *Server {
 		s.busLogStore = store.NewBusLogStore(deps.DB)
 		s.taskAckStore = store.NewTaskAckStore(deps.DB)
 		s.taskTraceStore = store.NewTaskTraceStore(deps.DB)
+
+		if s.cfg != nil {
+			maxFileBytes := int64(s.cfg.OrchestrationWorkspaceMaxFileBytes)
+			maxTotalBytes := int64(s.cfg.OrchestrationWorkspaceMaxTotalBytes)
+			workspaceMgr, mgrErr := service.NewWorkspaceManager(
+				s.workspaceRunStore,
+				s.cfg.OrchestrationWorkspaceRoot,
+				s.cfg.OrchestrationWorkspaceMaxFiles,
+				maxFileBytes,
+				maxTotalBytes,
+			)
+			if mgrErr != nil {
+				slog.Warn("app-server: workspace manager unavailable", "error", mgrErr)
+			} else {
+				s.workspaceMgr = workspaceMgr
+				slog.Info("app-server: workspace manager enabled", "root", workspaceMgr.RootDir())
+			}
+		}
 		slog.Info("app-server: message persistence + resource tools + dashboard enabled")
 	}
 	// Skills service (filesystem, no DB required)
@@ -161,12 +196,16 @@ func New(deps Deps) *Server {
 // InvokeMethod 内部调用 JSON-RPC 方法 (不经过 WebSocket)。
 //
 // 用于 Wails UI 等 Go 进程内客户端直接调用后端功能。
+// 复用 dispatchRequest 统一分发逻辑 (DRY)。
 func (s *Server) InvokeMethod(ctx context.Context, method string, params json.RawMessage) (any, error) {
-	handler, ok := s.methods[method]
-	if !ok {
-		return nil, fmt.Errorf("unknown method: %s", method)
+	resp := s.dispatchRequest(ctx, 1, method, params)
+	if resp == nil {
+		return nil, nil
 	}
-	return handler(ctx, params)
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s (code %d)", resp.Error.Message, resp.Error.Code)
+	}
+	return resp.Result, nil
 }
 
 // checkLocalOrigin 仅允许 localhost 来源的 WebSocket 连接。
@@ -201,19 +240,23 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	host = strings.TrimPrefix(host, "wss://")
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleUpgrade)
+	mux.HandleFunc("/", s.handleUpgrade)    // WebSocket
+	mux.HandleFunc("/rpc", s.handleHTTPRPC) // HTTP JSON-RPC (调试模式)
+	mux.HandleFunc("/events", s.handleSSE)  // SSE 事件流 (调试模式)
 
 	srv := &http.Server{
 		Addr:        host,
-		Handler:     mux,
+		Handler:     corsMiddleware(mux),
 		BaseContext: func(_ net.Listener) context.Context { return ctx },
 	}
 
-	// 优雅关闭
+	// 优雅关闭: 给活跃连接 5 秒完成处理
 	go func() {
 		<-ctx.Done()
 		slog.Info("app-server: shutting down")
-		_ = srv.Close()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
 	}()
 
 	slog.Info("app-server: listening", "addr", host)
@@ -223,9 +266,42 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	return nil
 }
 
-// Notify 向所有连接广播 JSON-RPC 通知。
+// SetNotifyHook 设置 Notify 事件钩子。
+//
+// 用于桌面端桥接: apiserver 事件 -> Wails runtime event。
+func (s *Server) SetNotifyHook(h func(method string, params any)) {
+	s.notifyHookMu.Lock()
+	s.notifyHook = h
+	s.notifyHookMu.Unlock()
+}
+
+// Notify 向所有连接广播 JSON-RPC 通知 (WebSocket + SSE)。
 func (s *Server) Notify(method string, params any) {
+	s.notifyHookMu.RLock()
+	hook := s.notifyHook
+	s.notifyHookMu.RUnlock()
+	if hook != nil {
+		hook(method, params)
+	}
+
 	notif := newNotification(method, params)
+
+	// SSE 广播 — 将事件推给浏览器调试客户端
+	s.sseMu.RLock()
+	sseCount := len(s.sseClients)
+	if sseCount > 0 {
+		data, _ := json.Marshal(notif)
+		slog.Debug("sse: broadcasting", "method", method, "clients", sseCount, "data_len", len(data))
+		for ch := range s.sseClients {
+			select {
+			case ch <- data:
+			default:
+				// 客户端跟不上, 丢弃 (非关键)
+				slog.Warn("sse: client channel full, dropping event")
+			}
+		}
+	}
+	s.sseMu.RUnlock()
 	data, err := json.Marshal(notif)
 	if err != nil {
 		return
@@ -318,41 +394,6 @@ func (s *Server) SendRequestToAll(method string, params any) (*Response, error) 
 	return s.SendRequest(firstConn, method, params)
 }
 
-// handleClientResponse 处理客户端对 Server→Client 请求的响应。
-//
-// 当 readLoop 收到一条消息, 且 ID 匹配 pending 请求时, 路由到此。
-func (s *Server) handleClientResponse(resp *Response) bool {
-	if resp.ID == nil {
-		return false
-	}
-
-	// ID 可能是 float64 (JSON number) 或 int64
-	var reqID int64
-	switch v := resp.ID.(type) {
-	case float64:
-		reqID = int64(v)
-	case int64:
-		reqID = v
-	case json.Number:
-		if n, err := v.Int64(); err == nil {
-			reqID = n
-		}
-	default:
-		return false
-	}
-
-	s.pendingMu.Lock()
-	ch, ok := s.pending[reqID]
-	s.pendingMu.Unlock()
-
-	if !ok {
-		return false
-	}
-
-	ch <- resp
-	return true
-}
-
 // handleUpgrade HTTP → WebSocket 升级。
 func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	// 连接数限制
@@ -393,12 +434,74 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	s.readLoop(r.Context(), entry, connID)
 }
 
+// rpcEnvelope 统一信封: 一次 Unmarshal 路由所有消息类型。
+//
+// 所有字段使用 json.RawMessage 延迟解析, 避免任何中间分配:
+//   - ID: 保留原始 JSON 字节，response 分支直接解析为 int64 (零 alloc)
+//   - Params/Result/Error: 按需解析
+type rpcEnvelope struct {
+	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  json.RawMessage `json:"error,omitempty"`
+	Params json.RawMessage `json:"params,omitempty"`
+}
+
+// parseIntID 从 JSON 原始字节直接解析 int64，无需 json.Unmarshal。
+//
+// 仅处理纯整数 "123"，不处理浮点/字符串/null。
+// 高并发热路径: 零分配、零反射。
+func parseIntID(raw json.RawMessage) (int64, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, false
+	}
+	// 快速路径: 纯数字字节 (JSON integer)
+	var n int64
+	neg := false
+	i := 0
+	if raw[0] == '-' {
+		neg = true
+		i = 1
+	}
+	if i >= len(raw) {
+		return 0, false
+	}
+	for ; i < len(raw); i++ {
+		c := raw[i]
+		if c < '0' || c > '9' {
+			return 0, false // 非整数 (浮点/字符串/对象)
+		}
+		n = n*10 + int64(c-'0')
+	}
+	if neg {
+		n = -n
+	}
+	return n, true
+}
+
+// rawIDtoAny 将 json.RawMessage ID 转换为 Go any 值。
+//
+// 用于 dispatchRequest 路径 (需要 any 类型 ID 传给 Response)。
+func rawIDtoAny(raw json.RawMessage) any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	// 优先尝试 int64 (我们自己的 ID 都是整数)
+	if n, ok := parseIntID(raw); ok {
+		return n
+	}
+	// fallback: 字符串 ID ("abc")
+	var v any
+	_ = json.Unmarshal(raw, &v)
+	return v
+}
+
 // readLoop 持续读取 WebSocket 消息并分发。
 //
 // 消息分为三类:
-//  1. Client→Server 请求 (有 method + id): 路由到 handleMessage
-//  2. Client→Server 通知 (有 method, 无 id): 路由到 handleMessage
-//  3. Client 对 Server 请求的响应 (有 id, 无 method): 路由到 handleClientResponse
+//  1. Client→Server 请求 (有 method + id): 路由到 dispatchRequest
+//  2. Client→Server 通知 (有 method, 无 id): 路由到 dispatchRequest
+//  3. Client 对 Server 请求的响应 (有 id, 无 method): 直接匹配 pending map
 func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) {
 	for {
 		_, message, err := entry.ws.ReadMessage()
@@ -409,27 +512,48 @@ func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) 
 			return
 		}
 
-		// 先尝试解析为响应 (§ 二 Server→Client 请求的回复)
-		var probe struct {
-			ID     any    `json:"id"`
-			Method string `json:"method"`
-			Result any    `json:"result,omitempty"`
-			Error  any    `json:"error,omitempty"`
+		// 单次 Unmarshal: 路由 + 延迟解析
+		var env rpcEnvelope
+		if err := json.Unmarshal(message, &env); err != nil {
+			data, _ := json.Marshal(newError(nil, CodeParseError, "parse error: "+err.Error()))
+			_ = entry.writeMsg(websocket.TextMessage, data)
+			continue
 		}
-		if err := json.Unmarshal(message, &probe); err == nil {
-			// 有 id + 无 method + (有 result 或 error) = 客户端响应
-			if probe.ID != nil && probe.Method == "" && (probe.Result != nil || probe.Error != nil) {
-				var resp Response
-				if err := json.Unmarshal(message, &resp); err == nil {
-					if s.handleClientResponse(&resp) {
-						continue
+
+		// 快速路径: 客户端响应 (有 id + 无 method + 有 result/error)
+		// 直接从 raw bytes 解析 int64 ID → pending map 查找, 零 alloc
+		if len(env.ID) > 0 && string(env.ID) != "null" && env.Method == "" && (len(env.Result) > 0 || len(env.Error) > 0) {
+			if reqID, ok := parseIntID(env.ID); ok {
+				s.pendingMu.Lock()
+				ch, found := s.pending[reqID]
+				s.pendingMu.Unlock()
+
+				if found {
+					resp := &Response{
+						JSONRPC: jsonrpcVersion,
+						ID:      reqID,
 					}
+					if len(env.Result) > 0 {
+						var result any
+						_ = json.Unmarshal(env.Result, &result)
+						resp.Result = result
+					}
+					if len(env.Error) > 0 {
+						var rpcErr RPCError
+						_ = json.Unmarshal(env.Error, &rpcErr)
+						resp.Error = &rpcErr
+					}
+					select {
+					case ch <- resp:
+					default:
+					}
+					continue
 				}
 			}
 		}
 
-		// 正常请求/通知
-		resp := s.handleMessage(ctx, message)
+		// 正常请求/通知: 复用已解析的字段
+		resp := s.handleParsedMessage(ctx, env)
 		if resp == nil {
 			continue
 		}
@@ -447,56 +571,317 @@ func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) 
 	}
 }
 
-// handleMessage 解析 JSON-RPC 请求并分发到对应 handler。
-func (s *Server) handleMessage(ctx context.Context, raw []byte) *Response {
-	var req Request
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return newError(nil, CodeParseError, "parse error: "+err.Error())
+// handleParsedMessage 复用已解析的 rpcEnvelope 分发请求 (避免二次 Unmarshal)。
+func (s *Server) handleParsedMessage(ctx context.Context, env rpcEnvelope) *Response {
+	return s.dispatchRequest(ctx, rawIDtoAny(env.ID), env.Method, env.Params)
+}
+
+// dispatchRequest 统一的方法分发逻辑。
+func (s *Server) dispatchRequest(ctx context.Context, id any, method string, params json.RawMessage) *Response {
+	if method == "" {
+		return newError(id, CodeInvalidRequest, "method is required")
 	}
 
-	if req.Method == "" {
-		return newError(req.ID, CodeInvalidRequest, "method is required")
-	}
-
-	handler, ok := s.methods[req.Method]
+	handler, ok := s.methods[method]
 	if !ok {
-		if req.ID == nil {
+		if id == nil {
 			slog.Warn("app-server: notification for unregistered method (dropped)",
-				"method", req.Method,
-				"params_len", len(req.Params),
+				"method", method,
+				"params_len", len(params),
 			)
 			return nil
 		}
 		slog.Warn("app-server: request for unregistered method",
-			"method", req.Method,
-			"id", req.ID,
+			"method", method,
+			"id", id,
 		)
-		return newError(req.ID, CodeMethodNotFound, "method not found: "+req.Method)
+		return newError(id, CodeMethodNotFound, "method not found: "+method)
 	}
 
-	result, err := handler(ctx, req.Params)
+	result, err := handler(ctx, params)
 	if err != nil {
-		if req.ID == nil {
+		if id == nil {
 			slog.Warn("app-server: notification handler error (no response sent)",
-				"method", req.Method,
+				"method", method,
 				"error", err,
 			)
 			return nil
 		}
 		slog.Warn("app-server: request handler error",
-			"method", req.Method,
-			"id", req.ID,
+			"method", method,
+			"id", id,
 			"error", err,
 		)
-		return newError(req.ID, CodeInternalError, err.Error())
+		return newError(id, CodeInternalError, err.Error())
 	}
 
 	// JSON-RPC 2.0: 通知 (id == nil) 不返回响应
-	if req.ID == nil {
+	if id == nil {
 		return nil
 	}
 
-	return newResult(req.ID, result)
+	return newResult(id, result)
+}
+
+var payloadExtractKeys = []string{
+	// legacy fields
+	"delta", "content", "message", "command",
+	"exit_code", "reason", "name", "status",
+	"file", "files", "diff", "tool_name",
+	// v2 protocol fields
+	"text", "summary", "args", "arguments", "output",
+	"id", "type", "item_id", "callId", "call_id",
+	"file_path", "path", "chunk", "stream",
+}
+
+func mergePayloadFromMap(payload map[string]any, data map[string]any) {
+	if data == nil {
+		return
+	}
+
+	for _, key := range payloadExtractKeys {
+		v, ok := data[key]
+		if !ok {
+			continue
+		}
+		payload[key] = v
+	}
+
+	if v, ok := data["call_id"]; ok {
+		if _, exists := payload["id"]; !exists {
+			payload["id"] = v
+		}
+	}
+	if v, ok := data["item_id"]; ok {
+		if _, exists := payload["id"]; !exists {
+			payload["id"] = v
+		}
+	}
+	if v, ok := data["file_path"]; ok {
+		if _, exists := payload["file"]; !exists {
+			payload["file"] = v
+		}
+	}
+	if v, ok := data["path"]; ok {
+		if _, exists := payload["file"]; !exists {
+			payload["file"] = v
+		}
+	}
+}
+
+func mergePayloadFields(payload map[string]any, raw json.RawMessage) {
+	if len(raw) == 0 {
+		return
+	}
+
+	var dataMap map[string]any
+	if err := json.Unmarshal(raw, &dataMap); err != nil {
+		return
+	}
+
+	mergePayloadFromMap(payload, dataMap)
+
+	for _, nestedKey := range []string{"msg", "data", "payload"} {
+		v, ok := dataMap[nestedKey]
+		if !ok {
+			continue
+		}
+
+		switch nested := v.(type) {
+		case map[string]any:
+			mergePayloadFromMap(payload, nested)
+		case string:
+			var nestedMap map[string]any
+			if err := json.Unmarshal([]byte(nested), &nestedMap); err == nil {
+				mergePayloadFromMap(payload, nestedMap)
+			}
+		case json.RawMessage:
+			var nestedMap map[string]any
+			if err := json.Unmarshal(nested, &nestedMap); err == nil {
+				mergePayloadFromMap(payload, nestedMap)
+			}
+		case []byte:
+			var nestedMap map[string]any
+			if err := json.Unmarshal(nested, &nestedMap); err == nil {
+				mergePayloadFromMap(payload, nestedMap)
+			}
+		}
+	}
+}
+
+func normalizeFiles(raw any) []string {
+	switch v := raw.(type) {
+	case nil:
+		return nil
+	case string:
+		value := strings.TrimSpace(v)
+		if value == "" {
+			return nil
+		}
+		return []string{value}
+	case []string:
+		return uniqueStrings(v)
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+		return uniqueStrings(out)
+	default:
+		return nil
+	}
+}
+
+func uniqueStrings(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		s := strings.TrimSpace(item)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+func parseFilesFromPatchDelta(delta string) []string {
+	if delta == "" {
+		return nil
+	}
+	lines := strings.Split(delta, "\n")
+	files := make([]string, 0, 4)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "diff --git ") {
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 4 {
+				path := strings.TrimPrefix(parts[3], "b/")
+				if path != "" {
+					files = append(files, path)
+				}
+			}
+			continue
+		}
+		if len(trimmed) > 2 && (strings.HasPrefix(trimmed, "M ") || strings.HasPrefix(trimmed, "A ") || strings.HasPrefix(trimmed, "D ")) {
+			path := strings.TrimSpace(trimmed[2:])
+			if path != "" {
+				files = append(files, path)
+			}
+		}
+	}
+	return uniqueStrings(files)
+}
+
+func firstNonEmpty(files []string) string {
+	for _, file := range files {
+		if strings.TrimSpace(file) != "" {
+			return strings.TrimSpace(file)
+		}
+	}
+	return ""
+}
+
+func toolResultSuccess(result string) bool {
+	value := strings.TrimSpace(strings.ToLower(result))
+	if value == "" {
+		return true
+	}
+	if strings.HasPrefix(value, "error") ||
+		strings.HasPrefix(value, "failed") ||
+		strings.HasPrefix(value, "unknown tool") {
+		return false
+	}
+	if strings.HasPrefix(value, `{"error"`) ||
+		strings.Contains(value, `"error":`) {
+		return false
+	}
+	return true
+}
+
+func (s *Server) rememberFileChanges(threadID string, files []string) {
+	if threadID == "" {
+		return
+	}
+	files = uniqueStrings(files)
+	if len(files) == 0 {
+		return
+	}
+	s.fileChangeMu.Lock()
+	defer s.fileChangeMu.Unlock()
+	s.fileChangeByThread[threadID] = files
+}
+
+func (s *Server) consumeRememberedFileChanges(threadID string) []string {
+	if threadID == "" {
+		return nil
+	}
+	s.fileChangeMu.Lock()
+	defer s.fileChangeMu.Unlock()
+	files := s.fileChangeByThread[threadID]
+	delete(s.fileChangeByThread, threadID)
+	return append([]string(nil), files...)
+}
+
+func (s *Server) enrichFileChangePayload(threadID, method string, payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	if !strings.Contains(method, "fileChange") {
+		return
+	}
+
+	files := normalizeFiles(payload["files"])
+	if len(files) == 0 {
+		files = normalizeFiles(payload["file"])
+	}
+	if len(files) == 0 {
+		delta := ""
+		if value, ok := payload["delta"].(string); ok {
+			delta = value
+		} else if value, ok := payload["output"].(string); ok {
+			delta = value
+		}
+		files = parseFilesFromPatchDelta(delta)
+	}
+
+	switch method {
+	case "item/fileChange/outputDelta":
+		if len(files) > 0 {
+			payload["files"] = files
+			payload["file"] = files[0]
+			s.rememberFileChanges(threadID, files)
+		}
+	case "item/fileChange/started":
+		if len(files) > 0 {
+			payload["files"] = files
+			payload["file"] = files[0]
+			s.rememberFileChanges(threadID, files)
+		}
+	case "item/fileChange/completed":
+		if len(files) == 0 {
+			files = s.consumeRememberedFileChanges(threadID)
+		}
+		if len(files) > 0 {
+			payload["files"] = files
+			payload["file"] = files[0]
+		}
+	}
 }
 
 // AgentEventHandler 返回一个 codex.EventHandler，将 Agent 事件转为 JSON-RPC 通知/请求。
@@ -513,7 +898,7 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 		if proc := s.mgr.Get(agentID); proc != nil {
 			threadID = proc.Client.GetThreadID()
 		}
-		slog.Info("codex event",
+		slog.Debug("codex event",
 			logger.FieldSource, "codex",
 			logger.FieldComponent, "event",
 			logger.FieldAgentID, agentID,
@@ -531,21 +916,9 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 			"threadId": agentID,
 		}
 
-		// 从 event.Data 提取前端常用字段到顶层
-		if len(event.Data) > 0 {
-			var dataMap map[string]any
-			if json.Unmarshal(event.Data, &dataMap) == nil {
-				for _, key := range []string{
-					"delta", "content", "message", "command",
-					"exit_code", "reason", "name", "status",
-					"file", "diff", "tool_name",
-				} {
-					if v, ok := dataMap[key]; ok {
-						payload[key] = v
-					}
-				}
-			}
-		}
+		// 从 event.Data 提取前端常用字段到顶层 (含嵌套 msg/data/payload)。
+		mergePayloadFields(payload, event.Data)
+		s.enrichFileChangePayload(agentID, method, payload)
 
 		// § 二 审批事件: 需要客户端回复 (双向请求)
 		switch event.Type {
@@ -623,17 +996,49 @@ func (s *Server) PersistUserMessage(agentID, prompt string) {
 	}
 }
 
+func (s *Server) persistSyntheticMessage(agentID, role, eventType, method, content string, metadata any) error {
+	if s.msgStore == nil {
+		return nil
+	}
+
+	var raw json.RawMessage
+	if metadata != nil {
+		data, err := json.Marshal(metadata)
+		if err != nil {
+			return err
+		}
+		raw = data
+	}
+
+	msg := &store.AgentMessage{
+		AgentID:   agentID,
+		Role:      role,
+		EventType: eventType,
+		Method:    method,
+		Content:   content,
+		Metadata:  raw,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.msgStore.Insert(ctx, msg)
+}
+
 // classifyEventRole 按事件类型归类消息角色。
 func classifyEventRole(eventType string) string {
+	t := strings.ToLower(eventType)
+
 	switch {
-	case strings.Contains(eventType, "agent_message"):
+	case strings.Contains(t, "agent_message"), strings.Contains(t, "agentmessage"):
 		return "assistant"
-	case strings.Contains(eventType, "reasoning"):
+	case strings.Contains(t, "reasoning"):
 		return "assistant"
-	case strings.Contains(eventType, "exec_"), strings.Contains(eventType, "patch_"),
-		strings.Contains(eventType, "mcp_"), strings.Contains(eventType, "dynamic_tool"):
+	case strings.Contains(t, "exec_"), strings.Contains(t, "patch_"),
+		strings.Contains(t, "mcp_"), strings.Contains(t, "dynamic_tool"),
+		strings.Contains(t, "commandexecution"), strings.Contains(t, "filechange"),
+		strings.Contains(t, "dynamictool"), strings.Contains(t, "tool/call"):
 		return "tool"
-	case eventType == "turn_started":
+	case t == "turn_started", t == "turn/started", t == "user_message", t == "item/usermessage":
 		return "user"
 	default:
 		return "system"
@@ -649,14 +1054,57 @@ func extractEventContent(event codex.Event) string {
 	if err := json.Unmarshal(event.Data, &m); err != nil {
 		return ""
 	}
-	// 优先提取常见文本字段
-	for _, key := range []string{"delta", "content", "message", "command", "diff", "text"} {
-		if v, ok := m[key]; ok {
-			if s, ok := v.(string); ok {
+
+	extract := func(src map[string]any) string {
+		for _, key := range []string{"delta", "content", "message", "command", "diff", "text", "summary", "output"} {
+			if v, ok := src[key]; ok {
+				if s, ok := v.(string); ok && s != "" {
+					return s
+				}
+			}
+		}
+		return ""
+	}
+
+	if s := extract(m); s != "" {
+		return s
+	}
+
+	for _, key := range []string{"msg", "data", "payload"} {
+		v, ok := m[key]
+		if !ok {
+			continue
+		}
+
+		switch nested := v.(type) {
+		case map[string]any:
+			if s := extract(nested); s != "" {
 				return s
+			}
+		case string:
+			var nestedMap map[string]any
+			if err := json.Unmarshal([]byte(nested), &nestedMap); err == nil {
+				if s := extract(nestedMap); s != "" {
+					return s
+				}
+			}
+		case json.RawMessage:
+			var nestedMap map[string]any
+			if err := json.Unmarshal(nested, &nestedMap); err == nil {
+				if s := extract(nestedMap); s != "" {
+					return s
+				}
+			}
+		case []byte:
+			var nestedMap map[string]any
+			if err := json.Unmarshal(nested, &nestedMap); err == nil {
+				if s := extract(nestedMap); s != "" {
+					return s
+				}
 			}
 		}
 	}
+
 	return ""
 }
 
@@ -733,6 +1181,18 @@ func (s *Server) SetupLSP(rootDir string) {
 // buildLSPDynamicTools 构建 LSP 动态工具列表 (注入 codex agent)。
 func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 	if s.lsp == nil {
+		return nil
+	}
+	statuses := s.lsp.Statuses()
+	hasAvailableServer := false
+	for _, st := range statuses {
+		if st.Available {
+			hasAvailableServer = true
+			break
+		}
+	}
+	if !hasAvailableServer {
+		slog.Info("lsp dynamic tools disabled: no language server available on PATH")
 		return nil
 	}
 	return []codex.DynamicTool{
@@ -848,11 +1308,36 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 		result = s.resourceSharedFileRead(call.Arguments)
 	case "shared_file_write":
 		result = s.resourceSharedFileWrite(call.Arguments)
+	case "workspace_create_run":
+		result = s.resourceWorkspaceCreateRun(call.Arguments)
+	case "workspace_get_run":
+		result = s.resourceWorkspaceGetRun(call.Arguments)
+	case "workspace_list_runs":
+		result = s.resourceWorkspaceListRuns(call.Arguments)
+	case "workspace_merge_run":
+		result = s.resourceWorkspaceMergeRun(call.Arguments)
+	case "workspace_abort_run":
+		result = s.resourceWorkspaceAbortRun(call.Arguments)
 	default:
 		result = fmt.Sprintf("unknown tool: %s", call.Tool)
 	}
 
 	elapsed := time.Since(start)
+	success := toolResultSuccess(result)
+
+	var argMap map[string]any
+	if len(call.Arguments) > 0 {
+		_ = json.Unmarshal(call.Arguments, &argMap)
+	}
+	filePath := ""
+	if argMap != nil {
+		for _, key := range []string{"file_path", "path", "file"} {
+			if v, ok := argMap[key].(string); ok && strings.TrimSpace(v) != "" {
+				filePath = strings.TrimSpace(v)
+				break
+			}
+		}
+	}
 
 	slog.Info("dynamic-tool: completed",
 		logger.FieldSource, "codex",
@@ -862,17 +1347,41 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 		logger.FieldDurationMS, elapsed.Milliseconds(),
 		logger.FieldEventType, "dynamic_tool_call",
 		"result_len", len(result),
+		"success", success,
 	)
 
 	// 广播到前端 — 让 UI 可以显示 LSP 调用
-	s.Notify("dynamic-tool/called", map[string]any{
+	notifyPayload := map[string]any{
+		"threadId":   agentID,
 		"agent":      agentID,
 		"tool":       call.Tool,
 		"callId":     call.CallID,
+		"arguments":  argMap,
+		"file":       filePath,
+		"success":    success,
 		"totalCalls": count,
 		"elapsedMs":  elapsed.Milliseconds(),
 		"resultLen":  len(result),
-	})
+	}
+	if result != "" {
+		if len(result) > 500 {
+			notifyPayload["resultPreview"] = result[:500]
+		} else {
+			notifyPayload["resultPreview"] = result
+		}
+	}
+	s.Notify("dynamic-tool/called", notifyPayload)
+
+	// 持久化可观测事件, 便于重启后回放工具调用链路。
+	if s.msgStore != nil {
+		content := result
+		if content == "" {
+			content = call.Tool
+		}
+		if err := s.persistSyntheticMessage(agentID, "tool", "dynamic-tool/called", "dynamic-tool/called", content, notifyPayload); err != nil {
+			slog.Warn("app-server: persist dynamic-tool event failed", "agent", agentID, "tool", call.Tool, "error", err)
+		}
+	}
 
 	// 回传结果: 使用 event.RequestID 发送 JSON-RPC response (codex 发的是 server request)
 	if err := proc.Client.SendDynamicToolResult(call.CallID, result, event.RequestID); err != nil {
@@ -882,6 +1391,9 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 
 // lspHover 调用 LSP hover。
 func (s *Server) lspHover(args json.RawMessage) string {
+	if s.lsp == nil {
+		return "error: lsp manager unavailable"
+	}
 	var p struct {
 		FilePath string `json:"file_path"`
 		Line     int    `json:"line"`
@@ -889,6 +1401,9 @@ func (s *Server) lspHover(args json.RawMessage) string {
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "error: " + err.Error()
+	}
+	if strings.TrimSpace(p.FilePath) == "" {
+		return "error: file_path is required"
 	}
 	result, err := s.lsp.Hover(p.FilePath, p.Line, p.Column)
 	if err != nil {
@@ -902,15 +1417,22 @@ func (s *Server) lspHover(args json.RawMessage) string {
 
 // lspOpenFile 打开文件触发 LSP 分析。
 func (s *Server) lspOpenFile(args json.RawMessage) string {
+	if s.lsp == nil {
+		return "error: lsp manager unavailable"
+	}
 	var p struct {
 		FilePath string `json:"file_path"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "error: " + err.Error()
 	}
+	p.FilePath = strings.TrimSpace(p.FilePath)
+	if p.FilePath == "" {
+		return "error: file_path is required"
+	}
 	content, err := os.ReadFile(p.FilePath)
 	if err != nil {
-		return "error reading file: " + err.Error()
+		return "error: reading file: " + err.Error()
 	}
 	if err := s.lsp.OpenFile(p.FilePath, string(content)); err != nil {
 		return "error: " + err.Error()
@@ -956,4 +1478,127 @@ func (s *Server) lspDiagnostics(args json.RawMessage) string {
 		}
 	}
 	return sb.String()
+}
+
+// ========================================
+// HTTP JSON-RPC (调试模式)
+// ========================================
+
+// handleHTTPRPC 处理 HTTP POST /rpc 请求 (调试模式用)。
+//
+// 接收标准 JSON-RPC 2.0 请求, 调用 InvokeMethod, 返回 JSON-RPC 响应。
+func (s *Server) handleHTTPRPC(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      any             `json:"id"`
+		Method  string          `json:"method"`
+		Params  json.RawMessage `json:"params"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONRPCError(w, nil, -32700, "Parse error: "+err.Error())
+		return
+	}
+
+	if req.Method == "" {
+		writeJSONRPCError(w, req.ID, -32600, "Invalid Request: method is required")
+		return
+	}
+
+	// 如果 params 为 null, 用空对象
+	params := req.Params
+	if len(params) == 0 || string(params) == "null" {
+		params = json.RawMessage("{}")
+	}
+
+	result, err := s.InvokeMethod(r.Context(), req.Method, params)
+	if err != nil {
+		writeJSONRPCError(w, req.ID, -32603, err.Error())
+		return
+	}
+
+	resp := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      req.ID,
+		"result":  result,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// writeJSONRPCError 写 JSON-RPC 错误响应。
+func writeJSONRPCError(w http.ResponseWriter, id any, code int, message string) {
+	resp := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error": map[string]any{
+			"code":    code,
+			"message": message,
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK) // JSON-RPC 错误仍返回 200
+	json.NewEncoder(w).Encode(resp)
+}
+
+// corsMiddleware 添加 CORS 头 (调试模式允许跨域)。
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handleSSE 处理 SSE 事件流 (debug 模式浏览器实时接收 agent 事件)。
+func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ch := make(chan []byte, 64)
+
+	s.sseMu.Lock()
+	s.sseClients[ch] = struct{}{}
+	s.sseMu.Unlock()
+
+	defer func() {
+		s.sseMu.Lock()
+		delete(s.sseClients, ch)
+		s.sseMu.Unlock()
+	}()
+
+	slog.Info("sse: client connected", "remote", r.RemoteAddr)
+
+	for {
+		select {
+		case data := <-ch:
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-r.Context().Done():
+			slog.Info("sse: client disconnected", "remote", r.RemoteAddr)
+			return
+		}
+	}
 }

@@ -4,6 +4,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"time"
@@ -33,11 +34,26 @@ func NewAgentMessageStore(pool *pgxpool.Pool) *AgentMessageStore {
 
 const amCols = "id, agent_id, role, event_type, method, content, metadata, created_at"
 
+func sanitizeMetadata(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	clean := bytes.ToValidUTF8(raw, []byte("�"))
+	if json.Valid(clean) {
+		return json.RawMessage(clean)
+	}
+	fallback, _ := json.Marshal(map[string]any{
+		"raw": string(clean),
+	})
+	return json.RawMessage(fallback)
+}
+
 // Insert 写入单条消息。
 func (s *AgentMessageStore) Insert(ctx context.Context, msg *AgentMessage) error {
 	if msg.CreatedAt.IsZero() {
 		msg.CreatedAt = time.Now()
 	}
+	msg.Metadata = sanitizeMetadata(msg.Metadata)
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO agent_messages (agent_id, role, event_type, method, content, metadata, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -67,7 +83,14 @@ func (s *AgentMessageStore) ListByAgent(ctx context.Context, agentID string, lim
 	if err != nil {
 		return nil, err
 	}
-	return collectRows[AgentMessage](rows)
+	items, err := collectRows[AgentMessage](rows)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].Metadata = sanitizeMetadata(items[i].Metadata)
+	}
+	return items, nil
 }
 
 // CountByAgent 统计某 agent 的消息总数。

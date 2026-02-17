@@ -53,6 +53,12 @@ type Config struct {
 	// 运行时
 	ACPBusSingletonEnabled bool `env:"ACP_BUS_SINGLETON_ENABLED" default:"false"`
 	AgentDBExecuteEnabled  bool `env:"AGENT_DB_EXECUTE_ENABLED" default:"true"`
+
+	// 编排工作区 (双通道: 虚拟目录 + PG 状态)
+	OrchestrationWorkspaceRoot          string `env:"ORCHESTRATION_WORKSPACE_ROOT" default:".agent/workspaces"`
+	OrchestrationWorkspaceMaxFiles      int    `env:"ORCHESTRATION_WORKSPACE_MAX_FILES" default:"5000" min:"1"`
+	OrchestrationWorkspaceMaxFileBytes  int    `env:"ORCHESTRATION_WORKSPACE_MAX_FILE_BYTES" default:"8388608" min:"1024"`     // 8MB
+	OrchestrationWorkspaceMaxTotalBytes int    `env:"ORCHESTRATION_WORKSPACE_MAX_TOTAL_BYTES" default:"268435456" min:"10240"` // 256MB
 }
 
 // Load 从环境变量加载配置 (通过反射读取 struct tag)。

@@ -174,32 +174,32 @@ func TestParseOutputTail(t *testing.T) {
 }
 
 // ========================================
-// hashOutput
+// hashLines
 // ========================================
 
-func TestHashOutput(t *testing.T) {
+func TestHashLines(t *testing.T) {
 	t.Run("truncates_to_6_lines", func(t *testing.T) {
 		lines := []string{"1", "2", "3", "4", "5", "6", "7", "8"}
-		hash := hashOutput(lines)
+		hash := hashLines(lines)
 		// Should only use last 6 lines
-		expected := hashOutput([]string{"3", "4", "5", "6", "7", "8"})
+		expected := hashLines([]string{"3", "4", "5", "6", "7", "8"})
 		if hash != expected {
-			t.Errorf("hashOutput should truncate to last 6, got different hash")
+			t.Errorf("hashLines should truncate to last 6, got different hash")
 		}
 	})
 
 	t.Run("deterministic", func(t *testing.T) {
 		lines := []string{"hello", "world"}
-		h1 := hashOutput(lines)
-		h2 := hashOutput(lines)
+		h1 := hashLines(lines)
+		h2 := hashLines(lines)
 		if h1 != h2 {
-			t.Errorf("hashOutput should be deterministic")
+			t.Errorf("hashLines should be deterministic")
 		}
 	})
 
 	t.Run("different_input_different_hash", func(t *testing.T) {
-		h1 := hashOutput([]string{"a"})
-		h2 := hashOutput([]string{"b"})
+		h1 := hashLines([]string{"a"})
+		h2 := hashLines([]string{"b"})
 		if h1 == h2 {
 			t.Errorf("different inputs should produce different hashes")
 		}

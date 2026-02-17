@@ -2,6 +2,7 @@
 //
 // 核心功能:
 //   - Init() 配置默认日志器 (JSON/Text)
+//   - InitWithFile() 同时输出到 stdout 和日志文件
 //   - FromContext() 上下文感知日志
 //   - 包级便捷方法 (Info/Error/Warn/Debug/Fatal)
 package logger
@@ -9,11 +10,17 @@ package logger
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"time"
 )
 
-var defaultLogger = newLogger(false)
+var (
+	defaultLogger = newLogger(false)
+	logFile       *os.File // 全局日志文件, Shutdown 时关闭
+)
 
 func newLogger(development bool) *slog.Logger {
 	opts := &slog.HandlerOptions{
@@ -34,6 +41,44 @@ func Init(env string) {
 	dev := env == "development" || env == "dev"
 	defaultLogger = newLogger(dev)
 	slog.SetDefault(defaultLogger)
+}
+
+// InitWithFile 初始化日志, 同时输出到 stdout 和日志文件。
+//
+// 日志文件: {logDir}/agent-terminal-{date}.log (JSON 格式)。
+// 调用者应在退出前调用 ShutdownFileHandler() 关闭文件。
+func InitWithFile(logDir string) error {
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return fmt.Errorf("create log dir: %w", err)
+	}
+
+	date := time.Now().Format("2006-01-02")
+	logPath := filepath.Join(logDir, fmt.Sprintf("agent-terminal-%s.log", date))
+
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open log file: %w", err)
+	}
+	logFile = f
+
+	// MultiWriter: stdout + file
+	multi := io.MultiWriter(os.Stdout, f)
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+	handler := slog.NewJSONHandler(multi, opts)
+	defaultLogger = slog.New(handler)
+	slog.SetDefault(defaultLogger)
+
+	slog.Info("log file opened", "path", logPath)
+	return nil
+}
+
+// ShutdownFileHandler 关闭日志文件。
+func ShutdownFileHandler() {
+	if logFile != nil {
+		_ = logFile.Sync()
+		_ = logFile.Close()
+		logFile = nil
+	}
 }
 
 // ========================================

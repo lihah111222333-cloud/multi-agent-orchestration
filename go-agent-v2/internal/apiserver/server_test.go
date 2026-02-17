@@ -168,7 +168,7 @@ func TestAllMethodsWired(t *testing.T) {
 		{method: "skills/list", params: nil},
 		{method: "skills/remote/read", params: map[string]any{"url": "https://example.com/skill"}, allowInternalError: true},
 		{method: "skills/remote/write", params: map[string]any{"name": "test-e2e-skill", "content": "# Test"}},
-		{method: "skills/config/write", params: map[string]any{"skills": []any{}}},
+		{method: "skills/config/write", params: map[string]any{"agent_id": "test-agent", "skills": []string{"test-skill"}}},
 		{method: "app/list", params: nil},
 
 		// § 6. 模型 / 配置

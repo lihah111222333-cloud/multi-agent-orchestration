@@ -26,7 +26,11 @@ func (rb *RingBuffer) Write(p []byte) {
 	rb.data = append(rb.data, p...)
 	if len(rb.data) > rb.limit {
 		excess := len(rb.data) - rb.limit
-		rb.data = rb.data[excess:]
+		trimmed := rb.data[excess:]
+		// copy 到新 slice，释放旧底层数组，避免内存泄漏
+		fresh := make([]byte, len(trimmed))
+		copy(fresh, trimmed)
+		rb.data = fresh
 	}
 }
 

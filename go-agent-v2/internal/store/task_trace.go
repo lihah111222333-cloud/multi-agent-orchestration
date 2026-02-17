@@ -14,21 +14,24 @@ import (
 type TaskTraceStore struct{ BaseStore }
 
 // NewTaskTraceStore 创建任务追踪存储。
-func NewTaskTraceStore(pool *pgxpool.Pool) *TaskTraceStore { return &TaskTraceStore{NewBaseStore(pool)} }
+func NewTaskTraceStore(pool *pgxpool.Pool) *TaskTraceStore {
+	return &TaskTraceStore{NewBaseStore(pool)}
+}
 
-const taskTraceCols = `id, trace_id, span_id, parent_span, agent_id, action,
-	input, output, status, error, duration_ms, metadata, created_at, updated_at`
+const taskTraceCols = `id, trace_id, span_id, parent_span_id, span_name, component,
+	status, input_payload, output_payload, error_text, metadata,
+	started_at, finished_at, duration_ms`
 
 // StartSpan 开始跟踪 (对应 Python start_task_trace_span)。
 func (s *TaskTraceStore) StartSpan(ctx context.Context, t *TaskTrace) (*TaskTrace, error) {
 	inJSON, _ := json.Marshal(t.Input)
 	metaJSON, _ := json.Marshal(t.Metadata)
 	rows, err := s.pool.Query(ctx,
-		`INSERT INTO task_traces (trace_id, span_id, parent_span, agent_id, action,
-		   input, status, metadata, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'running', $7::jsonb, NOW(), NOW())
+		`INSERT INTO task_traces (trace_id, span_id, parent_span_id, span_name, component,
+		   input_payload, status, metadata, started_at)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'running', $7::jsonb, NOW())
 		 RETURNING `+taskTraceCols,
-		t.TraceID, t.SpanID, t.ParentSpan, t.AgentID, t.Action,
+		t.TraceID, t.SpanID, t.ParentSpanID, t.SpanName, t.Component,
 		string(inJSON), string(metaJSON))
 	if err != nil {
 		return nil, err
@@ -37,16 +40,16 @@ func (s *TaskTraceStore) StartSpan(ctx context.Context, t *TaskTrace) (*TaskTrac
 }
 
 // FinishSpan 完成跟踪 (对应 Python finish_task_trace_span, 自动计算 duration)。
-func (s *TaskTraceStore) FinishSpan(ctx context.Context, traceID, spanID, status string, output any, errMsg *string) (*TaskTrace, error) {
+func (s *TaskTraceStore) FinishSpan(ctx context.Context, traceID, spanID, status string, output any, errText string) (*TaskTrace, error) {
 	outJSON, _ := json.Marshal(output)
 	rows, err := s.pool.Query(ctx,
 		`UPDATE task_traces
-		 SET status=$1, output=$2::jsonb, error=$3,
-		     duration_ms=EXTRACT(EPOCH FROM (NOW()-created_at))::INT * 1000,
-		     updated_at=NOW()
+		 SET status=$1, output_payload=$2::jsonb, error_text=$3,
+		     duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))::INT * 1000,
+		     finished_at=NOW()
 		 WHERE trace_id=$4 AND span_id=$5
 		 RETURNING `+taskTraceCols,
-		status, string(outJSON), errMsg, traceID, spanID)
+		status, string(outJSON), errText, traceID, spanID)
 	if err != nil {
 		return nil, err
 	}
@@ -59,12 +62,12 @@ func (s *TaskTraceStore) Create(ctx context.Context, t *TaskTrace) (*TaskTrace, 
 	outJSON, _ := json.Marshal(t.Output)
 	metaJSON, _ := json.Marshal(t.Metadata)
 	rows, err := s.pool.Query(ctx,
-		`INSERT INTO task_traces (trace_id, span_id, parent_span, agent_id, action,
-		   input, output, status, error, duration_ms, metadata, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11::jsonb, NOW(), NOW())
+		`INSERT INTO task_traces (trace_id, span_id, parent_span_id, span_name, component,
+		   input_payload, output_payload, status, error_text, duration_ms, metadata, started_at, finished_at)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11::jsonb, NOW(), NULL)
 		 RETURNING `+taskTraceCols,
-		t.TraceID, t.SpanID, t.ParentSpan, t.AgentID, t.Action,
-		string(inJSON), string(outJSON), t.Status, t.Error, t.DurationMS, string(metaJSON))
+		t.TraceID, t.SpanID, t.ParentSpanID, t.SpanName, t.Component,
+		string(inJSON), string(outJSON), t.Status, t.ErrorText, t.DurationMS, string(metaJSON))
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +77,7 @@ func (s *TaskTraceStore) Create(ctx context.Context, t *TaskTrace) (*TaskTrace, 
 // ListByTraceID 按 trace_id 查询 (对应 Python list_task_trace_spans)。
 func (s *TaskTraceStore) ListByTraceID(ctx context.Context, traceID string) ([]TaskTrace, error) {
 	rows, err := s.pool.Query(ctx,
-		"SELECT "+taskTraceCols+" FROM task_traces WHERE trace_id = $1 ORDER BY created_at", traceID)
+		"SELECT "+taskTraceCols+" FROM task_traces WHERE trace_id = $1 ORDER BY started_at", traceID)
 	if err != nil {
 		return nil, err
 	}
@@ -83,14 +86,14 @@ func (s *TaskTraceStore) ListByTraceID(ctx context.Context, traceID string) ([]T
 
 // List 列表查询 (对应 Python list_task_traces)。
 func (s *TaskTraceStore) List(ctx context.Context, agentID, keyword string, since *time.Time, limit int) ([]TaskTrace, error) {
-	q := NewQueryBuilder().Eq("agent_id", agentID)
+	q := NewQueryBuilder().Eq("component", agentID)
 	if since != nil {
 		q.n++
-		q.where = append(q.where, "created_at >= $"+string(rune('0'+q.n)))
+		q.where = append(q.where, "started_at >= $"+string(rune('0'+q.n)))
 		q.params = append(q.params, *since)
 	}
-	q.KeywordLike(keyword, "action", "status")
-	sql, params := q.Build("SELECT "+taskTraceCols+" FROM task_traces", "created_at DESC", limit)
+	q.KeywordLike(keyword, "span_name", "status")
+	sql, params := q.Build("SELECT "+taskTraceCols+" FROM task_traces", "started_at DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err

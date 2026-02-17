@@ -10,6 +10,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 
@@ -103,9 +104,41 @@ func (m *AgentManager) SetOnOutput(fn func(agentID string, data []byte)) {
 	})
 }
 
+// maxPortRetries 最多尝试的连续端口数 (防止耗尽)。
+const maxPortRetries = 20
+
+// findFreePort 从 nextPort 开始探测, 跳过被占用端口, 返回可用端口。
+//
+// 每次探测: net.Listen → Close。最多尝试 maxPortRetries 个端口。
+func (m *AgentManager) findFreePort() (int, error) {
+	for i := 0; i < maxPortRetries; i++ {
+		port := int(m.nextPort.Add(1) - 1)
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue // 端口被占用，跳到下一个
+		}
+		_ = ln.Close()
+		return port, nil
+	}
+
+	// 回退策略: 使用内核分配的随机可用端口 (127.0.0.1:0)。
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err == nil {
+		port := ln.Addr().(*net.TCPAddr).Port
+		_ = ln.Close()
+		if port > 0 {
+			m.nextPort.Store(int32(port + 1))
+			return port, nil
+		}
+	}
+
+	return 0, fmt.Errorf("runner: no free port found after %d attempts from %d, and fallback random port failed",
+		maxPortRetries, int(m.nextPort.Load())-maxPortRetries)
+}
+
 // Launch 启动一个 Codex Agent。
 //
-// 流程: 分配端口 → spawn codex app-server → JSON-RPC initialize → thread/start。
+// 流程: 探测空闲端口 → spawn codex app-server → JSON-RPC initialize → thread/start。
 // ctx 控制 spawn 超时和子进程生命周期。
 // dynamicTools 为 nil 时不注入自定义工具。
 func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string, dynamicTools []codex.DynamicTool) error {
@@ -115,7 +148,11 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 		return fmt.Errorf("runner: agent %s already exists", id)
 	}
 
-	port := int(m.nextPort.Add(1) - 1) // 每个 codex app-server 占 1 个端口
+	port, err := m.findFreePort()
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
 
 	// 使用 AppServerClient (JSON-RPC) 支持 dynamicTools
 	client := codex.NewAppServerClient(port)
@@ -139,26 +176,36 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 		proc.mu.Lock()
 		proc.State = StateError
 		proc.mu.Unlock()
+
+		// 启动失败时移除残留 agent，避免 list_agents 返回 error 态幽灵实例。
+		m.mu.Lock()
+		if existing, ok := m.agents[id]; ok && existing == proc {
+			delete(m.agents, id)
+		}
+		m.mu.Unlock()
 		return fmt.Errorf("runner: launch %s: %w", id, err)
 	}
 
 	return nil
 }
 
+// eventStateMap 声明式 事件类型→Agent 状态 映射。
+//
+// 新增事件→状态映射只需加一行，无需修改 handleEvent 逻辑。
+var eventStateMap = map[string]AgentState{
+	codex.EventTurnStarted:      StateThinking,
+	codex.EventIdle:             StateIdle,
+	codex.EventTurnComplete:     StateIdle,
+	codex.EventExecCommandBegin: StateRunning,
+	codex.EventError:            StateError,
+	codex.EventShutdownComplete: StateStopped,
+}
+
 // handleEvent 处理 Codex 事件 — 更新 Agent 状态并转发给 UI。
 func (m *AgentManager) handleEvent(proc *AgentProcess, event codex.Event) {
 	proc.mu.Lock()
-	switch event.Type {
-	case codex.EventTurnStarted:
-		proc.State = StateThinking
-	case codex.EventIdle, codex.EventTurnComplete:
-		proc.State = StateIdle
-	case codex.EventExecCommandBegin:
-		proc.State = StateRunning
-	case codex.EventError:
-		proc.State = StateError
-	case codex.EventShutdownComplete:
-		proc.State = StateStopped
+	if newState, ok := eventStateMap[event.Type]; ok {
+		proc.State = newState
 	}
 	proc.mu.Unlock()
 

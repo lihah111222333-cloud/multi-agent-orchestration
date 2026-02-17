@@ -234,6 +234,8 @@ func (b *MessageBus) SetOnPublish(fn func(Message)) {
 }
 
 // Publish 发布消息到匹配的订阅者。
+//
+// seq 递增和 fan-out 在同一把锁下执行, 保证消息到达顺序与 seq 一致。
 func (b *MessageBus) Publish(msg Message) {
 	b.mu.Lock()
 	b.seq++
@@ -242,16 +244,8 @@ func (b *MessageBus) Publish(msg Message) {
 		msg.Timestamp = time.Now()
 	}
 	onPub := b.onPublish
-	b.mu.Unlock()
 
-	// 全局回调 (SSE/日志桥接)
-	if onPub != nil {
-		onPub(msg)
-	}
-
-	// 分发给匹配的订阅者
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	// 在同一把锁下完成 fan-out, 保证 seq 顺序
 	for _, sub := range b.subscribers {
 		if matchTopic(sub.Filter, msg.Topic) {
 			select {
@@ -260,6 +254,12 @@ func (b *MessageBus) Publish(msg Message) {
 				// 通道满, 丢弃 (避免阻塞发布者)
 			}
 		}
+	}
+	b.mu.Unlock()
+
+	// 全局回调在锁外执行 (回调可能耗时, 避免持锁太久)
+	if onPub != nil {
+		onPub(msg)
 	}
 }
 

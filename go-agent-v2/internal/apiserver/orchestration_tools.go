@@ -46,9 +46,10 @@ func (s *Server) buildOrchestrationTools() []codex.DynamicTool {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"name":   map[string]any{"type": "string", "description": "Display name for the new agent"},
-					"prompt": map[string]any{"type": "string", "description": "Initial prompt (optional)"},
-					"cwd":    map[string]any{"type": "string", "description": "Working directory (optional, defaults to '.')"},
+					"name":              map[string]any{"type": "string", "description": "Display name for the new agent"},
+					"prompt":            map[string]any{"type": "string", "description": "Initial prompt (optional)"},
+					"cwd":               map[string]any{"type": "string", "description": "Working directory (optional, defaults to '.')"},
+					"workspace_run_key": map[string]any{"type": "string", "description": "Optional workspace run key. If provided, agent cwd is resolved to that run's virtual workspace."},
 				},
 				"required": []string{"name"},
 			},
@@ -72,7 +73,7 @@ func (s *Server) orchestrationListAgents() string {
 	infos := s.mgr.List()
 	data, err := json.Marshal(infos)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return toolError(err)
 	}
 	if len(infos) == 0 {
 		return "[]"
@@ -87,32 +88,44 @@ func (s *Server) orchestrationSendMessage(args json.RawMessage) string {
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return fmt.Sprintf(`{"error":"invalid args: %s"}`, err.Error())
+		return toolError(fmt.Errorf("invalid args: %w", err))
 	}
 	if p.AgentID == "" || p.Message == "" {
 		return `{"error":"agent_id and message are required"}`
 	}
 
 	if err := s.mgr.Submit(p.AgentID, p.Message, nil, nil); err != nil {
-		return fmt.Sprintf(`{"error":"send failed: %s"}`, err.Error())
+		return toolError(fmt.Errorf("send failed: %w", err))
 	}
 
 	slog.Info("orchestration: message sent", "to", p.AgentID, "len", len(p.Message))
-	return fmt.Sprintf(`{"success":true,"agent_id":"%s"}`, p.AgentID)
+	return toolJSON(map[string]any{"success": true, "agent_id": p.AgentID})
 }
 
 // orchestrationLaunchAgent 启动新 Agent。
 func (s *Server) orchestrationLaunchAgent(args json.RawMessage) string {
 	var p struct {
-		Name   string `json:"name"`
-		Prompt string `json:"prompt"`
-		Cwd    string `json:"cwd"`
+		Name            string `json:"name"`
+		Prompt          string `json:"prompt"`
+		Cwd             string `json:"cwd"`
+		WorkspaceRunKey string `json:"workspace_run_key"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return fmt.Sprintf(`{"error":"invalid args: %s"}`, err.Error())
+		return toolError(fmt.Errorf("invalid args: %w", err))
 	}
 	if p.Name == "" {
 		return `{"error":"name is required"}`
+	}
+
+	if p.WorkspaceRunKey != "" {
+		if s.workspaceMgr == nil {
+			return toolError(fmt.Errorf("workspace manager not initialized"))
+		}
+		workspacePath, err := s.workspaceMgr.ResolveRunWorkspace(context.Background(), p.WorkspaceRunKey)
+		if err != nil {
+			return toolError(fmt.Errorf("resolve workspace run %s: %w", p.WorkspaceRunKey, err))
+		}
+		p.Cwd = workspacePath
 	}
 	if p.Cwd == "" {
 		p.Cwd = "."
@@ -120,7 +133,7 @@ func (s *Server) orchestrationLaunchAgent(args json.RawMessage) string {
 
 	// fork-bomb 保护
 	if len(s.mgr.List()) >= maxAgents {
-		return fmt.Sprintf(`{"error":"max agents (%d) reached"}`, maxAgents)
+		return toolError(fmt.Errorf("max agents (%d) reached", maxAgents))
 	}
 
 	// 生成唯一 ID
@@ -134,11 +147,17 @@ func (s *Server) orchestrationLaunchAgent(args json.RawMessage) string {
 	tools := s.buildAllDynamicTools()
 
 	if err := s.mgr.Launch(ctx, id, p.Name, p.Prompt, p.Cwd, tools); err != nil {
-		return fmt.Sprintf(`{"error":"launch failed: %s"}`, err.Error())
+		return toolError(fmt.Errorf("launch failed: %w", err))
 	}
 
-	slog.Info("orchestration: agent launched", "id", id, "name", p.Name)
-	return fmt.Sprintf(`{"agent_id":"%s","name":"%s","status":"running"}`, id, p.Name)
+	slog.Info("orchestration: agent launched", "id", id, "name", p.Name, "cwd", p.Cwd, "workspace_run_key", p.WorkspaceRunKey)
+	return toolJSON(map[string]any{
+		"agent_id":          id,
+		"name":              p.Name,
+		"status":            "running",
+		"cwd":               p.Cwd,
+		"workspace_run_key": p.WorkspaceRunKey,
+	})
 }
 
 // orchestrationStopAgent 停止 Agent。
@@ -147,18 +166,18 @@ func (s *Server) orchestrationStopAgent(args json.RawMessage) string {
 		AgentID string `json:"agent_id"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return fmt.Sprintf(`{"error":"invalid args: %s"}`, err.Error())
+		return toolError(fmt.Errorf("invalid args: %w", err))
 	}
 	if p.AgentID == "" {
 		return `{"error":"agent_id is required"}`
 	}
 
 	if err := s.mgr.Stop(p.AgentID); err != nil {
-		return fmt.Sprintf(`{"error":"stop failed: %s"}`, err.Error())
+		return toolError(fmt.Errorf("stop failed: %w", err))
 	}
 
 	slog.Info("orchestration: agent stopped", "id", p.AgentID)
-	return fmt.Sprintf(`{"success":true,"agent_id":"%s"}`, p.AgentID)
+	return toolJSON(map[string]any{"success": true, "agent_id": p.AgentID})
 }
 
 // buildAllDynamicTools 构建全部动态工具列表 (LSP + 编排 + 资源)。

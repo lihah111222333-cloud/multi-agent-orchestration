@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -199,7 +200,7 @@ func (c *Client) Stop() error {
 // JSON-RPC 传输层
 // ========================================
 
-// call 发送请求并等待响应。
+// call 发送请求并等待响应 (30 秒超时防止 goroutine 泄漏)。
 func (c *Client) call(method string, params any, result any) error {
 	id := int(c.nextID.Add(1))
 	ch := make(chan *Response, 1)
@@ -208,24 +209,31 @@ func (c *Client) call(method string, params any, result any) error {
 	c.pending[id] = ch
 	c.mu.Unlock()
 
-	if err := c.writeRequest(id, method, params); err != nil {
+	defer func() {
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()
+	}()
+
+	if err := c.writeRequest(id, method, params); err != nil {
 		return err
 	}
 
-	resp, ok := <-ch
-	if !ok {
-		return fmt.Errorf("lsp: connection closed while waiting for %s", method)
+	select {
+	case resp, ok := <-ch:
+		if !ok {
+			return fmt.Errorf("lsp: connection closed while waiting for %s", method)
+		}
+		if resp.Error != nil {
+			return fmt.Errorf("lsp: %s error %d: %s", method, resp.Error.Code, resp.Error.Message)
+		}
+		if result != nil && resp.Result != nil {
+			return json.Unmarshal(resp.Result, result)
+		}
+		return nil
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("lsp: %s timeout (30s)", method)
 	}
-	if resp.Error != nil {
-		return fmt.Errorf("lsp: %s error %d: %s", method, resp.Error.Code, resp.Error.Message)
-	}
-	if result != nil && resp.Result != nil {
-		return json.Unmarshal(resp.Result, result)
-	}
-	return nil
 }
 
 // notify 发送通知 (无响应)。

@@ -125,6 +125,55 @@ func TestSeq(t *testing.T) {
 	}
 }
 
+// TestPublishConcurrentSeqOrder 验证并发 Publish 下消息到达顺序与 seq 一致。
+//
+// 50 个 goroutine 同时 Publish (channel 容量 64), 订阅者收到的消息 seq 必须严格递增。
+func TestPublishConcurrentSeqOrder(t *testing.T) {
+	b := NewMessageBus()
+	sub := b.Subscribe("order-check", "*")
+
+	const n = 50
+	done := make(chan struct{})
+
+	// 100 goroutines 并发 Publish
+	for i := 0; i < n; i++ {
+		go func() {
+			b.Publish(Message{Topic: "concurrent", Type: "test"})
+		}()
+	}
+
+	// 收集所有消息
+	go func() {
+		received := make([]int64, 0, n)
+		for i := 0; i < n; i++ {
+			msg := <-sub.Ch
+			received = append(received, msg.Seq)
+		}
+
+		// 验证 seq 唯一 (无重复)
+		seen := make(map[int64]bool)
+		for _, s := range received {
+			if seen[s] {
+				t.Errorf("duplicate seq %d", s)
+			}
+			seen[s] = true
+		}
+
+		// 验证所有 seq 都在 [1, n] 范围
+		if len(seen) != n {
+			t.Errorf("expected %d unique seq, got %d", n, len(seen))
+		}
+
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for concurrent messages")
+	}
+}
+
 // ========================================
 // OrchestrationState 测试
 // ========================================

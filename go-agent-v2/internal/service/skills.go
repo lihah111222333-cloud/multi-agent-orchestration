@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,7 +51,12 @@ func (s *SkillService) ListSkills() ([]SkillInfo, error) {
 }
 
 // ReadSkillContent 读取 SKILL.md 完整内容。
+//
+// 含路径遍历防护: 拒绝包含 "/", "\", ".." 的名称。
 func (s *SkillService) ReadSkillContent(name string) (string, error) {
+	if name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		return "", fmt.Errorf("invalid skill name: %q", name)
+	}
 	path := filepath.Join(s.dir, name, "SKILL.md")
 	data, err := os.ReadFile(path)
 	if err != nil {

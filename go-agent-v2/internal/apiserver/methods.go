@@ -18,29 +18,32 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/lsp"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 )
 
 // registerMethods 注册所有 JSON-RPC 方法 (完整对标 APP-SERVER-PROTOCOL.md)。
 func (s *Server) registerMethods() {
+	noop := noopHandler()
+
 	// § 1. 初始化
 	s.methods["initialize"] = s.initialize
-	s.methods["initialized"] = s.noop
+	s.methods["initialized"] = noop
 
 	// § 2. 线程生命周期 (12 methods)
 	s.methods["thread/start"] = s.threadStart
-	s.methods["thread/resume"] = s.threadResume
+	s.methods["thread/resume"] = typedHandler(s.threadResumeTyped)
 	s.methods["thread/fork"] = s.threadFork
-	s.methods["thread/archive"] = s.parseOnly
-	s.methods["thread/unarchive"] = s.parseOnly
+	s.methods["thread/archive"] = noop
+	s.methods["thread/unarchive"] = noop
 	s.methods["thread/name/set"] = s.threadNameSet
 	s.methods["thread/compact/start"] = s.threadCompact
 	s.methods["thread/rollback"] = s.threadRollback
 	s.methods["thread/list"] = s.threadList
 	s.methods["thread/loaded/list"] = s.threadLoadedList
-	s.methods["thread/read"] = s.threadRead
-	s.methods["thread/messages"] = s.threadMessages
+	s.methods["thread/read"] = typedHandler(s.threadReadTyped)
+	s.methods["thread/messages"] = typedHandler(s.threadMessagesTyped)
 	s.methods["thread/backgroundTerminals/clean"] = s.threadBgTerminalsClean
 
 	// § 3. 对话控制 (4 methods)
@@ -50,10 +53,10 @@ func (s *Server) registerMethods() {
 	s.methods["review/start"] = s.reviewStart
 
 	// § 4. 文件搜索 (4 methods)
-	s.methods["fuzzyFileSearch"] = s.fuzzyFileSearch
-	s.methods["fuzzyFileSearch/sessionStart"] = s.noop
-	s.methods["fuzzyFileSearch/sessionUpdate"] = s.noop
-	s.methods["fuzzyFileSearch/sessionStop"] = s.noop
+	s.methods["fuzzyFileSearch"] = typedHandler(s.fuzzyFileSearchTyped)
+	s.methods["fuzzyFileSearch/sessionStart"] = noop
+	s.methods["fuzzyFileSearch/sessionUpdate"] = noop
+	s.methods["fuzzyFileSearch/sessionStop"] = noop
 
 	// § 5. Skills / Apps (5 methods)
 	s.methods["skills/list"] = s.skillsList
@@ -67,25 +70,26 @@ func (s *Server) registerMethods() {
 	s.methods["collaborationMode/list"] = s.collaborationModeList
 	s.methods["experimentalFeature/list"] = s.experimentalFeatureList
 	s.methods["config/read"] = s.configRead
-	s.methods["config/value/write"] = s.configValueWrite
+	s.methods["config/value/write"] = typedHandler(s.configValueWriteTyped)
 	s.methods["config/batchWrite"] = s.configBatchWrite
 	s.methods["configRequirements/read"] = s.configRequirementsRead
 
 	// § 7. 账号 (5 methods)
 	s.methods["account/login/start"] = s.accountLoginStart
-	s.methods["account/login/cancel"] = s.noop
+	s.methods["account/login/cancel"] = noop
 	s.methods["account/logout"] = s.accountLogout
 	s.methods["account/read"] = s.accountRead
 	s.methods["account/rateLimits/read"] = s.accountRateLimitsRead
 
 	// § 8. MCP (3 methods)
-	s.methods["mcpServer/oauth/login"] = s.parseOnly
+	s.methods["mcpServer/oauth/login"] = noop
 	s.methods["config/mcpServer/reload"] = s.mcpServerReload
 	s.methods["mcpServerStatus/list"] = s.mcpServerStatusList
+	s.methods["lsp_diagnostics_query"] = typedHandler(s.lspDiagnosticsQueryTyped)
 
 	// § 9. 命令执行 / 其他 (2 methods)
 	s.methods["command/exec"] = s.commandExec
-	s.methods["feedback/upload"] = s.parseOnly
+	s.methods["feedback/upload"] = noop
 
 	// § 10. 斜杠命令 (SOCKS 独有, JSON-RPC 化)
 	s.methods["thread/undo"] = s.threadUndo
@@ -100,9 +104,10 @@ func (s *Server) registerMethods() {
 	s.methods["log/list"] = s.logList
 	s.methods["log/filters"] = s.logFilters
 
-	// § 12. Dashboard 数据查询 (10 methods, 替代 Wails Dashboard 绑定)
+	// § 12. Dashboard 数据查询 (12 methods, 替代 Wails Dashboard 绑定)
 	s.methods["dashboard/agentStatus"] = s.dashAgentStatus
 	s.methods["dashboard/dags"] = s.dashDAGs
+	s.methods["dashboard/dagDetail"] = s.dashDAGDetail
 	s.methods["dashboard/taskAcks"] = s.dashTaskAcks
 	s.methods["dashboard/taskTraces"] = s.dashTaskTraces
 	s.methods["dashboard/commandCards"] = s.dashCommandCards
@@ -112,6 +117,13 @@ func (s *Server) registerMethods() {
 	s.methods["dashboard/auditLogs"] = s.dashAuditLogs
 	s.methods["dashboard/aiLogs"] = s.dashAILogs
 	s.methods["dashboard/busLogs"] = s.dashBusLogs
+
+	// § 13. Workspace Run (双通道编排: 虚拟目录 + PG 状态)
+	s.methods["workspace/run/create"] = s.workspaceRunCreate
+	s.methods["workspace/run/get"] = s.workspaceRunGet
+	s.methods["workspace/run/list"] = s.workspaceRunList
+	s.methods["workspace/run/merge"] = s.workspaceRunMerge
+	s.methods["workspace/run/abort"] = s.workspaceRunAbort
 }
 
 // ========================================
@@ -188,17 +200,14 @@ func (s *Server) threadStart(ctx context.Context, params json.RawMessage) (any, 
 	}, nil
 }
 
+// threadResumeParams thread/resume 请求参数。
 type threadResumeParams struct {
 	ThreadID string `json:"threadId"`
-	Path     string `json:"path,omitempty"`
+	Path     string `json:"path"`
 	Model    string `json:"model,omitempty"`
 }
 
-func (s *Server) threadResume(_ context.Context, params json.RawMessage) (any, error) {
-	var p threadResumeParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
-	}
+func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (any, error) {
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
 		if err := proc.Client.ResumeThread(codex.ResumeThreadRequest{
 			ThreadID: p.ThreadID,
@@ -278,10 +287,77 @@ func (s *Server) threadRollback(_ context.Context, params json.RawMessage) (any,
 	})
 }
 
-func (s *Server) threadList(_ context.Context, params json.RawMessage) (any, error) {
+func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error) {
+	agents := s.mgr.List()
+
+	threads := make([]map[string]any, 0, len(agents)+32)
+	seen := make(map[string]struct{}, len(agents)+32)
+
+	for _, a := range agents {
+		if a.ID == "" {
+			continue
+		}
+		threads = append(threads, map[string]any{
+			"id":    a.ID,
+			"name":  a.Name,
+			"state": string(a.State),
+		})
+		seen[a.ID] = struct{}{}
+	}
+
+	// DB 历史兜底: 重启后 mgr 为空时, 仍可从 agent_messages 恢复会话列表。
+	if s.msgStore != nil {
+		dbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
+		rows, err := s.msgStore.Pool().Query(dbCtx,
+			`SELECT agent_id, MAX(created_at) AS last_at
+			 FROM agent_messages
+			 GROUP BY agent_id
+			 ORDER BY last_at DESC
+			 LIMIT 500`)
+		if err != nil {
+			slog.Warn("thread/list: load history threads failed", "error", err)
+		} else {
+			defer rows.Close()
+			for rows.Next() {
+				var agentID string
+				var lastAt time.Time
+				if err := rows.Scan(&agentID, &lastAt); err != nil {
+					slog.Warn("thread/list: scan history thread failed", "error", err)
+					continue
+				}
+				if agentID == "" {
+					continue
+				}
+				if _, ok := seen[agentID]; ok {
+					continue
+				}
+
+				threads = append(threads, map[string]any{
+					"id":    agentID,
+					"name":  agentID,
+					"state": "idle",
+				})
+				seen[agentID] = struct{}{}
+			}
+			if err := rows.Err(); err != nil {
+				slog.Warn("thread/list: iterate history threads failed", "error", err)
+			}
+		}
+	}
+
+	return map[string]any{"threads": threads}, nil
+}
+
+func (s *Server) threadLoadedList(ctx context.Context, _ json.RawMessage) (any, error) {
+	// 仅返回当前加载/运行中的线程。
 	agents := s.mgr.List()
 	threads := make([]map[string]any, 0, len(agents))
 	for _, a := range agents {
+		if a.ID == "" {
+			continue
+		}
 		threads = append(threads, map[string]any{
 			"id":    a.ID,
 			"name":  a.Name,
@@ -291,16 +367,7 @@ func (s *Server) threadList(_ context.Context, params json.RawMessage) (any, err
 	return map[string]any{"threads": threads}, nil
 }
 
-func (s *Server) threadLoadedList(_ context.Context, _ json.RawMessage) (any, error) {
-	// 返回当前加载的线程 (= 运行中的)
-	return s.threadList(context.Background(), nil)
-}
-
-func (s *Server) threadRead(_ context.Context, params json.RawMessage) (any, error) {
-	var p threadIDParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
-	}
+func (s *Server) threadReadTyped(ctx context.Context, p threadIDParams) (any, error) {
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
 		threads, err := proc.Client.ListThreads()
 		if err != nil {
@@ -317,12 +384,7 @@ type threadMessagesParams struct {
 	Before   int64  `json:"before,omitempty"` // cursor: id < before
 }
 
-// threadMessages 返回某 agent 的历史消息 (从 DB 读取)。
-func (s *Server) threadMessages(_ context.Context, params json.RawMessage) (any, error) {
-	var p threadMessagesParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
-	}
+func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams) (any, error) {
 	if p.ThreadID == "" {
 		return nil, fmt.Errorf("threadId is required")
 	}
@@ -331,7 +393,7 @@ func (s *Server) threadMessages(_ context.Context, params json.RawMessage) (any,
 		return map[string]any{"messages": []any{}, "total": 0}, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	msgs, err := s.msgStore.ListByAgent(ctx, p.ThreadID, p.Limit, p.Before)
@@ -439,12 +501,7 @@ type fuzzySearchParams struct {
 	Roots []string `json:"roots"`
 }
 
-func (s *Server) fuzzyFileSearch(_ context.Context, params json.RawMessage) (any, error) {
-	var p fuzzySearchParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
-	}
-
+func (s *Server) fuzzyFileSearchTyped(_ context.Context, p fuzzySearchParams) (any, error) {
 	query := strings.ToLower(p.Query)
 	results := make([]map[string]any, 0)
 
@@ -552,14 +609,13 @@ func isAllowedEnvKey(key string) bool {
 	return false
 }
 
-func (s *Server) configValueWrite(_ context.Context, params json.RawMessage) (any, error) {
-	var p struct {
-		Key   string `json:"key"`
-		Value string `json:"value"`
-	}
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
-	}
+// configValueWriteParams config/value/write 请求参数。
+type configValueWriteParams struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+func (s *Server) configValueWriteTyped(_ context.Context, p configValueWriteParams) (any, error) {
 	if !isAllowedEnvKey(p.Key) {
 		return nil, fmt.Errorf("config/value/write: key %q not in allowlist", p.Key)
 	}
@@ -595,6 +651,9 @@ func (s *Server) configBatchWrite(_ context.Context, params json.RawMessage) (an
 }
 
 func (s *Server) mcpServerStatusList(_ context.Context, _ json.RawMessage) (any, error) {
+	if s.lsp == nil {
+		return map[string]any{"servers": []map[string]any{}}, nil
+	}
 	statuses := s.lsp.Statuses()
 	servers := make([]map[string]any, 0, len(statuses))
 	for _, st := range statuses {
@@ -610,9 +669,60 @@ func (s *Server) mcpServerStatusList(_ context.Context, _ json.RawMessage) (any,
 
 // mcpServerReload 重载所有 MCP/LSP 语言服务器 (JSON-RPC: config/mcpServer/reload)。
 func (s *Server) mcpServerReload(_ context.Context, _ json.RawMessage) (any, error) {
+	if s.lsp == nil {
+		return map[string]any{"reloaded": false}, nil
+	}
 	s.lsp.Reload()
 	slog.Info("mcpServer/reload: all language servers restarted")
 	return map[string]any{"reloaded": true}, nil
+}
+
+type lspDiagnosticsQueryParams struct {
+	FilePath string `json:"file_path"`
+}
+
+func (s *Server) lspDiagnosticsQueryTyped(_ context.Context, p lspDiagnosticsQueryParams) (any, error) {
+	if s.lsp == nil {
+		return map[string]any{}, nil
+	}
+
+	formatDiagnostics := func(diags []lsp.Diagnostic) []map[string]any {
+		out := make([]map[string]any, 0, len(diags))
+		for _, d := range diags {
+			out = append(out, map[string]any{
+				"message":  d.Message,
+				"severity": d.Severity.String(),
+				"line":     d.Range.Start.Line,
+				"column":   d.Range.Start.Character,
+			})
+		}
+		return out
+	}
+
+	s.diagMu.RLock()
+	defer s.diagMu.RUnlock()
+
+	result := map[string]any{}
+	if strings.TrimSpace(p.FilePath) != "" {
+		uri := p.FilePath
+		if !strings.HasPrefix(uri, "file://") {
+			if abs, err := filepath.Abs(uri); err == nil {
+				uri = "file://" + abs
+			}
+		}
+		if diags, ok := s.diagCache[uri]; ok && len(diags) > 0 {
+			result[uri] = formatDiagnostics(diags)
+		}
+		return result, nil
+	}
+
+	for uri, diags := range s.diagCache {
+		if len(diags) == 0 {
+			continue
+		}
+		result[uri] = formatDiagnostics(diags)
+	}
+	return result, nil
 }
 
 // skillsConfigWrite 写入 Skill 配置 (JSON-RPC: skills/config/write)。
@@ -647,7 +757,7 @@ func (s *Server) skillsConfigWrite(_ context.Context, params json.RawMessage) (a
 	if p.Name == "" {
 		return nil, fmt.Errorf("skills/config/write: name or agent_id is required")
 	}
-	if strings.ContainsAny(p.Name, "/\\..") {
+	if strings.ContainsAny(p.Name, "/\\") || strings.Contains(p.Name, "..") {
 		return nil, fmt.Errorf("skills/config/write: invalid skill name %q", p.Name)
 	}
 	dir := filepath.Join(".", ".agent", "skills", p.Name)
@@ -843,22 +953,6 @@ func (s *Server) withThread(threadID string, fn func(*runner.AgentProcess) (any,
 		return nil, fmt.Errorf("thread %s not found", threadID)
 	}
 	return fn(proc)
-}
-
-// noop 空操作 handler (协议要求注册但暂无实现)。
-func (*Server) noop(_ context.Context, _ json.RawMessage) (any, error) {
-	return map[string]any{}, nil
-}
-
-// parseOnly 仅解析参数但不做操作的 handler (协议要求验证参数格式)。
-func (*Server) parseOnly(_ context.Context, params json.RawMessage) (any, error) {
-	if params != nil {
-		var raw json.RawMessage
-		if err := json.Unmarshal(params, &raw); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-	}
-	return map[string]any{}, nil
 }
 
 // sendSlashCommand 通用斜杠命令发送 (compact, interrupt 等)。

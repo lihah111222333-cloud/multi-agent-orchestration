@@ -149,7 +149,7 @@ func TestMessagePersistence_20Agents(t *testing.T) {
 			"limit":    100,
 		})
 
-		result, err := srv.threadMessages(ctx, json.RawMessage(params))
+		result, err := srv.InvokeMethod(ctx, "thread/messages", json.RawMessage(params))
 		if err != nil {
 			t.Errorf("agent %d thread/messages error: %v", i, err)
 			continue
@@ -199,7 +199,7 @@ func TestMessagePersistence_20Agents(t *testing.T) {
 		"threadId": firstAgent,
 		"limit":    3,
 	})
-	result, err := srv.threadMessages(ctx, json.RawMessage(params))
+	result, err := srv.InvokeMethod(ctx, "thread/messages", json.RawMessage(params))
 	if err != nil {
 		t.Fatalf("pagination test error: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestMessagePersistence_20Agents(t *testing.T) {
 			"limit":    3,
 			"before":   lastID,
 		})
-		result, err = srv.threadMessages(ctx, json.RawMessage(params))
+		result, err = srv.InvokeMethod(ctx, "thread/messages", json.RawMessage(params))
 		if err != nil {
 			t.Fatalf("pagination page 2 error: %v", err)
 		}

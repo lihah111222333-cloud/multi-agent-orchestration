@@ -57,20 +57,20 @@ type Interaction struct {
 
 // TaskTrace 任务执行追踪。
 type TaskTrace struct {
-	ID         int       `db:"id" json:"id"`
-	TraceID    string    `db:"trace_id" json:"trace_id"`
-	SpanID     string    `db:"span_id" json:"span_id"`
-	ParentSpan *string   `db:"parent_span" json:"parent_span"`
-	AgentID    string    `db:"agent_id" json:"agent_id"`
-	Action     string    `db:"action" json:"action"`
-	Input      any       `db:"input" json:"input"`
-	Output     any       `db:"output" json:"output"`
-	Status     string    `db:"status" json:"status"`
-	Error      *string   `db:"error" json:"error"`
-	DurationMS *int      `db:"duration_ms" json:"duration_ms"`
-	Metadata   any       `db:"metadata" json:"metadata"`
-	CreatedAt  time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
+	ID           int        `db:"id" json:"id"`
+	TraceID      string     `db:"trace_id" json:"trace_id"`
+	SpanID       string     `db:"span_id" json:"span_id"`
+	ParentSpanID *string    `db:"parent_span_id" json:"parent_span_id"`
+	SpanName     string     `db:"span_name" json:"span_name"`
+	Component    string     `db:"component" json:"component"`
+	Status       string     `db:"status" json:"status"`
+	Input        any        `db:"input_payload" json:"input_payload"`
+	Output       any        `db:"output_payload" json:"output_payload"`
+	ErrorText    string     `db:"error_text" json:"error_text"`
+	Metadata     any        `db:"metadata" json:"metadata"`
+	StartedAt    time.Time  `db:"started_at" json:"started_at"`
+	FinishedAt   *time.Time `db:"finished_at" json:"finished_at"`
+	DurationMS   int        `db:"duration_ms" json:"duration_ms"`
 }
 
 // ========================================
@@ -217,6 +217,42 @@ type TaskDAGNode struct {
 	FinishedAt *time.Time `db:"finished_at" json:"finished_at"`
 	CreatedAt  time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt  time.Time  `db:"updated_at" json:"updated_at"`
+}
+
+// ========================================
+// Workspace Run — 表 workspace_runs + workspace_run_files
+// 双通道编排: 虚拟工作区(文件系统) + PG 状态接口
+// ========================================
+
+// WorkspaceRun 一次编排运行主记录。
+type WorkspaceRun struct {
+	ID            int        `db:"id" json:"id"`
+	RunKey        string     `db:"run_key" json:"run_key"`
+	DagKey        string     `db:"dag_key" json:"dag_key"`
+	SourceRoot    string     `db:"source_root" json:"source_root"`
+	WorkspacePath string     `db:"workspace_path" json:"workspace_path"`
+	Status        string     `db:"status" json:"status"` // active|merging|merged|aborted|failed
+	CreatedBy     string     `db:"created_by" json:"created_by"`
+	UpdatedBy     string     `db:"updated_by" json:"updated_by"`
+	Metadata      any        `db:"metadata" json:"metadata"`
+	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt     time.Time  `db:"updated_at" json:"updated_at"`
+	FinishedAt    *time.Time `db:"finished_at" json:"finished_at"`
+}
+
+// WorkspaceRunFile run 内文件追踪状态。
+type WorkspaceRunFile struct {
+	ID                 int       `db:"id" json:"id"`
+	RunKey             string    `db:"run_key" json:"run_key"`
+	RelativePath       string    `db:"relative_path" json:"relative_path"`
+	BaselineSHA256     string    `db:"baseline_sha256" json:"baseline_sha256"`
+	WorkspaceSHA256    string    `db:"workspace_sha256" json:"workspace_sha256"`
+	SourceSHA256Before string    `db:"source_sha256_before" json:"source_sha256_before"`
+	SourceSHA256After  string    `db:"source_sha256_after" json:"source_sha256_after"`
+	State              string    `db:"state" json:"state"` // tracked|synced|changed|merged|conflict|error|unchanged
+	LastError          string    `db:"last_error" json:"last_error"`
+	CreatedAt          time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt          time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // ========================================

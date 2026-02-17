@@ -5,20 +5,21 @@
 // 核心方法:
 //   - CallAPI(method, params): 通用 JSON-RPC 桥, 覆盖全部后端功能
 //   - GetLSPDiagnostics/GetLSPStatus: LSP 工具结果显示
-//   - handleEvent: codex agent 事件 → Wails 事件 → 前端展示
+//   - handleBridgeNotification: Go 标准化事件 → Wails 事件 → 前端展示
 package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver"
-	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -35,19 +36,12 @@ type App struct {
 
 // NewApp 创建 App 实例。
 func NewApp(group string, autoN int, srv *apiserver.Server, mgr *runner.AgentManager) *App {
-	a := &App{
+	return &App{
 		srv:   srv,
 		mgr:   mgr,
 		group: group,
 		autoN: autoN,
 	}
-
-	// 注册事件回调 — codex agent 事件转发到 Wails 前端
-	a.mgr.SetOnEvent(func(agentID string, event codex.Event) {
-		a.handleEvent(agentID, event)
-	})
-
-	return a
 }
 
 // ServiceStartup Wails v3 Service 生命周期: 应用启动时调用。
@@ -86,6 +80,21 @@ func (a *App) shutdown() {
 //
 // 覆盖: 线程生命周期, 对话控制, 技能管理, 模型/配置, MCP, 命令执行, 日志查询 等。
 func (a *App) CallAPI(method, paramsJSON string) (string, error) {
+	// UI 辅助方法 (不经过 apiserver)
+	switch method {
+	case "ui/selectProjectDir":
+		path := a.SelectProjectDir()
+		data, _ := json.Marshal(map[string]string{"path": path})
+		return string(data), nil
+	case "ui/selectFiles":
+		paths := a.SelectFiles()
+		data, _ := json.Marshal(map[string]any{"paths": paths})
+		return string(data), nil
+	case "ui/buildInfo":
+		data, _ := json.Marshal(currentBuildInfo())
+		return string(data), nil
+	}
+
 	var params json.RawMessage
 	if paramsJSON != "" {
 		params = json.RawMessage(paramsJSON)
@@ -104,6 +113,105 @@ func (a *App) CallAPI(method, paramsJSON string) (string, error) {
 		return "", fmt.Errorf("marshal result: %w", err)
 	}
 	return string(data), nil
+}
+
+// ========================================
+// 项目管理 — 原生目录选择对话框
+// ========================================
+
+// SelectProjectDir 弹出原生目录选择对话框，返回所选路径。
+// 用户取消返回空字符串。
+// 约束: 前端仅做 UI，不应自行实现浏览器/系统文件选择能力。
+// 目录选择必须统一走此 Wails/Go 原生桥接入口。
+func (a *App) SelectProjectDir() string {
+	slog.Info("SelectProjectDir: invoked")
+
+	if a.wailsApp == nil {
+		slog.Warn("SelectProjectDir: wails app not ready")
+		return ""
+	}
+
+	cwd, _ := os.Getwd()
+	dialog := a.wailsApp.Dialog.OpenFile().
+		SetTitle("选择项目目录").
+		SetMessage("请选择项目目录").
+		SetButtonText("选择").
+		SetDirectory(cwd).
+		CanChooseDirectories(true).
+		CanChooseFiles(false).
+		CanCreateDirectories(true).
+		ShowHiddenFiles(true)
+	if current := a.wailsApp.Window.Current(); current != nil {
+		dialog.AttachToWindow(current)
+	}
+
+	slog.Info("SelectProjectDir: opening Wails folder dialog")
+	path, err := dialog.PromptForSingleSelection()
+	if err != nil {
+		if isDialogCancelError(err) {
+			slog.Info("SelectProjectDir: dialog cancelled by user")
+			return ""
+		}
+		slog.Warn("SelectProjectDir: Wails dialog failed", "error", err)
+		return ""
+	}
+	if path == "" {
+		slog.Info("SelectProjectDir: dialog cancelled by user")
+		return ""
+	}
+	slog.Info("SelectProjectDir: selected", "path", path)
+	return path
+}
+
+// SelectFiles 弹出原生文件选择对话框(支持多选)，返回绝对路径数组。
+// 用户取消返回空数组。
+// 约束: 前端仅做 UI，不应实现任何浏览器侧文件系统选择兜底。
+// 附件选择必须统一走此 Wails/Go 原生桥接入口。
+func (a *App) SelectFiles() []string {
+	slog.Info("SelectFiles: invoked")
+
+	if a.wailsApp == nil {
+		slog.Warn("SelectFiles: wails app not ready")
+		return []string{}
+	}
+
+	cwd, _ := os.Getwd()
+	dialog := a.wailsApp.Dialog.OpenFile().
+		SetTitle("选择附件文件").
+		SetMessage("可多选文件").
+		SetButtonText("选择").
+		SetDirectory(cwd).
+		CanChooseDirectories(false).
+		CanChooseFiles(true).
+		ShowHiddenFiles(true)
+	if current := a.wailsApp.Window.Current(); current != nil {
+		dialog.AttachToWindow(current)
+	}
+
+	slog.Info("SelectFiles: opening Wails file dialog")
+	paths, err := dialog.PromptForMultipleSelection()
+	if err != nil {
+		if isDialogCancelError(err) {
+			slog.Info("SelectFiles: dialog cancelled by user")
+			return []string{}
+		}
+		slog.Warn("SelectFiles: Wails dialog failed", "error", err)
+		return []string{}
+	}
+	if len(paths) == 0 {
+		slog.Info("SelectFiles: dialog cancelled by user")
+		return []string{}
+	}
+	slog.Info("SelectFiles: selected", "count", len(paths))
+	return paths
+}
+
+func isDialogCancelError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lowerErr := strings.ToLower(err.Error())
+	return strings.Contains(lowerErr, "cancel")
 }
 
 // ========================================
@@ -205,6 +313,12 @@ func (a *App) ListAgents() []runner.AgentInfo {
 // GetGroup 返回当前窗口的分组名。
 func (a *App) GetGroup() string { return a.group }
 
+// GetBuildInfo 返回当前桌面应用构建信息(JSON字符串)。
+func (a *App) GetBuildInfo() string {
+	data, _ := json.Marshal(currentBuildInfo())
+	return string(data)
+}
+
 // ========================================
 // LSP 调度 — 前端展示 agent 使用 LSP 工具的结果
 // ========================================
@@ -241,6 +355,36 @@ func (a *App) GetLSPStatus() (string, error) {
 	return result, nil
 }
 
+// SaveClipboardImage 保存剪贴板图片(base64)到临时文件, 返回路径。
+//
+// 前端使用:
+//
+//	const path = await window.go.main.App.SaveClipboardImage(base64Data)
+func (a *App) SaveClipboardImage(base64Data string) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		// 尝试 RawStdEncoding (无 padding)
+		data, err = base64.RawStdEncoding.DecodeString(base64Data)
+		if err != nil {
+			return "", fmt.Errorf("decode base64: %w", err)
+		}
+	}
+
+	tmpFile, err := os.CreateTemp("", "clipboard-*.png")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	defer tmpFile.Close()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		return "", fmt.Errorf("write temp file: %w", err)
+	}
+
+	slog.Info("ui: saved clipboard image", logger.FieldSource, "ui",
+		logger.FieldComponent, "clipboard", "path", tmpFile.Name(), "size", len(data))
+	return tmpFile.Name(), nil
+}
+
 // ========================================
 // 多窗口 + 事件转发
 // ========================================
@@ -264,14 +408,42 @@ func (a *App) OpenNewWindow(group string, n int) error {
 	return cmd.Start()
 }
 
-// handleEvent 将 codex agent 事件转发到 Wails 前端。
-func (a *App) handleEvent(agentID string, event codex.Event) {
+// handleBridgeNotification 将 apiserver 标准化通知转发到 Wails 前端。
+//
+// 事件链路:
+// codex raw event -> apiserver.Notify(method,payload) -> Wails runtime Events -> Vue 渲染。
+func (a *App) handleBridgeNotification(method string, params any) {
 	if a.wailsApp == nil {
 		return
 	}
-	a.wailsApp.Event.Emit("agent-event", map[string]interface{}{
-		"agent_id": agentID,
-		"type":     event.Type,
-		"data":     string(event.Data),
+
+	payloadMap := map[string]any{}
+	switch p := params.(type) {
+	case map[string]any:
+		payloadMap = p
+	default:
+		if raw, err := json.Marshal(params); err == nil {
+			_ = json.Unmarshal(raw, &payloadMap)
+		}
+	}
+
+	rawPayload, _ := json.Marshal(payloadMap)
+	// 通用桥接事件: 前端可统一订阅 bridge-event 自行按 type 渲染。
+	a.wailsApp.Event.Emit("bridge-event", map[string]any{
+		"type":    method,
+		"payload": payloadMap,
+		"data":    string(rawPayload),
+	})
+
+	threadID, _ := payloadMap["threadId"].(string)
+	if strings.TrimSpace(threadID) == "" {
+		return
+	}
+
+	// 兼容历史 agent-event 通道 (按 threadId 路由)。
+	a.wailsApp.Event.Emit("agent-event", map[string]any{
+		"agent_id": threadID,
+		"type":     method,
+		"data":     string(rawPayload),
 	})
 }

@@ -22,30 +22,29 @@ import (
 // § 1. 工具注入完整性
 // ============================================================
 
-// TestE2E_ToolInjectionCompleteness 验证 buildAllDynamicTools 包含所有 13 个工具。
+// TestE2E_ToolInjectionCompleteness 验证 buildAllDynamicTools 至少包含编排工具，
+// 并在 LSP 可用时包含 LSP 工具。
 func TestE2E_ToolInjectionCompleteness(t *testing.T) {
 	env := setupTestServer(t)
 	defer env.cancel()
 
 	tools := env.srv.buildAllDynamicTools()
+	lspTools := env.srv.buildLSPDynamicTools()
 
-	// 所有工具名
+	// 编排工具必须存在
 	allExpected := []string{
-		// LSP (3)
-		"lsp_hover", "lsp_open_file", "lsp_diagnostics",
-		// 编排 (4)
 		"orchestration_list_agents", "orchestration_send_message",
 		"orchestration_launch_agent", "orchestration_stop_agent",
-		// 资源 (9, 无 DB 时为 0)
-		// "task_create_dag", "task_get_dag", "task_update_node",
-		// "command_list", "command_get",
-		// "prompt_list", "prompt_get",
-		// "shared_file_read", "shared_file_write",
 	}
 
-	// 无 DB 时只有 LSP(3) + 编排(4) = 7
-	if len(tools) < 7 {
-		t.Fatalf("expected at least 7 tools (LSP+orch), got %d", len(tools))
+	// LSP 服务可用时才要求 LSP 工具
+	minExpected := 4 // orchestration only
+	if len(lspTools) > 0 {
+		allExpected = append(allExpected, "lsp_hover", "lsp_open_file", "lsp_diagnostics")
+		minExpected = 7
+	}
+	if len(tools) < minExpected {
+		t.Fatalf("expected at least %d tools, got %d", minExpected, len(tools))
 	}
 
 	names := map[string]bool{}

@@ -105,6 +105,8 @@ type AppServerClient struct {
 	pending sync.Map // id → *pendingCall
 }
 
+const appServerStartupProbeTimeout = 30 * time.Second
+
 // NewAppServerClient 创建 app-server 客户端。
 func NewAppServerClient(port int) *AppServerClient {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -134,6 +136,9 @@ func (c *AppServerClient) SetEventHandler(h EventHandler) {
 // ========================================
 
 // Spawn 启动 codex app-server --listen ws://IP:PORT。
+//
+// 子进程的生命周期独立于调用者 ctx — 用 Shutdown()/Kill() 管理。
+// ctx 仅用于启动超时控制。
 func (c *AppServerClient) Spawn(ctx context.Context) error {
 	if c.Port > 0 {
 		if err := checkPortFree(c.Port); err != nil {
@@ -142,7 +147,10 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 	}
 
 	listenURL := fmt.Sprintf("ws://127.0.0.1:%d", c.Port)
-	c.Cmd = exec.CommandContext(ctx, "codex", "app-server", "--listen", listenURL)
+	// 注意: 使用 exec.Command 而非 exec.CommandContext —
+	// 子进程不应随 HTTP 请求或 WebSocket 连接断开而被终止。
+	// 生命周期由 AppServerClient.Shutdown()/Kill() 显式管理。
+	c.Cmd = exec.Command("codex", "app-server", "--listen", listenURL)
 	c.Cmd.Env = os.Environ()
 	c.Cmd.Stdout = io.Discard
 	c.stderrCollector = logger.NewStderrCollector(fmt.Sprintf("codex-appserver-%d", c.Port))
@@ -152,9 +160,18 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 		return fmt.Errorf("codex: spawn app-server failed: %w", err)
 	}
 
-	// 等待 WebSocket 可用 (最多 15 秒)
-	deadline := time.Now().Add(15 * time.Second)
+	// 等待 WebSocket 可用 (默认最多 30 秒, 同时受 ctx 控制)
+	deadline := time.Now().Add(appServerStartupProbeTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
 	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			_ = c.Kill()
+			return fmt.Errorf("codex: spawn cancelled: %w", ctx.Err())
+		default:
+		}
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", c.Port), 500*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
@@ -163,6 +180,7 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
+	_ = c.Kill()
 	return fmt.Errorf("codex: app-server startup timeout on port %d", c.Port)
 }
 
@@ -374,11 +392,19 @@ func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID
 	// 兜底: 无 requestID 时用 notification (不应发生)
 	slog.Warn("codex: SendDynamicToolResult without requestID, falling back to notification",
 		"callId", callID)
-	return c.notify("dynamic_tool_result", map[string]any{
+	params := map[string]any{
 		"threadId": c.ThreadID,
 		"callId":   callID,
-		"output":   output,
-	})
+		// 兼容不同版本字段命名
+		"toolCallId":   callID,
+		"tool_call_id": callID,
+		"output":       output,
+		// 兼容可能期望响应体结构的实现
+		"result":       result,
+		"contentItems": result.ContentItems,
+		"success":      true,
+	}
+	return c.notify("dynamic_tool_result", params)
 }
 
 // ListThreads 返回线程列表 (app-server 模式下只有当前线程)。
@@ -520,54 +546,58 @@ func (c *AppServerClient) readLoop() {
 //	"agent/event/dynamic_tool_call" → "dynamic_tool_call"
 //	"agent/event/mcp_startup_complete" → "mcp_startup_complete"
 //	etc.
+//
+// methodToEventMap 包级 var — 零分配热路径查找。
+//
+// JSON-RPC notification method → codex Event type。
+var methodToEventMap = map[string]string{
+	// Agent 输出
+	"agent/event/agent_message_content_delta": EventAgentMessageDelta,
+	"agent/event/agent_reasoning_delta":       EventAgentReasoningDelta,
+	"agent/event/agent_message_completed":     EventAgentMessageCompleted,
+
+	// 生命周期
+	"agent/event/turn_started":         EventTurnStarted,
+	"agent/event/turn_completed":       EventTurnComplete,
+	"agent/event/session_configured":   EventSessionConfigured,
+	"agent/event/mcp_startup_complete": EventMCPStartupComplete,
+	"agent/event/shutdown_complete":    EventShutdownComplete,
+	"agent/event/error":                EventError,
+	"agent/event/warning":              EventWarning,
+
+	// 命令执行
+	"agent/event/exec_approval_request":     EventExecApprovalRequest,
+	"agent/event/exec_command_begin":        EventExecCommandBegin,
+	"agent/event/exec_command_end":          EventExecCommandEnd,
+	"agent/event/exec_command_output_delta": EventExecCommandOutputDelta,
+
+	// 代码修改
+	"agent/event/patch_apply_begin": EventPatchApplyBegin,
+	"agent/event/patch_apply_end":   EventPatchApplyEnd,
+
+	// MCP
+	"agent/event/mcp_tool_call_begin":     EventMCPToolCallBegin,
+	"agent/event/mcp_tool_call_end":       EventMCPToolCallEnd,
+	"agent/event/mcp_list_tools_response": EventMCPListToolsResponse,
+	"agent/event/list_skills_response":    EventListSkillsResponse,
+
+	// Dynamic Tools
+	// codex app-server 可能使用两种前缀:
+	//   agent/event/dynamic_tool_call — 旧版本
+	//   codex/event/dynamic_tool_call_request — 新版本 (v8.8+)
+	"agent/event/dynamic_tool_call":         EventDynamicToolCall,
+	"codex/event/dynamic_tool_call":         EventDynamicToolCall,
+	"codex/event/dynamic_tool_call_request": EventDynamicToolCall,
+
+	// Collab
+	"agent/event/collab_agent_spawn_begin":       EventCollabAgentSpawnBegin,
+	"agent/event/collab_agent_spawn_end":         EventCollabAgentSpawnEnd,
+	"agent/event/collab_agent_interaction_begin": EventCollabAgentInteractionBegin,
+	"agent/event/collab_agent_interaction_end":   EventCollabAgentInteractionEnd,
+}
+
 func (c *AppServerClient) jsonRPCToEvent(msg jsonRPCMessage) Event {
-	methodToEvent := map[string]string{
-		// Agent 输出
-		"agent/event/agent_message_content_delta": EventAgentMessageDelta,
-		"agent/event/agent_reasoning_delta":       EventAgentReasoningDelta,
-		"agent/event/agent_message_completed":     EventAgentMessageCompleted,
-
-		// 生命周期
-		"agent/event/turn_started":         EventTurnStarted,
-		"agent/event/turn_completed":       EventTurnComplete,
-		"agent/event/session_configured":   EventSessionConfigured,
-		"agent/event/mcp_startup_complete": EventMCPStartupComplete,
-		"agent/event/shutdown_complete":    EventShutdownComplete,
-		"agent/event/error":                EventError,
-		"agent/event/warning":              EventWarning,
-
-		// 命令执行
-		"agent/event/exec_approval_request":     EventExecApprovalRequest,
-		"agent/event/exec_command_begin":        EventExecCommandBegin,
-		"agent/event/exec_command_end":          EventExecCommandEnd,
-		"agent/event/exec_command_output_delta": EventExecCommandOutputDelta,
-
-		// 代码修改
-		"agent/event/patch_apply_begin": EventPatchApplyBegin,
-		"agent/event/patch_apply_end":   EventPatchApplyEnd,
-
-		// MCP
-		"agent/event/mcp_tool_call_begin":     EventMCPToolCallBegin,
-		"agent/event/mcp_tool_call_end":       EventMCPToolCallEnd,
-		"agent/event/mcp_list_tools_response": EventMCPListToolsResponse,
-		"agent/event/list_skills_response":    EventListSkillsResponse,
-
-		// Dynamic Tools
-		// codex app-server 可能使用两种前缀:
-		//   agent/event/dynamic_tool_call — 旧版本
-		//   codex/event/dynamic_tool_call_request — 新版本 (v8.8+)
-		"agent/event/dynamic_tool_call":         EventDynamicToolCall,
-		"codex/event/dynamic_tool_call":         EventDynamicToolCall,
-		"codex/event/dynamic_tool_call_request": EventDynamicToolCall,
-
-		// Collab
-		"agent/event/collab_agent_spawn_begin":       EventCollabAgentSpawnBegin,
-		"agent/event/collab_agent_spawn_end":         EventCollabAgentSpawnEnd,
-		"agent/event/collab_agent_interaction_begin": EventCollabAgentInteractionBegin,
-		"agent/event/collab_agent_interaction_end":   EventCollabAgentInteractionEnd,
-	}
-
-	eventType, ok := methodToEvent[msg.Method]
+	eventType, ok := methodToEventMap[msg.Method]
 	if !ok {
 		// 未知方法 → 用 method 名作为 type (兼容) + 警告日志
 		eventType = msg.Method

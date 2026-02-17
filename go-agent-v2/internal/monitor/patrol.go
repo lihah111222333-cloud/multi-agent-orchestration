@@ -128,9 +128,12 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 
 	var snapshots []AgentSnapshot
 	for _, a := range agents {
+		// 解析一次，重用结果 (避免 3 次重复 parseOutputTail)
+		lines := parseOutputTail(a.OutputTail)
+
 		// 计算 stagnation
-		stagnant := p.computeStagnant(a.AgentID, a.OutputTail, now)
-		status := ClassifyStatus(parseOutputTail(a.OutputTail), a.SessionID != "", stagnant)
+		stagnant := p.computeStagnantFromLines(a.AgentID, lines, now)
+		status := ClassifyStatus(lines, a.SessionID != "", stagnant)
 		if status != "error" && status != "disconnected" && a.Error != "" {
 			status = "disconnected"
 		}
@@ -142,7 +145,7 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 			Status:      status,
 			StagnantSec: stagnant,
 			Error:       a.Error,
-			OutputTail:  parseOutputTail(a.OutputTail),
+			OutputTail:  lines,
 		}
 		snapshots = append(snapshots, snap)
 
@@ -200,9 +203,10 @@ func (p *Patrol) Start(ctx context.Context) {
 // 内部工具 (DRY: 共享逻辑)
 // ========================================
 
-// computeStagnant 计算输出停滞时间 (指纹对比)。
-func (p *Patrol) computeStagnant(agentID string, outputTail any, now time.Time) int {
-	hash := hashOutput(outputTail)
+// computeStagnantFromLines 计算输出停滞时间 (指纹对比)。
+// 接受已解析的 lines，避免重复调用 parseOutputTail。
+func (p *Patrol) computeStagnantFromLines(agentID string, lines []string, now time.Time) int {
+	hash := hashLines(lines)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -215,12 +219,12 @@ func (p *Patrol) computeStagnant(agentID string, outputTail any, now time.Time) 
 	return int(now.Sub(prev.lastChangeAt).Seconds())
 }
 
-func hashOutput(v any) string {
-	lines := parseOutputTail(v)
-	if len(lines) > 6 {
-		lines = lines[len(lines)-6:]
+func hashLines(lines []string) string {
+	tail := lines
+	if len(tail) > 6 {
+		tail = tail[len(tail)-6:]
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(tail, "\n")
 }
 
 func parseOutputTail(v any) []string {

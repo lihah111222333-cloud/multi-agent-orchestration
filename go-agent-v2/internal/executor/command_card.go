@@ -430,9 +430,10 @@ func (e *CommandCardExecutor) ListRuns(ctx context.Context, cardKey, status, req
 // RecoverStaleRuns 恢复因崩溃卡在 running 状态的任务 (对应 Python _recover_stale_runs)。
 func (e *CommandCardExecutor) RecoverStaleRuns(ctx context.Context, timeoutSec int) (int64, error) {
 	threshold := util.ClampInt(timeoutSec*2, 300, 7200)
-	tag, err := e.pool.Exec(ctx, fmt.Sprintf(`
-		UPDATE command_card_runs SET status='failed', error='[timeout_recovery] process crash or timeout',
-		exit_code=-3, updated_at=NOW() WHERE status='running' AND updated_at < NOW() - INTERVAL '%d seconds'`, threshold))
+	tag, err := e.pool.Exec(ctx,
+		`UPDATE command_card_runs SET status='failed', error='[timeout_recovery] process crash or timeout',
+		 exit_code=-3, updated_at=NOW()
+		 WHERE status='running' AND updated_at < NOW() - $1 * INTERVAL '1 second'`, threshold)
 	if err != nil {
 		return 0, err
 	}

@@ -126,15 +126,15 @@ func TestProtocolTypes(t *testing.T) {
 }
 
 func TestDefaultServersConfig(t *testing.T) {
-	if len(DefaultServers) != 3 {
-		t.Fatalf("want 3 DefaultServers, got %d", len(DefaultServers))
+	if len(DefaultServers) != 5 {
+		t.Fatalf("want 5 DefaultServers, got %d", len(DefaultServers))
 	}
 
 	langs := map[string]bool{}
 	for _, s := range DefaultServers {
 		langs[s.Language] = true
 	}
-	for _, want := range []string{"go", "rust", "typescript"} {
+	for _, want := range []string{"go", "rust", "typescript", "python", "c"} {
 		if !langs[want] {
 			t.Errorf("missing language %q in DefaultServers", want)
 		}

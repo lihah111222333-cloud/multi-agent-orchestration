@@ -4,6 +4,8 @@
 //   - .go           → gopls
 //   - .rs           → rust-analyzer
 //   - .ts/.tsx/.js/.jsx → typescript-language-server --stdio
+//   - .py           → pylsp
+//   - .c/.h         → clangd
 //
 // 延迟启动: 首次打开某语言文件时才 spawn 对应进程。
 package lsp
@@ -25,7 +27,7 @@ type ServerConfig struct {
 	Extensions []string // 关联的文件后缀 (不含点号)
 }
 
-// DefaultServers 默认支持的三个语言服务器。
+// DefaultServers 默认支持的五个语言服务器。
 var DefaultServers = []ServerConfig{
 	{
 		Language:   "go",
@@ -44,6 +46,18 @@ var DefaultServers = []ServerConfig{
 		Command:    "typescript-language-server",
 		Args:       []string{"--stdio"},
 		Extensions: []string{"ts", "tsx", "js", "jsx"},
+	},
+	{
+		Language:   "python",
+		Command:    "pylsp",
+		Args:       nil,
+		Extensions: []string{"py"},
+	},
+	{
+		Language:   "c",
+		Command:    "clangd",
+		Args:       nil,
+		Extensions: []string{"c", "h"},
 	},
 }
 

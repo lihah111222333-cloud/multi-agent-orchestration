@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 )
 
@@ -30,6 +31,44 @@ func parseDashLimit(params json.RawMessage, defaultLimit int) int {
 
 func dashCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 10*time.Second)
+}
+
+// isNilStore 安全检测 store 是否为 nil (处理 typed nil 指针)。
+//
+// Go 中 `(*SomeStore)(nil)` 作为 `any` 参数传入时 `store == nil` 返回 false,
+// 但实际解引用会 panic。此函数同时检测 untyped nil 和 typed nil。
+func isNilStore(store any) bool {
+	if store == nil {
+		return true
+	}
+	v := reflect.ValueOf(store)
+	return v.Kind() == reflect.Ptr && v.IsNil()
+}
+
+// dashList 通用 Dashboard 列表查询模板。
+//
+// 封装 dashboard/xxx 方法的共享骨架:
+//
+//	nil store check → typedHandler unmarshal → dashCtx timeout → query → error→empty fallback → wrap
+//
+// 用法:
+//
+//	s.methods["dashboard/dags"] = dashList[dagParams]("dags", s.dagStore,
+//	    func(ctx context.Context, p dagParams) (any, error) { return s.dagStore.ListDAGs(ctx, ...) })
+func dashList[P any](key string, store any, query func(ctx context.Context, p P) (any, error)) Handler {
+	return typedHandler(func(_ context.Context, p P) (any, error) {
+		if isNilStore(store) {
+			return map[string]any{key: []any{}}, nil
+		}
+		ctx, cancel := dashCtx()
+		defer cancel()
+		list, err := query(ctx, p)
+		if err != nil {
+			slog.Warn("dashboard/"+key+" failed", "error", err)
+			return map[string]any{key: []any{}}, nil
+		}
+		return map[string]any{key: list}, nil
+	})
 }
 
 // ========================================

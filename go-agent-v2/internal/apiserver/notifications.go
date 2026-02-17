@@ -81,6 +81,41 @@ var eventMethodMap = map[string]string{
 
 	// ── Skills ──
 	"list_skills_response": "skills/list/response",
+
+	// ── codex/event/* v2 协议 (新版 codex app-server 直接转发的 JSON-RPC 方法名) ──
+	// 这些事件来自 codex app-server → readLoop → jsonRPCToEvent (unmapped) → Event.Type
+	"codex/event/agent_message":               "item/agentMessage/started",
+	"codex/event/agent_message_delta":         "item/agentMessage/delta",
+	"codex/event/agent_message_content_delta": "item/agentMessage/delta",
+	"codex/event/agent_reasoning_delta":       "item/reasoning/textDelta",
+	"codex/event/agent_reasoning_raw_delta":   "item/reasoning/textDelta",
+	"codex/event/item_completed":              "item/completed",
+	"codex/event/user_message":                "item/userMessage",
+	"codex/event/turn_started":                "turn/started",
+	"codex/event/task_complete":               "turn/completed",
+	"codex/event/token_count":                 "thread/tokenUsage/updated",
+	"codex/event/exec_command_begin":          "item/started",
+	"codex/event/exec_command_end":            "item/completed",
+	"codex/event/exec_command_output_delta":   "item/commandExecution/outputDelta",
+	"codex/event/patch_apply_begin":           "item/fileChange/started",
+	"codex/event/patch_apply":                 "item/fileChange/outputDelta",
+	"codex/event/patch_apply_end":             "item/fileChange/completed",
+	"codex/event/mcp_startup_update":          "mcpServer/startupUpdate",
+	"codex/event/mcp_startup_complete":        "mcpServer/startupComplete",
+
+	// ── item/* v2 协议 (直通方法名) ──
+	"item/agentMessage/delta":     "item/agentMessage/delta",
+	"item/completed":              "item/completed",
+	"item/started":                "item/started",
+	"item/reasoning/textDelta":    "item/reasoning/textDelta",
+	"item/fileChange/outputDelta": "item/fileChange/outputDelta",
+	"item/fileChange/started":     "item/fileChange/started",
+	"item/fileChange/completed":   "item/fileChange/completed",
+	"turn/completed":              "turn/completed",
+	"turn/started":                "turn/started",
+	"thread/tokenUsage/updated":   "thread/tokenUsage/updated",
+	"account/rateLimits/updated":  "account/rateLimits/updated",
+	"thread/started":              "thread/started",
 }
 
 // mapEventToMethod 将 Codex 事件类型转换为 JSON-RPC 通知方法名。

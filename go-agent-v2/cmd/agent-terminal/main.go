@@ -1,4 +1,4 @@
-// cmd/agent-terminal — Wails v3 原生多 Agent 终端 + Dashboard。
+// cmd/agent-terminal — Wails v3 原生多 Agent 终端。
 //
 // 统一架构:
 //   - 内嵌 apiserver — 前端通过 Wails 绑定 App.CallAPI() 调用
@@ -24,6 +24,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver"
+	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/config"
 	"github.com/multi-agent/go-agent-v2/internal/database"
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
@@ -78,9 +79,22 @@ func loadEnvFile() {
 
 func main() {
 	loadEnvFile()
+	info := currentBuildInfo()
+	slog.Info("build info",
+		"version", info.Version,
+		"commit", info.Commit,
+		"build_time", info.BuildTime,
+		"runtime", info.Runtime,
+	)
+
+	// 日志持久化: stdout + 文件
+	if err := logger.InitWithFile("logs"); err != nil {
+		slog.Warn("file logging unavailable", "error", err)
+	}
 
 	group := flag.String("group", "", "窗口分组名称 (显示在标题栏)")
 	n := flag.Int("n", 0, "自动启动的 Agent 数量")
+	debug := flag.Bool("debug", false, "调试模式: 在 :4501 启动 HTTP UI 服务, 浏览器访问")
 	flag.Parse()
 
 	title := "Agent Orchestrator"
@@ -102,6 +116,10 @@ func main() {
 		if err != nil {
 			slog.Warn("DB not available, dashboard pages will be empty", "error", err)
 		} else {
+			// 自动执行 DB 迁移
+			if mErr := database.Migrate(ctx, p, "./migrations"); mErr != nil {
+				slog.Warn("DB migration failed (non-fatal)", "error", mErr)
+			}
 			logger.AttachDBHandler(p)
 			pool = p
 			dbPool = p
@@ -129,8 +147,20 @@ func main() {
 		}
 	}()
 
+	// ─── 调试模式: HTTP 静态文件 + Wails Shim ───
+	if *debug {
+		startDebugServer(ctx)
+	}
+
 	// ─── Wails App ───
 	appSvc := NewApp(*group, *n, appSrv, mgr)
+	appSrv.SetNotifyHook(appSvc.handleBridgeNotification)
+
+	// 统一事件分发: 仅走 apiserver 标准化通知链路。
+	// codex raw event -> apiserver.Notify(method,payload) -> WebSocket/SSE + Wails bridge
+	mgr.SetOnEvent(func(agentID string, event codex.Event) {
+		appSrv.AgentEventHandler(agentID)(event)
+	})
 
 	app := application.New(application.Options{
 		Name: "Agent Orchestrator",
@@ -147,6 +177,7 @@ func main() {
 			cancel() // 停止 apiserver
 			appSvc.shutdown()
 			logger.ShutdownDBHandler()
+			logger.ShutdownFileHandler()
 			if dbPool != nil {
 				dbPool.Close()
 			}

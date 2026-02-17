@@ -1,0 +1,277 @@
+// app.go — Wails 绑定: Agent 管理 + 通用 API 桥。
+//
+// 前端通过 window.go.main.App.XXX() 调用。
+//
+// 核心方法:
+//   - CallAPI(method, params): 通用 JSON-RPC 桥, 覆盖全部后端功能
+//   - GetLSPDiagnostics/GetLSPStatus: LSP 工具结果显示
+//   - handleEvent: codex agent 事件 → Wails 事件 → 前端展示
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"time"
+
+	"github.com/multi-agent/go-agent-v2/internal/apiserver"
+	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/wailsapp/wails/v3/pkg/application"
+)
+
+// App Wails 绑定 — 前端通过 window.go.main.App.XXX() 调用。
+type App struct {
+	srv      *apiserver.Server    // 后端 API (所有操作通过此调用)
+	mgr      *runner.AgentManager // Agent 进程管理 (事件监听 + 直接操作)
+	group    string               // 分组名称
+	autoN    int                  // 自动启动数量
+	wailsApp *application.App
+}
+
+// NewApp 创建 App 实例。
+func NewApp(group string, autoN int, srv *apiserver.Server, mgr *runner.AgentManager) *App {
+	a := &App{
+		srv:   srv,
+		mgr:   mgr,
+		group: group,
+		autoN: autoN,
+	}
+
+	// 注册事件回调 — codex agent 事件转发到 Wails 前端
+	a.mgr.SetOnEvent(func(agentID string, event codex.Event) {
+		a.handleEvent(agentID, event)
+	})
+
+	return a
+}
+
+// ServiceStartup Wails v3 Service 生命周期: 应用启动时调用。
+func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) error {
+	if a.autoN > 0 && a.wailsApp != nil {
+		a.wailsApp.Event.Emit("auto-launch", map[string]interface{}{
+			"count": a.autoN,
+			"group": a.group,
+		})
+	}
+	return nil
+}
+
+func (a *App) shutdown() {
+	done := make(chan struct{})
+	go func() {
+		a.mgr.StopAll()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+	}
+}
+
+// ========================================
+// 通用 API 桥 — 覆盖全部 45+ JSON-RPC 方法
+// ========================================
+
+// CallAPI 通用 JSON-RPC 调用桥。
+//
+// 前端使用:
+//
+//	const result = await window.go.main.App.CallAPI("thread/start", '{"model":"o4-mini"}')
+//	const dag = await window.go.main.App.CallAPI("resource_task_get_dag", '{"dag_id":"xxx"}')
+//
+// 覆盖: 线程生命周期, 对话控制, 技能管理, 模型/配置, MCP, 命令执行, 日志查询 等。
+func (a *App) CallAPI(method, paramsJSON string) (string, error) {
+	var params json.RawMessage
+	if paramsJSON != "" {
+		params = json.RawMessage(paramsJSON)
+	} else {
+		params = json.RawMessage("{}")
+	}
+
+	result, err := a.srv.InvokeMethod(context.Background(), method, params)
+	if err != nil {
+		slog.Warn("CallAPI failed", "method", method, "error", err)
+		return "", err
+	}
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("marshal result: %w", err)
+	}
+	return string(data), nil
+}
+
+// ========================================
+// Agent 管理 (便捷方法, 内部走 apiserver)
+// ========================================
+
+// LaunchAgent 启动一个 Agent (通过 apiserver, 注入完整工具链)。
+func (a *App) LaunchAgent(name, prompt, cwd string) (string, error) {
+	slog.Info("ui: launch agent", logger.FieldSource, "ui",
+		logger.FieldComponent, "agent", "name", name)
+
+	params, _ := json.Marshal(map[string]string{
+		"model": "",
+		"cwd":   cwd,
+	})
+	result, err := a.srv.InvokeMethod(context.Background(), "thread/start", params)
+	if err != nil {
+		return "", fmt.Errorf("launch agent: %w", err)
+	}
+
+	// 发送初始 prompt (如果有)
+	resultMap, ok := result.(map[string]any)
+	if ok && prompt != "" {
+		if thread, ok2 := resultMap["thread"].(map[string]any); ok2 {
+			if id, ok3 := thread["id"].(string); ok3 {
+				turnParams, _ := json.Marshal(map[string]string{
+					"threadId": id,
+					"prompt":   prompt,
+				})
+				_, _ = a.srv.InvokeMethod(context.Background(), "turn/start", turnParams)
+			}
+		}
+	}
+
+	data, _ := json.Marshal(resultMap)
+	return string(data), nil
+}
+
+// LaunchBatch 批量启动 N 个 Agent。
+func (a *App) LaunchBatch(count int, cwd string) error {
+	slog.Info("ui: launch batch", logger.FieldSource, "ui",
+		logger.FieldComponent, "agent", "count", count, "group", a.group)
+	for i := 1; i <= count; i++ {
+		name := fmt.Sprintf("Agent %d", i)
+		if a.group != "" {
+			name = fmt.Sprintf("%s-%d", a.group, i)
+		}
+		if _, err := a.LaunchAgent(name, "", cwd); err != nil {
+			return fmt.Errorf("launch %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// SubmitInput 向 Agent 发送消息。
+func (a *App) SubmitInput(agentID, prompt string) error {
+	slog.Info("ui: submit input", logger.FieldSource, "ui",
+		logger.FieldComponent, "chat", logger.FieldAgentID, agentID,
+		"prompt_len", len(prompt))
+	return a.mgr.Submit(agentID, prompt, nil, nil)
+}
+
+// SubmitWithFiles 向 Agent 发送消息 + 附件。
+func (a *App) SubmitWithFiles(agentID, prompt string, images, files []string) error {
+	slog.Info("ui: submit with files", logger.FieldSource, "ui",
+		logger.FieldComponent, "chat", logger.FieldAgentID, agentID,
+		"images", len(images), "files", len(files))
+	return a.mgr.Submit(agentID, prompt, images, files)
+}
+
+// SendCommand 向 Agent 发送斜杠命令。
+func (a *App) SendCommand(agentID, cmd, args string) error {
+	slog.Info("ui: send command", logger.FieldSource, "ui",
+		logger.FieldComponent, "command", logger.FieldAgentID, agentID,
+		"cmd", cmd)
+	return a.mgr.SendCommand(agentID, cmd, args)
+}
+
+// StopAgent 停止一个 Agent (非阻塞)。
+func (a *App) StopAgent(id string) error {
+	slog.Info("ui: stop agent", logger.FieldSource, "ui",
+		logger.FieldComponent, "agent", logger.FieldAgentID, id)
+	done := make(chan error, 1)
+	go func() { done <- a.mgr.Stop(id) }()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(3 * time.Second):
+		return fmt.Errorf("stop %s: timeout", id)
+	}
+}
+
+// ListAgents 返回所有 Agent 信息。
+func (a *App) ListAgents() []runner.AgentInfo {
+	return a.mgr.List()
+}
+
+// GetGroup 返回当前窗口的分组名。
+func (a *App) GetGroup() string { return a.group }
+
+// ========================================
+// LSP 调度 — 前端展示 agent 使用 LSP 工具的结果
+// ========================================
+
+// GetLSPDiagnostics 获取当前缓存的 LSP 诊断信息 (按文件)。
+//
+// 前端使用:
+//
+//	const diags = await window.go.main.App.GetLSPDiagnostics("")
+//	// 返回: {"file:///path/to/file.go": [{Range, Message, Severity}...]}
+func (a *App) GetLSPDiagnostics(filePath string) (string, error) {
+	params, _ := json.Marshal(map[string]string{"file_path": filePath})
+	// 使用 apiserver 内置的 lsp_diagnostics handler
+	result, err := a.srv.InvokeMethod(context.Background(), "lsp_diagnostics_query", params)
+	if err != nil {
+		// 直接查 diagCache — 如果没有专用 method, 走 JSON-RPC 不通时降级
+		return "{}", nil
+	}
+	data, _ := json.Marshal(result)
+	return string(data), nil
+}
+
+// GetLSPStatus 获取所有 LSP 服务器状态。
+//
+// 前端使用:
+//
+//	const status = await window.go.main.App.GetLSPStatus()
+//	// 返回: [{"Language":"go","Status":"running","Port":0}...]
+func (a *App) GetLSPStatus() (string, error) {
+	result, err := a.CallAPI("mcpServerStatus/list", "{}")
+	if err != nil {
+		return "[]", nil
+	}
+	return result, nil
+}
+
+// ========================================
+// 多窗口 + 事件转发
+// ========================================
+
+// OpenNewWindow 启动一个新的 agent-terminal 进程 (独立窗口)。
+func (a *App) OpenNewWindow(group string, n int) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("get executable: %w", err)
+	}
+	args := []string{}
+	if group != "" {
+		args = append(args, "--group", group)
+	}
+	if n > 0 {
+		args = append(args, "--n", fmt.Sprintf("%d", n))
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Start()
+}
+
+// handleEvent 将 codex agent 事件转发到 Wails 前端。
+func (a *App) handleEvent(agentID string, event codex.Event) {
+	if a.wailsApp == nil {
+		return
+	}
+	a.wailsApp.Event.Emit("agent-event", map[string]interface{}{
+		"agent_id": agentID,
+		"type":     event.Type,
+		"data":     string(event.Data),
+	})
+}

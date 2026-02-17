@@ -1,0 +1,699 @@
+/* Agent Orchestrator — 金融级暗色主题 (Bloomberg × Linear × Raycast) */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --bg-base: #0C1017;
+    --surface: #131920;
+    --card: #1A2230;
+    --card-hover: #1E2838;
+    --elevated: #242E3E;
+    --primary: #6B9BFF;
+    --primary-dim: rgba(107, 155, 255, .08);
+    --success: #5BE88A;
+    --error: #F07070;
+    --warning: #E0B35B;
+    --info: #38BDF8;
+    --text: #EDF1F7;
+    --text-sec: #A8B8CE;
+    --text-muted: #6B7F98;
+    --text-subtle: #3E5068;
+    --border: #1E2B3E;
+    --border-hover: #2E4060;
+    --hover: rgba(255, 255, 255, .03);
+    --selected: rgba(107, 155, 255, .09);
+    --radius: 8px;
+    --radius-sm: 5px;
+    --sidebar-w: 56px;
+    --transition: 200ms ease;
+}
+
+body {
+    font-family: -apple-system, "Hiragino Sans GB", "SF Pro Text", sans-serif;
+    background: var(--bg-base);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ─── 侧栏 ─── */
+
+#sidebar {
+    width: var(--sidebar-w);
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    padding: 10px 0;
+    gap: 2px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--elevated);
+}
+
+.sidebar-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 52px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background var(--transition);
+    position: relative;
+    user-select: none;
+}
+
+.sidebar-btn:hover {
+    background: var(--hover);
+}
+
+.sidebar-btn.active {
+    background: var(--selected);
+}
+
+/* 左侧选中指示条 */
+.sidebar-btn.active::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 25%;
+    width: 3px;
+    height: 50%;
+    border-radius: 1.5px;
+    background: var(--primary);
+}
+
+.sb-icon {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-muted);
+    transition: color var(--transition);
+}
+
+.sidebar-btn.active .sb-icon {
+    color: var(--primary);
+}
+
+.sb-label {
+    font-size: 9px;
+    font-weight: 500;
+    color: var(--text-subtle);
+    margin-top: 3px;
+    transition: color var(--transition);
+}
+
+.sidebar-btn.active .sb-label {
+    color: var(--text-sec);
+}
+
+.sidebar-spacer {
+    flex: 1;
+}
+
+/* ─── 主内容区 ─── */
+
+#content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.page {
+    display: none;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+}
+
+.page.active {
+    display: flex;
+}
+
+/* ─── 面板头 ─── */
+
+.panel-header {
+    display: flex;
+    align-items: center;
+    height: 52px;
+    background: var(--surface);
+    padding: 0 20px;
+    gap: 8px;
+    border-bottom: 1px solid var(--elevated);
+    flex-shrink: 0;
+}
+
+.ph-bar {
+    width: 3px;
+    height: 18px;
+    border-radius: 1.5px;
+    background: var(--primary);
+}
+
+.ph-text h2 {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.ph-sub {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+/* ─── 面板体 ─── */
+
+.panel-body {
+    flex: 1;
+    overflow: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* ─── 数据卡片 ─── */
+
+.data-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    min-height: 44px;
+    transition: background var(--transition), border-color var(--transition);
+}
+
+.data-card:hover {
+    background: var(--card-hover);
+    border-color: var(--border-hover);
+}
+
+.dc-row {
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    gap: 8px;
+}
+
+.dc-left {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.dc-left strong {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.dc-left span {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.dc-right-text {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-sec);
+}
+
+/* ─── 徽章 ─── */
+
+.badge {
+    display: inline-block;
+    height: 22px;
+    line-height: 22px;
+    padding: 0 8px;
+    border-radius: 11px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.badge-primary {
+    background: rgba(107, 155, 255, .1);
+    color: var(--primary);
+    border: 1px solid rgba(107, 155, 255, .25);
+}
+
+.badge-success {
+    background: rgba(91, 232, 138, .1);
+    color: var(--success);
+    border: 1px solid rgba(91, 232, 138, .25);
+}
+
+.badge-error {
+    background: rgba(240, 112, 112, .1);
+    color: var(--error);
+    border: 1px solid rgba(240, 112, 112, .25);
+}
+
+.badge-warning {
+    background: rgba(224, 179, 91, .1);
+    color: var(--warning);
+    border: 1px solid rgba(224, 179, 91, .25);
+}
+
+.badge-muted {
+    background: rgba(107, 127, 152, .1);
+    color: var(--text-muted);
+    border: 1px solid rgba(107, 127, 152, .25);
+}
+
+/* ─── 统计卡片 ─── */
+
+.stat-row {
+    display: flex;
+    padding: 20px;
+    gap: 8px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--elevated);
+}
+
+.stat-card {
+    flex: 1;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    height: 68px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.stat-value {
+    font-size: 24px;
+    font-weight: 800;
+}
+
+.stat-label {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+/* ─── 子标签 ─── */
+
+.sub-tabs {
+    display: flex;
+    padding: 4px 20px;
+    gap: 4px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--elevated);
+}
+
+.sub-tab {
+    height: 32px;
+    padding: 0 16px;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-muted);
+    background: transparent;
+    cursor: pointer;
+}
+
+.sub-tab.active {
+    background: var(--primary-dim);
+    color: var(--primary);
+    font-weight: 600;
+    border: 1px solid rgba(107, 155, 255, .25);
+}
+
+/* ─── 分区标题 ─── */
+
+.section-header {
+    height: 34px;
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 4px;
+    background: var(--surface);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+}
+
+.sh-count {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-subtle);
+}
+
+/* ─── 空状态 ─── */
+
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    gap: 8px;
+    padding: 32px;
+}
+
+.es-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 24px;
+    background: var(--primary-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.empty-state h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.empty-state p {
+    font-size: 11px;
+    color: var(--text-subtle);
+}
+
+/* ─── 分栏面板 ─── */
+
+.split-panel {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+.split-left,
+.split-right {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.split-divider {
+    width: 1px;
+    background: var(--elevated);
+}
+
+/* ─── Terminal 页 — 工具栏 ─── */
+
+#toolbar {
+    display: flex;
+    align-items: center;
+    height: 48px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--elevated);
+    padding: 0 16px;
+    gap: 16px;
+    flex-shrink: 0;
+}
+
+#toolbar button,
+#toolbar input,
+#toolbar label,
+#toolbar .logo,
+#toolbar .toolbar-right {
+    -webkit-app-region: no-drag;
+}
+
+.toolbar-left {
+    display: flex;
+    align-items: center;
+}
+
+.logo {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--primary);
+    letter-spacing: 0.5px;
+}
+
+.toolbar-center {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    justify-content: center;
+}
+
+.toolbar-center label {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.toolbar-center input {
+    width: 56px;
+    height: 28px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 13px;
+    text-align: center;
+    outline: none;
+}
+
+.toolbar-center input:focus {
+    border-color: var(--primary);
+}
+
+.toolbar-right {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+/* 按钮 */
+.btn {
+    height: 28px;
+    padding: 0 14px;
+    border: none;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 200ms;
+}
+
+.btn-primary {
+    background: var(--primary);
+    color: #fff;
+}
+
+.btn-primary:hover {
+    filter: brightness(1.15);
+}
+
+.btn-secondary {
+    background: var(--card);
+    color: var(--text-sec);
+    border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+    border-color: var(--border-hover);
+    color: var(--text);
+}
+
+.btn-ghost {
+    background: transparent;
+    color: var(--text-muted);
+}
+
+.btn-ghost:hover {
+    color: var(--text-sec);
+}
+
+/* ─── 终端网格 ─── */
+
+#grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+    gap: 1px;
+    background: var(--elevated);
+    overflow: auto;
+}
+
+.pane {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-base);
+    min-height: 200px;
+}
+
+.pane-header {
+    display: flex;
+    align-items: center;
+    height: 32px;
+    background: var(--surface);
+    padding: 0 10px;
+    gap: 8px;
+    cursor: default;
+    user-select: none;
+    border-bottom: 1px solid var(--border);
+}
+
+.pane-header:hover {
+    background: var(--card);
+}
+
+.pane-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-subtle);
+    flex-shrink: 0;
+}
+
+.pane-dot.running {
+    background: var(--success);
+}
+
+.pane-dot.thinking {
+    background: var(--warning);
+    animation: pulse 1.5s infinite;
+}
+
+.pane-dot.error {
+    background: var(--error);
+}
+
+.pane-dot.idle {
+    background: var(--primary);
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.4;
+    }
+}
+
+.pane-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-sec);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pane-state {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.pane-btn {
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: transparent;
+    color: var(--text-subtle);
+    font-size: 14px;
+    cursor: pointer;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 150ms;
+}
+
+.pane-btn:hover {
+    background: var(--card);
+    color: var(--text);
+}
+
+.pane-body {
+    flex: 1;
+    padding: 4px;
+    overflow: hidden;
+}
+
+.pane-input {
+    display: flex;
+    height: 32px;
+    border-top: 1px solid var(--border);
+}
+
+.pane-input textarea {
+    flex: 1;
+    background: var(--card);
+    border: none;
+    padding: 6px 10px;
+    color: var(--text);
+    font-size: 12px;
+    font-family: "Menlo", monospace;
+    outline: none;
+    resize: none;
+    overflow: hidden;
+    line-height: 20px;
+    height: 32px;
+    box-sizing: border-box;
+}
+
+.pane-input textarea::placeholder {
+    color: var(--text-subtle);
+}
+
+.pane-input button {
+    width: 48px;
+    background: var(--primary-dim);
+    border: none;
+    color: var(--primary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.pane-input button:hover {
+    background: var(--primary);
+    color: #fff;
+}
+
+/* ─── 放大遮罩 ─── */
+
+.overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .85);
+    z-index: 100;
+    display: flex;
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 24px;
+}
+
+.overlay.hidden {
+    display: none;
+}
+
+.overlay-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-base);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    overflow: hidden;
+}
+
+.xterm {
+    height: 100%;
+}

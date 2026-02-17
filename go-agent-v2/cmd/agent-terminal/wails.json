@@ -1,0 +1,10 @@
+{
+    "$schema": "https://wails.io/schemas/config.v2.json",
+    "name": "agent-terminal",
+    "outputfilename": "agent-terminal",
+    "frontend:dir": "frontend",
+    "wailsjsdir": "frontend",
+    "author": {
+        "name": "multi-agent"
+    }
+}

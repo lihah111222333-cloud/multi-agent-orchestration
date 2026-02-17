@@ -1,0 +1,87 @@
+package logger
+
+import (
+	"bufio"
+	"context"
+	"io"
+	"log/slog"
+)
+
+// StderrCollector 将 codex 进程的 stderr 逐行转为 slog 日志。
+//
+// 实现 io.Writer 接口，可直接赋给 exec.Cmd.Stderr。
+// 内部使用 goroutine + bufio.Scanner 逐行读取。
+type StderrCollector struct {
+	pr      *io.PipeReader
+	pw      *io.PipeWriter
+	agentID string
+	done    chan struct{}
+}
+
+// NewStderrCollector 创建 StderrCollector。agentID 关联日志行。
+func NewStderrCollector(agentID string) *StderrCollector {
+	pr, pw := io.Pipe()
+	c := &StderrCollector{
+		pr:      pr,
+		pw:      pw,
+		agentID: agentID,
+		done:    make(chan struct{}),
+	}
+	go c.scan()
+	return c
+}
+
+// Write 实现 io.Writer — exec.Cmd.Stderr 直接写入。
+func (c *StderrCollector) Write(p []byte) (int, error) {
+	return c.pw.Write(p)
+}
+
+// Close 关闭 writer 端，等待 scanner 完成。
+func (c *StderrCollector) Close() error {
+	_ = c.pw.Close()
+	<-c.done
+	return nil
+}
+
+// scan 后台逐行读取 stderr → slog。
+func (c *StderrCollector) scan() {
+	defer close(c.done)
+
+	scanner := bufio.NewScanner(c.pr)
+	// 默认 64KB 行缓冲已足够 codex stderr
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		// 简单启发式: 含 error/panic/fatal 视为 ERROR 级别
+		level := slog.LevelInfo
+		if containsErrorKeyword(line) {
+			level = slog.LevelError
+		}
+
+		slog.Log(context.Background(), level, line,
+			FieldSource, "codex",
+			FieldComponent, "stderr",
+			FieldAgentID, c.agentID,
+			"logger", "codex.stderr",
+		)
+	}
+}
+
+// containsErrorKeyword 简单匹配 stderr 行中的错误关键词。
+func containsErrorKeyword(line string) bool {
+	// 使用低效但简洁的字符串搜索 — stderr 行率不高
+	for _, kw := range []string{"error", "Error", "ERROR", "panic", "PANIC", "fatal", "FATAL"} {
+		if len(line) >= len(kw) {
+			for i := 0; i <= len(line)-len(kw); i++ {
+				if line[i:i+len(kw)] == kw {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}

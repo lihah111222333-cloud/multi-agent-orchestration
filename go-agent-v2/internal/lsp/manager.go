@@ -72,6 +72,15 @@ type ServerStatus struct {
 
 // Manager 管理多个语言的 LSP 客户端。
 type Manager struct {
+	// ========================================
+	// 锁层次 (Lock Hierarchy)
+	// ========================================
+	// Manager.mu < Client.mu
+	// Manager.mu 保护 configs/clients map, Client.mu 保护 pending/stdin。
+	// ensureClient 中: 持有 Manager.mu → 释放 → 调用 client.Start
+	// (client.Start 内部使用 Client.mu), 不嵌套。
+	// ========================================
+
 	mu       sync.RWMutex
 	configs  map[string]*ServerConfig // ext → config
 	clients  map[string]*Client       // language → client

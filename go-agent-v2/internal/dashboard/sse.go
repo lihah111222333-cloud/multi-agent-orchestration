@@ -55,13 +55,12 @@ func (b *EventBus) Subscribe(id string) chan Event {
 }
 
 // Unsubscribe 取消订阅。
+//
+// 不关闭 ch — sseHandler 通过 ctx.Done() 退出, GC 回收未引用的 channel。
 func (b *EventBus) Unsubscribe(id string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if ch, ok := b.subscribers[id]; ok {
-		close(ch)
-		delete(b.subscribers, id)
-	}
+	delete(b.subscribers, id)
+	b.mu.Unlock()
 }
 
 // sseHandler Gin SSE handler。

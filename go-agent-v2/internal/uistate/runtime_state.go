@@ -92,7 +92,7 @@ func newThreadRuntime() *threadRuntime {
 
 // RuntimeManager stores UI business runtime state in Go.
 type RuntimeManager struct {
-	mu sync.RWMutex
+	mu sync.RWMutex // 保护 snapshot/runtime/seq
 
 	snapshot RuntimeSnapshot
 	runtime  map[string]*threadRuntime
@@ -280,20 +280,7 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 		if payload == nil {
 			payload = map[string]any{}
 		}
-		if rec.Content != "" {
-			if _, ok := payload["delta"]; !ok {
-				payload["delta"] = rec.Content
-			}
-			if _, ok := payload["text"]; !ok {
-				payload["text"] = rec.Content
-			}
-			if _, ok := payload["content"]; !ok {
-				payload["content"] = rec.Content
-			}
-			if _, ok := payload["output"]; !ok {
-				payload["output"] = rec.Content
-			}
-		}
+		hydrateContentPayload(rec, payload)
 
 		normalized := NormalizeEvent(rec.EventType, rec.Method, rec.Metadata)
 		if normalized.Text == "" {
@@ -307,6 +294,24 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 		}
 
 		m.applyAgentEventLocked(id, normalized, payload, ts)
+	}
+}
+
+func hydrateContentPayload(rec HistoryRecord, payload map[string]any) {
+	if rec.Content == "" {
+		return
+	}
+	if _, ok := payload["delta"]; !ok {
+		payload["delta"] = rec.Content
+	}
+	if _, ok := payload["text"]; !ok {
+		payload["text"] = rec.Content
+	}
+	if _, ok := payload["content"]; !ok {
+		payload["content"] = rec.Content
+	}
+	if _, ok := payload["output"]; !ok {
+		payload["output"] = rec.Content
 	}
 }
 
@@ -391,94 +396,166 @@ func (m *RuntimeManager) SetWorkspaceUnavailable(message string) {
 	m.snapshot.WorkspaceLastError = strings.TrimSpace(message)
 }
 
+type resolvedFields struct {
+	text     string
+	command  string
+	file     string
+	files    []string
+	exitCode *int
+}
+
+type runtimeEventHandler func(*RuntimeManager, string, resolvedFields, map[string]any, time.Time)
+
+var runtimeEventHandlers = map[UIType]runtimeEventHandler{
+	UITypeTurnStarted:     handleTurnStartedEvent,
+	UITypeTurnComplete:    handleTurnCompleteEvent,
+	UITypeAssistantDelta:  handleAssistantDeltaEvent,
+	UITypeAssistantDone:   handleAssistantDoneEvent,
+	UITypeReasoningDelta:  handleReasoningDeltaEvent,
+	UITypeCommandStart:    handleCommandStartEvent,
+	UITypeCommandOutput:   handleCommandOutputEvent,
+	UITypeCommandDone:     handleCommandDoneEvent,
+	UITypeFileEditStart:   handleFileEditStartEvent,
+	UITypeFileEditDone:    handleFileEditDoneEvent,
+	UITypeToolCall:        handleToolCallEvent,
+	UITypeApprovalRequest: handleApprovalRequestEvent,
+	UITypePlanDelta:       handlePlanDeltaEvent,
+	UITypeDiffUpdate:      handleDiffUpdateEvent,
+	UITypeUserMessage:     handleUserMessageEvent,
+	UITypeError:           handleErrorEvent,
+}
+
+func resolveEventFields(normalized NormalizedEvent, payload map[string]any) resolvedFields {
+	fields := resolvedFields{
+		text:    strings.TrimSpace(normalized.Text),
+		command: strings.TrimSpace(normalized.Command),
+		file:    strings.TrimSpace(normalized.File),
+		files:   nil,
+	}
+	if fields.text == "" {
+		fields.text = extractFirstString(payload, "uiText", "delta", "text", "content", "output", "message")
+	}
+	if fields.command == "" {
+		fields.command = extractFirstString(payload, "uiCommand", "command")
+	}
+	if fields.file == "" {
+		fields.file = extractFirstString(payload, "uiFile", "file")
+	}
+	fields.files = normalizeFilesAny(payload["uiFiles"])
+	if len(fields.files) == 0 {
+		fields.files = normalizeFilesAny(payload["files"])
+	}
+	if len(fields.files) == 0 && len(normalized.Files) > 0 {
+		fields.files = append(fields.files, normalized.Files...)
+	}
+	if fields.file != "" && len(fields.files) == 0 {
+		fields.files = []string{fields.file}
+	}
+	fields.exitCode = normalized.ExitCode
+	if fields.exitCode != nil {
+		return fields
+	}
+	if code, ok := extractExitCode(payload["uiExitCode"]); ok {
+		fields.exitCode = &code
+		return fields
+	}
+	if code, ok := extractExitCode(payload["exit_code"]); ok {
+		fields.exitCode = &code
+	}
+	return fields
+}
+
 func (m *RuntimeManager) applyAgentEventLocked(threadID string, normalized NormalizedEvent, payload map[string]any, ts time.Time) {
 	if normalized.UIStatus != "" {
 		m.setThreadStateLocked(threadID, string(normalized.UIStatus))
 	}
 	m.markAgentActiveLocked(threadID, ts)
+	fields := resolveEventFields(normalized, payload)
+	if handler, ok := runtimeEventHandlers[normalized.UIType]; ok {
+		handler(m, threadID, fields, payload, ts)
+	}
+}
 
-	text := strings.TrimSpace(normalized.Text)
+func handleTurnStartedEvent(m *RuntimeManager, threadID string, _ resolvedFields, _ map[string]any, ts time.Time) {
+	m.completeTurnLocked(threadID, ts)
+	m.startThinkingLocked(threadID, ts)
+}
+
+func handleTurnCompleteEvent(m *RuntimeManager, threadID string, _ resolvedFields, _ map[string]any, ts time.Time) {
+	m.completeTurnLocked(threadID, ts)
+}
+
+func handleAssistantDeltaEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
+	m.appendAssistantLocked(threadID, fields.text, ts)
+}
+
+func handleAssistantDoneEvent(m *RuntimeManager, threadID string, _ resolvedFields, _ map[string]any, _ time.Time) {
+	m.finishAssistantLocked(threadID)
+}
+
+func handleReasoningDeltaEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
+	m.appendThinkingLocked(threadID, fields.text, ts)
+}
+
+func handleCommandStartEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
+	m.startCommandLocked(threadID, fields.command, ts)
+}
+
+func handleCommandOutputEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
+	m.appendCommandOutputLocked(threadID, fields.text, ts)
+}
+
+func handleCommandDoneEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, _ time.Time) {
+	m.finishCommandLocked(threadID, fields.exitCode)
+}
+
+func handleFileEditStartEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
+	for _, file := range fields.files {
+		m.fileEditingLocked(threadID, file, ts)
+	}
+	m.rememberEditingFilesLocked(threadID, fields.files)
+}
+
+func handleFileEditDoneEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
+	saved := fields.files
+	if len(saved) == 0 {
+		saved = m.consumeEditingFilesLocked(threadID)
+	}
+	for _, file := range saved {
+		m.fileSavedLocked(threadID, file, ts)
+	}
+}
+
+func handleToolCallEvent(m *RuntimeManager, threadID string, _ resolvedFields, payload map[string]any, ts time.Time) {
+	m.appendToolCallLocked(threadID, payload, ts)
+}
+
+func handleApprovalRequestEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
+	m.showApprovalLocked(threadID, fields.command, ts)
+}
+
+func handlePlanDeltaEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
+	m.appendPlanLocked(threadID, fields.text, ts)
+}
+
+func handleDiffUpdateEvent(m *RuntimeManager, threadID string, _ resolvedFields, payload map[string]any, _ time.Time) {
+	diff := extractFirstString(payload, "diff", "uiText", "text", "content")
+	m.snapshot.DiffTextByThread[threadID] = diff
+}
+
+func handleUserMessageEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
+	m.appendUserLocked(threadID, fields.text, nil, ts)
+}
+
+func handleErrorEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
+	text := fields.text
 	if text == "" {
-		text = extractFirstString(payload, "uiText", "delta", "text", "content", "output", "message")
+		text = "发生错误"
 	}
-	command := strings.TrimSpace(normalized.Command)
-	if command == "" {
-		command = extractFirstString(payload, "uiCommand", "command")
-	}
-	file := strings.TrimSpace(normalized.File)
-	if file == "" {
-		file = extractFirstString(payload, "uiFile", "file")
-	}
-	files := normalizeFilesAny(payload["uiFiles"])
-	if len(files) == 0 {
-		files = normalizeFilesAny(payload["files"])
-	}
-	if len(files) == 0 && len(normalized.Files) > 0 {
-		files = append(files, normalized.Files...)
-	}
-	if file != "" && len(files) == 0 {
-		files = []string{file}
-	}
-	exitCode := normalized.ExitCode
-	if exitCode == nil {
-		if code, ok := extractExitCode(payload["uiExitCode"]); ok {
-			exitCode = &code
-		} else if code, ok := extractExitCode(payload["exit_code"]); ok {
-			exitCode = &code
-		}
-	}
-
-	switch normalized.UIType {
-	case UITypeTurnStarted:
-		m.completeTurnLocked(threadID, ts)
-		m.startThinkingLocked(threadID, ts)
-	case UITypeTurnComplete:
-		m.completeTurnLocked(threadID, ts)
-	case UITypeAssistantDelta:
-		m.appendAssistantLocked(threadID, text, ts)
-	case UITypeAssistantDone:
-		m.finishAssistantLocked(threadID)
-	case UITypeReasoningDelta:
-		m.appendThinkingLocked(threadID, text, ts)
-	case UITypeCommandStart:
-		m.startCommandLocked(threadID, command, ts)
-	case UITypeCommandOutput:
-		m.appendCommandOutputLocked(threadID, text, ts)
-	case UITypeCommandDone:
-		m.finishCommandLocked(threadID, exitCode)
-	case UITypeFileEditStart:
-		for _, f := range files {
-			m.fileEditingLocked(threadID, f, ts)
-		}
-		m.rememberEditingFilesLocked(threadID, files)
-	case UITypeFileEditDone:
-		saved := files
-		if len(saved) == 0 {
-			saved = m.consumeEditingFilesLocked(threadID)
-		}
-		for _, f := range saved {
-			m.fileSavedLocked(threadID, f, ts)
-		}
-	case UITypeToolCall:
-		m.appendToolCallLocked(threadID, payload, ts)
-	case UITypeApprovalRequest:
-		m.showApprovalLocked(threadID, command, ts)
-	case UITypePlanDelta:
-		m.appendPlanLocked(threadID, text, ts)
-	case UITypeDiffUpdate:
-		diff := extractFirstString(payload, "diff", "uiText", "text", "content")
-		m.snapshot.DiffTextByThread[threadID] = diff
-	case UITypeUserMessage:
-		m.appendUserLocked(threadID, text, nil, ts)
-	case UITypeError:
-		if text == "" {
-			text = "发生错误"
-		}
-		m.pushTimelineItemLocked(threadID, TimelineItem{
-			Kind: "error",
-			Text: text,
-		}, ts)
-	}
+	m.pushTimelineItemLocked(threadID, TimelineItem{
+		Kind: "error",
+		Text: text,
+	}, ts)
 }
 
 func (m *RuntimeManager) ensureThreadLocked(threadID string) {
@@ -800,27 +877,22 @@ func (m *RuntimeManager) appendToolCallLocked(threadID string, payload map[strin
 	lastIndex := len(list) - 1
 	if lastIndex >= 0 {
 		last := list[lastIndex]
-		if last.Kind == "tool" && last.Tool == tool {
-			canMerge := (last.File == "" && file != "") ||
-				(last.Preview == "" && preview != "") ||
-				(last.ElapsedMS == nil && elapsedMS != nil)
-			if canMerge {
-				m.patchTimelineItemLocked(threadID, lastIndex, func(item *TimelineItem) {
-					if item.File == "" {
-						item.File = file
-					}
-					if item.Preview == "" {
-						item.Preview = preview
-					}
-					if item.ElapsedMS == nil {
-						item.ElapsedMS = elapsedMS
-					}
-					if status == "failed" {
-						item.Status = "failed"
-					}
-				})
-				return
-			}
+		if canMergeToolCall(last, tool, file, preview, elapsedMS) {
+			m.patchTimelineItemLocked(threadID, lastIndex, func(item *TimelineItem) {
+				if item.File == "" {
+					item.File = file
+				}
+				if item.Preview == "" {
+					item.Preview = preview
+				}
+				if item.ElapsedMS == nil {
+					item.ElapsedMS = elapsedMS
+				}
+				if status == "failed" {
+					item.Status = "failed"
+				}
+			})
+			return
 		}
 	}
 
@@ -832,6 +904,15 @@ func (m *RuntimeManager) appendToolCallLocked(threadID string, payload map[strin
 		ElapsedMS: elapsedMS,
 		Preview:   preview,
 	}, ts)
+}
+
+func canMergeToolCall(last TimelineItem, tool, file, preview string, elapsedMS *int) bool {
+	if last.Kind != "tool" || last.Tool != tool {
+		return false
+	}
+	return (last.File == "" && file != "") ||
+		(last.Preview == "" && preview != "") ||
+		(last.ElapsedMS == nil && elapsedMS != nil)
 }
 
 func (m *RuntimeManager) showApprovalLocked(threadID, command string, ts time.Time) {

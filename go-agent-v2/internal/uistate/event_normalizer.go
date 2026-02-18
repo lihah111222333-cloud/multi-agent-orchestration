@@ -2,17 +2,165 @@ package uistate
 
 import "encoding/json"
 
+// ── classifyEvent: map 查表替代 switch ──
+
+type classifyResult struct {
+	uiType   UIType
+	uiStatus UIStatus
+}
+
+var classifyMap = map[string]classifyResult{
+	// Assistant Messages
+	"agent_message_delta":         {UITypeAssistantDelta, UIStatusThinking},
+	"agent_message_content_delta": {UITypeAssistantDelta, UIStatusThinking},
+	"agent_message_completed":     {UITypeAssistantDone, UIStatusThinking},
+	"agent_message":               {UITypeAssistantDone, UIStatusThinking},
+
+	// Reasoning
+	"agent_reasoning":               {UITypeReasoningDelta, UIStatusThinking},
+	"agent_reasoning_delta":         {UITypeReasoningDelta, UIStatusThinking},
+	"agent_reasoning_raw":           {UITypeReasoningDelta, UIStatusThinking},
+	"agent_reasoning_raw_delta":     {UITypeReasoningDelta, UIStatusThinking},
+	"agent_reasoning_section_break": {UITypeReasoningDelta, UIStatusThinking},
+
+	// Command Execution
+	"exec_command_begin":        {UITypeCommandStart, UIStatusRunning},
+	"exec_output_delta":         {UITypeCommandOutput, UIStatusRunning},
+	"exec_command_output_delta": {UITypeCommandOutput, UIStatusRunning},
+	"exec_command_end":          {UITypeCommandDone, UIStatusRunning},
+
+	// File Editing
+	"patch_apply_begin": {UITypeFileEditStart, UIStatusRunning},
+	"file_read":         {UITypeFileEditStart, UIStatusRunning},
+	"patch_apply":       {UITypeCommandOutput, UIStatusRunning},
+	"patch_apply_delta": {UITypeCommandOutput, UIStatusRunning},
+	"patch_apply_end":   {UITypeFileEditDone, UIStatusRunning},
+	"file_updated":      {UITypeFileEditDone, UIStatusRunning},
+
+	// Tool Calls
+	"mcp_tool_call_begin": {UITypeToolCall, UIStatusRunning},
+	"mcp_tool_call":       {UITypeToolCall, UIStatusRunning},
+	"dynamic_tool_call":   {UITypeToolCall, UIStatusRunning},
+	"mcp_tool_call_end":   {UITypeCommandDone, UIStatusRunning},
+
+	// Approval
+	"exec_approval_request":        {UITypeApprovalRequest, UIStatusRunning},
+	"file_change_approval_request": {UITypeApprovalRequest, UIStatusRunning},
+
+	// Turn Lifecycle
+	"turn_started":  {UITypeTurnStarted, UIStatusThinking},
+	"turn_complete": {UITypeTurnComplete, UIStatusIdle},
+	"idle":          {UITypeTurnComplete, UIStatusIdle},
+
+	// Plan / Diff
+	"plan_delta":  {UITypePlanDelta, UIStatusThinking},
+	"plan_update": {UITypePlanDelta, UIStatusThinking},
+	"turn_diff":   {UITypeDiffUpdate, UIStatusIdle},
+
+	// User Message
+	"user_message": {UITypeUserMessage, UIStatusThinking},
+
+	// Errors
+	"error":        {UITypeError, UIStatusError},
+	"stream_error": {UITypeError, UIStatusError},
+
+	// Warnings
+	"warning": {UITypeSystem, ""},
+
+	// System / Lifecycle
+	"shutdown_complete":       {UITypeSystem, UIStatusIdle},
+	"session_configured":      {UITypeSystem, ""},
+	"mcp_startup_complete":    {UITypeSystem, ""},
+	"mcp_list_tools_response": {UITypeSystem, ""},
+	"list_skills_response":    {UITypeSystem, ""},
+	"token_count":             {UITypeSystem, ""},
+	"context_compacted":       {UITypeSystem, ""},
+	"thread_name_updated":     {UITypeSystem, ""},
+	"thread_rolled_back":      {UITypeSystem, ""},
+	"undo_started":            {UITypeSystem, ""},
+	"undo_completed":          {UITypeSystem, ""},
+	"entered_review_mode":     {UITypeSystem, ""},
+	"exited_review_mode":      {UITypeSystem, ""},
+	"background_event":        {UITypeSystem, ""},
+
+	// Collab Agents
+	"collab_agent_spawn_begin":       {UITypeSystem, UIStatusRunning},
+	"collab_agent_interaction_begin": {UITypeSystem, UIStatusRunning},
+	"collab_waiting_begin":           {UITypeSystem, UIStatusRunning},
+	"collab_agent_spawn_end":         {UITypeSystem, UIStatusRunning},
+	"collab_agent_interaction_end":   {UITypeSystem, UIStatusRunning},
+	"collab_waiting_end":             {UITypeSystem, UIStatusRunning},
+}
+
+// classifyEvent 按 codex 原始事件类型分类 (map 查表, O(1))。
+func classifyEvent(codexType string) (UIType, UIStatus) {
+	if r, ok := classifyMap[codexType]; ok {
+		return r.uiType, r.uiStatus
+	}
+	return UITypeSystem, ""
+}
+
+// ── NormalizeEvent 辅助函数 ──
+
+// extractText 按优先级从 payload 提取文本: delta > text > content > output > message。
+func extractText(payload map[string]any) string {
+	for _, key := range []string{"delta", "text", "content", "output", "message"} {
+		if v, ok := payload[key].(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// extractNormalizedFiles 从 payload 提取文件路径。
+func extractNormalizedFiles(codexType string, payload map[string]any) (file string, files []string) {
+	switch {
+	case codexType == "patch_apply_begin" || codexType == "item/fileChange/started":
+		if f, ok := payload["file"].(string); ok {
+			return f, []string{f}
+		}
+		return "", nil
+	default:
+		if v, ok := payload["file"].(string); ok {
+			return v, []string{v}
+		}
+		if arr, ok := payload["files"].([]any); ok {
+			var strs []string
+			for _, f := range arr {
+				if s, ok := f.(string); ok {
+					strs = append(strs, s)
+				}
+			}
+			if len(strs) > 0 {
+				return strs[0], strs
+			}
+		}
+		return "", nil
+	}
+}
+
+// extractExitCodeFromPayload 仅在 exec_command_end 事件中提取退出码。
+func extractExitCodeFromPayload(codexType string, payload map[string]any) *int {
+	if codexType != "exec_command_end" {
+		return nil
+	}
+	if code, ok := payload["exit_code"].(float64); ok {
+		c := int(code)
+		return &c
+	}
+	return nil
+}
+
 // NormalizeEvent 将 codex 事件归一化为前端可渲染的结构化事件。
 //
 // 纯函数, 无状态, 无锁, 热路径安全。
 func NormalizeEvent(codexType, method string, data json.RawMessage) NormalizedEvent {
 	var payload map[string]any
-	// data is raw JSON, let's unmarshal it into a generic map
 	if len(data) > 0 {
 		_ = json.Unmarshal(data, &payload)
 	}
 	if payload == nil {
-		payload = map[string]any{} // Prevent panic on subsequent lookups
+		payload = map[string]any{}
 	}
 
 	uiType, uiStatus := classifyEvent(codexType)
@@ -22,166 +170,19 @@ func NormalizeEvent(codexType, method string, data json.RawMessage) NormalizedEv
 		UIStatus: uiStatus,
 	}
 
-	// 1. Extract Text (Priority: delta > text > content > output > message)
-	if v, ok := payload["delta"].(string); ok {
-		result.Text = v
-	} else if v, ok := payload["text"].(string); ok {
-		result.Text = v
-	} else if v, ok := payload["content"].(string); ok {
-		result.Text = v
-	} else if v, ok := payload["output"].(string); ok {
-		result.Text = v
-	} else if v, ok := payload["message"].(string); ok {
-		result.Text = v
-	}
+	result.Text = extractText(payload)
 
-	// 2. Extract Command
 	if v, ok := payload["command"].(string); ok {
 		result.Command = v
 	}
 
-	// 3. Extract Files
-	// Prioritize logic:
-	// - If specific file fields exist, use them.
-	// - Logic mimics JS: file > files
-	if codexType == "patch_apply_begin" {
-		if f, ok := payload["file"].(string); ok {
-			result.Files = []string{f}
-		} else if d, ok := payload["delta"].(string); ok {
-			// Backward compatibility: parsing diff header is complex and prone to errors in Go without regex/state
-			// JS version had fallback Logic. For now, rely on `file` field usually being present in structured events.
-			// If strictly needed, we can add simple parsing.
-			// Assuming `file` field is populated by the backend for these events now or will be.
-			// If delta contains "diff --git a/...", we might extract it, but let's stick to mapped fields first.
-			_ = d
-		}
-	} else if codexType == "item/fileChange/started" { // Use method if type matches? NO, classifyEvent only uses codexType mostly
-		if f, ok := payload["file"].(string); ok {
-			result.Files = []string{f}
-		}
-	} else {
-		// Generic fallback
-		if v, ok := payload["file"].(string); ok {
-			result.Files = []string{v}
-		} else if files, ok := payload["files"].([]any); ok {
-			// handle []string from JSON
-			var strs []string
-			for _, f := range files {
-				if s, ok := f.(string); ok {
-					strs = append(strs, s)
-				}
-			}
-			if len(strs) > 0 {
-				result.Files = strs
-			}
-		}
-	}
+	result.File, result.Files = extractNormalizedFiles(codexType, payload)
 
-	// Ensure File field is also populated if Files has 1 element (for compatibility if needed, though NormalizedEvent struct has both?)
-	// struct has File string and Files []string. Let's populate File if Files has 1, or vice versa?
-	// The struct definition in plan has both `File string` and `Files []string`.
-	// Logic: If `File` is set, append to `Files`.
 	if result.File == "" && len(result.Files) > 0 {
 		result.File = result.Files[0]
 	}
 
-	// 4. Extract ExitCode
-	if codexType == "exec_command_end" {
-		if code, ok := payload["exit_code"].(float64); ok { // JSON numbers are float64 in generic map
-			c := int(code)
-			result.ExitCode = &c
-		}
-	}
+	result.ExitCode = extractExitCodeFromPayload(codexType, payload)
 
 	return result
-}
-
-// classifyEvent 按 codex 原始事件类型分类。
-func classifyEvent(codexType string) (UIType, UIStatus) {
-	switch codexType {
-	// ── Assistant Messages ──
-	case "agent_message_delta", "agent_message_content_delta":
-		return UITypeAssistantDelta, UIStatusThinking
-	case "agent_message_completed", "agent_message":
-		return UITypeAssistantDone, UIStatusThinking
-
-	// ── Reasoning ──
-	case "agent_reasoning", "agent_reasoning_delta",
-		"agent_reasoning_raw", "agent_reasoning_raw_delta",
-		"agent_reasoning_section_break":
-		return UITypeReasoningDelta, UIStatusThinking
-
-	// ── Command Execution ──
-	case "exec_command_begin":
-		return UITypeCommandStart, UIStatusRunning
-	case "exec_output_delta", "exec_command_output_delta":
-		return UITypeCommandOutput, UIStatusRunning
-	case "exec_command_end":
-		return UITypeCommandDone, UIStatusRunning
-
-	// ── File Editing ──
-	case "patch_apply_begin", "file_read":
-		return UITypeFileEditStart, UIStatusRunning
-	case "patch_apply", "patch_apply_delta":
-		return UITypeCommandOutput, UIStatusRunning // Treat patch output as command output/logs
-	case "patch_apply_end", "file_updated":
-		return UITypeFileEditDone, UIStatusRunning
-
-	// ── Tool Calls ──
-	case "mcp_tool_call_begin", "mcp_tool_call", "dynamic_tool_call":
-		return UITypeToolCall, UIStatusRunning
-	case "mcp_tool_call_end":
-		return UITypeCommandDone, UIStatusRunning
-
-	// ── Approval ──
-	case "exec_approval_request", "file_change_approval_request":
-		return UITypeApprovalRequest, UIStatusRunning
-
-	// ── Turn Lifecycle ──
-	case "turn_started":
-		return UITypeTurnStarted, UIStatusThinking
-	case "turn_complete", "idle":
-		return UITypeTurnComplete, UIStatusIdle
-
-	// ── Plan / Diff ──
-	case "plan_delta", "plan_update":
-		return UITypePlanDelta, UIStatusThinking
-	case "turn_diff":
-		return UITypeDiffUpdate, UIStatusIdle
-
-	// ── User Message ──
-	case "user_message":
-		return UITypeUserMessage, UIStatusThinking
-
-	// ── Errors ──
-	case "error", "stream_error":
-		return UITypeError, UIStatusError
-
-	// ── Warnings (System) ──
-	case "warning":
-		return UITypeSystem, ""
-
-	// ── System / Lifecycle ──
-	case "shutdown_complete":
-		return UITypeSystem, UIStatusIdle
-	case "session_configured", "mcp_startup_complete",
-		"mcp_list_tools_response", "list_skills_response",
-		"token_count", "context_compacted",
-		"thread_name_updated", "thread_rolled_back",
-		"undo_started", "undo_completed",
-		"entered_review_mode", "exited_review_mode",
-		"background_event":
-		return UITypeSystem, ""
-
-	// ── Collab Agents ──
-	case "collab_agent_spawn_begin", "collab_agent_interaction_begin",
-		"collab_waiting_begin":
-		return UITypeSystem, UIStatusRunning
-	case "collab_agent_spawn_end", "collab_agent_interaction_end",
-		"collab_waiting_end":
-		return UITypeSystem, UIStatusRunning
-	}
-
-	// Fallback
-	return UITypeSystem, ""
 }

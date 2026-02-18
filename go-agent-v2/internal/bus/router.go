@@ -41,7 +41,7 @@ type AgentEndpoint struct {
 type AgentRouter struct {
 	bus        *MessageBus
 	discover   AgentDiscoverer
-	mu         sync.RWMutex
+	mu         sync.RWMutex             // 保护 clients map (活跃连接缓存)
 	clients    map[string]*codex.Client // threadID → 活跃连接缓存
 	httpClient *http.Client
 }

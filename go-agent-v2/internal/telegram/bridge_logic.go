@@ -91,7 +91,7 @@ type HistoryEntry struct {
 
 // History 线程安全的环形消息历史。
 type History struct {
-	mu      sync.Mutex
+	mu      sync.Mutex // 保护 entries slice
 	entries []HistoryEntry
 	maxLen  int
 }

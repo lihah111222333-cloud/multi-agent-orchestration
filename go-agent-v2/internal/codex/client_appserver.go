@@ -92,6 +92,14 @@ type AppServerClient struct {
 	Cmd      *exec.Cmd
 	ThreadID string
 
+	// ========================================
+	// 锁职责说明
+	// ========================================
+	// wsMu:      保护 ws (WebSocket 读写序列化)
+	// handlerMu: 保护 handler (事件回调注册/读取)
+	// 两者独立, 不存在嵌套获取关系。
+	// ========================================
+
 	ws              *websocket.Conn
 	wsMu            sync.Mutex
 	wsDone          chan struct{}
@@ -225,10 +233,12 @@ func (c *AppServerClient) call(method string, params any, timeout time.Duration)
 		return nil, err
 	}
 
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case <-pc.done:
 		return pc.result, pc.err
-	case <-time.After(timeout):
+	case <-timer.C:
 		return nil, apperrors.Newf("AppServerClient.call", "%s timeout", method)
 	case <-c.ctx.Done():
 		return nil, c.ctx.Err()
@@ -455,10 +465,12 @@ func (c *AppServerClient) ResumeThread(req ResumeThreadRequest) error {
 	if id == "" {
 		return apperrors.New("AppServerClient.ResumeThread", "thread/resume requires thread ID")
 	}
+	path := strings.TrimSpace(req.Path)
+	cwd := strings.TrimSpace(req.Cwd)
 	result, err := c.call("thread/resume", asThreadResumeParams{
 		ThreadID: id,
-		Path:     strings.TrimSpace(req.Cwd),
-		Cwd:      strings.TrimSpace(req.Cwd),
+		Path:     path,
+		Cwd:      cwd,
 	}, 30*time.Second)
 	if err != nil {
 		return apperrors.Wrap(err, "AppServerClient.ResumeThread", "thread/resume")

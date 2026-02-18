@@ -215,7 +215,9 @@ type Subscriber struct {
 //   - 订阅 "*" → 收到所有消息
 //   - 发布 agent.a0.output → 匹配 "agent.a0", "agent.", "*" 的订阅者
 type MessageBus struct {
-	mu          sync.RWMutex
+	// mu 保护 subscribers map 和 seq 计数器。
+	// Publish 持锁递增 seq + 快照订阅者列表, 然后释放锁再 fan-out。
+	mu          sync.Mutex
 	subscribers map[string]*Subscriber // key = subscriber ID
 	seq         int64
 	onPublish   func(Message) // 可选: 每条消息的全局回调 (用于桥接 SSE/日志)
@@ -231,13 +233,18 @@ func NewMessageBus() *MessageBus {
 // SetOnPublish 设置全局发布回调 (用于桥接到 dashboard EventBus / bus_log)。
 func (b *MessageBus) SetOnPublish(fn func(Message)) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.onPublish = fn
+	b.mu.Unlock()
 }
 
 // Publish 发布消息到匹配的订阅者。
 //
-// seq 递增和 fan-out 在同一把锁下执行, 保证消息到达顺序与 seq 一致。
+// 锁策略:
+//   - 持锁: 递增 seq + 快照 matched 订阅者列表
+//   - 释放锁后: fan-out 写入 channel + 全局回调
+//
+// seq 在锁内分配, 保证全局唯一递增。fan-out 在锁外执行,
+// 不阻塞 Subscribe/Unsubscribe (避免慢消费者拖慢订阅管理)。
 func (b *MessageBus) Publish(msg Message) {
 	b.mu.Lock()
 	b.seq++
@@ -247,24 +254,30 @@ func (b *MessageBus) Publish(msg Message) {
 	}
 	onPub := b.onPublish
 
-	// 在同一把锁下完成 fan-out, 保证 seq 顺序
+	// 快照匹配的订阅者
+	matched := make([]*Subscriber, 0, len(b.subscribers))
 	for _, sub := range b.subscribers {
 		if matchTopic(sub.Filter, msg.Topic) {
-			select {
-			case sub.Ch <- msg:
-			default:
-				// 通道满, 丢弃 (避免阻塞发布者)
-				logger.Warn("bus: subscriber channel full, message dropped",
-					logger.FieldSubscriber, sub.ID,
-					logger.FieldTopic, msg.Topic,
-					logger.FieldSeq, msg.Seq,
-				)
-			}
+			matched = append(matched, sub)
 		}
 	}
 	b.mu.Unlock()
 
-	// 全局回调在锁外执行 (回调可能耗时, 避免持锁太久)
+	// fan-out 在锁外执行, 不阻塞 Subscribe/Unsubscribe
+	for _, sub := range matched {
+		select {
+		case sub.Ch <- msg:
+		default:
+			// 通道满, 丢弃 (避免阻塞发布者)
+			logger.Warn("bus: subscriber channel full, message dropped",
+				logger.FieldSubscriber, sub.ID,
+				logger.FieldTopic, msg.Topic,
+				logger.FieldSeq, msg.Seq,
+			)
+		}
+	}
+
+	// 全局回调在锁外执行 (回调可能耗时)
 	if onPub != nil {
 		onPub(msg)
 	}
@@ -272,41 +285,41 @@ func (b *MessageBus) Publish(msg Message) {
 
 // Subscribe 订阅消息。filter 为 topic 前缀 ("agent.a0" / "*" / "system")。
 func (b *MessageBus) Subscribe(id, filter string) *Subscriber {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	sub := &Subscriber{
 		ID:     id,
 		Filter: filter,
 		Ch:     make(chan Message, 64),
 	}
+	b.mu.Lock()
 	b.subscribers[id] = sub
+	b.mu.Unlock()
 	return sub
 }
 
 // Unsubscribe 取消订阅。
+//
+// 注意: 不关闭 Ch — 因为 Publish 可能在锁外 fan-out 时仍持有该 Subscriber 的快照引用。
+// 订阅者应自行停止从 Ch 读取; GC 会回收未引用的 channel。
 func (b *MessageBus) Unsubscribe(id string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if sub, ok := b.subscribers[id]; ok {
-		close(sub.Ch)
-		delete(b.subscribers, id)
-	}
+	delete(b.subscribers, id)
+	b.mu.Unlock()
 }
 
 // SubscriberCount 返回当前订阅者数量。
 func (b *MessageBus) SubscriberCount() int {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return len(b.subscribers)
+	b.mu.Lock()
+	n := len(b.subscribers)
+	b.mu.Unlock()
+	return n
 }
 
 // Seq 返回当前序列号。
 func (b *MessageBus) Seq() int64 {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.seq
+	b.mu.Lock()
+	s := b.seq
+	b.mu.Unlock()
+	return s
 }
 
 // ========================================

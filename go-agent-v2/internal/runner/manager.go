@@ -45,7 +45,7 @@ type AgentProcess struct {
 	Name   string            // 显示名称
 	Client codex.CodexClient // Codex API 客户端 (支持 http-api 或 app-server)
 	State  AgentState        // 当前状态
-	mu     sync.Mutex
+	mu     sync.Mutex        // 保护 State 字段读写
 }
 
 // AgentInfo Agent 信息快照 (线程安全复制)。
@@ -76,6 +76,14 @@ type EventHandler func(agentID string, event codex.Event)
 
 // AgentManager 管理多个 Codex Agent 子进程。
 type AgentManager struct {
+	// ========================================
+	// 锁层次 (Lock Hierarchy)
+	// ========================================
+	// 获取顺序: mu < AgentProcess.mu
+	// mu 保护 agents map + onEvent, AgentProcess.mu 保护单个进程状态。
+	// NEVER 在持有 AgentProcess.mu 时获取 mu 的写锁。
+	// ========================================
+
 	mu       sync.RWMutex
 	agents   map[string]*AgentProcess
 	nextPort atomic.Int32
@@ -310,12 +318,22 @@ func (m *AgentManager) StopAll() {
 }
 
 // List 返回所有 Agent 信息快照。
+//
+// 使用 snapshot-then-lock 模式:
+//   - 先持 mu.RLock 快照 agents slice, 立即释放
+//   - 再逐个持 proc.mu 读取状态
+//
+// 这样避免在持有 mu 的同时获取 proc.mu, 缩小持锁范围。
 func (m *AgentManager) List() []AgentInfo {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	infos := make([]AgentInfo, 0, len(m.agents))
+	snapshot := make([]*AgentProcess, 0, len(m.agents))
 	for _, proc := range m.agents {
+		snapshot = append(snapshot, proc)
+	}
+	m.mu.RUnlock()
+
+	infos := make([]AgentInfo, 0, len(snapshot))
+	for _, proc := range snapshot {
 		proc.mu.Lock()
 		info := AgentInfo{
 			ID:       proc.ID,

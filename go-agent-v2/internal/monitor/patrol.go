@@ -42,7 +42,7 @@ type Patrol struct {
 	agentStore *store.AgentStatusStore
 	eventBus   EventPublisher
 
-	mu     sync.Mutex
+	mu     sync.Mutex              // 保护 memory (输出指纹缓存)
 	memory map[string]*fingerprint // 输出指纹缓存
 }
 

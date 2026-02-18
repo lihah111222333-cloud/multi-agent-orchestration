@@ -319,277 +319,298 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 
 	fileCount := 0
 	err = filepath.WalkDir(run.WorkspacePath, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			result.Errors++
-			result.Files = append(result.Files, WorkspaceMergeFileResult{
-				Path:   path,
-				Action: "error",
-				Reason: walkErr.Error(),
-			})
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		fileCount++
-		if fileCount > m.maxFiles {
-			return apperrors.Newf("WorkspaceManager.MergeRun", "too many files in workspace (%d > %d)", fileCount, m.maxFiles)
-		}
-		if d.Type()&os.ModeSymlink != 0 {
-			result.Errors++
-			rel, _ := filepath.Rel(run.WorkspacePath, path)
-			result.Files = append(result.Files, WorkspaceMergeFileResult{
-				Path:   rel,
-				Action: "error",
-				Reason: "symlink is not allowed in workspace",
-			})
-			return nil
-		}
-
-		relRaw, err := filepath.Rel(run.WorkspacePath, path)
-		if err != nil {
-			result.Errors++
-			return nil
-		}
-		rel, err := normalizeRelativePath(relRaw)
-		if err != nil {
-			result.Errors++
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: relRaw, Action: "error", Reason: err.Error()})
-			return nil
-		}
-		seen[rel] = true
-
-		wsInfo, err := os.Stat(path)
-		if err != nil {
-			result.Errors++
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "error", Reason: err.Error()})
-			return nil
-		}
-		if wsInfo.Size() > m.maxFileBytes {
-			result.Errors++
-			msg := fmt.Sprintf("workspace file too large: %d bytes > %d", wsInfo.Size(), m.maxFileBytes)
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey:       run.RunKey,
-				RelativePath: rel,
-				State:        WorkspaceFileStateError,
-				LastError:    msg,
-			})
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "error", Reason: msg})
-			return nil
-		}
-
-		wsHash, err := hashFile(path)
-		if err != nil {
-			result.Errors++
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey:       run.RunKey,
-				RelativePath: rel,
-				State:        WorkspaceFileStateError,
-				LastError:    err.Error(),
-			})
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "error", Reason: err.Error()})
-			return nil
-		}
-
-		sourcePath := filepath.Join(run.SourceRoot, rel)
-		if !isPathWithinRoot(run.SourceRoot, sourcePath) {
-			result.Errors++
-			msg := "target path escapes source root"
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey:          run.RunKey,
-				RelativePath:    rel,
-				WorkspaceSHA256: wsHash,
-				State:           WorkspaceFileStateError,
-				LastError:       msg,
-			})
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "error", Reason: msg})
-			return nil
-		}
-
-		sourceBefore, err := hashFileIfExists(sourcePath)
-		if err != nil {
-			result.Errors++
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey:             run.RunKey,
-				RelativePath:       rel,
-				WorkspaceSHA256:    wsHash,
-				SourceSHA256Before: sourceBefore,
-				State:              WorkspaceFileStateError,
-				LastError:          err.Error(),
-			})
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "error", Reason: err.Error()})
-			return nil
-		}
-
-		trackedFile, exists := tracked[rel]
-		baseline := ""
-		if exists {
-			baseline = trackedFile.BaselineSHA256
-		} else {
-			baseline = sourceBefore
-		}
-
-		if baseline != "" && wsHash == baseline {
-			result.Unchanged++
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey:             run.RunKey,
-				RelativePath:       rel,
-				BaselineSHA256:     baseline,
-				WorkspaceSHA256:    wsHash,
-				SourceSHA256Before: sourceBefore,
-				SourceSHA256After:  sourceBefore,
-				State:              WorkspaceFileStateUnchanged,
-			})
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "unchanged"})
-			return nil
-		}
-
-		if baseline != "" && sourceBefore != "" && sourceBefore != baseline {
-			result.Conflicts++
-			reason := "source changed since baseline"
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey:             run.RunKey,
-				RelativePath:       rel,
-				BaselineSHA256:     baseline,
-				WorkspaceSHA256:    wsHash,
-				SourceSHA256Before: sourceBefore,
-				State:              WorkspaceFileStateConflict,
-				LastError:          reason,
-			})
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "conflict", Reason: reason})
-			return nil
-		}
-
-		if req.DryRun {
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey:             run.RunKey,
-				RelativePath:       rel,
-				BaselineSHA256:     baseline,
-				WorkspaceSHA256:    wsHash,
-				SourceSHA256Before: sourceBefore,
-				State:              WorkspaceFileStateChanged,
-			})
-			result.Merged++
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "would_merge"})
-			return nil
-		}
-
-		if err := copyFileAtomic(path, sourcePath, wsInfo.Mode().Perm()); err != nil {
-			result.Errors++
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey:             run.RunKey,
-				RelativePath:       rel,
-				BaselineSHA256:     baseline,
-				WorkspaceSHA256:    wsHash,
-				SourceSHA256Before: sourceBefore,
-				State:              WorkspaceFileStateError,
-				LastError:          err.Error(),
-			})
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "error", Reason: err.Error()})
-			return nil
-		}
-
-		sourceAfter, hashErr := hashFileIfExists(sourcePath)
-		if hashErr != nil {
-			result.Errors++
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey:             run.RunKey,
-				RelativePath:       rel,
-				BaselineSHA256:     baseline,
-				WorkspaceSHA256:    wsHash,
-				SourceSHA256Before: sourceBefore,
-				State:              WorkspaceFileStateError,
-				LastError:          hashErr.Error(),
-			})
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "error", Reason: hashErr.Error()})
-			return nil
-		}
-
-		result.Merged++
-		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-			RunKey:             run.RunKey,
-			RelativePath:       rel,
-			BaselineSHA256:     baseline,
-			WorkspaceSHA256:    wsHash,
-			SourceSHA256Before: sourceBefore,
-			SourceSHA256After:  sourceAfter,
-			State:              WorkspaceFileStateMerged,
-		})
-		result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "merged"})
-		return nil
+		return m.walkMergeEntry(ctx, run, path, d, walkErr, &fileCount, tracked, seen, result, req)
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	if req.DeleteRemoved {
-		for rel, trackedFile := range tracked {
-			if seen[rel] {
-				continue
-			}
-			sourcePath := filepath.Join(run.SourceRoot, rel)
-			sourceBefore, hashErr := hashFileIfExists(sourcePath)
-			if hashErr != nil {
-				result.Errors++
-				m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-					RunKey:             run.RunKey,
-					RelativePath:       rel,
-					BaselineSHA256:     trackedFile.BaselineSHA256,
-					SourceSHA256Before: sourceBefore,
-					State:              WorkspaceFileStateError,
-					LastError:          hashErr.Error(),
-				})
-				result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "error", Reason: hashErr.Error()})
-				continue
-			}
-			if trackedFile.BaselineSHA256 != "" && sourceBefore != "" && sourceBefore != trackedFile.BaselineSHA256 {
-				result.Conflicts++
-				reason := "delete conflict: source changed since baseline"
-				m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-					RunKey:             run.RunKey,
-					RelativePath:       rel,
-					BaselineSHA256:     trackedFile.BaselineSHA256,
-					SourceSHA256Before: sourceBefore,
-					State:              WorkspaceFileStateConflict,
-					LastError:          reason,
-				})
-				result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "conflict", Reason: reason})
-				continue
-			}
-
-			if req.DryRun {
-				result.Merged++
-				result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "would_delete"})
-				continue
-			}
-
-			if err := os.Remove(sourcePath); err != nil && !os.IsNotExist(err) {
-				result.Errors++
-				m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-					RunKey:             run.RunKey,
-					RelativePath:       rel,
-					BaselineSHA256:     trackedFile.BaselineSHA256,
-					SourceSHA256Before: sourceBefore,
-					State:              WorkspaceFileStateError,
-					LastError:          err.Error(),
-				})
-				result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "error", Reason: err.Error()})
-				continue
-			}
-			result.Merged++
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey:             run.RunKey,
-				RelativePath:       rel,
-				BaselineSHA256:     trackedFile.BaselineSHA256,
-				SourceSHA256Before: sourceBefore,
-				SourceSHA256After:  "",
-				State:              WorkspaceFileStateMerged,
-			})
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "deleted"})
-		}
+		m.handleDeletedFiles(ctx, run, tracked, seen, result, req)
 	}
 
 	return result, nil
+}
+
+func (m *WorkspaceManager) walkMergeEntry(
+	ctx context.Context,
+	run *store.WorkspaceRun,
+	path string,
+	d fs.DirEntry,
+	walkErr error,
+	fileCount *int,
+	tracked map[string]store.WorkspaceRunFile,
+	seen map[string]bool,
+	result *WorkspaceMergeResult,
+	req WorkspaceMergeRequest,
+) error {
+	if walkErr != nil {
+		recordMergeError(result, path, walkErr.Error())
+		return nil
+	}
+	if d.IsDir() {
+		return nil
+	}
+	*fileCount = *fileCount + 1
+	if *fileCount > m.maxFiles {
+		return apperrors.Newf("WorkspaceManager.MergeRun", "too many files in workspace (%d > %d)", *fileCount, m.maxFiles)
+	}
+	if d.Type()&os.ModeSymlink != 0 {
+		rel, _ := filepath.Rel(run.WorkspacePath, path)
+		recordMergeError(result, rel, "symlink is not allowed in workspace")
+		return nil
+	}
+	relRaw, err := filepath.Rel(run.WorkspacePath, path)
+	if err != nil {
+		recordMergeError(result, path, err.Error())
+		return nil
+	}
+	rel, err := normalizeRelativePath(relRaw)
+	if err != nil {
+		recordMergeError(result, relRaw, err.Error())
+		return nil
+	}
+	seen[rel] = true
+	return m.mergeOneFile(ctx, run, path, rel, tracked, result, req)
+}
+
+// recordMergeError 记录一条合并错误到结果集。
+func recordMergeError(result *WorkspaceMergeResult, path, reason string) {
+	result.Errors++
+	result.Files = append(result.Files, WorkspaceMergeFileResult{Path: path, Action: "error", Reason: reason})
+}
+
+// mergeOneFile 处理单个工作区文件的合并逻辑 (验证 → hash → 冲突检测 → 拷贝)。
+func (m *WorkspaceManager) mergeOneFile(
+	ctx context.Context, run *store.WorkspaceRun,
+	wsPath, rel string,
+	tracked map[string]store.WorkspaceRunFile,
+	result *WorkspaceMergeResult, req WorkspaceMergeRequest,
+) error {
+	candidate, ok := m.buildMergeCandidate(ctx, run, wsPath, rel, tracked, result)
+	if !ok {
+		return nil
+	}
+	m.applyMergeCandidate(ctx, run, candidate, result, req)
+	return nil
+}
+
+type mergeCandidate struct {
+	rel          string
+	wsPath       string
+	sourcePath   string
+	wsInfo       os.FileInfo
+	wsHash       string
+	sourceBefore string
+	baseline     string
+}
+
+func (m *WorkspaceManager) buildMergeCandidate(
+	ctx context.Context,
+	run *store.WorkspaceRun,
+	wsPath, rel string,
+	tracked map[string]store.WorkspaceRunFile,
+	result *WorkspaceMergeResult,
+) (*mergeCandidate, bool) {
+	wsInfo, err := os.Stat(wsPath)
+	if err != nil {
+		recordMergeError(result, rel, err.Error())
+		return nil, false
+	}
+	if wsInfo.Size() > m.maxFileBytes {
+		msg := fmt.Sprintf("workspace file too large: %d bytes > %d", wsInfo.Size(), m.maxFileBytes)
+		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			RunKey: run.RunKey, RelativePath: rel,
+			State: WorkspaceFileStateError, LastError: msg,
+		})
+		recordMergeError(result, rel, msg)
+		return nil, false
+	}
+	wsHash, err := hashFile(wsPath)
+	if err != nil {
+		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			RunKey: run.RunKey, RelativePath: rel,
+			State: WorkspaceFileStateError, LastError: err.Error(),
+		})
+		recordMergeError(result, rel, err.Error())
+		return nil, false
+	}
+	sourcePath := filepath.Join(run.SourceRoot, rel)
+	if !isPathWithinRoot(run.SourceRoot, sourcePath) {
+		msg := "target path escapes source root"
+		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			RunKey: run.RunKey, RelativePath: rel,
+			WorkspaceSHA256: wsHash, State: WorkspaceFileStateError, LastError: msg,
+		})
+		recordMergeError(result, rel, msg)
+		return nil, false
+	}
+	sourceBefore, err := hashFileIfExists(sourcePath)
+	if err != nil {
+		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			RunKey: run.RunKey, RelativePath: rel,
+			WorkspaceSHA256: wsHash, SourceSHA256Before: sourceBefore,
+			State: WorkspaceFileStateError, LastError: err.Error(),
+		})
+		recordMergeError(result, rel, err.Error())
+		return nil, false
+	}
+	baseline := sourceBefore
+	if trackedFile, exists := tracked[rel]; exists {
+		baseline = trackedFile.BaselineSHA256
+	}
+	return &mergeCandidate{
+		rel: rel, wsPath: wsPath, sourcePath: sourcePath, wsInfo: wsInfo,
+		wsHash: wsHash, sourceBefore: sourceBefore, baseline: baseline,
+	}, true
+}
+
+func (m *WorkspaceManager) applyMergeCandidate(
+	ctx context.Context,
+	run *store.WorkspaceRun,
+	candidate *mergeCandidate,
+	result *WorkspaceMergeResult,
+	req WorkspaceMergeRequest,
+) {
+	if candidate.baseline != "" && candidate.wsHash == candidate.baseline {
+		result.Unchanged++
+		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			RunKey: run.RunKey, RelativePath: candidate.rel,
+			BaselineSHA256: candidate.baseline, WorkspaceSHA256: candidate.wsHash,
+			SourceSHA256Before: candidate.sourceBefore, SourceSHA256After: candidate.sourceBefore,
+			State: WorkspaceFileStateUnchanged,
+		})
+		result.Files = append(result.Files, WorkspaceMergeFileResult{Path: candidate.rel, Action: "unchanged"})
+		return
+	}
+	if candidate.baseline != "" && candidate.sourceBefore != "" && candidate.sourceBefore != candidate.baseline {
+		result.Conflicts++
+		reason := "source changed since baseline"
+		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			RunKey: run.RunKey, RelativePath: candidate.rel,
+			BaselineSHA256: candidate.baseline, WorkspaceSHA256: candidate.wsHash,
+			SourceSHA256Before: candidate.sourceBefore, State: WorkspaceFileStateConflict,
+			LastError: reason,
+		})
+		result.Files = append(result.Files, WorkspaceMergeFileResult{Path: candidate.rel, Action: "conflict", Reason: reason})
+		return
+	}
+	if req.DryRun {
+		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			RunKey: run.RunKey, RelativePath: candidate.rel,
+			BaselineSHA256: candidate.baseline, WorkspaceSHA256: candidate.wsHash,
+			SourceSHA256Before: candidate.sourceBefore, State: WorkspaceFileStateChanged,
+		})
+		result.Merged++
+		result.Files = append(result.Files, WorkspaceMergeFileResult{Path: candidate.rel, Action: "would_merge"})
+		return
+	}
+	if err := copyFileAtomic(candidate.wsPath, candidate.sourcePath, candidate.wsInfo.Mode().Perm()); err != nil {
+		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			RunKey: run.RunKey, RelativePath: candidate.rel,
+			BaselineSHA256: candidate.baseline, WorkspaceSHA256: candidate.wsHash,
+			SourceSHA256Before: candidate.sourceBefore, State: WorkspaceFileStateError,
+			LastError: err.Error(),
+		})
+		recordMergeError(result, candidate.rel, err.Error())
+		return
+	}
+	sourceAfter, hashErr := hashFileIfExists(candidate.sourcePath)
+	if hashErr != nil {
+		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			RunKey: run.RunKey, RelativePath: candidate.rel,
+			BaselineSHA256: candidate.baseline, WorkspaceSHA256: candidate.wsHash,
+			SourceSHA256Before: candidate.sourceBefore, State: WorkspaceFileStateError,
+			LastError: hashErr.Error(),
+		})
+		recordMergeError(result, candidate.rel, hashErr.Error())
+		return
+	}
+	result.Merged++
+	m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+		RunKey: run.RunKey, RelativePath: candidate.rel,
+		BaselineSHA256: candidate.baseline, WorkspaceSHA256: candidate.wsHash,
+		SourceSHA256Before: candidate.sourceBefore, SourceSHA256After: sourceAfter,
+		State: WorkspaceFileStateMerged,
+	})
+	result.Files = append(result.Files, WorkspaceMergeFileResult{Path: candidate.rel, Action: "merged"})
+}
+
+// handleDeletedFiles 处理工作区中不再存在但 tracked 记录仍在的文件。
+func (m *WorkspaceManager) handleDeletedFiles(
+	ctx context.Context, run *store.WorkspaceRun,
+	tracked map[string]store.WorkspaceRunFile, seen map[string]bool,
+	result *WorkspaceMergeResult, req WorkspaceMergeRequest,
+) {
+	for rel, trackedFile := range tracked {
+		if seen[rel] {
+			continue
+		}
+		sourcePath := filepath.Join(run.SourceRoot, rel)
+		sourceBefore, hashErr := hashFileIfExists(sourcePath)
+		if hashErr != nil {
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+				RunKey: run.RunKey, RelativePath: rel,
+				BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
+				State: WorkspaceFileStateError, LastError: hashErr.Error(),
+			})
+			recordMergeError(result, rel, hashErr.Error())
+			continue
+		}
+		if trackedFile.BaselineSHA256 != "" && sourceBefore != "" && sourceBefore != trackedFile.BaselineSHA256 {
+			result.Conflicts++
+			reason := "delete conflict: source changed since baseline"
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+				RunKey: run.RunKey, RelativePath: rel,
+				BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
+				State: WorkspaceFileStateConflict, LastError: reason,
+			})
+			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "conflict", Reason: reason})
+			continue
+		}
+
+		if req.DryRun {
+			result.Merged++
+			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "would_delete"})
+			continue
+		}
+
+		if err := os.Remove(sourcePath); err != nil && !os.IsNotExist(err) {
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+				RunKey: run.RunKey, RelativePath: rel,
+				BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
+				State: WorkspaceFileStateError, LastError: err.Error(),
+			})
+			recordMergeError(result, rel, err.Error())
+			continue
+		}
+		result.Merged++
+		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			RunKey: run.RunKey, RelativePath: rel,
+			BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
+			SourceSHA256After: "", State: WorkspaceFileStateMerged,
+		})
+		result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "deleted"})
+	}
+}
+
+// validateBootstrapFile 验证单个引导文件 (路径安全+大小限制+类型检查)。
+func (m *WorkspaceManager) validateBootstrapFile(sourcePath, rel string) (os.FileInfo, error) {
+	info, err := os.Lstat(sourcePath)
+	if err != nil {
+		return nil, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "bootstrap stat %s", rel)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap symlink not allowed: %s", rel)
+	}
+	if info.IsDir() {
+		return nil, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap path is directory: %s", rel)
+	}
+	if info.Size() > m.maxFileBytes {
+		return nil, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap file too large %s (%d bytes > %d)",
+			rel, info.Size(), m.maxFileBytes)
+	}
+	return info, nil
 }
 
 func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.WorkspaceRun, files []string) (int, int64, error) {
@@ -618,19 +639,9 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap path escapes source root: %s", rel)
 		}
 
-		info, err := os.Lstat(sourcePath)
+		info, err := m.validateBootstrapFile(sourcePath, rel)
 		if err != nil {
-			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "bootstrap stat %s", rel)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap symlink not allowed: %s", rel)
-		}
-		if info.IsDir() {
-			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap path is directory: %s", rel)
-		}
-		if info.Size() > m.maxFileBytes {
-			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap file too large %s (%d bytes > %d)",
-				rel, info.Size(), m.maxFileBytes)
+			return copied, totalBytes, err
 		}
 		totalBytes += info.Size()
 		if totalBytes > m.maxTotalBytes {

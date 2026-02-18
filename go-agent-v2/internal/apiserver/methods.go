@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,6 +26,8 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
+
+var codexThreadIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // registerMethods 注册所有 JSON-RPC 方法 (完整对标 APP-SERVER-PROTOCOL.md)。
 func (s *Server) registerMethods() {
@@ -223,7 +226,8 @@ func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any
 // threadResumeParams thread/resume 请求参数。
 type threadResumeParams struct {
 	ThreadID string `json:"threadId"`
-	Path     string `json:"path"`
+	Path     string `json:"path,omitempty"`
+	Cwd      string `json:"cwd,omitempty"`
 	Model    string `json:"model,omitempty"`
 }
 
@@ -235,9 +239,19 @@ type threadResumeResponse struct {
 
 func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (any, error) {
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
+		resumeThreadID := strings.TrimSpace(p.ThreadID)
+		if !isLikelyCodexThreadID(resumeThreadID) {
+			if resolved := s.resolveHistoricalCodexThreadID(ctx, p.ThreadID); resolved != "" {
+				resumeThreadID = resolved
+			}
+		}
+		if !isLikelyCodexThreadID(resumeThreadID) {
+			return nil, apperrors.Newf("Server.threadResume", "unable to resolve codex thread id for %s", p.ThreadID)
+		}
 		if err := proc.Client.ResumeThread(codex.ResumeThreadRequest{
-			ThreadID: p.ThreadID,
-			Cwd:      p.Path,
+			ThreadID: resumeThreadID,
+			Path:     p.Path,
+			Cwd:      p.Cwd,
 		}); err != nil {
 			return nil, apperrors.Wrap(err, "Server.threadResume", "resume thread")
 		}
@@ -1109,6 +1123,160 @@ func (s *Server) threadExistsInHistory(ctx context.Context, threadID string) boo
 	return count > 0
 }
 
+func isLikelyCodexThreadID(raw string) bool {
+	id := strings.TrimSpace(raw)
+	if id == "" {
+		return false
+	}
+	id = strings.TrimPrefix(strings.ToLower(id), "urn:uuid:")
+	return codexThreadIDPattern.MatchString(id)
+}
+
+func metadataThreadID(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+
+	candidates := []string{
+		nestedString(payload, "thread", "id"),
+		nestedString(payload, "threadId"),
+		nestedString(payload, "thread_id"),
+		nestedString(payload, "conversationId"),
+		nestedString(payload, "conversation_id"),
+		nestedString(payload, "sessionId"),
+		nestedString(payload, "session_id"),
+	}
+	for _, candidate := range candidates {
+		if isLikelyCodexThreadID(candidate) {
+			return strings.TrimSpace(candidate)
+		}
+	}
+	return ""
+}
+
+func nestedString(root map[string]any, path ...string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	var current any = root
+	for _, key := range path {
+		obj, ok := current.(map[string]any)
+		if !ok {
+			return ""
+		}
+		next, ok := obj[key]
+		if !ok {
+			return ""
+		}
+		current = next
+	}
+	value, ok := current.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func isMeaningfulSessionMessage(msg store.AgentMessage) bool {
+	role := strings.ToLower(strings.TrimSpace(msg.Role))
+	if role == "user" || role == "assistant" {
+		return true
+	}
+
+	eventType := strings.ToLower(strings.TrimSpace(msg.EventType))
+	method := strings.ToLower(strings.TrimSpace(msg.Method))
+	switch {
+	case eventType == codex.EventTurnComplete,
+		eventType == codex.EventAgentMessage,
+		eventType == codex.EventAgentMessageDelta,
+		eventType == codex.EventAgentMessageCompleted,
+		method == "turn/completed",
+		method == "item/agentmessage/delta":
+		return true
+	}
+	return false
+}
+
+func resolveResumeThreadIDFromMessages(messages []store.AgentMessage) string {
+	type sessionCandidate struct {
+		threadID   string
+		meaningful bool
+	}
+
+	sessions := make([]sessionCandidate, 0, 8)
+	current := sessionCandidate{}
+	flush := func() {
+		if current.threadID == "" {
+			return
+		}
+		sessions = append(sessions, current)
+	}
+
+	// ListByAgent 返回倒序；这里改为时间正序遍历。
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if strings.EqualFold(msg.EventType, codex.EventSessionConfigured) || strings.EqualFold(msg.Method, "thread/started") {
+			flush()
+			current = sessionCandidate{
+				threadID: metadataThreadID(msg.Metadata),
+			}
+			continue
+		}
+		if current.threadID == "" {
+			continue
+		}
+		if isMeaningfulSessionMessage(msg) {
+			current.meaningful = true
+		}
+	}
+	flush()
+
+	for i := len(sessions) - 1; i >= 0; i-- {
+		if sessions[i].meaningful {
+			return sessions[i].threadID
+		}
+	}
+	if len(sessions) > 0 {
+		return sessions[len(sessions)-1].threadID
+	}
+
+	// 回退：无明确会话边界时，直接扫描任意 metadata 中的可用线程 ID。
+	for _, msg := range messages {
+		if tid := metadataThreadID(msg.Metadata); tid != "" {
+			return tid
+		}
+	}
+	return ""
+}
+
+func (s *Server) resolveHistoricalCodexThreadID(ctx context.Context, agentID string) string {
+	if s.msgStore == nil {
+		return ""
+	}
+	id := strings.TrimSpace(agentID)
+	if id == "" {
+		return ""
+	}
+
+	dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	msgs, err := s.msgStore.ListByAgent(dbCtx, id, 500, 0)
+	if err != nil {
+		logger.Warn("turn/start: resolve historical codex thread id failed",
+			logger.FieldThreadID, id,
+			logger.FieldError, err,
+		)
+		return ""
+	}
+	return resolveResumeThreadIDFromMessages(msgs)
+}
+
 func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd string) (*runner.AgentProcess, error) {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -1120,6 +1288,12 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	}
 	if !s.threadExistsInHistory(ctx, id) {
 		return nil, apperrors.Newf("Server.ensureThreadReady", "thread %s not found", id)
+	}
+	resumeThreadID := id
+	if !isLikelyCodexThreadID(resumeThreadID) {
+		if resolved := s.resolveHistoricalCodexThreadID(ctx, id); resolved != "" {
+			resumeThreadID = resolved
+		}
 	}
 
 	launchCwd := strings.TrimSpace(cwd)
@@ -1140,8 +1314,14 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	if proc == nil {
 		return nil, apperrors.Newf("Server.ensureThreadReady", "thread %s loaded but not found", id)
 	}
+	if !isLikelyCodexThreadID(resumeThreadID) {
+		logger.Warn("turn/start: no valid historical codex thread id, continue with fresh session",
+			logger.FieldThreadID, id,
+		)
+		return proc, nil
+	}
 	if err := proc.Client.ResumeThread(codex.ResumeThreadRequest{
-		ThreadID: id,
+		ThreadID: resumeThreadID,
 		Cwd:      launchCwd,
 	}); err != nil {
 		if stopErr := s.mgr.Stop(id); stopErr != nil {
@@ -1155,6 +1335,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 
 	logger.Info("turn/start: historical thread auto-loaded",
 		logger.FieldThreadID, id,
+		"resume_thread_id", resumeThreadID,
 		logger.FieldCwd, launchCwd,
 	)
 	return proc, nil

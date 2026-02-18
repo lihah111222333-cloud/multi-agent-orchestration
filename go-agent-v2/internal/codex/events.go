@@ -286,6 +286,7 @@ type ThreadInfo struct {
 // ResumeThreadRequest 恢复已有会话 (对应 CLI: codex resume <id> [path])。
 type ResumeThreadRequest struct {
 	ThreadID string `json:"thread_id"`
+	Path     string `json:"path,omitempty"`
 	Cwd      string `json:"cwd,omitempty"`
 }
 

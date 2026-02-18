@@ -31,7 +31,7 @@ type OrchestrationSnapshot struct {
 
 // OrchestrationState 编排状态跟踪器。
 type OrchestrationState struct {
-	mu             sync.RWMutex
+	mu             sync.RWMutex // 保护 activeRuns/bindingWarning
 	activeRuns     map[string]*RunState
 	bindingWarning string
 	bus            *MessageBus

@@ -189,12 +189,6 @@ export const UnifiedChatPage = {
       () => modeKey.value,
       () => {
         splitRatio.value = props.threadStore.getSplitRatio(modeKey.value);
-        if (isCmd.value && !props.threadStore.state.activeCmdThreadId) {
-          const pinned = props.threadStore.getCurrentThreadId('cmd');
-          if (pinned) {
-            props.threadStore.saveActiveCmdThread(pinned);
-          }
-        }
       },
       { immediate: true },
     );
@@ -204,35 +198,6 @@ export const UnifiedChatPage = {
       (value) => {
         props.threadStore.setSplitRatio(modeKey.value, value);
       },
-    );
-
-    watch(
-      () => threads.value.map((item) => item.id).join(','),
-      () => {
-        if (!selectedThreadId.value && threads.value.length > 0) {
-          selectedThreadId.value = threads.value[0].id;
-        }
-      },
-      { immediate: true },
-    );
-
-    watch(
-      () => chatThreadOptions.value.map((item) => item.id).join(','),
-      () => {
-        if (isCmd.value) return;
-        const options = chatThreadOptions.value;
-        if (options.length === 0) {
-          if (selectedThreadId.value) {
-            selectedThreadId.value = '';
-          }
-          return;
-        }
-        const selected = selectedThreadId.value;
-        if (!selected || !options.some((item) => item.id === selected)) {
-          selectedThreadId.value = options[0].id;
-        }
-      },
-      { immediate: true },
     );
 
     watch(

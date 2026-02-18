@@ -36,6 +36,8 @@ type Client struct {
 
 	stderrCollector *logger.StderrCollector
 
+	// mu 保护 pending map 和 stdin 写入 (JSON-RPC 帧序列化)。
+	// 也用于保护 onDiag callback 注册。
 	mu       sync.Mutex
 	nextID   atomic.Int64
 	pending  map[int]chan *Response
@@ -233,6 +235,8 @@ func (c *Client) call(method string, params any, result any) error {
 		return err
 	}
 
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
 	select {
 	case resp, ok := <-ch:
 		if !ok {
@@ -245,7 +249,7 @@ func (c *Client) call(method string, params any, result any) error {
 			return json.Unmarshal(resp.Result, result)
 		}
 		return nil
-	case <-time.After(30 * time.Second):
+	case <-timer.C:
 		logger.Warn("lsp: call timeout", logger.FieldMethod, method, logger.FieldLanguage, c.language)
 		return apperrors.Newf("LSP.call", "%s timeout (30s)", method)
 	}

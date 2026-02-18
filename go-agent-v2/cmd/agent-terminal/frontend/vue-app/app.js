@@ -1,8 +1,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from '../lib/vue.esm-browser.prod.js';
-import { callAPI, getBuildInfo, onAgentEvent } from './services/api.js';
+import { callAPI, getBuildInfo, onAgentEvent, onBridgeEvent } from './services/api.js';
 import { SidebarNav } from './components/SidebarNav.js';
 import { ProjectModal } from './components/ProjectModal.js';
-import { TerminalPage } from './pages/TerminalPage.js';
 import { ChatPage } from './pages/ChatPage.js';
 import { DataPage } from './pages/DataPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
@@ -13,7 +12,6 @@ const REFRESH_INTERVAL_MS = 10000;
 
 const NAV_ITEMS = Object.freeze([
   { key: 'chat', icon: '💬', label: 'Chat' },
-  { key: 'terminal', icon: '>_', label: 'CMD' },
   { key: 'agents', icon: 'A', label: 'Agent' },
   { key: 'dags', icon: 'D', label: 'DAG' },
   { key: 'tasks', icon: 'T', label: '任务' },
@@ -28,7 +26,6 @@ export const AppRoot = {
   components: {
     SidebarNav,
     ProjectModal,
-    TerminalPage,
     ChatPage,
     DataPage,
     SettingsPage,
@@ -53,7 +50,8 @@ export const AppRoot = {
     });
 
     let refreshTimer = null;
-    let unsubscribeEvent = () => {};
+    let unsubscribeAgentEvent = () => {};
+    let unsubscribeBridgeEvent = () => {};
 
     const agentsFields = Object.freeze([
       { key: 'agent_id', label: 'Agent' },
@@ -199,8 +197,11 @@ export const AppRoot = {
         await threadStore.loadMessages(threadStore.state.activeThreadId);
       }
 
-      unsubscribeEvent = onAgentEvent((evt) => {
+      unsubscribeAgentEvent = onAgentEvent((evt) => {
         threadStore.handleAgentEvent(evt);
+      });
+      unsubscribeBridgeEvent = onBridgeEvent((evt) => {
+        threadStore.handleBridgeEvent(evt);
       });
 
       refreshTimer = setInterval(() => {
@@ -225,7 +226,8 @@ export const AppRoot = {
     });
 
     onBeforeUnmount(() => {
-      unsubscribeEvent();
+      unsubscribeAgentEvent();
+      unsubscribeBridgeEvent();
       if (refreshTimer) clearInterval(refreshTimer);
     });
 
@@ -257,14 +259,8 @@ export const AppRoot = {
       <SidebarNav :items="NAV_ITEMS" :page="page" @change="page = $event" />
 
       <main id="content">
-        <TerminalPage
-          v-if="page === 'terminal'"
-          :project-store="projectStore"
-          :thread-store="threadStore"
-        />
-
         <ChatPage
-          v-else-if="page === 'chat'"
+          v-if="page === 'chat'"
           :project-store="projectStore"
           :thread-store="threadStore"
         />

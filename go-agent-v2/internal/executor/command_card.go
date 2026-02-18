@@ -85,6 +85,10 @@ type PrepareResult struct {
 
 // Prepare 创建命令卡运行实例，渲染模板并写入 DB (对应 Python prepare_command_card_run)。
 func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, params map[string]string, requestedBy string) (*PrepareResult, error) {
+	logger.Infow("executor: prepare",
+		logger.FieldCardKey, cardKey,
+		"requested_by", requestedBy,
+	)
 	cardKey = strings.TrimSpace(cardKey)
 	if cardKey == "" {
 		return &PrepareResult{OK: false, Message: "card_key 不能为空"}, nil
@@ -138,7 +142,7 @@ func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, param
 	}
 
 	// 审计
-	_ = e.auditLog.Append(ctx, &store.AuditEvent{
+	if err := e.auditLog.Append(ctx, &store.AuditEvent{
 		EventType: "command_card_run",
 		Action:    "prepare",
 		Result:    status,
@@ -146,7 +150,9 @@ func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, param
 		Target:    cardKey,
 		Detail:    fmt.Sprintf("run_id=%d dangerous=%v", run.ID, dp != ""),
 		Level:     "INFO",
-	})
+	}); err != nil {
+		logger.Warn("executor: audit append failed", logger.FieldError, err)
+	}
 
 	return &PrepareResult{
 		OK:               true,
@@ -170,6 +176,11 @@ type ReviewResult struct {
 
 // Review 对 pending_review 状态的运行实例进行审批 (对应 Python review_command_card_run)。
 func (e *CommandCardExecutor) Review(ctx context.Context, runID int, decision, reviewer, note string) (*ReviewResult, error) {
+	logger.Infow("executor: review",
+		logger.FieldRunID, runID,
+		logger.FieldDecision, decision,
+		"reviewer", reviewer,
+	)
 	run, err := e.GetRun(ctx, runID)
 	if err != nil {
 		return nil, err
@@ -206,7 +217,7 @@ func (e *CommandCardExecutor) Review(ctx context.Context, runID int, decision, r
 	}
 
 	// 审计
-	_ = e.auditLog.Append(ctx, &store.AuditEvent{
+	if err := e.auditLog.Append(ctx, &store.AuditEvent{
 		EventType: "command_card_run",
 		Action:    "review",
 		Result:    decision,
@@ -214,7 +225,9 @@ func (e *CommandCardExecutor) Review(ctx context.Context, runID int, decision, r
 		Target:    run.CardKey,
 		Detail:    fmt.Sprintf("run_id=%d note=%s", runID, note),
 		Level:     "INFO",
-	})
+	}); err != nil {
+		logger.Warn("executor: audit append failed", logger.FieldError, err)
+	}
 
 	return &ReviewResult{OK: true, Run: updated}, nil
 }
@@ -256,12 +269,26 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 	}
 
 	// 标记 running
-	_, _ = e.pool.Exec(ctx, "UPDATE command_card_runs SET status='running', updated_at=NOW() WHERE id=$1", runID)
+	if _, err := e.pool.Exec(ctx, "UPDATE command_card_runs SET status='running', updated_at=NOW() WHERE id=$1", runID); err != nil {
+		logger.Warn("executor: mark running failed", logger.FieldRunID, runID, logger.FieldError, err)
+	}
 
 	timeout := util.ClampInt(timeoutSec, minTimeoutSec, maxTimeoutSec)
 	if timeout == 0 {
 		timeout = defaultTimeoutSec
 	}
+
+	logger.Infow("executor: executing command",
+		logger.FieldRunID, runID,
+		logger.FieldCommand, func() string {
+			if len(command) > 200 {
+				return command[:200] + "..."
+			}
+			return command
+		}(),
+		"timeout_sec", timeout,
+		"actor", actor,
+	)
 
 	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
@@ -314,14 +341,16 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 	}
 
 	// 审计
-	_ = e.auditLog.Append(ctx, &store.AuditEvent{
+	if err := e.auditLog.Append(ctx, &store.AuditEvent{
 		EventType: "command_card_run",
 		Action:    "execute",
 		Result:    status,
 		Actor:     actor,
 		Detail:    fmt.Sprintf("run_id=%d exit_code=%d output_len=%d", runID, exitCode, len(output)),
 		Level:     "INFO",
-	})
+	}); err != nil {
+		logger.Warn("executor: audit append failed", logger.FieldError, err)
+	}
 
 	logger.Infow("command executed",
 		"run_id", runID,
@@ -351,6 +380,11 @@ type RunOneOpts struct {
 
 // RunOne 一站式: Prepare → (Review) → Execute (对应 Python execute_command_card)。
 func (e *CommandCardExecutor) RunOne(ctx context.Context, cardKey string, params map[string]string, requestedBy string, opts RunOneOpts) (*ExecResult, error) {
+	logger.Infow("executor: run_one",
+		logger.FieldCardKey, cardKey,
+		"requested_by", requestedBy,
+		"auto_approve", opts.AutoApprove,
+	)
 	prepared, err := e.Prepare(ctx, cardKey, params, requestedBy)
 	if err != nil {
 		return nil, err
@@ -439,7 +473,7 @@ func (e *CommandCardExecutor) RecoverStaleRuns(ctx context.Context, timeoutSec i
 	}
 	count := tag.RowsAffected()
 	if count > 0 {
-		_ = e.auditLog.Append(ctx, &store.AuditEvent{
+		if err := e.auditLog.Append(ctx, &store.AuditEvent{
 			EventType: "command_card_run",
 			Action:    "recover_stale",
 			Result:    "ok",
@@ -447,7 +481,9 @@ func (e *CommandCardExecutor) RecoverStaleRuns(ctx context.Context, timeoutSec i
 			Target:    "command_card_runs",
 			Detail:    fmt.Sprintf("recovered %d stale running task(s)", count),
 			Level:     "INFO",
-		})
+		}); err != nil {
+			logger.Warn("executor: audit append failed", logger.FieldError, err)
+		}
 	}
 	return count, nil
 }
@@ -497,6 +533,10 @@ func detectDangerous(command string) string {
 
 // marshalJSON 安全序列化 (DRY helper)。
 func marshalJSON(v any) string {
-	b, _ := json.Marshal(v)
+	b, err := json.Marshal(v)
+	if err != nil {
+		logger.Debug("marshalJSON failed", logger.FieldError, err)
+		return "{}"
+	}
 	return string(b)
 }

@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 // ========================================
@@ -252,6 +254,11 @@ func (b *MessageBus) Publish(msg Message) {
 			case sub.Ch <- msg:
 			default:
 				// 通道满, 丢弃 (避免阻塞发布者)
+				logger.Warn("bus: subscriber channel full, message dropped",
+					logger.FieldSubscriber, sub.ID,
+					logger.FieldTopic, msg.Topic,
+					logger.FieldSeq, msg.Seq,
+				)
 			}
 		}
 	}

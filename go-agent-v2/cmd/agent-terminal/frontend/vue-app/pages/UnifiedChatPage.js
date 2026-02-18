@@ -12,6 +12,30 @@ import { ComposerBar } from '../components/ComposerBar.js';
 import { statusLabel, normalizeStatus } from '../services/status.js';
 import { useComposerStore } from '../stores/composer.js';
 
+export async function requestHistoryLoad(threadStore, threadId, options = {}) {
+  if (!threadId || typeof threadStore?.loadMessages !== 'function') {
+    return false;
+  }
+
+  if (options.force) {
+    const limit = Number.isFinite(options.limit) && options.limit > 0 ? options.limit : 300;
+    await threadStore.loadMessages(threadId, limit, { force: true });
+    return true;
+  }
+
+  await threadStore.loadMessages(threadId);
+  return true;
+}
+
+export function pickChatSelectableThreads(threads, loadedThreadMap, loadedThreadListReady) {
+  const list = Array.isArray(threads) ? threads : [];
+  if (!loadedThreadListReady) return list;
+  const loaded = loadedThreadMap && typeof loadedThreadMap === 'object'
+    ? loadedThreadMap
+    : {};
+  return list.filter((thread) => loaded[(thread?.id || '').toString()] === true);
+}
+
 export const UnifiedChatPage = {
   name: 'UnifiedChatPage',
   components: {
@@ -66,6 +90,14 @@ export const UnifiedChatPage = {
     });
 
     const activeThread = computed(() => threads.value.find((item) => item.id === selectedThreadId.value) || null);
+    const chatThreadOptions = computed(() => {
+      if (isCmd.value) return [];
+      return pickChatSelectableThreads(
+        threads.value,
+        props.threadStore.state.loadedThreadIds,
+        props.threadStore.state.loadedThreadListReady,
+      );
+    });
 
     const activeTimeline = computed(() => props.threadStore.getThreadTimeline(selectedThreadId.value));
     const activeDiffText = computed(() => props.threadStore.getThreadDiff(selectedThreadId.value));
@@ -160,11 +192,31 @@ export const UnifiedChatPage = {
     );
 
     watch(
+      () => chatThreadOptions.value.map((item) => item.id).join(','),
+      () => {
+        if (isCmd.value) return;
+        const options = chatThreadOptions.value;
+        if (options.length === 0) {
+          if (selectedThreadId.value) {
+            selectedThreadId.value = '';
+          }
+          return;
+        }
+        const selected = selectedThreadId.value;
+        if (!selected || !options.some((item) => item.id === selected)) {
+          selectedThreadId.value = options[0].id;
+        }
+      },
+      { immediate: true },
+    );
+
+    watch(
       () => selectedThreadId.value,
       (id) => {
         if (!id) return;
-        // Avoid blocking the UI during page switch/startup.
-        // History can be loaded explicitly via toolbar/button.
+        requestHistoryLoad(props.threadStore, id).catch(() => {
+          // ignore: real-time stream may still backfill timeline
+        });
       },
       { immediate: true },
     );
@@ -206,7 +258,7 @@ export const UnifiedChatPage = {
     async function loadCurrentHistory() {
       const threadId = selectedThreadId.value;
       if (!threadId) return;
-      await props.threadStore.loadMessages(threadId, 300, { force: true });
+      await requestHistoryLoad(props.threadStore, threadId, { force: true, limit: 300 });
     }
 
     function selectThread(threadId) {
@@ -300,6 +352,7 @@ export const UnifiedChatPage = {
       mainAgentId,
       selectedThreadId,
       activeThread,
+      chatThreadOptions,
       activeTimeline,
       activeDiffText,
       activeStatus,
@@ -361,7 +414,7 @@ export const UnifiedChatPage = {
         <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" @click="threadStore.refreshThreads">刷新</button>
 
         <select v-if="!isCmd" class="agent-selector" v-model="selectedThreadId">
-          <option v-for="thread in threads" :key="thread.id" :value="thread.id">{{ threadStore.displayName(thread) }}</option>
+          <option v-for="thread in chatThreadOptions" :key="thread.id" :value="thread.id">{{ threadStore.displayName(thread) }}</option>
         </select>
         <button
           v-if="!isCmd && selectedThreadId"
@@ -381,10 +434,6 @@ export const UnifiedChatPage = {
           @click="threadStore.stopThread(selectedThreadId)"
         >停止</button>
 
-        <div class="chat-status">
-          <span class="status-dot" :class="activeStatus"></span>
-          <span>{{ statusLabel(activeStatus) }}</span>
-        </div>
       </div>
 
       <div class="unified-main">
@@ -464,7 +513,7 @@ export const UnifiedChatPage = {
                 <div v-if="noActiveThread" class="chat-messages-vue">
                   <div class="diff-empty">选择或启动一个 Agent 开始对话</div>
                 </div>
-                <ChatTimeline v-else :items="activeTimeline" />
+                <ChatTimeline v-else :items="activeTimeline" :active-status="activeStatus" />
               </div>
 
               <div class="panel-resizer" :class="{dragging}" @mousedown="onResizeStart"></div>

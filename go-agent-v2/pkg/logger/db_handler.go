@@ -47,15 +47,18 @@ type DBHandler struct {
 	group string
 	level slog.Level
 	done  chan struct{}
+	// closed 在 handler clone(WithAttrs/WithGroup) 间共享，避免 shutdown 后继续写入已关闭通道 panic。
+	closed *atomic.Bool
 }
 
 // NewDBHandler 创建并启动后台写入 goroutine。
 func NewDBHandler(pool *pgxpool.Pool, level slog.Level) *DBHandler {
 	h := &DBHandler{
-		pool:  pool,
-		buf:   make(chan LogEntry, bufSize),
-		level: level,
-		done:  make(chan struct{}),
+		pool:   pool,
+		buf:    make(chan LogEntry, bufSize),
+		level:  level,
+		done:   make(chan struct{}),
+		closed: &atomic.Bool{},
 	}
 	go h.consumeLoop()
 	return h
@@ -68,6 +71,10 @@ func (h *DBHandler) Enabled(_ context.Context, level slog.Level) bool {
 
 // Handle 实现 slog.Handler — 构造 LogEntry 推入异步缓冲。
 func (h *DBHandler) Handle(_ context.Context, r slog.Record) error {
+	if h.closed != nil && h.closed.Load() {
+		return nil
+	}
+
 	entry := LogEntry{
 		Ts:      r.Time,
 		Level:   r.Level.String(),
@@ -86,11 +93,18 @@ func (h *DBHandler) Handle(_ context.Context, r slog.Record) error {
 	})
 
 	// 非阻塞推入 — chan 满时 drop
-	select {
-	case h.buf <- entry:
-	default:
-		// drop: 避免 DB 慢时阻塞主流程
-	}
+	func() {
+		defer func() {
+			if recover() != nil {
+				// shutdown 期间通道被关闭: 丢弃该条日志，避免 panic 影响主流程。
+			}
+		}()
+		select {
+		case h.buf <- entry:
+		default:
+			// drop: 避免 DB 慢时阻塞主流程
+		}
+	}()
 	return nil
 }
 
@@ -100,29 +114,34 @@ func (h *DBHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	copy(newAttrs, h.attrs)
 	copy(newAttrs[len(h.attrs):], attrs)
 	return &DBHandler{
-		pool:  h.pool,
-		buf:   h.buf,
-		attrs: newAttrs,
-		group: h.group,
-		level: h.level,
-		done:  h.done,
+		pool:   h.pool,
+		buf:    h.buf,
+		attrs:  newAttrs,
+		group:  h.group,
+		level:  h.level,
+		done:   h.done,
+		closed: h.closed,
 	}
 }
 
 // WithGroup 实现 slog.Handler。
 func (h *DBHandler) WithGroup(name string) slog.Handler {
 	return &DBHandler{
-		pool:  h.pool,
-		buf:   h.buf,
-		attrs: h.attrs,
-		group: name,
-		level: h.level,
-		done:  h.done,
+		pool:   h.pool,
+		buf:    h.buf,
+		attrs:  h.attrs,
+		group:  name,
+		level:  h.level,
+		done:   h.done,
+		closed: h.closed,
 	}
 }
 
 // Shutdown 停止后台 goroutine 并 flush 剩余日志。
 func (h *DBHandler) Shutdown() {
+	if h.closed != nil && !h.closed.CompareAndSwap(false, true) {
+		return
+	}
 	close(h.buf)
 	<-h.done
 }
@@ -167,7 +186,12 @@ func (h *DBHandler) flush(batch []LogEntry) {
 	for _, e := range batch {
 		var extraJSON []byte
 		if len(e.Extra) > 0 {
-			extraJSON, _ = json.Marshal(e.Extra)
+			var marshalErr error
+			extraJSON, marshalErr = json.Marshal(e.Extra)
+			if marshalErr != nil {
+				slog.Default().Debug("db_handler: marshal extra", "error", marshalErr)
+				extraJSON = nil
+			}
 		}
 
 		_, err := h.pool.Exec(ctx,

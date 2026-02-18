@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,6 +20,8 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/store"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // registerMethods 注册所有 JSON-RPC 方法 (完整对标 APP-SERVER-PROTOCOL.md)。
@@ -139,7 +140,9 @@ type initializeParams struct {
 func (s *Server) initialize(_ context.Context, params json.RawMessage) (any, error) {
 	var p initializeParams
 	if params != nil {
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			logger.Debug("initialize: unmarshal params", logger.FieldError, err)
+		}
 	}
 	return map[string]any{
 		"protocolVersion": "2.0",
@@ -310,39 +313,23 @@ func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error)
 		dbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		rows, err := s.msgStore.Pool().Query(dbCtx,
-			`SELECT agent_id, MAX(created_at) AS last_at
-			 FROM agent_messages
-			 GROUP BY agent_id
-			 ORDER BY last_at DESC
-			 LIMIT 500`)
+		historyThreads, err := s.msgStore.ListDistinctAgentIDs(dbCtx, 500)
 		if err != nil {
-			slog.Warn("thread/list: load history threads failed", "error", err)
+			logger.Warn("thread/list: load history threads failed", logger.FieldError, err)
 		} else {
-			defer rows.Close()
-			for rows.Next() {
-				var agentID string
-				var lastAt time.Time
-				if err := rows.Scan(&agentID, &lastAt); err != nil {
-					slog.Warn("thread/list: scan history thread failed", "error", err)
+			for _, t := range historyThreads {
+				if t.AgentID == "" {
 					continue
 				}
-				if agentID == "" {
+				if _, ok := seen[t.AgentID]; ok {
 					continue
 				}
-				if _, ok := seen[agentID]; ok {
-					continue
-				}
-
 				threads = append(threads, map[string]any{
-					"id":    agentID,
-					"name":  agentID,
+					"id":    t.AgentID,
+					"name":  t.AgentID,
 					"state": "idle",
 				})
-				seen[agentID] = struct{}{}
-			}
-			if err := rows.Err(); err != nil {
-				slog.Warn("thread/list: iterate history threads failed", "error", err)
+				seen[t.AgentID] = struct{}{}
 			}
 		}
 	}
@@ -444,7 +431,7 @@ func (s *Server) turnStart(_ context.Context, params json.RawMessage) (any, erro
 		}
 
 		// 持久化用户消息
-		go s.PersistUserMessage(p.ThreadID, prompt)
+		util.SafeGo(func() { s.PersistUserMessage(p.ThreadID, prompt) })
 
 		turnID := fmt.Sprintf("turn-%d", time.Now().UnixMilli())
 		return map[string]any{
@@ -641,7 +628,9 @@ func (s *Server) configBatchWrite(_ context.Context, params json.RawMessage) (an
 			rejected = append(rejected, e.Key)
 			continue
 		}
-		_ = os.Setenv(e.Key, e.Value)
+		if err := os.Setenv(e.Key, e.Value); err != nil {
+			logger.Warn("config/batchWrite: setenv failed", logger.FieldKey, e.Key, logger.FieldError, err)
+		}
 	}
 	result := map[string]any{}
 	if len(rejected) > 0 {
@@ -673,7 +662,7 @@ func (s *Server) mcpServerReload(_ context.Context, _ json.RawMessage) (any, err
 		return map[string]any{"reloaded": false}, nil
 	}
 	s.lsp.Reload()
-	slog.Info("mcpServer/reload: all language servers restarted")
+	logger.Info("mcpServer/reload: all language servers restarted")
 	return map[string]any{"reloaded": true}, nil
 }
 
@@ -748,8 +737,8 @@ func (s *Server) skillsConfigWrite(_ context.Context, params json.RawMessage) (a
 		s.skillsMu.Lock()
 		s.agentSkills[p.AgentID] = p.Skills
 		s.skillsMu.Unlock()
-		slog.Info("skills/config/write: agent skills configured",
-			"agent_id", p.AgentID, "skills", p.Skills)
+		logger.Info("skills/config/write: agent skills configured",
+			logger.FieldAgentID, p.AgentID, "skills", p.Skills)
 		return map[string]any{"ok": true, "agent_id": p.AgentID, "skills": p.Skills}, nil
 	}
 
@@ -768,7 +757,7 @@ func (s *Server) skillsConfigWrite(_ context.Context, params json.RawMessage) (a
 	if err := os.WriteFile(path, []byte(p.Content), 0o644); err != nil {
 		return nil, fmt.Errorf("skills/config/write: write: %w", err)
 	}
-	slog.Info("skills/config/write: saved", "skill", p.Name, "bytes", len(p.Content))
+	logger.Info("skills/config/write: saved", logger.FieldSkill, p.Name, logger.FieldBytes, len(p.Content))
 	return map[string]any{"ok": true, "path": path}, nil
 }
 
@@ -839,6 +828,12 @@ func (s *Server) commandExec(ctx context.Context, params json.RawMessage) (any, 
 		}
 	}
 
+	logger.Infow("command/exec: starting",
+		logger.FieldCommand, baseName,
+		logger.FieldCwd, p.Cwd,
+		"argc", len(p.Argv),
+	)
+
 	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -863,15 +858,28 @@ func (s *Server) commandExec(ctx context.Context, params json.RawMessage) (any, 
 	cmd.Stdout = &limitedWriter{w: &stdout, limit: maxOutputSize}
 	cmd.Stderr = &limitedWriter{w: &stderr, limit: maxOutputSize}
 
+	start := time.Now()
 	err := cmd.Run()
+	elapsed := time.Since(start)
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
+			logger.Error("command/exec: run failed",
+				logger.FieldCommand, baseName,
+				logger.FieldError, err,
+				logger.FieldDurationMS, elapsed.Milliseconds(),
+			)
 			return nil, fmt.Errorf("command/exec: %w", err)
 		}
 	}
+
+	logger.Infow("command/exec: completed",
+		logger.FieldCommand, baseName,
+		logger.FieldExitCode, exitCode,
+		logger.FieldDurationMS, elapsed.Milliseconds(),
+	)
 
 	return map[string]any{
 		"exitCode": exitCode,
@@ -913,7 +921,10 @@ func (s *Server) accountLoginStart(_ context.Context, params json.RawMessage) (a
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 	if p.APIKey != "" {
-		_ = os.Setenv("OPENAI_API_KEY", p.APIKey)
+		if err := os.Setenv("OPENAI_API_KEY", p.APIKey); err != nil {
+			logger.Warn("account/login: setenv failed", logger.FieldError, err)
+			return nil, fmt.Errorf("setenv OPENAI_API_KEY: %w", err)
+		}
 		return map[string]any{}, nil
 	}
 	return map[string]any{"loginUrl": "https://platform.openai.com/api-keys"}, nil
@@ -924,7 +935,9 @@ func (s *Server) accountLoginCancel(_ context.Context, _ json.RawMessage) (any, 
 }
 
 func (s *Server) accountLogout(_ context.Context, _ json.RawMessage) (any, error) {
-	_ = os.Unsetenv("OPENAI_API_KEY")
+	if err := os.Unsetenv("OPENAI_API_KEY"); err != nil {
+		logger.Warn("account/logout: unsetenv failed", logger.FieldError, err)
+	}
 	return map[string]any{}, nil
 }
 
@@ -1035,9 +1048,11 @@ func (s *Server) skillsRemoteRead(_ context.Context, params json.RawMessage) (an
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
+	logger.Infow("skills/remote/read: fetching", logger.FieldURL, p.URL)
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(p.URL)
 	if err != nil {
+		logger.Warn("skills/remote/read: fetch failed", logger.FieldURL, p.URL, logger.FieldError, err)
 		return nil, fmt.Errorf("skills/remote/read: %w", err)
 	}
 	defer resp.Body.Close()

@@ -3,7 +3,6 @@
 // 本包为 go-agent-v2 精简版:
 //   - L1 哨兵错误: ErrNotFound / ErrInvalidInput / ErrTimeout 等
 //   - L2 AppError: 带 Op + Code + Message 的应用级错误 (替代 EngineError)
-//   - 标准 errors.Is / errors.As re-export
 package errors
 
 import (
@@ -86,18 +85,4 @@ func Wrap(err error, op string, message string) error {
 // Wrapf 用格式化消息包装错误。
 func Wrapf(err error, op, format string, args ...any) error {
 	return &AppError{Op: op, Message: fmt.Sprintf(format, args...), Err: err}
-}
-
-// ========================================
-// 标准库 re-export
-// ========================================
-
-// Is 检查目标错误是否匹配。
-func Is(err, target error) bool {
-	return errors.Is(err, target)
-}
-
-// As 在错误链中查找匹配目标的错误。
-func As(err error, target interface{}) bool {
-	return errors.As(err, target)
 }

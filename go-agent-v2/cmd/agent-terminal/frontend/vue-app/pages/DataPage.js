@@ -1,3 +1,6 @@
+import { onBeforeUnmount, onMounted, watch } from '../../lib/vue.esm-browser.prod.js';
+import { logDebug, logInfo } from '../services/log.js';
+
 export const DataPage = {
   name: 'DataPage',
   props: {
@@ -7,6 +10,31 @@ export const DataPage = {
     items: { type: Array, default: () => [] },
     emptyText: { type: String, default: '暂无数据' },
     fields: { type: Array, default: () => [] },
+  },
+  setup(props) {
+    watch(
+      () => props.items.length,
+      (next, prev) => {
+        if (next === prev) return;
+        logDebug('page', 'data.items.changed', {
+          page: props.pageId,
+          count: next,
+        });
+      },
+      { immediate: true },
+    );
+
+    onMounted(() => {
+      logInfo('page', 'data.mounted', {
+        page: props.pageId,
+      });
+    });
+    onBeforeUnmount(() => {
+      logInfo('page', 'data.unmounted', {
+        page: props.pageId,
+      });
+    });
+    return {};
   },
   template: `
     <section :id="'page-' + pageId" class="page active">

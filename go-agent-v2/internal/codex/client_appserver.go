@@ -16,10 +16,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +27,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // ========================================
@@ -175,7 +176,7 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", c.Port), 500*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
-			slog.Info("codex: app-server listening", "port", c.Port)
+			logger.Info("codex: app-server listening", logger.FieldPort, c.Port)
 			return nil
 		}
 		time.Sleep(300 * time.Millisecond)
@@ -197,7 +198,7 @@ func (c *AppServerClient) connectWS() error {
 		return fmt.Errorf("codex: app-server ws connect: %w", err)
 	}
 	c.ws = conn
-	go c.readLoop()
+	util.SafeGo(func() { c.readLoop() })
 	return nil
 }
 
@@ -263,8 +264,8 @@ func (c *AppServerClient) respond(id int64, result any) error {
 // codex 的 thread/start.dynamicTools 标记了 #[experimental],
 // 不声明此 capability 会导致 dynamicTools 被静默忽略。
 func (c *AppServerClient) Initialize() error {
-	slog.Info("codex: Initialize()",
-		"port", c.Port,
+	logger.Info("codex: Initialize()",
+		logger.FieldPort, c.Port,
 		"experimentalApi", true,
 	)
 	result, err := c.call("initialize", map[string]any{
@@ -277,11 +278,11 @@ func (c *AppServerClient) Initialize() error {
 		},
 	}, 10*time.Second)
 	if err != nil {
-		slog.Error("codex: Initialize() FAILED", "port", c.Port, "error", err)
+		logger.Error("codex: Initialize() FAILED", logger.FieldPort, c.Port, logger.FieldError, err)
 		return err
 	}
-	slog.Info("codex: Initialize() OK",
-		"port", c.Port,
+	logger.Info("codex: Initialize() OK",
+		logger.FieldPort, c.Port,
 		"server_caps", string(result),
 	)
 	return nil
@@ -300,9 +301,9 @@ func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicT
 	for i, t := range dynamicTools {
 		toolNames[i] = t.Name
 	}
-	slog.Info("codex: thread/start",
-		"port", c.Port,
-		"cwd", cwd,
+	logger.Info("codex: thread/start",
+		logger.FieldPort, c.Port,
+		logger.FieldCwd, cwd,
 		"model", model,
 		"dynamic_tools_count", len(dynamicTools),
 		"dynamic_tools", toolNames,
@@ -314,7 +315,7 @@ func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicT
 		DynamicTools: dynamicTools,
 	}, 30*time.Second)
 	if err != nil {
-		slog.Error("codex: thread/start FAILED", "port", c.Port, "error", err)
+		logger.Error("codex: thread/start FAILED", logger.FieldPort, c.Port, logger.FieldError, err)
 		return "", fmt.Errorf("codex: thread/start: %w", err)
 	}
 
@@ -324,17 +325,17 @@ func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicT
 		} `json:"thread"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
-		slog.Error("codex: thread/start decode FAILED", "port", c.Port, "raw", string(result), "error", err)
+		logger.Error("codex: thread/start decode FAILED", logger.FieldPort, c.Port, logger.FieldRaw, string(result), logger.FieldError, err)
 		return "", fmt.Errorf("codex: thread/start decode: %w (raw: %s)", err, result)
 	}
 	if resp.Thread.ID == "" {
-		slog.Error("codex: thread/start returned empty thread ID", "port", c.Port, "raw", string(result))
+		logger.Error("codex: thread/start returned empty thread ID", logger.FieldPort, c.Port, logger.FieldRaw, string(result))
 		return "", fmt.Errorf("codex: thread/start returned empty thread ID (raw: %s)", result)
 	}
 	c.ThreadID = resp.Thread.ID
-	slog.Info("codex: thread/start OK",
-		"port", c.Port,
-		"threadID", c.ThreadID,
+	logger.Info("codex: thread/start OK",
+		logger.FieldPort, c.Port,
+		logger.FieldThreadID, c.ThreadID,
 		"dynamic_tools", len(dynamicTools),
 	)
 	return c.ThreadID, nil
@@ -390,8 +391,8 @@ func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID
 	}
 
 	// 兜底: 无 requestID 时用 notification (不应发生)
-	slog.Warn("codex: SendDynamicToolResult without requestID, falling back to notification",
-		"callId", callID)
+	logger.Warn("codex: SendDynamicToolResult without requestID, falling back to notification",
+		logger.FieldCallID, callID)
 	params := map[string]any{
 		"threadId": c.ThreadID,
 		"callId":   callID,
@@ -466,8 +467,8 @@ func (c *AppServerClient) readLoop() {
 
 		var msg jsonRPCMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
-			slog.Warn("codex: readLoop unparseable JSON-RPC message",
-				"error", err,
+			logger.Warn("codex: readLoop unparseable JSON-RPC message",
+				logger.FieldError, err,
 				"raw_len", len(message),
 				"raw_prefix", truncateBytes(message, 200),
 			)
@@ -480,8 +481,8 @@ func (c *AppServerClient) readLoop() {
 				pc := val.(*pendingCall)
 				if msg.Error != nil {
 					pc.err = fmt.Errorf("codex rpc: %s (code %d)", msg.Error.Message, msg.Error.Code)
-					slog.Warn("codex: RPC error response",
-						"id", *msg.ID,
+					logger.Warn("codex: RPC error response",
+						logger.FieldID, *msg.ID,
 						"code", msg.Error.Code,
 						"message", msg.Error.Message,
 					)
@@ -490,8 +491,8 @@ func (c *AppServerClient) readLoop() {
 				}
 				close(pc.done)
 			} else {
-				slog.Warn("codex: orphan RPC response (no pending call)",
-					"id", *msg.ID,
+				logger.Warn("codex: orphan RPC response (no pending call)",
+					logger.FieldID, *msg.ID,
 					"result_len", len(msg.Result),
 				)
 			}
@@ -501,10 +502,10 @@ func (c *AppServerClient) readLoop() {
 		// Server Request 或 Notification: 转为 Event, 交给 handler
 		event := c.jsonRPCToEvent(msg)
 		if event.Type == "" {
-			slog.Warn("codex: readLoop skipped message with empty event type",
-				"method", msg.Method,
+			logger.Warn("codex: readLoop skipped message with empty event type",
+				logger.FieldMethod, msg.Method,
 				"has_id", msg.ID != nil,
-				"params_len", len(msg.Params),
+				logger.FieldParamsLen, len(msg.Params),
 			)
 			continue
 		}
@@ -512,10 +513,10 @@ func (c *AppServerClient) readLoop() {
 		// 如果是 server request, 携带 requestID 让 handler 回复
 		if msg.ID != nil && msg.Method != "" {
 			event.RequestID = msg.ID
-			slog.Debug("codex: server request received",
-				"id", *msg.ID,
-				"method", msg.Method,
-				"event_type", event.Type,
+			logger.Debug("codex: server request received",
+				logger.FieldID, *msg.ID,
+				logger.FieldMethod, msg.Method,
+				logger.FieldEventType, event.Type,
 			)
 		}
 
@@ -523,9 +524,9 @@ func (c *AppServerClient) readLoop() {
 		h := c.handler
 		c.handlerMu.RUnlock()
 		if h == nil {
-			slog.Warn("codex: readLoop dropping event (no handler registered)",
-				"event_type", event.Type,
-				"method", msg.Method,
+			logger.Warn("codex: readLoop dropping event (no handler registered)",
+				logger.FieldEventType, event.Type,
+				logger.FieldMethod, msg.Method,
 			)
 			continue
 		}
@@ -551,16 +552,68 @@ func (c *AppServerClient) readLoop() {
 //
 // JSON-RPC notification method → codex Event type。
 var methodToEventMap = map[string]string{
+	// v2 server notifications
+	"error":                                     EventError,
+	"thread/started":                            EventSessionConfigured,
+	"thread/name/updated":                       EventThreadNameUpdated,
+	"thread/tokenUsage/updated":                 EventTokenCount,
+	"turn/started":                              EventTurnStarted,
+	"turn/completed":                            EventTurnComplete,
+	"turn/diff/updated":                         EventTurnDiff,
+	"turn/plan/updated":                         EventPlanUpdate,
+	"item/started":                              "item/started",
+	"item/completed":                            "item/completed",
+	"rawResponseItem/completed":                 "rawResponseItem/completed",
+	"item/agentMessage/delta":                   EventAgentMessageDelta,
+	"item/plan/delta":                           EventPlanDelta,
+	"item/commandExecution/outputDelta":         EventExecCommandOutputDelta,
+	"item/commandExecution/terminalInteraction": "item/commandExecution/terminalInteraction",
+	"item/fileChange/outputDelta":               "item/fileChange/outputDelta",
+	"item/mcpToolCall/progress":                 "item/mcpToolCall/progress",
+	"mcpServer/oauthLogin/completed":            "mcpServer/oauthLogin/completed",
+	"account/updated":                           "account/updated",
+	"account/rateLimits/updated":                "account/rateLimits/updated",
+	"app/list/updated":                          "app/list/updated",
+	"item/reasoning/summaryTextDelta":           EventAgentReasoningDelta,
+	"item/reasoning/summaryPartAdded":           EventAgentReasoningSectionBreak,
+	"item/reasoning/textDelta":                  EventAgentReasoningRawDelta,
+	"thread/compacted":                          EventContextCompacted,
+	"deprecationNotice":                         "deprecationNotice",
+	"configWarning":                             EventWarning,
+	"fuzzyFileSearch/sessionUpdated":            "fuzzyFileSearch/sessionUpdated",
+	"fuzzyFileSearch/sessionCompleted":          "fuzzyFileSearch/sessionCompleted",
+	"windows/worldWritableWarning":              EventWarning,
+	"account/login/completed":                   "account/login/completed",
+	"authStatusChange":                          "authStatusChange",
+	"loginChatGptComplete":                      "loginChatGptComplete",
+	"sessionConfigured":                         EventSessionConfigured,
+
+	// v2 server requests
+	"item/commandExecution/requestApproval": EventExecApprovalRequest,
+	"item/fileChange/requestApproval":       "item/fileChange/requestApproval",
+	"item/tool/requestUserInput":            "item/tool/requestUserInput",
+	"item/tool/call":                        EventDynamicToolCall,
+	"account/chatgptAuthTokens/refresh":     "account/chatgptAuthTokens/refresh",
+	"applyPatchApproval":                    "applyPatchApproval",
+	"execCommandApproval":                   EventExecApprovalRequest,
+
 	// Agent 输出
-	"agent/event/agent_message_content_delta": EventAgentMessageDelta,
-	"agent/event/agent_reasoning_delta":       EventAgentReasoningDelta,
-	"agent/event/agent_message_completed":     EventAgentMessageCompleted,
+	"agent/event/agent_message_content_delta":   EventAgentMessageDelta,
+	"agent/event/agent_message_delta":           EventAgentMessageDelta,
+	"agent/event/agent_message":                 EventAgentMessage,
+	"agent/event/agent_reasoning":               EventAgentReasoning,
+	"agent/event/agent_reasoning_raw":           EventAgentReasoningRaw,
+	"agent/event/agent_reasoning_raw_delta":     EventAgentReasoningRawDelta,
+	"agent/event/agent_reasoning_section_break": EventAgentReasoningSectionBreak,
+	"agent/event/agent_reasoning_delta":         EventAgentReasoningDelta,
+	"agent/event/agent_message_completed":       EventAgentMessageCompleted,
 
 	// 生命周期
 	"agent/event/turn_started":         EventTurnStarted,
 	"agent/event/turn_completed":       EventTurnComplete,
 	"agent/event/session_configured":   EventSessionConfigured,
 	"agent/event/mcp_startup_complete": EventMCPStartupComplete,
+	"agent/event/mcp_startup_update":   "agent/event/mcp_startup_update",
 	"agent/event/shutdown_complete":    EventShutdownComplete,
 	"agent/event/error":                EventError,
 	"agent/event/warning":              EventWarning,
@@ -582,28 +635,103 @@ var methodToEventMap = map[string]string{
 	"agent/event/list_skills_response":    EventListSkillsResponse,
 
 	// Dynamic Tools
-	// codex app-server 可能使用两种前缀:
-	//   agent/event/dynamic_tool_call — 旧版本
-	//   codex/event/dynamic_tool_call_request — 新版本 (v8.8+)
-	"agent/event/dynamic_tool_call":         EventDynamicToolCall,
-	"codex/event/dynamic_tool_call":         EventDynamicToolCall,
-	"codex/event/dynamic_tool_call_request": EventDynamicToolCall,
+	// 注意:
+	//   - `item/tool/call` 才是 v2 正式 Server Request（需 JSON-RPC response）。
+	//   - `codex/event/dynamic_tool_call_request` 是 raw event 通知副本，不应驱动工具回传。
+	//     否则会出现“处理了通知副本但未响应真实 request”，导致 turn 卡住。
+	//
+	// 兼容保留:
+	//   - agent/event/dynamic_tool_call
+	//   - codex/event/dynamic_tool_call
+	"agent/event/dynamic_tool_call": EventDynamicToolCall,
+	"codex/event/dynamic_tool_call": EventDynamicToolCall,
 
 	// Collab
 	"agent/event/collab_agent_spawn_begin":       EventCollabAgentSpawnBegin,
 	"agent/event/collab_agent_spawn_end":         EventCollabAgentSpawnEnd,
 	"agent/event/collab_agent_interaction_begin": EventCollabAgentInteractionBegin,
 	"agent/event/collab_agent_interaction_end":   EventCollabAgentInteractionEnd,
+
+	// legacy codex/event/*
+	"codex/event/task_started":                   EventTurnStarted,
+	"codex/event/task_complete":                  EventTurnComplete,
+	"codex/event/session_configured":             EventSessionConfigured,
+	"codex/event/agent_message":                  EventAgentMessage,
+	"codex/event/agent_message_delta":            EventAgentMessageDelta,
+	"codex/event/agent_message_content_delta":    EventAgentMessageDelta,
+	"codex/event/agent_message_completed":        EventAgentMessageCompleted,
+	"codex/event/agent_reasoning":                EventAgentReasoning,
+	"codex/event/agent_reasoning_delta":          EventAgentReasoningDelta,
+	"codex/event/agent_reasoning_raw":            EventAgentReasoningRaw,
+	"codex/event/agent_reasoning_raw_delta":      EventAgentReasoningRawDelta,
+	"codex/event/agent_reasoning_section_break":  EventAgentReasoningSectionBreak,
+	"codex/event/reasoning_content_delta":        EventAgentReasoningDelta,
+	"codex/event/exec_approval_request":          EventExecApprovalRequest,
+	"codex/event/exec_command_begin":             EventExecCommandBegin,
+	"codex/event/exec_command_end":               EventExecCommandEnd,
+	"codex/event/exec_command_output_delta":      EventExecCommandOutputDelta,
+	"codex/event/patch_apply_begin":              EventPatchApplyBegin,
+	"codex/event/patch_apply_end":                EventPatchApplyEnd,
+	"codex/event/mcp_tool_call_begin":            EventMCPToolCallBegin,
+	"codex/event/mcp_tool_call_end":              EventMCPToolCallEnd,
+	"codex/event/mcp_list_tools_response":        EventMCPListToolsResponse,
+	"codex/event/list_skills_response":           EventListSkillsResponse,
+	"codex/event/mcp_startup_complete":           EventMCPStartupComplete,
+	"codex/event/mcp_startup_update":             "codex/event/mcp_startup_update",
+	"codex/event/token_count":                    EventTokenCount,
+	"codex/event/context_compacted":              EventContextCompacted,
+	"codex/event/thread_name_updated":            EventThreadNameUpdated,
+	"codex/event/thread_rolled_back":             EventThreadRolledBack,
+	"codex/event/plan_delta":                     EventPlanDelta,
+	"codex/event/plan_update":                    EventPlanUpdate,
+	"codex/event/collab_agent_spawn_begin":       EventCollabAgentSpawnBegin,
+	"codex/event/collab_agent_spawn_end":         EventCollabAgentSpawnEnd,
+	"codex/event/collab_agent_interaction_begin": EventCollabAgentInteractionBegin,
+	"codex/event/collab_agent_interaction_end":   EventCollabAgentInteractionEnd,
+	"codex/event/item_started":                   "item/started",
+	"codex/event/item_completed":                 "item/completed",
+	"codex/event/raw_response_item":              "rawResponseItem/completed",
+	"codex/event/error":                          EventError,
+	"codex/event/warning":                        EventWarning,
+	"codex/event/shutdown_complete":              EventShutdownComplete,
+}
+
+var mappedMethodPrefixes = [...]string{
+	"thread/",
+	"turn/",
+	"item/",
+	"account/",
+	"app/",
+	"mcpServer/",
+	"fuzzyFileSearch/",
+	"rawResponseItem/",
+	"windows/",
+	"codex/event/",
+	"agent/event/",
+}
+
+func mapMethodToEventType(method string) (string, bool) {
+	if eventType, ok := methodToEventMap[method]; ok {
+		return eventType, true
+	}
+
+	for _, prefix := range mappedMethodPrefixes {
+		if strings.HasPrefix(method, prefix) {
+			return method, true
+		}
+	}
+
+	return "", false
 }
 
 func (c *AppServerClient) jsonRPCToEvent(msg jsonRPCMessage) Event {
-	eventType, ok := methodToEventMap[msg.Method]
+	eventType, ok := mapMethodToEventType(msg.Method)
 	if !ok {
 		// 未知方法 → 用 method 名作为 type (兼容) + 警告日志
 		eventType = msg.Method
-		slog.Warn("codex: unmapped JSON-RPC method → using raw method as event type",
-			"method", msg.Method,
-			"params_len", len(msg.Params),
+		logger.Warn("codex: unmapped JSON-RPC method → using raw method as event type",
+			logger.FieldMethod, msg.Method,
+			logger.FieldParamsLen, len(msg.Params),
 		)
 	}
 
@@ -654,9 +782,9 @@ func (c *AppServerClient) SpawnAndConnect(ctx context.Context, prompt, cwd, mode
 		return err
 	}
 
-	slog.Info("codex: app-server thread started",
-		"port", c.Port,
-		"thread", threadID,
+	logger.Info("codex: app-server thread started",
+		logger.FieldPort, c.Port,
+		logger.FieldThreadID, threadID,
 		"dynamic_tools", len(dynamicTools),
 	)
 	return nil

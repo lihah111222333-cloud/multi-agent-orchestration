@@ -9,11 +9,29 @@
 package util
 
 import (
+	"encoding/json"
 	"os"
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
+
+// ToMapAny 将任意值转为 map[string]any。
+//
+// 已经是 map[string]any 则直接返回 (零分配)。
+// 否则通过 json marshal+unmarshal 转换，失败返回空 map。
+func ToMapAny(v any) map[string]any {
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	m := map[string]any{}
+	if raw, err := json.Marshal(v); err == nil {
+		_ = json.Unmarshal(raw, &m)
+	}
+	return m
+}
 
 // EscapeLike 转义 SQL LIKE 模式中的特殊字符 (%, _, \)。
 // 对应 Python escape_like。
@@ -104,11 +122,13 @@ func EnvStr(name, def string) string {
 // 支持的字段类型: string, int, float64, bool。
 func LoadFromEnv(ptr any) {
 	if ptr == nil {
-		panic("util.LoadFromEnv: ptr must not be nil")
+		logger.Error("util.LoadFromEnv: ptr must not be nil")
+		return
 	}
 	rv := reflect.ValueOf(ptr)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
-		panic("util.LoadFromEnv: ptr must be a non-nil pointer to struct")
+		logger.Error("util.LoadFromEnv: ptr must be a non-nil pointer to struct")
+		return
 	}
 	v := rv.Elem()
 	t := v.Type()

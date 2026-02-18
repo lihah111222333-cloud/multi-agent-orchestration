@@ -4,7 +4,11 @@
 // 参考: APP-SERVER-PROTOCOL.md § 三、四
 package apiserver
 
-import "log/slog"
+import (
+	"strings"
+
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
+)
 
 // eventMethodMap Codex 事件类型 → JSON-RPC 通知方法名。
 //
@@ -23,45 +27,68 @@ var eventMethodMap = map[string]string{
 	"idle":                "turn/completed",
 	"turn_diff":           "turn/diff/updated",
 	"turn_plan":           "turn/plan/updated",
+	"plan_update":         "turn/plan/updated",
 	"context_compacted":   "thread/compacted",
+	"thread_rolled_back":  "codex/event/thread_rolled_back",
 
 	// ── Item 事件 ──
-	"agent_message":       "item/started",
-	"agent_message_delta": "item/agentMessage/delta",
+	"agent_message":                 "item/started",
+	"agent_message_delta":           "item/agentMessage/delta",
+	"agent_message_content_delta":   "item/agentMessage/delta",
+	"agent_message_completed":       "item/completed",
+	"agent_reasoning":               "item/reasoning/textDelta",
+	"agent_reasoning_delta":         "item/reasoning/summaryTextDelta",
+	"agent_reasoning_raw":           "item/reasoning/textDelta",
+	"agent_reasoning_raw_delta":     "item/reasoning/textDelta",
+	"agent_reasoning_section_break": "item/reasoning/summaryPartAdded",
 
-	"exec_command_begin":        "item/started",
-	"exec_command_end":          "item/completed",
-	"exec_output_delta":         "item/commandExecution/outputDelta",
-	"exec_approval_request":     "item/commandExecution/requestApproval",
-	"exec_terminal_interaction": "item/commandExecution/terminalInteraction",
+	"exec_command_begin":           "item/started",
+	"exec_command_end":             "item/completed",
+	"exec_output_delta":            "item/commandExecution/outputDelta",
+	"exec_command_output_delta":    "item/commandExecution/outputDelta",
+	"exec_approval_request":        "item/commandExecution/requestApproval",
+	"exec_terminal_interaction":    "item/commandExecution/terminalInteraction",
+	"file_change_approval_request": "item/fileChange/requestApproval",
 
 	"patch_apply":       "item/fileChange/outputDelta",
-	"patch_apply_begin": "item/fileChange/started",
-	"patch_apply_end":   "item/fileChange/completed",
+	"patch_apply_begin": "item/started",
+	"patch_apply_end":   "item/completed",
 	"file_read":         "item/started",
 	"file_updated":      "item/completed",
 
 	// ── Dynamic Tools ──
-	"dynamic_tool_call": "item/dynamicToolCall",
+	"dynamic_tool_call": "item/tool/call",
 
 	// ── 推理事件 ──
 	"reasoning":              "item/reasoning/textDelta",
-	"reasoning_delta":        "item/reasoning/textDelta",
+	"reasoning_delta":        "item/reasoning/summaryTextDelta",
 	"reasoning_summary":      "item/reasoning/summaryTextDelta",
 	"reasoning_summary_part": "item/reasoning/summaryPartAdded",
 
 	// ── MCP ──
+	"mcp_tool_call_begin":     "item/started",
+	"mcp_tool_call_end":       "item/completed",
 	"mcp_tool_call":           "item/started",
 	"mcp_tool_progress":       "item/mcpToolCall/progress",
-	"mcp_list_tools_response": "item/completed",
+	"mcp_list_tools_response": "codex/event/mcp_list_tools_response",
+	"mcp_startup_update":      "codex/event/mcp_startup_update",
+	"mcp_startup_complete":    "codex/event/mcp_startup_complete",
 	"mcp_oauth_completed":     "mcpServer/oauthLogin/completed",
 
 	// ── 计划 ──
 	"plan_delta": "item/plan/delta",
 
 	// ── 协作 ──
-	"collab_agent_launched":  "item/started",
-	"collab_agent_completed": "item/completed",
+	"collab_agent_spawn_begin":       "item/started",
+	"collab_agent_spawn_end":         "item/completed",
+	"collab_agent_interaction_begin": "item/started",
+	"collab_agent_interaction_end":   "item/completed",
+	"collab_waiting_begin":           "item/started",
+	"collab_waiting_end":             "item/completed",
+	"collab_agent_launched":          "item/started",
+	"collab_agent_completed":         "item/completed",
+	"entered_review_mode":            "item/started",
+	"exited_review_mode":             "item/completed",
 
 	// ── 账号/配置推送 ──
 	"account_updated":     "account/updated",
@@ -77,45 +104,26 @@ var eventMethodMap = map[string]string{
 	"error":              "error",
 	"warning":            "configWarning",
 	"deprecation_notice": "deprecationNotice",
-	"shutdown_complete":  "thread/shutdown",
+	"shutdown_complete":  "codex/event/shutdown_complete",
+	"stream_error":       "codex/event/stream_error",
+	"background_event":   "codex/event/background_event",
 
 	// ── Skills ──
-	"list_skills_response": "skills/list/response",
+	"list_skills_response": "codex/event/list_skills_response",
+}
 
-	// ── codex/event/* v2 协议 (新版 codex app-server 直接转发的 JSON-RPC 方法名) ──
-	// 这些事件来自 codex app-server → readLoop → jsonRPCToEvent (unmapped) → Event.Type
-	"codex/event/agent_message":               "item/agentMessage/started",
-	"codex/event/agent_message_delta":         "item/agentMessage/delta",
-	"codex/event/agent_message_content_delta": "item/agentMessage/delta",
-	"codex/event/agent_reasoning_delta":       "item/reasoning/textDelta",
-	"codex/event/agent_reasoning_raw_delta":   "item/reasoning/textDelta",
-	"codex/event/item_completed":              "item/completed",
-	"codex/event/user_message":                "item/userMessage",
-	"codex/event/turn_started":                "turn/started",
-	"codex/event/task_complete":               "turn/completed",
-	"codex/event/token_count":                 "thread/tokenUsage/updated",
-	"codex/event/exec_command_begin":          "item/started",
-	"codex/event/exec_command_end":            "item/completed",
-	"codex/event/exec_command_output_delta":   "item/commandExecution/outputDelta",
-	"codex/event/patch_apply_begin":           "item/fileChange/started",
-	"codex/event/patch_apply":                 "item/fileChange/outputDelta",
-	"codex/event/patch_apply_end":             "item/fileChange/completed",
-	"codex/event/mcp_startup_update":          "mcpServer/startupUpdate",
-	"codex/event/mcp_startup_complete":        "mcpServer/startupComplete",
-
-	// ── item/* v2 协议 (直通方法名) ──
-	"item/agentMessage/delta":     "item/agentMessage/delta",
-	"item/completed":              "item/completed",
-	"item/started":                "item/started",
-	"item/reasoning/textDelta":    "item/reasoning/textDelta",
-	"item/fileChange/outputDelta": "item/fileChange/outputDelta",
-	"item/fileChange/started":     "item/fileChange/started",
-	"item/fileChange/completed":   "item/fileChange/completed",
-	"turn/completed":              "turn/completed",
-	"turn/started":                "turn/started",
-	"thread/tokenUsage/updated":   "thread/tokenUsage/updated",
-	"account/rateLimits/updated":  "account/rateLimits/updated",
-	"thread/started":              "thread/started",
+var passthroughEventPrefixes = [...]string{
+	"thread/",
+	"turn/",
+	"item/",
+	"account/",
+	"app/",
+	"mcpServer/",
+	"fuzzyFileSearch/",
+	"rawResponseItem/",
+	"windows/",
+	"codex/event/",
+	"agent/event/",
 }
 
 // mapEventToMethod 将 Codex 事件类型转换为 JSON-RPC 通知方法名。
@@ -125,8 +133,16 @@ func mapEventToMethod(eventType string) string {
 	if method, ok := eventMethodMap[eventType]; ok {
 		return method
 	}
-	slog.Warn("app-server: unmapped event type → fallback to agent/event/ prefix",
-		"event_type", eventType,
+	for _, prefix := range passthroughEventPrefixes {
+		if strings.HasPrefix(eventType, prefix) {
+			return eventType
+		}
+	}
+	if strings.Contains(eventType, "/") {
+		return eventType
+	}
+	logger.Warn("app-server: unmapped event type → fallback to agent/event/ prefix",
+		logger.FieldEventType, eventType,
 	)
 	return "agent/event/" + eventType
 }

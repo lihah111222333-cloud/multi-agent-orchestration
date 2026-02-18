@@ -3,8 +3,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"os/signal"
 	"syscall"
 
@@ -14,6 +12,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/monitor"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 func main() {
@@ -57,14 +56,14 @@ func main() {
 	patrol.Start(ctx)
 
 	port := ":8080"
-	logger.Infow("dashboard starting", "port", port)
+	logger.Infow("dashboard starting", logger.FieldPort, port)
 
-	go func() {
+	util.SafeGo(func() {
 		if err := srv.Engine().Run(port); err != nil {
 			logger.Fatal("server failed", logger.Any(logger.FieldError, err))
 		}
-	}()
+	})
 
 	<-ctx.Done()
-	fmt.Fprintln(os.Stderr, "shutting down...")
+	logger.Info("shutting down")
 }

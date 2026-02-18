@@ -40,7 +40,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// TODO: 集成 github.com/mark3labs/mcp-go
 	// 以下为工具注册占位
 	tools := s.toolRegistry()
-	logger.Infow("MCP tools registered", "count", len(tools))
+	logger.Infow("MCP tools registered", logger.FieldCount, len(tools))
 	<-ctx.Done()
 	return nil
 }
@@ -86,7 +86,9 @@ func (s *Server) HandleTool(ctx context.Context, name string, args json.RawMessa
 		SQL       string `json:"sql"`
 	}
 	if len(args) > 0 {
-		_ = json.Unmarshal(args, &p)
+		if err := json.Unmarshal(args, &p); err != nil {
+			logger.Debug("mcp: unmarshal tool args", logger.FieldError, err)
+		}
 	}
 	if p.Limit <= 0 || p.Limit > 500 {
 		p.Limit = 100

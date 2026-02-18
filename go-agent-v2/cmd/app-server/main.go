@@ -8,7 +8,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -41,13 +40,11 @@ func main() {
 
 	// PostgreSQL (消息持久化, 必需)
 	if cfg.PostgresConnStr == "" {
-		fmt.Fprintln(os.Stderr, "FATAL: POSTGRES_CONNECTION_STRING is required")
-		os.Exit(1)
+		logger.Fatal("POSTGRES_CONNECTION_STRING is required")
 	}
 	dbPool, err := database.NewPool(ctx, cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: postgres connect: %v\n", err)
-		os.Exit(1)
+		logger.Fatal("postgres connect failed", logger.Any(logger.FieldError, err))
 	}
 	defer dbPool.Close()
 
@@ -57,7 +54,7 @@ func main() {
 		migrationsDir = "migrations"
 	}
 	if err := database.Migrate(ctx, dbPool, migrationsDir); err != nil {
-		logger.Warnw("migration failed (non-fatal)", "error", err)
+		logger.Warnw("migration failed (non-fatal)", logger.FieldError, err)
 	}
 
 	// JSON-RPC Server
@@ -78,10 +75,9 @@ func main() {
 	cwd, _ := os.Getwd()
 	srv.SetupLSP(cwd)
 
-	logger.Infow("app-server starting", "listen", *listen)
+	logger.Infow("app-server starting", logger.FieldListen, *listen)
 
 	if err := srv.ListenAndServe(ctx, *listen); err != nil {
-		fmt.Fprintf(os.Stderr, "app-server: %v\n", err)
-		os.Exit(1)
+		logger.Fatal("app-server failed", logger.Any(logger.FieldError, err))
 	}
 }

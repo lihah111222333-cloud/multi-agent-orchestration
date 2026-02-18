@@ -1,5 +1,6 @@
 import { reactive, computed } from '../../lib/vue.esm-browser.prod.js';
 import { callAPI } from '../services/api.js';
+import { logDebug, logInfo, logWarn } from '../services/log.js';
 import {
   defaultLayoutForMode,
   normalizeChatLayout,
@@ -9,6 +10,13 @@ import {
   deriveCmdAgents,
   pickMostRecentAgent,
 } from './thread-view.model.js';
+import {
+  buildLoadedThreadMap,
+  buildLoadedStateMap,
+  isThreadLoadedForSend,
+  upsertLoadedThread,
+  choosePreferredActiveThreadId,
+} from './thread-send.guard.js';
 import {
   normalizeStatus,
   statusFromEventType,
@@ -23,16 +31,21 @@ const MAIN_AGENT_KEY = 'agent-orchestrator.mainAgentId';
 const AGENT_META_KEY = 'agent-orchestrator.agentMeta.v1';
 const CHAT_LAYOUT_KEY = 'agent-orchestrator.layout.chat.v1';
 const CMD_LAYOUT_KEY = 'agent-orchestrator.layout.cmd.v1';
+const AGENT_META_MAX_BYTES = 512 * 1024;
+const AGENT_META_MAX_ENTRIES = 240;
 
 const state = reactive({
   threads: [],
   statuses: {},
   timelinesByThread: {},
   diffTextByThread: {},
+  workspaceRunsByKey: {},
+  workspaceFeatureEnabled: null,
+  workspaceLastError: '',
   activeThreadId: localStorage.getItem(ACTIVE_THREAD_KEY) || '',
   activeCmdThreadId: localStorage.getItem(ACTIVE_CMD_THREAD_KEY) || '',
   mainAgentId: localStorage.getItem(MAIN_AGENT_KEY) || '',
-  agentMetaById: parseStorageJSON(AGENT_META_KEY, {}),
+  agentMetaById: loadAgentMeta(),
   viewPrefs: {
     chat: parseStorageJSON(CHAT_LAYOUT_KEY, {
       layout: defaultLayoutForMode('chat'),
@@ -46,6 +59,9 @@ const state = reactive({
   },
   loadingThreads: false,
   sending: false,
+  loadedThreadIds: {},
+  loadedThreadStates: {},
+  loadedThreadListReady: false,
 });
 
 const runtimeByThread = {};
@@ -53,6 +69,21 @@ const inflightMessagesByThread = {};
 const recentMessageLoadAtByThread = {};
 const historyLoadedByThread = {};
 const MESSAGE_LOAD_COOLDOWN_MS = 800;
+const AGENT_META_PERSIST_DEBOUNCE_MS = 400;
+const AGENT_ACTIVE_TOUCH_MS = 1200;
+const AGENT_META_PRUNE_THRESHOLD = 240;
+const AGENT_EVENT_LOG_SAMPLE = 120;
+const lastActiveTouchByThread = {};
+let persistMetaTimer = 0;
+let agentEventSeq = 0;
+let bridgeEventSeq = 0;
+
+function perfNow() {
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+    return performance.now();
+  }
+  return Date.now();
+}
 
 function nowISO() {
   return new Date().toISOString();
@@ -68,34 +99,124 @@ function parseStorageJSON(key, fallback) {
     if (!raw) return fallback;
     const value = JSON.parse(raw);
     return value && typeof value === 'object' ? value : fallback;
-  } catch {
+  } catch (error) {
+    logWarn('thread', 'storage.parse.failed', {
+      key,
+      error,
+    });
     return fallback;
   }
 }
 
+function loadAgentMeta() {
+  try {
+    const raw = localStorage.getItem(AGENT_META_KEY);
+    if (!raw) return {};
+    if (raw.length > AGENT_META_MAX_BYTES) {
+      localStorage.removeItem(AGENT_META_KEY);
+      logWarn('thread', 'agentMeta.discarded.tooLarge', {
+        raw_bytes: raw.length,
+      });
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+
+    const keys = Object.keys(parsed);
+    if (keys.length <= AGENT_META_MAX_ENTRIES) {
+      return parsed;
+    }
+
+    const keep = keys
+      .sort((a, b) => {
+        const aMeta = parsed[a] || {};
+        const bMeta = parsed[b] || {};
+        const aAlias = (aMeta.alias || '').toString().trim();
+        const bAlias = (bMeta.alias || '').toString().trim();
+        if (aAlias && !bAlias) return -1;
+        if (!aAlias && bAlias) return 1;
+        const aTs = Date.parse(aMeta.lastActiveAt || '') || 0;
+        const bTs = Date.parse(bMeta.lastActiveAt || '') || 0;
+        return bTs - aTs;
+      })
+      .slice(0, AGENT_META_MAX_ENTRIES);
+
+    const next = {};
+    for (const key of keep) {
+      next[key] = parsed[key];
+    }
+    persistJSON(AGENT_META_KEY, next);
+    return next;
+  } catch (error) {
+    localStorage.removeItem(AGENT_META_KEY);
+    logWarn('thread', 'agentMeta.load.failed', { error });
+    return {};
+  }
+}
+
 function persistJSON(key, value) {
-  localStorage.setItem(key, JSON.stringify(value ?? {}));
+  try {
+    localStorage.setItem(key, JSON.stringify(value ?? {}));
+  } catch (error) {
+    logWarn('thread', 'storage.persist.failed', {
+      key,
+      error,
+    });
+  }
+}
+
+function schedulePersistAgentMeta() {
+  if (persistMetaTimer) return;
+  persistMetaTimer = window.setTimeout(() => {
+    persistMetaTimer = 0;
+    persistJSON(AGENT_META_KEY, state.agentMetaById);
+  }, AGENT_META_PERSIST_DEBOUNCE_MS);
 }
 
 function saveActiveThread(id) {
-  state.activeThreadId = id || '';
+  const next = id || '';
+  if (state.activeThreadId === next) return;
+  const prev = state.activeThreadId || '';
+  state.activeThreadId = next;
   localStorage.setItem(ACTIVE_THREAD_KEY, state.activeThreadId);
+  logDebug('thread', 'activeChat.changed', {
+    from: prev,
+    to: next,
+  });
 }
 
 function saveActiveCmdThread(id) {
-  state.activeCmdThreadId = id || '';
+  const next = id || '';
+  if (state.activeCmdThreadId === next) return;
+  const prev = state.activeCmdThreadId || '';
+  state.activeCmdThreadId = next;
   localStorage.setItem(ACTIVE_CMD_THREAD_KEY, state.activeCmdThreadId);
+  logDebug('thread', 'activeCmd.changed', {
+    from: prev,
+    to: next,
+  });
 }
 
 function setMainAgent(threadId) {
   const id = (threadId || '').toString();
+  if (state.mainAgentId === id) {
+    return;
+  }
+  const prev = state.mainAgentId;
   state.mainAgentId = id;
   localStorage.setItem(MAIN_AGENT_KEY, id);
   for (const key of Object.keys(state.agentMetaById)) {
     const prev = state.agentMetaById[key] || {};
     state.agentMetaById[key] = { ...prev, isMain: id ? key === id : false };
   }
-  persistJSON(AGENT_META_KEY, state.agentMetaById);
+  schedulePersistAgentMeta();
+  logInfo('thread', 'mainAgent.changed', {
+    previous: prev,
+    current: id,
+  });
 }
 
 function setAgentAlias(threadId, alias) {
@@ -105,6 +226,10 @@ function setAgentAlias(threadId, alias) {
   const prev = state.agentMetaById[id] || {};
   state.agentMetaById[id] = { ...prev, alias: normalized };
   persistJSON(AGENT_META_KEY, state.agentMetaById);
+  logInfo('thread', 'alias.changed', {
+    thread_id: id,
+    alias: normalized,
+  });
 
   const target = state.threads.find((item) => item.id === id);
   if (target && normalized) {
@@ -120,8 +245,11 @@ async function renameThread(threadId, name) {
   if (!id || !nextName) return;
   try {
     await callAPI('thread/name/set', { threadId: id, name: nextName });
-  } catch {
-    // best effort: UI alias is still persisted locally
+  } catch (error) {
+    logWarn('thread', 'rename.remote.failed', {
+      thread_id: id,
+      error,
+    });
   }
   setAgentAlias(id, nextName);
 }
@@ -129,27 +257,50 @@ async function renameThread(threadId, name) {
 function markAgentActive(threadId, iso = nowISO()) {
   const id = (threadId || '').toString();
   if (!id) return;
+  const now = Date.now();
+  const last = lastActiveTouchByThread[id] || 0;
   const prev = state.agentMetaById[id] || {};
+  if (now-last < AGENT_ACTIVE_TOUCH_MS) {
+    if ((id === state.mainAgentId || prev.isMain === true) !== !!prev.isMain) {
+      state.agentMetaById[id] = {
+        ...prev,
+        isMain: id === state.mainAgentId || prev.isMain === true,
+      };
+      schedulePersistAgentMeta();
+    }
+    return;
+  }
+  lastActiveTouchByThread[id] = now;
   state.agentMetaById[id] = {
     ...prev,
     lastActiveAt: iso,
     isMain: id === state.mainAgentId || prev.isMain === true,
   };
+  schedulePersistAgentMeta();
 }
 
 function ensureModePrefs(mode) {
   if (mode === 'cmd') {
-    state.viewPrefs.cmd = {
-      layout: normalizeCmdLayout(state.viewPrefs?.cmd?.layout),
-      splitRatio: normalizeSplitRatio(state.viewPrefs?.cmd?.splitRatio),
-      cardCols: normalizeCmdCardCols(state.viewPrefs?.cmd?.cardCols),
-    };
+    if (!state.viewPrefs.cmd || typeof state.viewPrefs.cmd !== 'object') {
+      state.viewPrefs.cmd = {};
+    }
+    const current = state.viewPrefs.cmd;
+    const nextLayout = normalizeCmdLayout(current.layout);
+    const nextSplitRatio = normalizeSplitRatio(current.splitRatio);
+    const nextCardCols = normalizeCmdCardCols(current.cardCols);
+    if (current.layout !== nextLayout) current.layout = nextLayout;
+    if (current.splitRatio !== nextSplitRatio) current.splitRatio = nextSplitRatio;
+    if (current.cardCols !== nextCardCols) current.cardCols = nextCardCols;
     return;
   }
-  state.viewPrefs.chat = {
-    layout: normalizeChatLayout(state.viewPrefs?.chat?.layout),
-    splitRatio: normalizeSplitRatio(state.viewPrefs?.chat?.splitRatio),
-  };
+  if (!state.viewPrefs.chat || typeof state.viewPrefs.chat !== 'object') {
+    state.viewPrefs.chat = {};
+  }
+  const current = state.viewPrefs.chat;
+  const nextLayout = normalizeChatLayout(current.layout);
+  const nextSplitRatio = normalizeSplitRatio(current.splitRatio);
+  if (current.layout !== nextLayout) current.layout = nextLayout;
+  if (current.splitRatio !== nextSplitRatio) current.splitRatio = nextSplitRatio;
 }
 
 function normalizeSplitRatio(value) {
@@ -208,6 +359,34 @@ function setCmdCardCols(cols) {
   ensureModePrefs('cmd');
   state.viewPrefs.cmd.cardCols = normalizeCmdCardCols(cols);
   persistJSON(CMD_LAYOUT_KEY, state.viewPrefs.cmd);
+}
+
+function pruneAgentMetaForThreads(threads) {
+  const meta = state.agentMetaById || {};
+  const keys = Object.keys(meta);
+  if (keys.length === 0) return 0;
+  if (keys.length <= AGENT_META_PRUNE_THRESHOLD) return 0;
+
+  const keep = new Set((threads || []).map((item) => (item?.id || '').toString()).filter(Boolean));
+  const activeChat = (state.activeThreadId || '').toString();
+  const activeCmd = (state.activeCmdThreadId || '').toString();
+  const main = (state.mainAgentId || '').toString();
+  if (activeChat) keep.add(activeChat);
+  if (activeCmd) keep.add(activeCmd);
+  if (main) keep.add(main);
+
+  const next = {};
+  for (const key of keys) {
+    if (keep.has(key)) {
+      next[key] = meta[key];
+    }
+  }
+
+  const removed = keys.length - Object.keys(next).length;
+  if (removed <= 0) return 0;
+  state.agentMetaById = next;
+  schedulePersistAgentMeta();
+  return removed;
 }
 
 function getThreadsByMode(mode) {
@@ -501,13 +680,36 @@ function normalizeFiles(value) {
 function appendToolCall(threadId, payload) {
   const tool = (payload?.tool || payload?.tool_name || '').toString();
   if (!tool) return;
+  const file = (payload?.file || payload?.file_path || '').toString();
+  const preview = (payload?.resultPreview || '').toString();
+  const status = payload?.success === false ? 'failed' : 'ok';
+  const elapsedMs = typeof payload?.elapsedMs === 'number' ? payload.elapsedMs : undefined;
+
+  const list = timeline(threadId);
+  const lastIndex = list.length - 1;
+  const last = lastIndex >= 0 ? list[lastIndex] : null;
+  if (last?.kind === 'tool' && last.tool === tool) {
+    const canMerge = (!last.file && !!file)
+      || (!last.preview && !!preview)
+      || (typeof last.elapsedMs === 'undefined' && typeof elapsedMs === 'number');
+    if (canMerge) {
+      patchTimelineItem(threadId, lastIndex, {
+        file: file || last.file || '',
+        preview: preview || last.preview || '',
+        status: status === 'failed' ? 'failed' : (last.status || status),
+        elapsedMs: typeof elapsedMs === 'number' ? elapsedMs : last.elapsedMs,
+      });
+      return;
+    }
+  }
+
   pushTimelineItem(threadId, {
     kind: 'tool',
     tool,
-    file: (payload?.file || payload?.file_path || '').toString(),
-    status: payload?.success === false ? 'failed' : 'ok',
-    elapsedMs: typeof payload?.elapsedMs === 'number' ? payload.elapsedMs : undefined,
-    preview: (payload?.resultPreview || '').toString(),
+    file,
+    status,
+    elapsedMs,
+    preview,
   });
 }
 
@@ -569,6 +771,98 @@ function normalizeThread(item) {
     name: item?.name || item?.id || '',
     state: normalizeStatus(item?.state || 'idle'),
   };
+}
+
+function normalizeWorkspaceRunStatus(status) {
+  const raw = (status || '').toString().trim().toLowerCase();
+  if (!raw) return 'active';
+  switch (raw) {
+    case 'active':
+    case 'merging':
+    case 'merged':
+    case 'aborted':
+    case 'failed':
+      return raw;
+    default:
+      return raw;
+  }
+}
+
+function asNumber(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeWorkspaceRun(raw, fallback = {}) {
+  if (!raw || typeof raw !== 'object') return null;
+  const runKey = (raw.run_key || raw.runKey || fallback.runKey || '').toString().trim();
+  if (!runKey) return null;
+
+  const status = normalizeWorkspaceRunStatus(raw.status || fallback.status || 'active');
+  const createdAt = raw.created_at || raw.createdAt || fallback.createdAt || '';
+  const updatedAt = raw.updated_at || raw.updatedAt || raw.finished_at || raw.finishedAt || fallback.updatedAt || '';
+  const finishedAt = raw.finished_at || raw.finishedAt || fallback.finishedAt || '';
+
+  return {
+    runKey,
+    dagKey: (raw.dag_key || raw.dagKey || fallback.dagKey || '').toString(),
+    sourceRoot: (raw.source_root || raw.sourceRoot || fallback.sourceRoot || '').toString(),
+    workspacePath: (raw.workspace_path || raw.workspacePath || fallback.workspacePath || '').toString(),
+    status,
+    createdBy: (raw.created_by || raw.createdBy || fallback.createdBy || '').toString(),
+    updatedBy: (raw.updated_by || raw.updatedBy || fallback.updatedBy || '').toString(),
+    metadata: raw.metadata ?? fallback.metadata ?? null,
+    createdAt: createdAt || '',
+    updatedAt: updatedAt || createdAt || '',
+    finishedAt: finishedAt || '',
+    dryRun: typeof raw.dryRun === 'boolean' ? raw.dryRun : (typeof fallback.dryRun === 'boolean' ? fallback.dryRun : false),
+    merged: asNumber(raw.merged, asNumber(fallback.merged, 0)),
+    conflicts: asNumber(raw.conflicts, asNumber(fallback.conflicts, 0)),
+    unchanged: asNumber(raw.unchanged, asNumber(fallback.unchanged, 0)),
+    errors: asNumber(raw.errors, asNumber(fallback.errors, 0)),
+    reason: (raw.reason || fallback.reason || '').toString(),
+  };
+}
+
+function upsertWorkspaceRun(raw) {
+  if (!raw || typeof raw !== 'object') return;
+  const runKey = (raw.run_key || raw.runKey || '').toString().trim();
+  if (!runKey) return;
+  const prev = state.workspaceRunsByKey[runKey] || {};
+  const candidate = normalizeWorkspaceRun(raw, prev);
+  if (!candidate) return;
+  state.workspaceRunsByKey[candidate.runKey] = candidate;
+}
+
+function applyWorkspaceMergeResult(result, fallbackRun = {}) {
+  if (!result || typeof result !== 'object') return;
+  const runKey = (result.runKey || result.run_key || fallbackRun.runKey || fallbackRun.run_key || '').toString().trim();
+  if (!runKey) return;
+  const current = state.workspaceRunsByKey[runKey] || {};
+  const merged = normalizeWorkspaceRun({
+    runKey,
+    status: result.status || current.status || 'active',
+    workspacePath: result.workspace || current.workspacePath,
+    sourceRoot: result.sourceRoot || current.sourceRoot,
+    dryRun: result.dryRun,
+    merged: result.merged,
+    conflicts: result.conflicts,
+    unchanged: result.unchanged,
+    errors: result.errors,
+    finishedAt: result.finishedAt,
+    updatedAt: result.finishedAt || nowISO(),
+  }, current);
+  if (!merged) return;
+  state.workspaceRunsByKey[runKey] = merged;
+}
+
+function sortedWorkspaceRuns() {
+  return Object.values(state.workspaceRunsByKey)
+    .sort((left, right) => {
+      const leftTs = Date.parse(left?.updatedAt || left?.createdAt || '') || 0;
+      const rightTs = Date.parse(right?.updatedAt || right?.createdAt || '') || 0;
+      return rightTs - leftTs;
+    });
 }
 
 function sortByIDAsc(messages) {
@@ -854,7 +1148,12 @@ function parsePayload(data) {
   if (typeof data === 'string') {
     try {
       return JSON.parse(data);
-    } catch {
+    } catch (error) {
+      logWarn('event', 'payload.parse.failed', {
+        error,
+        raw_len: data.length,
+        preview: data.slice(0, 200),
+      });
       return { text: data };
     }
   }
@@ -873,15 +1172,33 @@ function handleAgentEvent(evt) {
   const threadId = evt?.agent_id || evt?.threadId || '';
   const eventType = (evt?.type || '').toString();
   if (!threadId || !eventType) return;
+  const seq = ++agentEventSeq;
+  const sampled = seq % AGENT_EVENT_LOG_SAMPLE === 0 || !eventType.toLowerCase().includes('delta');
+  if (sampled) {
+    logDebug('event', 'agent.received', {
+      seq,
+      thread_id: threadId,
+      type: eventType,
+    });
+  }
 
   ensureThreadState(threadId);
   markAgentActive(threadId);
-  persistJSON(AGENT_META_KEY, state.agentMetaById);
 
   const payload = parsePayload(evt?.data);
+  const prevStatus = state.statuses[threadId] || 'idle';
   const nextStatus = statusFromEventType(eventType, payload);
   if (nextStatus) {
     updateThreadState(threadId, nextStatus);
+    const normalizedNext = normalizeStatus(nextStatus);
+    if (prevStatus !== normalizedNext) {
+      logInfo('thread', 'status.changed', {
+        thread_id: threadId,
+        from: prevStatus,
+        to: normalizedNext,
+        by_event: eventType,
+      });
+    }
   }
 
   switch (eventType) {
@@ -906,6 +1223,16 @@ function handleAgentEvent(evt) {
     case 'item/started': {
       const command = (payload?.command || '').toString().trim();
       if (command) startCommand(threadId, command);
+      const subType = (payload?.type || payload?.item_type || payload?.name || '').toString().toLowerCase();
+      if (subType.includes('filechange') || subType.includes('file_change')) {
+        let files = normalizeFiles(payload?.files);
+        if (files.length === 0) files = normalizeFiles(payload?.file);
+        if (files.length === 0) files = extractFilesFromPatchDelta((payload?.delta || payload?.output || '').toString());
+        for (const file of files) {
+          fileEditing(threadId, file);
+        }
+        rememberEditingFiles(threadId, files);
+      }
       return;
     }
     case 'exec_command_end':
@@ -914,6 +1241,17 @@ function handleAgentEvent(evt) {
     case 'item/completed':
       if (typeof payload?.exit_code !== 'undefined') {
         finishCommand(threadId, payload.exit_code);
+      }
+      {
+        const subType = (payload?.type || payload?.item_type || payload?.name || '').toString().toLowerCase();
+        if (subType.includes('filechange') || subType.includes('file_change')) {
+          let files = normalizeFiles(payload?.files);
+          if (files.length === 0) files = normalizeFiles(payload?.file);
+          if (files.length === 0) files = consumeEditingFiles(threadId);
+          for (const file of files) {
+            fileSaved(threadId, file);
+          }
+        }
       }
       return;
     case 'patch_apply_begin':
@@ -1022,11 +1360,112 @@ function handleAgentEvent(evt) {
   }
 }
 
+function handleBridgeEvent(evt) {
+  const eventType = (evt?.type || evt?.method || '').toString();
+  if (!eventType) return;
+  const seq = ++bridgeEventSeq;
+  if (seq % AGENT_EVENT_LOG_SAMPLE === 0 || !eventType.toLowerCase().includes('delta')) {
+    logDebug('event', 'bridge.received', {
+      seq,
+      type: eventType,
+    });
+  }
+
+  const payload = evt?.payload != null
+    ? parsePayload(evt.payload)
+    : parsePayload(evt?.data);
+
+  switch (eventType) {
+    case 'workspace/run/created':
+      state.workspaceFeatureEnabled = true;
+      state.workspaceLastError = '';
+      upsertWorkspaceRun(payload?.run || payload);
+      return;
+    case 'workspace/run/merged':
+      state.workspaceFeatureEnabled = true;
+      state.workspaceLastError = '';
+      applyWorkspaceMergeResult(payload?.result || payload, payload?.run || {});
+      return;
+    case 'workspace/run/aborted': {
+      state.workspaceFeatureEnabled = true;
+      state.workspaceLastError = '';
+      const run = normalizeWorkspaceRun(payload?.run || payload);
+      if (!run) return;
+      run.reason = (payload?.reason || run.reason || '').toString();
+      upsertWorkspaceRun(run);
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+async function refreshWorkspaceRuns(limit = 100) {
+  const start = perfNow();
+  try {
+    const res = await callAPI('workspace/run/list', { limit });
+    const runs = Array.isArray(res?.runs) ? res.runs : [];
+    const next = {};
+    for (const raw of runs) {
+      if (!raw || typeof raw !== 'object') continue;
+      const runKey = (raw.run_key || raw.runKey || '').toString().trim();
+      if (!runKey) continue;
+      const previous = state.workspaceRunsByKey[runKey] || {};
+      const normalized = normalizeWorkspaceRun(raw, previous);
+      if (!normalized) continue;
+      next[normalized.runKey] = normalized;
+    }
+    state.workspaceRunsByKey = next;
+    state.workspaceFeatureEnabled = true;
+    state.workspaceLastError = '';
+    logDebug('thread', 'workspaceRuns.refreshed', {
+      count: Object.keys(next).length,
+      duration_ms: Math.round(perfNow() - start),
+    });
+  } catch (error) {
+    const message = (error?.message || error || '').toString();
+    if (message.includes('workspace manager not initialized') || message.includes('method not found')) {
+      state.workspaceFeatureEnabled = false;
+      state.workspaceLastError = '';
+      logWarn('thread', 'workspaceRuns.unavailable', {
+        error: message,
+        duration_ms: Math.round(perfNow() - start),
+      });
+      return;
+    }
+    state.workspaceLastError = message;
+    logWarn('thread', 'workspaceRuns.refresh.failed', {
+      error: message,
+      duration_ms: Math.round(perfNow() - start),
+    });
+  }
+}
+
 async function refreshThreads() {
+  const start = perfNow();
   state.loadingThreads = true;
   try {
-    const res = await callAPI('thread/list', {});
+    const [res, loadedRes] = await Promise.all([
+      callAPI('thread/list', {}),
+      callAPI('thread/loaded/list', {}).catch((error) => {
+        logWarn('thread', 'loadedList.refresh.failed', { error });
+        return null;
+      }),
+    ]);
+
+    const loadedThreads = Array.isArray(loadedRes?.threads) ? loadedRes.threads : null;
+    if (loadedThreads) {
+      state.loadedThreadIds = buildLoadedThreadMap(loadedThreads);
+      state.loadedThreadStates = buildLoadedStateMap(loadedThreads);
+      state.loadedThreadListReady = true;
+    } else {
+      state.loadedThreadIds = {};
+      state.loadedThreadStates = {};
+      state.loadedThreadListReady = false;
+    }
+
     state.threads = (res?.threads || []).map(normalizeThread);
+    pruneAgentMetaForThreads(state.threads);
     for (const thread of state.threads) {
       ensureThreadState(thread.id);
       if (!state.statuses[thread.id]) {
@@ -1045,34 +1484,57 @@ async function refreshThreads() {
     });
     setMainAgent(resolvedMain);
 
-    if (state.activeThreadId && !state.threads.some((item) => item.id === state.activeThreadId)) {
-      saveActiveThread(state.threads[0]?.id || '');
+    const preferredChatActive = choosePreferredActiveThreadId({
+      currentActiveId: state.activeThreadId,
+      threads: state.threads,
+      loadedThreadMap: state.loadedThreadIds,
+    });
+    if (preferredChatActive !== (state.activeThreadId || '')) {
+      saveActiveThread(preferredChatActive || '');
     }
     if (!state.activeThreadId && state.threads.length > 0) {
-      saveActiveThread(state.threads[0].id);
+      saveActiveThread(preferredChatActive || state.threads[0].id);
     }
 
     const cmdThreads = getThreadsByMode('cmd');
-    if (state.activeCmdThreadId && !cmdThreads.some((item) => item.id === state.activeCmdThreadId)) {
-      saveActiveCmdThread('');
+    const preferredCmdActive = choosePreferredActiveThreadId({
+      currentActiveId: state.activeCmdThreadId,
+      threads: cmdThreads,
+      loadedThreadMap: state.loadedThreadIds,
+    });
+    if (preferredCmdActive !== (state.activeCmdThreadId || '')) {
+      saveActiveCmdThread(preferredCmdActive || '');
     }
     if (!state.activeCmdThreadId && cmdThreads.length > 0) {
-      saveActiveCmdThread(getCurrentThreadId('cmd'));
+      saveActiveCmdThread(preferredCmdActive || getCurrentThreadId('cmd'));
     }
-
-    persistJSON(AGENT_META_KEY, state.agentMetaById);
+    logDebug('thread', 'list.refreshed', {
+      count: state.threads.length,
+      active_chat: state.activeThreadId,
+      active_cmd: state.activeCmdThreadId,
+      main_agent: state.mainAgentId,
+      duration_ms: Math.round(perfNow() - start),
+    });
+  } catch (error) {
+    logWarn('thread', 'list.refresh.failed', {
+      error,
+      duration_ms: Math.round(perfNow() - start),
+    });
   } finally {
     state.loadingThreads = false;
   }
 }
 
 async function startThread(cwd = '.', options = {}) {
+  const start = perfNow();
   const res = await callAPI('thread/start', { cwd });
   const id = res?.thread?.id;
   if (!id) return '';
 
   state.threads.unshift({ id, name: id, state: 'starting' });
   state.statuses[id] = 'starting';
+  upsertLoadedThread(state.loadedThreadIds, state.loadedThreadStates, id, 'starting');
+  state.loadedThreadListReady = true;
   ensureThreadState(id);
   const focusMode = options?.focusMode === 'cmd' ? 'cmd' : 'chat';
   if (focusMode === 'cmd') {
@@ -1083,6 +1545,12 @@ async function startThread(cwd = '.', options = {}) {
   if (!state.mainAgentId) {
     setMainAgent(id);
   }
+  logInfo('thread', 'start.done', {
+    thread_id: id,
+    focus_mode: focusMode,
+    cwd,
+    duration_ms: Math.round(perfNow() - start),
+  });
   return id;
 }
 
@@ -1095,27 +1563,39 @@ async function launchBatch(count, cwd = '.', options = {}) {
 
 async function stopThread(threadId) {
   if (!threadId) return;
+  const start = perfNow();
   try {
     await callAPI('thread/abort', { threadId });
   } catch {
     // ignore remote error and update UI optimistically
   }
   updateThreadState(threadId, 'idle');
+  logInfo('thread', 'stop.done', {
+    thread_id: threadId,
+    duration_ms: Math.round(perfNow() - start),
+  });
 }
 
 async function loadMessages(threadId, limit = 300, options = {}) {
   if (!threadId) return;
+  const start = perfNow();
   const force = options?.force === true;
   if (!force && historyLoadedByThread[threadId]) {
+    logDebug('thread', 'messages.skip.cached', { thread_id: threadId });
     return;
   }
   if (inflightMessagesByThread[threadId]) {
+    logDebug('thread', 'messages.skip.inflight', { thread_id: threadId });
     return inflightMessagesByThread[threadId];
   }
 
   const now = Date.now();
   const last = recentMessageLoadAtByThread[threadId] || 0;
   if (now - last < MESSAGE_LOAD_COOLDOWN_MS) {
+    logDebug('thread', 'messages.skip.cooldown', {
+      thread_id: threadId,
+      elapsed_ms: now - last,
+    });
     return;
   }
   recentMessageLoadAtByThread[threadId] = now;
@@ -1124,6 +1604,19 @@ async function loadMessages(threadId, limit = 300, options = {}) {
     .then((res) => {
       hydrateHistory(threadId, res?.messages || []);
       historyLoadedByThread[threadId] = true;
+      logInfo('thread', 'messages.loaded', {
+        thread_id: threadId,
+        count: Array.isArray(res?.messages) ? res.messages.length : 0,
+        duration_ms: Math.round(perfNow() - start),
+      });
+    })
+    .catch((error) => {
+      logWarn('thread', 'messages.load.failed', {
+        thread_id: threadId,
+        error,
+        duration_ms: Math.round(perfNow() - start),
+      });
+      throw error;
     })
     .finally(() => {
       delete inflightMessagesByThread[threadId];
@@ -1166,6 +1659,23 @@ async function sendMessage(threadId, prompt, attachments = []) {
   const hasAttachments = attachments.length > 0;
   if (!threadId || (!text && !hasAttachments)) return;
 
+  if (state.loadedThreadListReady && !isThreadLoadedForSend(state.loadedThreadIds, threadId)) {
+    const message = '当前会话未加载到运行器，后端无法接收消息。请新建会话或选择已加载会话。';
+    logWarn('thread', 'send.blocked.unloaded', {
+      thread_id: threadId,
+      loaded_count: Object.keys(state.loadedThreadIds || {}).length,
+    });
+    addError(threadId, message);
+    updateThreadState(threadId, 'idle');
+    throw new Error(message);
+  }
+
+  const start = perfNow();
+  logInfo('thread', 'send.start', {
+    thread_id: threadId,
+    text_len: text.length,
+    attachments: attachments.length,
+  });
   appendUser(threadId, text, formatAttachmentForTimeline(attachments));
   updateThreadState(threadId, 'thinking');
   state.sending = true;
@@ -1174,6 +1684,17 @@ async function sendMessage(threadId, prompt, attachments = []) {
       threadId,
       input: buildTurnInput(text, attachments),
     });
+    logInfo('thread', 'send.done', {
+      thread_id: threadId,
+      duration_ms: Math.round(perfNow() - start),
+    });
+  } catch (error) {
+    logWarn('thread', 'send.failed', {
+      thread_id: threadId,
+      error,
+      duration_ms: Math.round(perfNow() - start),
+    });
+    throw error;
   } finally {
     state.sending = false;
   }
@@ -1209,13 +1730,19 @@ function promptRenameThread(threadId) {
   const current = displayName(target || { id });
   const next = window.prompt('输入新的 Agent 名称', current);
   if (!next || !next.trim()) return;
-  renameThread(id, next.trim()).catch(() => {});
+  renameThread(id, next.trim()).catch((error) => {
+    logWarn('thread', 'rename.failed', {
+      thread_id: id,
+      error,
+    });
+  });
 }
 
 export function useThreadStore() {
   return {
     state,
     threads: computed(() => state.threads),
+    workspaceRuns: computed(() => sortedWorkspaceRuns()),
     activeThread: computed(() => state.threads.find((item) => item.id === state.activeThreadId) || null),
     activeStatus: computed(() => state.statuses[state.activeThreadId] || 'idle'),
     activeTimeline: computed(() => state.timelinesByThread[state.activeThreadId] || []),
@@ -1229,6 +1756,8 @@ export function useThreadStore() {
     sendMessage,
     clearThreadTimeline,
     handleAgentEvent,
+    handleBridgeEvent,
+    refreshWorkspaceRuns,
     saveActiveCmdThread,
     setMainAgent,
     renameThread,

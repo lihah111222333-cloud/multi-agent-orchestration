@@ -68,7 +68,10 @@ func (b *EventBus) Unsubscribe(id string) {
 func (s *Server) sseHandler(c *gin.Context) {
 	clientID := fmt.Sprintf("sse-%d", time.Now().UnixNano())
 	ch := s.bus.Subscribe(clientID)
-	defer s.bus.Unsubscribe(clientID)
+	defer func() {
+		s.bus.Unsubscribe(clientID)
+		logger.Infow("SSE client disconnected", "client_id", clientID)
+	}()
 
 	logger.Infow("SSE client connected", "client_id", clientID)
 

@@ -1,3 +1,5 @@
+import { logDebug } from '../services/log.js';
+
 export const ComposerBar = {
   name: 'ComposerBar',
   props: {
@@ -7,32 +9,45 @@ export const ComposerBar = {
   emits: ['send'],
   methods: {
     onPaste(event) {
+      logDebug('ui', 'composerBar.paste', {});
       this.composer.handlePaste(event);
     },
     onSend() {
+      logDebug('ui', 'composerBar.send.click', {
+        disabled: this.disabled,
+      });
       this.$emit('send');
+    },
+    onAttach() {
+      logDebug('ui', 'composerBar.attach.click', {
+        disabled: this.disabled || this.composer.state.attaching,
+      });
+      this.composer.attachByPicker();
+    },
+    onRemoveAttachment(index) {
+      logDebug('ui', 'composerBar.attachment.remove', { index });
+      this.composer.removeAttachment(index);
     },
   },
   template: `
     <div id="chat-input-bar" class="chat-input-vue">
       <div v-if="composer.state.attachments.length > 0" class="chat-attachment-list composer-attachments">
         <span v-for="(att, idx) in composer.state.attachments" :key="att.path + idx" class="chat-attachment-pill">
-          <template v-if="att.kind === 'image'">🖼️</template>
-          <template v-else>📎</template>
-          {{ att.name }}
-          <button class="attachment-remove" @click="composer.removeAttachment(idx)">✕</button>
+          <span class="attachment-kind">{{ att.kind === 'image' ? 'IMG' : 'FILE' }}</span>
+          <span class="attachment-name">{{ att.name }}</span>
+          <button class="attachment-remove" @click="onRemoveAttachment(idx)" aria-label="移除附件">×</button>
         </span>
       </div>
 
       <div id="input-row" class="chat-input-row-vue">
-        <button id="btnAttach" class="btn btn-secondary" @click="composer.attachByPicker()" :disabled="composer.state.attaching || disabled">
-          {{ composer.state.attaching ? '选择中...' : '+' }}
+        <button id="btnAttach" class="btn btn-secondary" @click="onAttach" :disabled="composer.state.attaching || disabled">
+          {{ composer.state.attaching ? '选择中...' : '附件' }}
         </button>
         <textarea
           id="chatInput"
           rows="2"
           v-model="composer.state.text"
-          placeholder="Ask anything..."
+          placeholder="输入给 Agent 的内容，Enter 发送，Shift+Enter 换行"
           :disabled="disabled"
           @paste="onPaste"
           @keydown.enter.exact.prevent="onSend"

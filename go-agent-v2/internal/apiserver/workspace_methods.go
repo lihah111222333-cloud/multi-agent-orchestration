@@ -8,7 +8,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/service"
 )
 
-func (s *Server) workspaceRunCreate(_ context.Context, params json.RawMessage) (any, error) {
+func (s *Server) workspaceRunCreate(ctx context.Context, params json.RawMessage) (any, error) {
 	if s.workspaceMgr == nil {
 		return nil, fmt.Errorf("workspace manager not initialized")
 	}
@@ -26,7 +26,7 @@ func (s *Server) workspaceRunCreate(_ context.Context, params json.RawMessage) (
 	if p.SourceRoot == "" {
 		p.SourceRoot = "."
 	}
-	run, err := s.workspaceMgr.CreateRun(context.Background(), service.WorkspaceCreateRequest{
+	run, err := s.workspaceMgr.CreateRun(ctx, service.WorkspaceCreateRequest{
 		RunKey:     p.RunKey,
 		DagKey:     p.DagKey,
 		SourceRoot: p.SourceRoot,
@@ -44,7 +44,7 @@ func (s *Server) workspaceRunCreate(_ context.Context, params json.RawMessage) (
 	return map[string]any{"run": run}, nil
 }
 
-func (s *Server) workspaceRunGet(_ context.Context, params json.RawMessage) (any, error) {
+func (s *Server) workspaceRunGet(ctx context.Context, params json.RawMessage) (any, error) {
 	if s.workspaceMgr == nil {
 		return nil, fmt.Errorf("workspace manager not initialized")
 	}
@@ -57,7 +57,7 @@ func (s *Server) workspaceRunGet(_ context.Context, params json.RawMessage) (any
 	if p.RunKey == "" {
 		return nil, fmt.Errorf("runKey is required")
 	}
-	run, err := s.workspaceMgr.GetRun(context.Background(), p.RunKey)
+	run, err := s.workspaceMgr.GetRun(ctx, p.RunKey)
 	if err != nil {
 		return nil, fmt.Errorf("workspace/run/get: %w", err)
 	}
@@ -67,7 +67,7 @@ func (s *Server) workspaceRunGet(_ context.Context, params json.RawMessage) (any
 	return map[string]any{"run": run}, nil
 }
 
-func (s *Server) workspaceRunList(_ context.Context, params json.RawMessage) (any, error) {
+func (s *Server) workspaceRunList(ctx context.Context, params json.RawMessage) (any, error) {
 	if s.workspaceMgr == nil {
 		return nil, fmt.Errorf("workspace manager not initialized")
 	}
@@ -82,14 +82,14 @@ func (s *Server) workspaceRunList(_ context.Context, params json.RawMessage) (an
 	if p.Limit <= 0 || p.Limit > 5000 {
 		p.Limit = 200
 	}
-	runs, err := s.workspaceMgr.ListRuns(context.Background(), p.Status, p.DagKey, p.Limit)
+	runs, err := s.workspaceMgr.ListRuns(ctx, p.Status, p.DagKey, p.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("workspace/run/list: %w", err)
 	}
 	return map[string]any{"runs": runs}, nil
 }
 
-func (s *Server) workspaceRunMerge(_ context.Context, params json.RawMessage) (any, error) {
+func (s *Server) workspaceRunMerge(ctx context.Context, params json.RawMessage) (any, error) {
 	if s.workspaceMgr == nil {
 		return nil, fmt.Errorf("workspace manager not initialized")
 	}
@@ -105,7 +105,7 @@ func (s *Server) workspaceRunMerge(_ context.Context, params json.RawMessage) (a
 	if p.RunKey == "" {
 		return nil, fmt.Errorf("runKey is required")
 	}
-	result, err := s.workspaceMgr.MergeRun(context.Background(), service.WorkspaceMergeRequest{
+	result, err := s.workspaceMgr.MergeRun(ctx, service.WorkspaceMergeRequest{
 		RunKey:        p.RunKey,
 		UpdatedBy:     p.UpdatedBy,
 		DryRun:        p.DryRun,
@@ -121,7 +121,7 @@ func (s *Server) workspaceRunMerge(_ context.Context, params json.RawMessage) (a
 	return map[string]any{"result": result}, nil
 }
 
-func (s *Server) workspaceRunAbort(_ context.Context, params json.RawMessage) (any, error) {
+func (s *Server) workspaceRunAbort(ctx context.Context, params json.RawMessage) (any, error) {
 	if s.workspaceMgr == nil {
 		return nil, fmt.Errorf("workspace manager not initialized")
 	}
@@ -136,7 +136,7 @@ func (s *Server) workspaceRunAbort(_ context.Context, params json.RawMessage) (a
 	if p.RunKey == "" {
 		return nil, fmt.Errorf("runKey is required")
 	}
-	run, err := s.workspaceMgr.AbortRun(context.Background(), p.RunKey, p.UpdatedBy, p.Reason)
+	run, err := s.workspaceMgr.AbortRun(ctx, p.RunKey, p.UpdatedBy, p.Reason)
 	if err != nil {
 		return nil, fmt.Errorf("workspace/run/abort: %w", err)
 	}

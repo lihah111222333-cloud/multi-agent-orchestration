@@ -8,12 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	"github.com/multi-agent/go-agent-v2/internal/store"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 // buildResourceTools 返回资源类工具定义 (注入 codex agent)。
@@ -257,7 +258,8 @@ func (s *Server) resourceTaskCreateDAG(args json.RawMessage) string {
 		return toolError(fmt.Errorf("invalid args: %w", err))
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	// 创建 DAG
 	dag, err := s.dagStore.SaveDAG(ctx, &store.TaskDAG{
@@ -282,13 +284,13 @@ func (s *Server) resourceTaskCreateDAG(args json.RawMessage) string {
 			CommandRef: n.CommandRef,
 		})
 		if err != nil {
-			slog.Warn("resource: save node failed", "dag", p.DagKey, "node", n.NodeKey, "error", err)
+			logger.Warn("resource: save node failed", logger.FieldDAG, p.DagKey, logger.FieldNode, n.NodeKey, logger.FieldError, err)
 			continue
 		}
 		nodesCreated++
 	}
 
-	slog.Info("resource: DAG created", "dag_key", p.DagKey, "nodes", nodesCreated)
+	logger.Info("resource: DAG created", logger.FieldDAG, p.DagKey, "nodes", nodesCreated)
 	data, _ := json.Marshal(map[string]any{
 		"dag_key":       dag.DagKey,
 		"title":         dag.Title,
@@ -306,7 +308,9 @@ func (s *Server) resourceTaskGetDAG(args json.RawMessage) string {
 		return toolError(fmt.Errorf("invalid args: %w", err))
 	}
 
-	dag, nodes, err := s.dagStore.GetDAGDetail(context.Background(), p.DagKey)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dag, nodes, err := s.dagStore.GetDAGDetail(ctx, p.DagKey)
 	if err != nil {
 		return toolError(fmt.Errorf("get dag: %w", err))
 	}
@@ -337,7 +341,9 @@ func (s *Server) resourceTaskUpdateNode(args json.RawMessage) string {
 		result = p.Result
 	}
 
-	node, err := s.dagStore.UpdateNodeStatus(context.Background(), p.DagKey, p.NodeKey, p.Status, result)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	node, err := s.dagStore.UpdateNodeStatus(ctx, p.DagKey, p.NodeKey, p.Status, result)
 	if err != nil {
 		return toolError(fmt.Errorf("update node: %w", err))
 	}
@@ -345,7 +351,7 @@ func (s *Server) resourceTaskUpdateNode(args json.RawMessage) string {
 		return `{"error":"node not found"}`
 	}
 
-	slog.Info("resource: node updated", "dag", p.DagKey, "node", p.NodeKey, "status", p.Status)
+	logger.Info("resource: node updated", logger.FieldDAG, p.DagKey, logger.FieldNode, p.NodeKey, logger.FieldStatus, p.Status)
 	data, _ := json.Marshal(node)
 	return string(data)
 }
@@ -354,9 +360,13 @@ func (s *Server) resourceCommandList(args json.RawMessage) string {
 	var p struct {
 		Keyword string `json:"keyword"`
 	}
-	_ = json.Unmarshal(args, &p) // keyword 可选
+	if err := json.Unmarshal(args, &p); err != nil {
+		logger.Debug("resource: unmarshal command list args", logger.FieldError, err)
+	}
 
-	cards, err := s.cmdStore.List(context.Background(), p.Keyword, 50)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cards, err := s.cmdStore.List(ctx, p.Keyword, 50)
 	if err != nil {
 		return toolError(fmt.Errorf("list commands: %w", err))
 	}
@@ -372,7 +382,9 @@ func (s *Server) resourceCommandGet(args json.RawMessage) string {
 		return toolError(fmt.Errorf("invalid args: %w", err))
 	}
 
-	card, err := s.cmdStore.Get(context.Background(), p.CardKey)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	card, err := s.cmdStore.Get(ctx, p.CardKey)
 	if err != nil {
 		return toolError(fmt.Errorf("get command: %w", err))
 	}
@@ -387,9 +399,13 @@ func (s *Server) resourcePromptList(args json.RawMessage) string {
 	var p struct {
 		Keyword string `json:"keyword"`
 	}
-	_ = json.Unmarshal(args, &p)
+	if err := json.Unmarshal(args, &p); err != nil {
+		logger.Debug("resource: unmarshal prompt list args", logger.FieldError, err)
+	}
 
-	prompts, err := s.promptStore.List(context.Background(), "", p.Keyword, 50)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	prompts, err := s.promptStore.List(ctx, "", p.Keyword, 50)
 	if err != nil {
 		return toolError(fmt.Errorf("list prompts: %w", err))
 	}
@@ -405,7 +421,9 @@ func (s *Server) resourcePromptGet(args json.RawMessage) string {
 		return toolError(fmt.Errorf("invalid args: %w", err))
 	}
 
-	prompt, err := s.promptStore.Get(context.Background(), p.PromptKey)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	prompt, err := s.promptStore.Get(ctx, p.PromptKey)
 	if err != nil {
 		return toolError(fmt.Errorf("get prompt: %w", err))
 	}
@@ -424,7 +442,9 @@ func (s *Server) resourceSharedFileRead(args json.RawMessage) string {
 		return toolError(fmt.Errorf("invalid args: %w", err))
 	}
 
-	file, err := s.fileStore.Read(context.Background(), p.Path)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	file, err := s.fileStore.Read(ctx, p.Path)
 	if err != nil {
 		return toolError(fmt.Errorf("read file: %w", err))
 	}
@@ -447,12 +467,14 @@ func (s *Server) resourceSharedFileWrite(args json.RawMessage) string {
 		return `{"error":"path and content are required"}`
 	}
 
-	file, err := s.fileStore.Write(context.Background(), p.Path, p.Content, "agent")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	file, err := s.fileStore.Write(ctx, p.Path, p.Content, "agent")
 	if err != nil {
 		return toolError(fmt.Errorf("write file: %w", err))
 	}
 
-	slog.Info("resource: file written", "path", p.Path, "len", len(p.Content))
+	logger.Info("resource: file written", logger.FieldPath, p.Path, logger.FieldLen, len(p.Content))
 	data, _ := json.Marshal(file)
 	return string(data)
 }
@@ -472,7 +494,9 @@ func (s *Server) resourceWorkspaceCreateRun(args json.RawMessage) string {
 	if err := json.Unmarshal(args, &p); err != nil {
 		return toolError(fmt.Errorf("invalid args: %w", err))
 	}
-	run, err := s.workspaceMgr.CreateRun(context.Background(), service.WorkspaceCreateRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	run, err := s.workspaceMgr.CreateRun(ctx, service.WorkspaceCreateRequest{
 		RunKey:     p.RunKey,
 		DagKey:     p.DagKey,
 		SourceRoot: p.SourceRoot,
@@ -501,7 +525,9 @@ func (s *Server) resourceWorkspaceGetRun(args json.RawMessage) string {
 	if err := json.Unmarshal(args, &p); err != nil {
 		return toolError(fmt.Errorf("invalid args: %w", err))
 	}
-	run, err := s.workspaceMgr.GetRun(context.Background(), p.RunKey)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	run, err := s.workspaceMgr.GetRun(ctx, p.RunKey)
 	if err != nil {
 		return toolError(err)
 	}
@@ -521,11 +547,15 @@ func (s *Server) resourceWorkspaceListRuns(args json.RawMessage) string {
 		DagKey string `json:"dag_key"`
 		Limit  int    `json:"limit"`
 	}
-	_ = json.Unmarshal(args, &p)
+	if err := json.Unmarshal(args, &p); err != nil {
+		logger.Debug("resource: unmarshal workspace list args", logger.FieldError, err)
+	}
 	if p.Limit <= 0 || p.Limit > 5000 {
 		p.Limit = 200
 	}
-	runs, err := s.workspaceMgr.ListRuns(context.Background(), p.Status, p.DagKey, p.Limit)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	runs, err := s.workspaceMgr.ListRuns(ctx, p.Status, p.DagKey, p.Limit)
 	if err != nil {
 		return toolError(err)
 	}
@@ -546,7 +576,9 @@ func (s *Server) resourceWorkspaceMergeRun(args json.RawMessage) string {
 	if err := json.Unmarshal(args, &p); err != nil {
 		return toolError(fmt.Errorf("invalid args: %w", err))
 	}
-	result, err := s.workspaceMgr.MergeRun(context.Background(), service.WorkspaceMergeRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result, err := s.workspaceMgr.MergeRun(ctx, service.WorkspaceMergeRequest{
 		RunKey:        p.RunKey,
 		UpdatedBy:     p.UpdatedBy,
 		DryRun:        p.DryRun,
@@ -575,7 +607,9 @@ func (s *Server) resourceWorkspaceAbortRun(args json.RawMessage) string {
 	if err := json.Unmarshal(args, &p); err != nil {
 		return toolError(fmt.Errorf("invalid args: %w", err))
 	}
-	run, err := s.workspaceMgr.AbortRun(context.Background(), p.RunKey, p.UpdatedBy, p.Reason)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	run, err := s.workspaceMgr.AbortRun(ctx, p.RunKey, p.UpdatedBy, p.Reason)
 	if err != nil {
 		return toolError(err)
 	}

@@ -140,6 +140,12 @@ type Attr = slog.Attr
 // Any 创建任意类型属性。
 func Any(key string, value any) Attr { return slog.Any(key, value) }
 
+// String 创建字符串属性。
+func String(key, value string) Attr { return slog.String(key, value) }
+
+// Int64 创建 int64 属性。
+func Int64(key string, value int64) Attr { return slog.Int64(key, value) }
+
 // 预留字段常量 — MUST 使用常量键名，勿硬编码。
 const (
 	FieldTraceID   = "trace_id"
@@ -161,4 +167,45 @@ const (
 	FieldEventType  = "event_type"
 	FieldToolName   = "tool_name"
 	FieldDurationMS = "duration_ms"
+	// v3: 补充常用字段
+	FieldAddr      = "addr"
+	FieldConn      = "conn"
+	FieldRemote    = "remote"
+	FieldKey       = "key"
+	FieldSkill     = "skill"
+	FieldOrigin    = "origin"
+	FieldMax       = "max"
+	FieldDataLen   = "data_len"
+	FieldParamsLen = "params_len"
+	FieldID        = "id"
+	FieldName      = "name"
+	FieldCwd       = "cwd"
+	FieldRunKey    = "run_key"
+	FieldRoot      = "root"
+	FieldBytes     = "bytes"
+	FieldLen       = "len"
+	FieldListen    = "listen"
+	FieldPort      = "port"
+	FieldVersion   = "version"
+	// v4: 补充剩余文件所需常量
+	FieldTopic   = "topic"
+	FieldSeq     = "seq"
+	FieldDAG     = "dag"
+	FieldNode    = "node"
+	FieldURL     = "url"
+	FieldVarsSet = "vars_set"
+	FieldReqID   = "req_id"
+	FieldCallID  = "call_id"
+	FieldRaw     = "raw"
+	// v5: 高风险点日志所需常量
+	FieldCommand    = "command"
+	FieldRunID      = "run_id"
+	FieldExitCode   = "exit_code"
+	FieldCardKey    = "card_key"
+	FieldLanguage   = "language"
+	FieldSubscriber = "subscriber"
+	FieldFilter     = "filter"
+	FieldDecision   = "decision"
+	FieldPID        = "pid"
+	FieldState      = "state"
 )

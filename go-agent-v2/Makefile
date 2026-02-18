@@ -1,4 +1,4 @@
-.PHONY: build run test vet clean
+.PHONY: build run test vet clean protocol-sync-check
 
 build:
 	go build ./...
@@ -11,6 +11,10 @@ mcp:
 
 test:
 	go test ./... -race -count=1
+
+protocol-sync-check:
+	go test ./internal/codex -run TestProtocolMethodCoverage_FromCodexRs -count=1
+	go test ./internal/apiserver -run TestEventMethodMap_TargetMethodsKnownByProtocol -count=1
 
 vet:
 	go vet ./...

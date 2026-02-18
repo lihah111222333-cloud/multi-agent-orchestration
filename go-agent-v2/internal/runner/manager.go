@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 // basePort 自动分配端口的起始值。
@@ -142,6 +143,12 @@ func (m *AgentManager) findFreePort() (int, error) {
 // ctx 控制 spawn 超时和子进程生命周期。
 // dynamicTools 为 nil 时不注入自定义工具。
 func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string, dynamicTools []codex.DynamicTool) error {
+	logger.Infow("runner: launching agent",
+		logger.FieldAgentID, id,
+		logger.FieldName, name,
+		logger.FieldCwd, cwd,
+	)
+
 	m.mu.Lock()
 	if _, exists := m.agents[id]; exists {
 		m.mu.Unlock()
@@ -151,6 +158,7 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 	port, err := m.findFreePort()
 	if err != nil {
 		m.mu.Unlock()
+		logger.Error("runner: no free port", logger.FieldAgentID, id, logger.FieldError, err)
 		return err
 	}
 
@@ -183,9 +191,11 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 			delete(m.agents, id)
 		}
 		m.mu.Unlock()
+		logger.Error("runner: launch failed", logger.FieldAgentID, id, logger.FieldPort, port, logger.FieldError, err)
 		return fmt.Errorf("runner: launch %s: %w", id, err)
 	}
 
+	logger.Infow("runner: agent launched", logger.FieldAgentID, id, logger.FieldPort, port)
 	return nil
 }
 
@@ -205,6 +215,11 @@ var eventStateMap = map[string]AgentState{
 func (m *AgentManager) handleEvent(proc *AgentProcess, event codex.Event) {
 	proc.mu.Lock()
 	if newState, ok := eventStateMap[event.Type]; ok {
+		logger.Debug("runner: state transition",
+			logger.FieldAgentID, proc.ID,
+			logger.FieldEventType, event.Type,
+			logger.FieldState, string(newState),
+		)
 		proc.State = newState
 	}
 	proc.mu.Unlock()
@@ -242,6 +257,8 @@ func (m *AgentManager) SendInput(id string, data []byte) error {
 
 // Stop 停止指定 Agent。
 func (m *AgentManager) Stop(id string) error {
+	logger.Infow("runner: stopping agent", logger.FieldAgentID, id)
+
 	m.mu.Lock()
 	proc, ok := m.agents[id]
 	if !ok {
@@ -252,12 +269,14 @@ func (m *AgentManager) Stop(id string) error {
 	m.mu.Unlock()
 
 	if err := proc.Client.Shutdown(); err != nil {
+		logger.Warn("runner: shutdown error", logger.FieldAgentID, id, logger.FieldError, err)
 		return fmt.Errorf("runner: stop %s: %w", id, err)
 	}
 
 	proc.mu.Lock()
 	proc.State = StateStopped
 	proc.mu.Unlock()
+	logger.Infow("runner: agent stopped", logger.FieldAgentID, id)
 	return nil
 }
 
@@ -270,8 +289,11 @@ func (m *AgentManager) StopAll() {
 	}
 	m.mu.RUnlock()
 
+	logger.Infow("runner: stopping all agents", logger.FieldCount, len(ids))
 	for _, id := range ids {
-		_ = m.Stop(id)
+		if err := m.Stop(id); err != nil {
+			logger.Warn("runner: stop agent failed during StopAll", logger.FieldAgentID, id, logger.FieldError, err)
+		}
 	}
 }
 

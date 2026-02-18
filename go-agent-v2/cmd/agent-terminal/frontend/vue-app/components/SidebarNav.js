@@ -1,3 +1,5 @@
+import { logDebug } from '../services/log.js';
+
 export const SidebarNav = {
   name: 'SidebarNav',
   props: {
@@ -5,6 +7,15 @@ export const SidebarNav = {
     items: { type: Array, required: true },
   },
   emits: ['change'],
+  methods: {
+    onChange(target) {
+      logDebug('ui', 'sidebar.change', {
+        from: this.page,
+        to: target,
+      });
+      this.$emit('change', target);
+    },
+  },
   template: `
     <nav id="sidebar">
       <button
@@ -12,7 +23,7 @@ export const SidebarNav = {
         :key="item.key"
         class="sidebar-btn"
         :class="{ active: item.key === page }"
-        @click="$emit('change', item.key)"
+        @click="onChange(item.key)"
       >
         <span class="sb-icon">{{ item.icon }}</span>
         <span class="sb-label">{{ item.label }}</span>

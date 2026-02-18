@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // DiagnosticHandler 诊断回调。
@@ -75,19 +76,28 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 		return fmt.Errorf("lsp: stdout pipe: %w", err)
 	}
 	c.stdout = bufio.NewReaderSize(stdoutPipe, 256*1024)
-	c.stderr, _ = c.cmd.StderrPipe()
+	c.stderr, err = c.cmd.StderrPipe()
+	if err != nil {
+		logger.Warn("lsp: stderr pipe failed", logger.FieldLanguage, c.language, logger.FieldError, err)
+	}
 
 	if err := c.cmd.Start(); err != nil {
 		return fmt.Errorf("lsp: start %s: %w", command, err)
 	}
 
+	logger.Infow("lsp: process started",
+		logger.FieldLanguage, c.language,
+		logger.FieldCommand, command,
+		logger.FieldPID, c.cmd.Process.Pid,
+	)
+
 	// 后台读取 server→client 消息
-	go c.readLoop()
+	util.SafeGo(func() { c.readLoop() })
 
 	// 收集 stderr (LSP 服务器错误输出 → 统一日志)
 	if c.stderr != nil {
 		c.stderrCollector = logger.NewStderrCollector("lsp-" + c.language)
-		go func() { _, _ = io.Copy(c.stderrCollector, c.stderr) }()
+		util.SafeGo(func() { _, _ = io.Copy(c.stderrCollector, c.stderr) })
 	}
 
 	// initialize 握手
@@ -118,6 +128,7 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 		return fmt.Errorf("lsp: initialized notify: %w", err)
 	}
 
+	logger.Infow("lsp: initialize handshake complete", logger.FieldLanguage, c.language)
 	return nil
 }
 
@@ -166,6 +177,8 @@ func (c *Client) Stop() error {
 	if c.stopped.Swap(true) {
 		return nil // 已停止
 	}
+
+	logger.Infow("lsp: stopping", logger.FieldLanguage, c.language)
 
 	if c.stderrCollector != nil {
 		_ = c.stderrCollector.Close()
@@ -232,6 +245,7 @@ func (c *Client) call(method string, params any, result any) error {
 		}
 		return nil
 	case <-time.After(30 * time.Second):
+		logger.Warn("lsp: call timeout", logger.FieldMethod, method, logger.FieldLanguage, c.language)
 		return fmt.Errorf("lsp: %s timeout (30s)", method)
 	}
 }
@@ -285,7 +299,10 @@ func (c *Client) readLoop() {
 		data, err := c.readFrame()
 		if err != nil {
 			if !c.stopped.Load() {
-				// 非主动关闭的读取错误
+				logger.Warn("lsp: readLoop error",
+					logger.FieldLanguage, c.language,
+					logger.FieldError, err,
+				)
 			}
 			return
 		}
@@ -295,7 +312,10 @@ func (c *Client) readLoop() {
 			ID     *int   `json:"id"`
 			Method string `json:"method"`
 		}
-		_ = json.Unmarshal(data, &peek)
+		if err := json.Unmarshal(data, &peek); err != nil {
+			logger.Debug("lsp: unmarshal peek failed", logger.FieldLanguage, c.language, logger.FieldError, err)
+			continue
+		}
 
 		if peek.ID != nil && peek.Method == "" {
 			// 响应
@@ -333,7 +353,11 @@ func (c *Client) readFrame() ([]byte, error) {
 		}
 		if strings.HasPrefix(line, "Content-Length:") {
 			numStr := strings.TrimSpace(strings.TrimPrefix(line, "Content-Length:"))
-			contentLen, _ = strconv.Atoi(numStr)
+			var atoiErr error
+			contentLen, atoiErr = strconv.Atoi(numStr)
+			if atoiErr != nil {
+				logger.Debug("lsp: invalid Content-Length", logger.FieldRaw, numStr, logger.FieldError, atoiErr)
+			}
 		}
 	}
 	if contentLen <= 0 {
@@ -355,6 +379,10 @@ func (c *Client) handleNotification(method string, raw []byte) {
 			Params PublishDiagnosticsParams `json:"params"`
 		}
 		if err := json.Unmarshal(raw, &notif); err != nil {
+			logger.Warn("lsp: unmarshal diagnostics failed",
+				logger.FieldLanguage, c.language,
+				logger.FieldError, err,
+			)
 			return
 		}
 		c.mu.Lock()

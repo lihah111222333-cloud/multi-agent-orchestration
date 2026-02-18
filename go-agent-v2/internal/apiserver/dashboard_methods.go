@@ -8,9 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"reflect"
 	"time"
+
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 // dashLimitParams 通用分页参数。
@@ -21,7 +22,9 @@ type dashLimitParams struct {
 func parseDashLimit(params json.RawMessage, defaultLimit int) int {
 	var p dashLimitParams
 	if params != nil {
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			logger.Warn("dashboard: unmarshal limit params", logger.FieldError, err)
+		}
 	}
 	if p.Limit <= 0 || p.Limit > 2000 {
 		return defaultLimit
@@ -64,7 +67,7 @@ func dashList[P any](key string, store any, query func(ctx context.Context, p P)
 		defer cancel()
 		list, err := query(ctx, p)
 		if err != nil {
-			slog.Warn("dashboard/"+key+" failed", "error", err)
+			logger.Warn("dashboard/"+key+" failed", logger.FieldError, err)
 			return map[string]any{key: []any{}}, nil
 		}
 		return map[string]any{key: list}, nil
@@ -84,13 +87,15 @@ func (s *Server) dashAgentStatus(_ context.Context, params json.RawMessage) (any
 		Status string `json:"status"`
 	}
 	if params != nil {
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			logger.Warn("dashboard/agentStatus: unmarshal params", logger.FieldError, err)
+		}
 	}
 	ctx, cancel := dashCtx()
 	defer cancel()
 	list, err := s.agentStatusStore.List(ctx, p.Status)
 	if err != nil {
-		slog.Warn("dashboard/agentStatus failed", "error", err)
+		logger.Warn("dashboard/agentStatus failed", logger.FieldError, err)
 		return map[string]any{"agents": []any{}}, nil
 	}
 	return map[string]any{"agents": list}, nil
@@ -107,7 +112,9 @@ func (s *Server) dashDAGs(_ context.Context, params json.RawMessage) (any, error
 		Limit   int    `json:"limit"`
 	}
 	if params != nil {
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			logger.Warn("dashboard/dags: unmarshal params", logger.FieldError, err)
+		}
 	}
 	if p.Limit <= 0 || p.Limit > 2000 {
 		p.Limit = 100
@@ -116,7 +123,7 @@ func (s *Server) dashDAGs(_ context.Context, params json.RawMessage) (any, error
 	defer cancel()
 	list, err := s.dagStore.ListDAGs(ctx, p.Keyword, p.Status, p.Limit)
 	if err != nil {
-		slog.Warn("dashboard/dags failed", "error", err)
+		logger.Warn("dashboard/dags failed", logger.FieldError, err)
 		return map[string]any{"dags": []any{}}, nil
 	}
 	return map[string]any{"dags": list}, nil
@@ -135,7 +142,9 @@ func (s *Server) dashTaskAcks(_ context.Context, params json.RawMessage) (any, e
 		Limit      int    `json:"limit"`
 	}
 	if params != nil {
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			logger.Warn("dashboard/taskAcks: unmarshal params", logger.FieldError, err)
+		}
 	}
 	if p.Limit <= 0 || p.Limit > 2000 {
 		p.Limit = 100
@@ -144,7 +153,7 @@ func (s *Server) dashTaskAcks(_ context.Context, params json.RawMessage) (any, e
 	defer cancel()
 	list, err := s.taskAckStore.List(ctx, p.Keyword, p.Status, p.Priority, p.AssignedTo, p.Limit)
 	if err != nil {
-		slog.Warn("dashboard/taskAcks failed", "error", err)
+		logger.Warn("dashboard/taskAcks failed", logger.FieldError, err)
 		return map[string]any{"acks": []any{}}, nil
 	}
 	return map[string]any{"acks": list}, nil
@@ -161,7 +170,9 @@ func (s *Server) dashTaskTraces(_ context.Context, params json.RawMessage) (any,
 		Limit   int    `json:"limit"`
 	}
 	if params != nil {
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			logger.Warn("dashboard/taskTraces: unmarshal params", logger.FieldError, err)
+		}
 	}
 	if p.Limit <= 0 || p.Limit > 2000 {
 		p.Limit = 100
@@ -170,7 +181,7 @@ func (s *Server) dashTaskTraces(_ context.Context, params json.RawMessage) (any,
 	defer cancel()
 	list, err := s.taskTraceStore.List(ctx, p.AgentID, p.Keyword, nil, p.Limit)
 	if err != nil {
-		slog.Warn("dashboard/taskTraces failed", "error", err)
+		logger.Warn("dashboard/taskTraces failed", logger.FieldError, err)
 		return map[string]any{"traces": []any{}}, nil
 	}
 	return map[string]any{"traces": list}, nil
@@ -186,7 +197,9 @@ func (s *Server) dashCommandCards(_ context.Context, params json.RawMessage) (an
 		Limit   int    `json:"limit"`
 	}
 	if params != nil {
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			logger.Warn("dashboard/commandCards: unmarshal params", logger.FieldError, err)
+		}
 	}
 	if p.Limit <= 0 || p.Limit > 2000 {
 		p.Limit = 100
@@ -195,7 +208,7 @@ func (s *Server) dashCommandCards(_ context.Context, params json.RawMessage) (an
 	defer cancel()
 	list, err := s.cmdStore.List(ctx, p.Keyword, p.Limit)
 	if err != nil {
-		slog.Warn("dashboard/commandCards failed", "error", err)
+		logger.Warn("dashboard/commandCards failed", logger.FieldError, err)
 		return map[string]any{"cards": []any{}}, nil
 	}
 	return map[string]any{"cards": list}, nil
@@ -212,7 +225,9 @@ func (s *Server) dashPrompts(_ context.Context, params json.RawMessage) (any, er
 		Limit    int    `json:"limit"`
 	}
 	if params != nil {
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			logger.Warn("dashboard/prompts: unmarshal params", logger.FieldError, err)
+		}
 	}
 	if p.Limit <= 0 || p.Limit > 2000 {
 		p.Limit = 100
@@ -221,7 +236,7 @@ func (s *Server) dashPrompts(_ context.Context, params json.RawMessage) (any, er
 	defer cancel()
 	list, err := s.promptStore.List(ctx, p.AgentKey, p.Keyword, p.Limit)
 	if err != nil {
-		slog.Warn("dashboard/prompts failed", "error", err)
+		logger.Warn("dashboard/prompts failed", logger.FieldError, err)
 		return map[string]any{"prompts": []any{}}, nil
 	}
 	return map[string]any{"prompts": list}, nil
@@ -237,7 +252,9 @@ func (s *Server) dashSharedFiles(_ context.Context, params json.RawMessage) (any
 		Limit  int    `json:"limit"`
 	}
 	if params != nil {
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			logger.Warn("dashboard/sharedFiles: unmarshal params", logger.FieldError, err)
+		}
 	}
 	if p.Limit <= 0 || p.Limit > 2000 {
 		p.Limit = 500
@@ -246,7 +263,7 @@ func (s *Server) dashSharedFiles(_ context.Context, params json.RawMessage) (any
 	defer cancel()
 	list, err := s.fileStore.List(ctx, p.Prefix, p.Limit)
 	if err != nil {
-		slog.Warn("dashboard/sharedFiles failed", "error", err)
+		logger.Warn("dashboard/sharedFiles failed", logger.FieldError, err)
 		return map[string]any{"files": []any{}}, nil
 	}
 	return map[string]any{"files": list}, nil
@@ -259,7 +276,7 @@ func (s *Server) dashSkills(_ context.Context, _ json.RawMessage) (any, error) {
 	}
 	list, err := s.skillSvc.ListSkills()
 	if err != nil {
-		slog.Warn("dashboard/skills failed", "error", err)
+		logger.Warn("dashboard/skills failed", logger.FieldError, err)
 		return map[string]any{"skills": []any{}}, nil
 	}
 	return map[string]any{"skills": list}, nil
@@ -278,7 +295,9 @@ func (s *Server) dashAuditLogs(_ context.Context, params json.RawMessage) (any, 
 		Limit     int    `json:"limit"`
 	}
 	if params != nil {
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			logger.Warn("dashboard/auditLogs: unmarshal params", logger.FieldError, err)
+		}
 	}
 	if p.Limit <= 0 || p.Limit > 2000 {
 		p.Limit = 100
@@ -287,7 +306,7 @@ func (s *Server) dashAuditLogs(_ context.Context, params json.RawMessage) (any, 
 	defer cancel()
 	list, err := s.auditLogStore.List(ctx, p.EventType, p.Action, p.Actor, p.Keyword, p.Limit)
 	if err != nil {
-		slog.Warn("dashboard/auditLogs failed", "error", err)
+		logger.Warn("dashboard/auditLogs failed", logger.FieldError, err)
 		return map[string]any{"logs": []any{}}, nil
 	}
 	return map[string]any{"logs": list}, nil
@@ -304,7 +323,9 @@ func (s *Server) dashAILogs(_ context.Context, params json.RawMessage) (any, err
 		Limit    int    `json:"limit"`
 	}
 	if params != nil {
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			logger.Warn("dashboard/aiLogs: unmarshal params", logger.FieldError, err)
+		}
 	}
 	if p.Limit <= 0 || p.Limit > 2000 {
 		p.Limit = 100
@@ -313,7 +334,7 @@ func (s *Server) dashAILogs(_ context.Context, params json.RawMessage) (any, err
 	defer cancel()
 	list, err := s.aiLogStore.Query(ctx, p.Category, p.Keyword, p.Limit)
 	if err != nil {
-		slog.Warn("dashboard/aiLogs failed", "error", err)
+		logger.Warn("dashboard/aiLogs failed", logger.FieldError, err)
 		return map[string]any{"logs": []any{}}, nil
 	}
 	return map[string]any{"logs": list}, nil
@@ -331,7 +352,9 @@ func (s *Server) dashBusLogs(_ context.Context, params json.RawMessage) (any, er
 		Limit    int    `json:"limit"`
 	}
 	if params != nil {
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			logger.Warn("dashboard/busLogs: unmarshal params", logger.FieldError, err)
+		}
 	}
 	if p.Limit <= 0 || p.Limit > 2000 {
 		p.Limit = 100
@@ -340,7 +363,7 @@ func (s *Server) dashBusLogs(_ context.Context, params json.RawMessage) (any, er
 	defer cancel()
 	list, err := s.busLogStore.List(ctx, p.Category, p.Severity, p.Keyword, p.Limit)
 	if err != nil {
-		slog.Warn("dashboard/busLogs failed", "error", err)
+		logger.Warn("dashboard/busLogs failed", logger.FieldError, err)
 		return map[string]any{"logs": []any{}}, nil
 	}
 	return map[string]any{"logs": list}, nil

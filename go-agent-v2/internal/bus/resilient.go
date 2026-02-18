@@ -13,10 +13,12 @@ package bus
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // FallbackStore 降级存储接口 (由 store 层实现)。
@@ -57,7 +59,7 @@ func NewResilientPublisher(bus *MessageBus, fallback FallbackStore) *ResilientPu
 // Start 启动后台恢复协程。
 func (rp *ResilientPublisher) Start(ctx context.Context) {
 	rp.wg.Add(1)
-	go rp.recoveryLoop(ctx)
+	util.SafeGo(func() { rp.recoveryLoop(ctx) })
 }
 
 // Stop 停止后台恢复。
@@ -78,7 +80,7 @@ func (rp *ResilientPublisher) Publish(msg Message) {
 		}
 		// 发布失败, 标记不健康
 		rp.healthy.Store(false)
-		slog.Warn("bus: marked unhealthy, switching to DB fallback")
+		logger.Warn("bus: marked unhealthy, switching to DB fallback")
 	}
 
 	// 降级: 写入 DB
@@ -105,7 +107,7 @@ func (rp *ResilientPublisher) tryPublish(msg Message) (ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			ok = false
-			slog.Error("bus: publish panicked", "error", r)
+			logger.Error("bus: publish panicked", logger.FieldError, r)
 		}
 	}()
 	rp.bus.Publish(msg)
@@ -122,10 +124,10 @@ func (rp *ResilientPublisher) saveToDB(msg Message) {
 	}
 
 	if err := rp.fallback.SavePending(ctx, msg); err != nil {
-		slog.Error("bus: fallback save failed", "topic", msg.Topic, "error", err)
+		logger.Error("bus: fallback save failed", logger.FieldTopic, msg.Topic, logger.FieldError, err)
 		return
 	}
-	slog.Info("bus: message saved to DB fallback", "topic", msg.Topic)
+	logger.Info("bus: message saved to DB fallback", logger.FieldTopic, msg.Topic)
 }
 
 // recoveryLoop 后台恢复: 定期扫描 pending 消息, 恢复后补发。
@@ -157,7 +159,7 @@ func (rp *ResilientPublisher) recoverPending(ctx context.Context) {
 		// 无 pending 消息, 恢复健康
 		if !rp.healthy.Load() {
 			rp.healthy.Store(true)
-			slog.Info("bus: recovered, marked healthy")
+			logger.Info("bus: recovered, marked healthy")
 		}
 		return
 	}
@@ -170,11 +172,11 @@ func (rp *ResilientPublisher) recoverPending(ctx context.Context) {
 		}
 		// 补发成功, 删除 pending
 		if err := rp.fallback.DeletePending(ctx, msg.Seq); err != nil {
-			slog.Error("bus: delete pending failed", "seq", msg.Seq, "error", err)
+			logger.Error("bus: delete pending failed", logger.FieldSeq, msg.Seq, logger.FieldError, err)
 		}
 	}
 
-	slog.Info("bus: replayed pending messages", "count", len(msgs))
+	logger.Info("bus: replayed pending messages", logger.FieldCount, len(msgs))
 }
 
 // ========================================
@@ -194,7 +196,7 @@ func (rp *ResilientPublisher) recoverPending(ctx context.Context) {
 func (rp *ResilientPublisher) PublishTo(topicPrefix, id, msgType string, payload any) {
 	data, err := json.Marshal(payload)
 	if err != nil {
-		slog.Error("bus: marshal payload failed", "topic", topicPrefix+"."+id, "error", err)
+		logger.Error("bus: marshal payload failed", logger.FieldTopic, topicPrefix+"."+id, logger.FieldError, err)
 		return
 	}
 	rp.Publish(Message{
@@ -216,7 +218,7 @@ func (rp *ResilientPublisher) PublishTo(topicPrefix, id, msgType string, payload
 func (rp *ResilientPublisher) PublishFrom(topicPrefix, id, from, msgType string, payload any) {
 	data, err := json.Marshal(payload)
 	if err != nil {
-		slog.Error("bus: marshal payload failed", "topic", topicPrefix+"."+id, "error", err)
+		logger.Error("bus: marshal payload failed", logger.FieldTopic, topicPrefix+"."+id, logger.FieldError, err)
 		return
 	}
 	rp.Publish(Message{

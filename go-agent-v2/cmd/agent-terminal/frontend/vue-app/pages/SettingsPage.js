@@ -1,4 +1,5 @@
-import { computed } from '../../lib/vue.esm-browser.prod.js';
+import { computed, onBeforeUnmount, onMounted } from '../../lib/vue.esm-browser.prod.js';
+import { logInfo } from '../services/log.js';
 
 export const SettingsPage = {
   name: 'SettingsPage',
@@ -13,12 +14,24 @@ export const SettingsPage = {
       : 'Wails WebKit · Go Backend');
     const buildTimeText = computed(() => props.buildInfo.buildTime || '-');
     const commitText = computed(() => props.buildInfo.commit || '-');
+    const refresh = () => {
+      logInfo('page', 'settings.refreshBuildInfo.click', {});
+      props.refreshBuildInfo();
+    };
+
+    onMounted(() => {
+      logInfo('page', 'settings.mounted', {});
+    });
+    onBeforeUnmount(() => {
+      logInfo('page', 'settings.unmounted', {});
+    });
 
     return {
       versionText,
       runtimeText,
       buildTimeText,
       commitText,
+      refresh,
     };
   },
   template: `
@@ -39,7 +52,7 @@ export const SettingsPage = {
           <div class="data-row-vue"><strong>Commit</strong><span>{{ commitText }}</span></div>
         </div>
         <div style="margin-top:12px">
-          <button class="btn btn-secondary" @click="refreshBuildInfo">刷新构建信息</button>
+          <button class="btn btn-secondary" @click="refresh">刷新构建信息</button>
         </div>
       </div>
     </section>

@@ -8,10 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 // maxAgents 最大 Agent 数量 (fork-bomb 保护)。
@@ -98,7 +98,7 @@ func (s *Server) orchestrationSendMessage(args json.RawMessage) string {
 		return toolError(fmt.Errorf("send failed: %w", err))
 	}
 
-	slog.Info("orchestration: message sent", "to", p.AgentID, "len", len(p.Message))
+	logger.Info("orchestration: message sent", "to", p.AgentID, logger.FieldLen, len(p.Message))
 	return toolJSON(map[string]any{"success": true, "agent_id": p.AgentID})
 }
 
@@ -150,7 +150,7 @@ func (s *Server) orchestrationLaunchAgent(args json.RawMessage) string {
 		return toolError(fmt.Errorf("launch failed: %w", err))
 	}
 
-	slog.Info("orchestration: agent launched", "id", id, "name", p.Name, "cwd", p.Cwd, "workspace_run_key", p.WorkspaceRunKey)
+	logger.Info("orchestration: agent launched", logger.FieldID, id, logger.FieldName, p.Name, logger.FieldCwd, p.Cwd, logger.FieldRunKey, p.WorkspaceRunKey)
 	return toolJSON(map[string]any{
 		"agent_id":          id,
 		"name":              p.Name,
@@ -176,7 +176,7 @@ func (s *Server) orchestrationStopAgent(args json.RawMessage) string {
 		return toolError(fmt.Errorf("stop failed: %w", err))
 	}
 
-	slog.Info("orchestration: agent stopped", "id", p.AgentID)
+	logger.Info("orchestration: agent stopped", logger.FieldID, p.AgentID)
 	return toolJSON(map[string]any{"success": true, "agent_id": p.AgentID})
 }
 

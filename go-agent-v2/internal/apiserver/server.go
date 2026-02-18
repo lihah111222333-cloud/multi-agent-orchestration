@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -30,6 +29,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // Handler JSON-RPC 方法处理器。
@@ -175,13 +175,13 @@ func New(deps Deps) *Server {
 				maxTotalBytes,
 			)
 			if mgrErr != nil {
-				slog.Warn("app-server: workspace manager unavailable", "error", mgrErr)
+				logger.Warn("app-server: workspace manager unavailable", logger.FieldError, mgrErr)
 			} else {
 				s.workspaceMgr = workspaceMgr
-				slog.Info("app-server: workspace manager enabled", "root", workspaceMgr.RootDir())
+				logger.Info("app-server: workspace manager enabled", logger.FieldRoot, workspaceMgr.RootDir())
 			}
 		}
-		slog.Info("app-server: message persistence + resource tools + dashboard enabled")
+		logger.Info("app-server: message persistence + resource tools + dashboard enabled")
 	}
 	// Skills service (filesystem, no DB required)
 	skillsDir := deps.SkillsDir
@@ -227,7 +227,7 @@ func checkLocalOrigin(r *http.Request) bool {
 			return true
 		}
 	}
-	slog.Warn("app-server: rejected non-local origin", "origin", origin)
+	logger.Warn("app-server: rejected non-local origin", logger.FieldOrigin, origin)
 	return false
 }
 
@@ -246,20 +246,22 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 
 	srv := &http.Server{
 		Addr:        host,
-		Handler:     corsMiddleware(mux),
+		Handler:     recoveryMiddleware(corsMiddleware(mux)),
 		BaseContext: func(_ net.Listener) context.Context { return ctx },
 	}
 
 	// 优雅关闭: 给活跃连接 5 秒完成处理
-	go func() {
+	util.SafeGo(func() {
 		<-ctx.Done()
-		slog.Info("app-server: shutting down")
+		logger.Info("app-server: shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("app-server: shutdown error", logger.FieldError, err)
+		}
+	})
 
-	slog.Info("app-server: listening", "addr", host)
+	logger.Info("app-server: listening", logger.FieldAddr, host)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("app-server: %w", err)
 	}
@@ -285,33 +287,32 @@ func (s *Server) Notify(method string, params any) {
 	}
 
 	notif := newNotification(method, params)
-
-	// SSE 广播 — 将事件推给浏览器调试客户端
-	s.sseMu.RLock()
-	sseCount := len(s.sseClients)
-	if sseCount > 0 {
-		data, _ := json.Marshal(notif)
-		slog.Debug("sse: broadcasting", "method", method, "clients", sseCount, "data_len", len(data))
-		for ch := range s.sseClients {
-			select {
-			case ch <- data:
-			default:
-				// 客户端跟不上, 丢弃 (非关键)
-				slog.Warn("sse: client channel full, dropping event")
-			}
-		}
-	}
-	s.sseMu.RUnlock()
 	data, err := json.Marshal(notif)
 	if err != nil {
 		return
 	}
 
+	// SSE 广播 — 将事件推给浏览器调试客户端
+	s.sseMu.RLock()
+	sseCount := len(s.sseClients)
+	if sseCount > 0 {
+		logger.Debug("sse: broadcasting", logger.FieldMethod, method, "clients", sseCount, logger.FieldDataLen, len(data))
+		for ch := range s.sseClients {
+			select {
+			case ch <- data:
+			default:
+				// 客户端跟不上, 丢弃 (非关键)
+				logger.Warn("sse: client channel full, dropping event")
+			}
+		}
+	}
+	s.sseMu.RUnlock()
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for id, entry := range s.conns {
 		if err := entry.writeMsg(websocket.TextMessage, data); err != nil {
-			slog.Warn("app-server: notify failed", "conn", id, "error", err)
+			logger.Warn("app-server: notify failed", logger.FieldConn, id, logger.FieldError, err)
 		}
 	}
 }
@@ -365,7 +366,7 @@ func (s *Server) SendRequest(connID, method string, params any) (*Response, erro
 		return nil, fmt.Errorf("write to %s: %w", connID, err)
 	}
 
-	slog.Info("app-server: sent request to client", "conn", connID, "method", method, "id", reqID)
+	logger.Info("app-server: sent request to client", logger.FieldConn, connID, logger.FieldMethod, method, logger.FieldID, reqID)
 
 	// 等待客户端响应 (5 分钟超时)
 	select {
@@ -402,13 +403,13 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 	if numConns >= maxConnections {
 		http.Error(w, "too many connections", http.StatusServiceUnavailable)
-		slog.Warn("app-server: connection rejected (max reached)", "max", maxConnections)
+		logger.Warn("app-server: connection rejected (max reached)", logger.FieldMax, maxConnections)
 		return
 	}
 
 	ws, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		slog.Error("app-server: upgrade failed", "error", err)
+		logger.Error("app-server: upgrade failed", logger.FieldError, err)
 		return
 	}
 
@@ -421,14 +422,14 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	s.conns[connID] = entry
 	s.mu.Unlock()
 
-	slog.Info("app-server: client connected", "conn", connID, "remote", r.RemoteAddr)
+	logger.Info("app-server: client connected", logger.FieldConn, connID, logger.FieldRemote, r.RemoteAddr)
 
 	defer func() {
 		s.mu.Lock()
 		delete(s.conns, connID)
 		s.mu.Unlock()
 		_ = ws.Close()
-		slog.Info("app-server: client disconnected", "conn", connID)
+		logger.Info("app-server: client disconnected", logger.FieldConn, connID)
 	}()
 
 	s.readLoop(r.Context(), entry, connID)
@@ -492,7 +493,9 @@ func rawIDtoAny(raw json.RawMessage) any {
 	}
 	// fallback: 字符串 ID ("abc")
 	var v any
-	_ = json.Unmarshal(raw, &v)
+	if err := json.Unmarshal(raw, &v); err != nil {
+		logger.Debug("app-server: rawIDtoAny unmarshal", logger.FieldError, err)
+	}
 	return v
 }
 
@@ -507,7 +510,7 @@ func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) 
 		_, message, err := entry.ws.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				slog.Warn("app-server: read error", "conn", connID, "error", err)
+				logger.Warn("app-server: read error", logger.FieldConn, connID, logger.FieldError, err)
 			}
 			return
 		}
@@ -535,12 +538,16 @@ func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) 
 					}
 					if len(env.Result) > 0 {
 						var result any
-						_ = json.Unmarshal(env.Result, &result)
+						if err := json.Unmarshal(env.Result, &result); err != nil {
+							logger.Warn("app-server: unmarshal client response result", logger.FieldError, err)
+						}
 						resp.Result = result
 					}
 					if len(env.Error) > 0 {
 						var rpcErr RPCError
-						_ = json.Unmarshal(env.Error, &rpcErr)
+						if err := json.Unmarshal(env.Error, &rpcErr); err != nil {
+							logger.Warn("app-server: unmarshal client response error", logger.FieldError, err)
+						}
 						resp.Error = &rpcErr
 					}
 					select {
@@ -560,12 +567,12 @@ func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) 
 
 		data, err := json.Marshal(resp)
 		if err != nil {
-			slog.Error("app-server: marshal response failed", "error", err)
+			logger.Error("app-server: marshal response failed", logger.FieldError, err)
 			continue
 		}
 
 		if err := entry.writeMsg(websocket.TextMessage, data); err != nil {
-			slog.Warn("app-server: write failed", "conn", connID, "error", err)
+			logger.Warn("app-server: write failed", logger.FieldConn, connID, logger.FieldError, err)
 			return
 		}
 	}
@@ -585,15 +592,15 @@ func (s *Server) dispatchRequest(ctx context.Context, id any, method string, par
 	handler, ok := s.methods[method]
 	if !ok {
 		if id == nil {
-			slog.Warn("app-server: notification for unregistered method (dropped)",
-				"method", method,
-				"params_len", len(params),
+			logger.Warn("app-server: notification for unregistered method (dropped)",
+				logger.FieldMethod, method,
+				logger.FieldParamsLen, len(params),
 			)
 			return nil
 		}
-		slog.Warn("app-server: request for unregistered method",
-			"method", method,
-			"id", id,
+		logger.Warn("app-server: request for unregistered method",
+			logger.FieldMethod, method,
+			logger.FieldID, id,
 		)
 		return newError(id, CodeMethodNotFound, "method not found: "+method)
 	}
@@ -601,16 +608,16 @@ func (s *Server) dispatchRequest(ctx context.Context, id any, method string, par
 	result, err := handler(ctx, params)
 	if err != nil {
 		if id == nil {
-			slog.Warn("app-server: notification handler error (no response sent)",
-				"method", method,
-				"error", err,
+			logger.Warn("app-server: notification handler error (no response sent)",
+				logger.FieldMethod, method,
+				logger.FieldError, err,
 			)
 			return nil
 		}
-		slog.Warn("app-server: request handler error",
-			"method", method,
-			"id", id,
-			"error", err,
+		logger.Warn("app-server: request handler error",
+			logger.FieldMethod, method,
+			logger.FieldID, id,
+			logger.FieldError, err,
 		)
 		return newError(id, CodeInternalError, err.Error())
 	}
@@ -838,11 +845,14 @@ func (s *Server) consumeRememberedFileChanges(threadID string) []string {
 	return append([]string(nil), files...)
 }
 
-func (s *Server) enrichFileChangePayload(threadID, method string, payload map[string]any) {
+func (s *Server) enrichFileChangePayload(threadID, eventType, method string, payload map[string]any) {
 	if payload == nil {
 		return
 	}
-	if !strings.Contains(method, "fileChange") {
+	isFileChangeEvent := strings.Contains(strings.ToLower(eventType), "filechange") ||
+		strings.Contains(strings.ToLower(eventType), "patch_apply")
+	isFileChangeMethod := strings.Contains(method, "fileChange")
+	if !isFileChangeEvent && !isFileChangeMethod {
 		return
 	}
 
@@ -861,25 +871,21 @@ func (s *Server) enrichFileChangePayload(threadID, method string, payload map[st
 	}
 
 	switch method {
-	case "item/fileChange/outputDelta":
+	case "item/fileChange/outputDelta", "item/started":
 		if len(files) > 0 {
 			payload["files"] = files
 			payload["file"] = files[0]
+			payload["type"] = "fileChange"
 			s.rememberFileChanges(threadID, files)
 		}
-	case "item/fileChange/started":
-		if len(files) > 0 {
-			payload["files"] = files
-			payload["file"] = files[0]
-			s.rememberFileChanges(threadID, files)
-		}
-	case "item/fileChange/completed":
+	case "item/completed":
 		if len(files) == 0 {
 			files = s.consumeRememberedFileChanges(threadID)
 		}
 		if len(files) > 0 {
 			payload["files"] = files
 			payload["file"] = files[0]
+			payload["type"] = "fileChange"
 		}
 	}
 }
@@ -898,7 +904,7 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 		if proc := s.mgr.Get(agentID); proc != nil {
 			threadID = proc.Client.GetThreadID()
 		}
-		slog.Debug("codex event",
+		logger.Debug("codex event",
 			logger.FieldSource, "codex",
 			logger.FieldComponent, "event",
 			logger.FieldAgentID, agentID,
@@ -908,7 +914,7 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 
 		// 异步持久化 (不阻塞通知广播)
 		if s.msgStore != nil {
-			go s.persistMessage(agentID, event, method)
+			util.SafeGo(func() { s.persistMessage(agentID, event, method) })
 		}
 
 		// 构建通知参数: threadId 始终在顶层以便前端路由
@@ -918,18 +924,18 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 
 		// 从 event.Data 提取前端常用字段到顶层 (含嵌套 msg/data/payload)。
 		mergePayloadFields(payload, event.Data)
-		s.enrichFileChangePayload(agentID, method, payload)
+		s.enrichFileChangePayload(agentID, event.Type, method, payload)
 
 		// § 二 审批事件: 需要客户端回复 (双向请求)
 		switch event.Type {
 		case "exec_approval_request":
-			go s.handleApprovalRequest(agentID, "item/commandExecution/requestApproval", payload)
+			util.SafeGo(func() { s.handleApprovalRequest(agentID, "item/commandExecution/requestApproval", payload) })
 			return
 		case "file_change_approval_request":
-			go s.handleApprovalRequest(agentID, "item/fileChange/requestApproval", payload)
+			util.SafeGo(func() { s.handleApprovalRequest(agentID, "item/fileChange/requestApproval", payload) })
 			return
 		case codex.EventDynamicToolCall:
-			go s.handleDynamicToolCall(agentID, event)
+			util.SafeGo(func() { s.handleDynamicToolCall(agentID, event) })
 			return
 		}
 
@@ -963,10 +969,10 @@ func (s *Server) persistMessage(agentID string, event codex.Event, method string
 	defer cancel()
 
 	if err := s.msgStore.Insert(ctx, msg); err != nil {
-		slog.Warn("app-server: persist message failed",
-			"agent", agentID,
-			"event_type", event.Type,
-			"error", err,
+		logger.Warn("app-server: persist message failed",
+			logger.FieldAgentID, agentID,
+			logger.FieldEventType, event.Type,
+			logger.FieldError, err,
 		)
 	}
 }
@@ -989,9 +995,9 @@ func (s *Server) PersistUserMessage(agentID, prompt string) {
 	defer cancel()
 
 	if err := s.msgStore.Insert(ctx, msg); err != nil {
-		slog.Warn("app-server: persist user message failed",
-			"agent", agentID,
-			"error", err,
+		logger.Warn("app-server: persist user message failed",
+			logger.FieldAgentID, agentID,
+			logger.FieldError, err,
 		)
 	}
 }
@@ -1112,7 +1118,7 @@ func extractEventContent(event codex.Event) string {
 func (s *Server) handleApprovalRequest(agentID, method string, payload map[string]any) {
 	resp, err := s.SendRequestToAll(method, payload)
 	if err != nil {
-		slog.Warn("app-server: approval request failed", "agent", agentID, "error", err)
+		logger.Warn("app-server: approval request failed", logger.FieldAgentID, agentID, logger.FieldError, err)
 		return
 	}
 
@@ -1136,7 +1142,7 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 		decision = "yes"
 	}
 	if err := proc.Client.Submit(decision, nil, nil, nil); err != nil {
-		slog.Warn("app-server: relay approval to codex failed", "agent", agentID, "error", err)
+		logger.Warn("app-server: relay approval to codex failed", logger.FieldAgentID, agentID, logger.FieldError, err)
 	}
 }
 
@@ -1192,7 +1198,7 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 		}
 	}
 	if !hasAvailableServer {
-		slog.Info("lsp dynamic tools disabled: no language server available on PATH")
+		logger.Info("lsp dynamic tools disabled: no language server available on PATH")
 		return nil
 	}
 	return []codex.DynamicTool{
@@ -1247,7 +1253,7 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 
 	var call codex.DynamicToolCallData
 	if err := json.Unmarshal(raw, &call); err != nil {
-		slog.Warn("app-server: bad dynamic_tool_call data", "agent", agentID, "error", err,
+		logger.Warn("app-server: bad dynamic_tool_call data", logger.FieldAgentID, agentID, logger.FieldError, err,
 			"raw", string(event.Data))
 		return
 	}
@@ -1264,9 +1270,9 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 	count := s.toolCallCount[call.Tool]
 	s.toolCallMu.Unlock()
 
-	slog.Info("dynamic-tool: called",
-		"agent", agentID,
-		"tool", call.Tool,
+	logger.Info("dynamic-tool: called",
+		logger.FieldAgentID, agentID,
+		logger.FieldToolName, call.Tool,
 		"call_id", call.CallID,
 		"total_calls", count,
 	)
@@ -1327,7 +1333,9 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 
 	var argMap map[string]any
 	if len(call.Arguments) > 0 {
-		_ = json.Unmarshal(call.Arguments, &argMap)
+		if err := json.Unmarshal(call.Arguments, &argMap); err != nil {
+			logger.Debug("app-server: unmarshal tool arguments", logger.FieldToolName, call.Tool, logger.FieldError, err)
+		}
 	}
 	filePath := ""
 	if argMap != nil {
@@ -1339,7 +1347,7 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 		}
 	}
 
-	slog.Info("dynamic-tool: completed",
+	logger.Info("dynamic-tool: completed",
 		logger.FieldSource, "codex",
 		logger.FieldComponent, "tool_call",
 		logger.FieldAgentID, agentID,
@@ -1379,13 +1387,13 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 			content = call.Tool
 		}
 		if err := s.persistSyntheticMessage(agentID, "tool", "dynamic-tool/called", "dynamic-tool/called", content, notifyPayload); err != nil {
-			slog.Warn("app-server: persist dynamic-tool event failed", "agent", agentID, "tool", call.Tool, "error", err)
+			logger.Warn("app-server: persist dynamic-tool event failed", logger.FieldAgentID, agentID, logger.FieldToolName, call.Tool, logger.FieldError, err)
 		}
 	}
 
 	// 回传结果: 使用 event.RequestID 发送 JSON-RPC response (codex 发的是 server request)
 	if err := proc.Client.SendDynamicToolResult(call.CallID, result, event.RequestID); err != nil {
-		slog.Warn("app-server: send tool result failed", "agent", agentID, "tool", call.Tool, "error", err)
+		logger.Warn("app-server: send tool result failed", logger.FieldAgentID, agentID, logger.FieldToolName, call.Tool, logger.FieldError, err)
 	}
 }
 
@@ -1445,7 +1453,9 @@ func (s *Server) lspDiagnostics(args json.RawMessage) string {
 	var p struct {
 		FilePath string `json:"file_path"`
 	}
-	_ = json.Unmarshal(args, &p)
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "error: unmarshal diagnostics params: " + err.Error()
+	}
 
 	s.diagMu.RLock()
 	defer s.diagMu.RUnlock()
@@ -1550,6 +1560,24 @@ func writeJSONRPCError(w http.ResponseWriter, id any, code int, message string) 
 	json.NewEncoder(w).Encode(resp)
 }
 
+// recoveryMiddleware 捕获 HTTP handler panic，防止单个请求崩溃导致整个服务端退出。
+func recoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rv := recover(); rv != nil {
+				logger.Error("http: handler panicked",
+					logger.FieldMethod, r.Method,
+					logger.FieldPath, r.URL.Path,
+					logger.FieldRemote, r.RemoteAddr,
+					logger.FieldError, rv,
+				)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
 // corsMiddleware 添加 CORS 头 (调试模式允许跨域)。
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1589,7 +1617,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		s.sseMu.Unlock()
 	}()
 
-	slog.Info("sse: client connected", "remote", r.RemoteAddr)
+	logger.Info("sse: client connected", logger.FieldRemote, r.RemoteAddr)
 
 	for {
 		select {
@@ -1597,7 +1625,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 		case <-r.Context().Done():
-			slog.Info("sse: client disconnected", "remote", r.RemoteAddr)
+			logger.Info("sse: client disconnected", logger.FieldRemote, r.RemoteAddr)
 			return
 		}
 	}

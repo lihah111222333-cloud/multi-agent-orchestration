@@ -106,3 +106,26 @@ func (s *AgentMessageStore) DeleteByAgent(ctx context.Context, agentID string) e
 	_, err := s.pool.Exec(ctx, "DELETE FROM agent_messages WHERE agent_id=$1", agentID)
 	return err
 }
+
+// AgentThreadInfo 线程历史信息 (供 thread/list 使用)。
+type AgentThreadInfo struct {
+	AgentID string    `json:"agentId"`
+	LastAt  time.Time `json:"lastAt"`
+}
+
+// ListDistinctAgentIDs 返回所有有消息记录的 agent ID (按最近活跃排序)。
+func (s *AgentMessageStore) ListDistinctAgentIDs(ctx context.Context, limit int) ([]AgentThreadInfo, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT agent_id, MAX(created_at) AS last_at
+		 FROM agent_messages
+		 GROUP BY agent_id
+		 ORDER BY last_at DESC
+		 LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	return collectRows[AgentThreadInfo](rows)
+}

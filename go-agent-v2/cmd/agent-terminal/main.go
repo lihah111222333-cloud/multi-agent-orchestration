@@ -15,7 +15,6 @@ import (
 	"embed"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -30,6 +29,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -66,7 +66,7 @@ func loadEnvFile() {
 				}
 			}
 			f.Close()
-			slog.Info("loaded .env file", "path", envPath, "vars_set", count)
+			logger.Info("loaded .env file", logger.FieldPath, envPath, logger.FieldVarsSet, count)
 			return
 		}
 		parent := filepath.Dir(dir)
@@ -80,7 +80,7 @@ func loadEnvFile() {
 func main() {
 	loadEnvFile()
 	info := currentBuildInfo()
-	slog.Info("build info",
+	logger.Info("build info",
 		"version", info.Version,
 		"commit", info.Commit,
 		"build_time", info.BuildTime,
@@ -89,13 +89,17 @@ func main() {
 
 	// 日志持久化: stdout + 文件
 	if err := logger.InitWithFile("logs"); err != nil {
-		slog.Warn("file logging unavailable", "error", err)
+		logger.Warn("file logging unavailable", logger.FieldError, err)
 	}
 
 	group := flag.String("group", "", "窗口分组名称 (显示在标题栏)")
 	n := flag.Int("n", 0, "自动启动的 Agent 数量")
 	debug := flag.Bool("debug", false, "调试模式: 在 :4501 启动 HTTP UI 服务, 浏览器访问")
 	flag.Parse()
+
+	apiAddr := "127.0.0.1:4500"
+	apiBaseURL := "http://127.0.0.1:4500"
+	debugUIPort := debugPort
 
 	title := "Agent Orchestrator"
 	if *group != "" {
@@ -107,25 +111,23 @@ func main() {
 
 	// 加载配置 + 数据库
 	cfg := config.Load()
-	var dbPool interface{ Close() } // 用于 shutdown 关闭
 
 	// DB 连接池 (database.NewPool 返回 *pgxpool.Pool)
 	var pool *pgxpool.Pool
 	if cfg.PostgresConnStr != "" {
 		p, err := database.NewPool(ctx, cfg)
 		if err != nil {
-			slog.Warn("DB not available, dashboard pages will be empty", "error", err)
+			logger.Warn("DB not available, dashboard pages will be empty", logger.FieldError, err)
 		} else {
 			// 自动执行 DB 迁移
 			if mErr := database.Migrate(ctx, p, "./migrations"); mErr != nil {
-				slog.Warn("DB migration failed (non-fatal)", "error", mErr)
+				logger.Warn("DB migration failed (non-fatal)", logger.FieldError, mErr)
 			}
 			logger.AttachDBHandler(p)
 			pool = p
-			dbPool = p
 		}
 	} else {
-		slog.Info("no POSTGRES_CONNECTION_STRING, dashboard pages disabled")
+		logger.Info("no POSTGRES_CONNECTION_STRING, dashboard pages disabled")
 	}
 
 	// ─── 内嵌 apiserver (统一工具注入 + JSON-RPC) ───
@@ -141,26 +143,38 @@ func main() {
 	}
 	appSrv := apiserver.New(deps)
 
-	go func() {
-		if err := appSrv.ListenAndServe(ctx, "127.0.0.1:4500"); err != nil {
-			slog.Error("apiserver failed", "error", err)
+	util.SafeGo(func() {
+		if err := appSrv.ListenAndServe(ctx, apiAddr); err != nil {
+			logger.Error("apiserver failed", logger.FieldError, err)
 		}
-	}()
+	})
 
 	// ─── 调试模式: HTTP 静态文件 + Wails Shim ───
-	if *debug {
-		startDebugServer(ctx)
-	}
-
-	// ─── Wails App ───
-	appSvc := NewApp(*group, *n, appSrv, mgr)
-	appSrv.SetNotifyHook(appSvc.handleBridgeNotification)
-
 	// 统一事件分发: 仅走 apiserver 标准化通知链路。
 	// codex raw event -> apiserver.Notify(method,payload) -> WebSocket/SSE + Wails bridge
 	mgr.SetOnEvent(func(agentID string, event codex.Event) {
 		appSrv.AgentEventHandler(agentID)(event)
 	})
+
+	// ─── 调试模式: 同时启动 debug HTTP 服务 + Wails 桌面窗口 ───
+	if *debug {
+		startDebugServer(ctx, debugUIPort, apiBaseURL)
+		logger.Info("debug mode: web UI + desktop app",
+			logger.FieldURL, fmt.Sprintf("http://localhost:%d", debugUIPort),
+			"api_url", apiBaseURL)
+	}
+
+	// ─── Wails App ───
+	appSvc := NewApp(*group, *n, appSrv, mgr)
+	if *debug {
+		// 事件同时分发到 debug bridge (浏览器轮询) 和 Wails bridge (桌面窗口)
+		appSrv.SetNotifyHook(func(method string, params any) {
+			publishDebugBridgeEvent(method, params)
+			appSvc.handleBridgeNotification(method, params)
+		})
+	} else {
+		appSrv.SetNotifyHook(appSvc.handleBridgeNotification)
+	}
 
 	app := application.New(application.Options{
 		Name: "Agent Orchestrator",
@@ -178,8 +192,8 @@ func main() {
 			appSvc.shutdown()
 			logger.ShutdownDBHandler()
 			logger.ShutdownFileHandler()
-			if dbPool != nil {
-				dbPool.Close()
+			if pool != nil {
+				pool.Close()
 			}
 		},
 	})
@@ -202,6 +216,6 @@ func main() {
 	})
 
 	if err := app.Run(); err != nil {
-		println("Error:", err.Error())
+		logger.Error("wails app failed", logger.FieldError, err)
 	}
 }

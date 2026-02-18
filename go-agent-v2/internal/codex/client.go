@@ -118,23 +118,42 @@ func (c *Client) Spawn(ctx context.Context) error {
 		return fmt.Errorf("codex: spawn failed: %w", err)
 	}
 
-	// 等待 health check (最多 15 秒)
+	logger.Infow("codex: process spawned",
+		logger.FieldPort, c.Port,
+		logger.FieldPID, c.Cmd.Process.Pid,
+	)
+
+	// 等待 health check (最多 15 秒, 指数退避)
 	deadline := time.Now().Add(15 * time.Second)
 
 	if c.Port > 0 {
 		// 已知端口: 直接 health check
+		backoff := 100 * time.Millisecond
 		for time.Now().Before(deadline) {
 			if err := c.Health(); err == nil {
+				logger.Infow("codex: health check passed", logger.FieldPort, c.Port)
 				return nil
 			}
-			time.Sleep(200 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, 2*time.Second)
 		}
+		logger.Warn("codex: health check timeout", logger.FieldPort, c.Port)
 		return fmt.Errorf("codex: health check timeout on port %d", c.Port)
 	}
 
 	// port 0: 先等 stdout, 再尝试解析端口, 再扫描
+	backoff := 200 * time.Millisecond
 	for time.Now().Before(deadline) {
-		time.Sleep(300 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, 2*time.Second)
 
 		// 策略 1: 从 stdout 解析端口 (codex 可能输出 "Listening on port XXXX")
 		if port := parsePortFromOutput(stdoutBuf.String()); port > 0 {
@@ -419,10 +438,15 @@ func (c *Client) SpawnAndConnect(ctx context.Context, prompt, cwd, model string,
 		DynamicTools: dynamicTools,
 	}
 	if _, err := c.CreateThread(req); err != nil {
+		logger.Error("codex: create thread failed", logger.FieldPort, c.Port, logger.FieldError, err)
 		_ = c.Kill()
 		return err
 	}
 
+	logger.Infow("codex: spawn and connect complete",
+		logger.FieldPort, c.Port,
+		logger.FieldThreadID, c.ThreadID,
+	)
 	return nil
 }
 
@@ -435,6 +459,7 @@ func (c *Client) Shutdown() error {
 	if c.stopped.Swap(true) {
 		return nil
 	}
+	logger.Infow("codex: shutting down", logger.FieldPort, c.Port)
 	if c.stderrCollector != nil {
 		_ = c.stderrCollector.Close()
 	}
@@ -445,6 +470,7 @@ func (c *Client) Shutdown() error {
 // Kill 强制终止子进程。
 func (c *Client) Kill() error {
 	if c.Cmd != nil && c.Cmd.Process != nil {
+		logger.Warn("codex: force killing process", logger.FieldPID, c.Cmd.Process.Pid)
 		_ = c.Cmd.Process.Kill()
 		_ = c.Cmd.Wait()
 	}

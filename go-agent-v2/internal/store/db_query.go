@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -50,13 +51,26 @@ func (s *DBQueryStore) Query(ctx context.Context, sqlText string, limit int) ([]
 
 // Execute 执行变更语句 (对应 Python db_execute)。
 // 使用 ValidateExecuteQuery 确保安全 (白名单 + 危险模式检测 + 单语句)。
+// 在事务中执行 + SET LOCAL statement_timeout 防止无限 SQL。
 func (s *DBQueryStore) Execute(ctx context.Context, sqlText string) (int64, error) {
 	if err := ValidateExecuteQuery(sqlText); err != nil {
 		return 0, err
 	}
-	tag, err := s.pool.Exec(ctx, sqlText)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("db_execute: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, "SET LOCAL statement_timeout = '5s'"); err != nil {
+		return 0, fmt.Errorf("db_execute: set timeout: %w", err)
+	}
+	tag, err := tx.Exec(ctx, sqlText)
 	if err != nil {
 		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("db_execute: commit: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

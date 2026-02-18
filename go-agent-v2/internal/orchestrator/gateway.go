@@ -14,7 +14,7 @@ type Gateway struct {
 
 // Execute 执行任务分发。
 func (g *Gateway) Execute(ctx context.Context, task string) (string, error) {
-	logger.Infow("gateway executing", "gateway_id", g.ID, "task", task)
+	logger.Infow("gateway executing", logger.FieldGatewayID, g.ID, "task", task)
 	// TODO: 实现 Gateway 任务分发逻辑
 	return "dispatched", nil
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 // CommandCardStore 命令卡存储。
@@ -26,13 +27,15 @@ func (s *CommandCardStore) Save(ctx context.Context, c *CommandCard) (*CommandCa
 	existing, _ := s.Get(ctx, c.CardKey)
 	if existing != nil {
 		schemaJSON, _ := json.Marshal(existing.ArgsSchema)
-		_, _ = s.pool.Exec(ctx,
+		if _, err := s.pool.Exec(ctx,
 			`INSERT INTO command_card_versions (card_key, title, description, command_template,
 			   args_schema, risk_level, enabled, created_by, updated_by, source_updated_at)
 			 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10)`,
 			existing.CardKey, existing.Title, existing.Description, existing.CommandTemplate,
 			string(schemaJSON), existing.RiskLevel, existing.Enabled,
-			existing.CreatedBy, existing.UpdatedBy, existing.UpdatedAt)
+			existing.CreatedBy, existing.UpdatedBy, existing.UpdatedAt); err != nil {
+			logger.Warn("store: save command card version failed", "card_key", existing.CardKey, logger.FieldError, err)
+		}
 	}
 
 	schemaJSON, _ := json.Marshal(c.ArgsSchema)

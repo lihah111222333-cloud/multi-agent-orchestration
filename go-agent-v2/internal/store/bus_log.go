@@ -24,7 +24,7 @@ func (s *BusLogStore) Record(ctx context.Context, e *BusException) error {
 		 VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7::jsonb)`,
 		e.Category, e.Severity, e.Source, e.ToolName, e.Message, e.Traceback, string(extraJSON))
 	if err != nil {
-		logger.Debugw("bus_log write failed", "error", err)
+		logger.Debugw("bus_log write failed", logger.FieldError, err)
 	}
 	return nil
 }

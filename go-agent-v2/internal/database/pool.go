@@ -7,6 +7,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,8 +28,8 @@ func NewPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("parse postgres config: %w", err)
 	}
 
-	poolCfg.MinConns = int32(cfg.PostgresPoolMinSize)
-	poolCfg.MaxConns = int32(cfg.PostgresPoolMaxSize)
+	poolCfg.MinConns = safeInt32(cfg.PostgresPoolMinSize, "PostgresPoolMinSize")
+	poolCfg.MaxConns = safeInt32(cfg.PostgresPoolMaxSize, "PostgresPoolMaxSize")
 
 	// AfterConnect: 设置 search_path (使用 quote_ident 防止 SQL 注入)
 	schema := cfg.PostgresSchema
@@ -56,4 +57,17 @@ func NewPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 		"schema", schema,
 	)
 	return pool, nil
+}
+
+// safeInt32 将 int 安全转为 int32，超出范围时 clamp 并记录警告。
+func safeInt32(v int, name string) int32 {
+	if v > math.MaxInt32 {
+		logger.Warn("pool config overflow, clamped to MaxInt32", "field", name, "value", v)
+		return math.MaxInt32
+	}
+	if v < 0 {
+		logger.Warn("pool config negative, clamped to 0", "field", name, "value", v)
+		return 0
+	}
+	return int32(v)
 }

@@ -15,12 +15,12 @@ import (
 type State string
 
 const (
-	StateIdle      State = "idle"
+	StateIdle        State = "idle"
 	StateDispatching State = "dispatching"
-	StateWaiting   State = "waiting"
-	StateCollecting State = "collecting"
-	StateCompleted State = "completed"
-	StateError     State = "error"
+	StateWaiting     State = "waiting"
+	StateCollecting  State = "collecting"
+	StateCompleted   State = "completed"
+	StateError       State = "error"
 )
 
 // Master 主编排器。
@@ -59,7 +59,7 @@ func (m *Master) Run(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			if err := m.tick(ctx); err != nil {
-				logger.Errorw("orchestrator tick error", "state", m.state, "error", err)
+				logger.Errorw("orchestrator tick error", logger.FieldStatus, m.state, logger.FieldError, err)
 				m.state = StateError
 			}
 		}

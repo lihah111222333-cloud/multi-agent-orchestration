@@ -1,0 +1,158 @@
+<script>
+    // Wails Runtime Shim — 浏览器调试模式
+    (function () {
+        'use strict';
+        const API = '__APP_SERVER_BASE_URL__';
+        let reqId = 0;
+
+        // JSON-RPC 调用
+        async function rpcCall(method, params) {
+            const id = ++reqId;
+            const body = JSON.stringify({ jsonrpc: '2.0', id, method, params: params || {} });
+            const resp = await fetch(API + '/rpc', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: body,
+            });
+            const data = await resp.json();
+            if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+            return data.result;
+        }
+
+        // Wails App bindings shim
+        const AppShim = {
+            CallAPI: async function (method, paramsJSON) {
+                const params = paramsJSON ? JSON.parse(paramsJSON) : {};
+                const result = await rpcCall(method, params);
+                return result ? JSON.stringify(result) : '{}';
+            },
+            LaunchAgent: async function (name, prompt, cwd) {
+                const result = await rpcCall('thread/start', { model: '', cwd: cwd || '.' });
+                if (prompt && result?.thread?.id) {
+                    const input = [{ type: 'text', text: prompt }];
+                    await rpcCall('turn/start', { threadId: result.thread.id, input: input });
+                }
+                return JSON.stringify(result);
+            },
+            SubmitInput: async function (agentId, prompt) {
+                const input = [{ type: 'text', text: prompt }];
+                await rpcCall('turn/start', { threadId: agentId, input: input });
+            },
+            SubmitWithFiles: async function (agentId, prompt, images, files) {
+                const input = [{ type: 'text', text: prompt }];
+                if (images) images.forEach(p => input.push({ type: 'localImage', path: p }));
+                if (files) files.forEach(p => input.push({ type: 'fileContent', path: p }));
+                await rpcCall('turn/start', { threadId: agentId, input: input });
+            },
+            SelectProjectDir: async function () {
+                try {
+                    const resp = await fetch('/select-project-dir', { method: 'POST' });
+                    if (!resp.ok) return '';
+                    const data = await resp.json();
+                    return data?.path || '';
+                } catch (err) {
+                    console.warn('[shim] SelectProjectDir failed:', err);
+                    return '';
+                }
+            },
+            SelectFiles: async function () {
+                try {
+                    const resp = await fetch('/select-files', { method: 'POST' });
+                    if (!resp.ok) return [];
+                    const data = await resp.json();
+                    return Array.isArray(data?.paths) ? data.paths : [];
+                } catch (err) {
+                    console.warn('[shim] SelectFiles failed:', err);
+                    return [];
+                }
+            },
+            GetBuildInfo: async function () {
+                try {
+                    const resp = await fetch('/build-info');
+                    if (!resp.ok) return '{}';
+                    const data = await resp.json();
+                    return JSON.stringify(data || {});
+                } catch (err) {
+                    console.warn('[shim] GetBuildInfo failed:', err);
+                    return '{}';
+                }
+            },
+            GetGroup: async function () { return ''; },
+            GetLSPStatus: async function () { return '[]'; },
+            GetLSPDiagnostics: async function () { return '{}'; },
+            SaveClipboardImage: async function (base64) {
+                console.warn('[shim] SaveClipboardImage not available in debug mode');
+                return '';
+            },
+            ListAgents: async function () { return []; },
+        };
+
+        // Event system shim (Go bridge polling)
+        const listeners = {};
+        const RuntimeShim = {
+            EventsOn: function (eventName, callback) {
+                if (!listeners[eventName]) listeners[eventName] = [];
+                listeners[eventName].push(callback);
+            },
+            EventsOff: function (eventName, callback) {
+                if (!listeners[eventName]) return;
+                if (!callback) {
+                    delete listeners[eventName];
+                    return;
+                }
+                listeners[eventName] = listeners[eventName].filter(fn => fn !== callback);
+                if (listeners[eventName].length === 0) {
+                    delete listeners[eventName];
+                }
+            },
+            EventsEmit: function (eventName, data) {
+                (listeners[eventName] || []).forEach(fn => fn(data));
+            },
+        };
+
+        // 事件拉取（由 Go 统一收集/转发；前端不直连 SSE）
+        let bridgeCursor = 0;
+        async function pollBridgeEvents() {
+            try {
+                const resp = await fetch('/bridge/events?after=' + bridgeCursor, { cache: 'no-store' });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+                const lastID = Number(data?.last_id || 0);
+                if (lastID > bridgeCursor && (!Array.isArray(data?.events) || data.events.length === 0)) {
+                    bridgeCursor = lastID;
+                }
+                const events = Array.isArray(data?.events) ? data.events : [];
+                for (const evt of events) {
+                    const eventID = Number(evt?.id || 0);
+                    if (eventID > bridgeCursor) bridgeCursor = eventID;
+                    const eventType = (evt?.type || '').toString();
+                    const payload = (evt?.payload && typeof evt.payload === 'object') ? evt.payload : {};
+                    const raw = (evt?.data || JSON.stringify(payload)).toString();
+                    const agentID = (evt?.agent_id || '').toString();
+                    RuntimeShim.EventsEmit('bridge-event', {
+                        type: eventType,
+                        payload: payload,
+                        data: raw,
+                    });
+                    RuntimeShim.EventsEmit('agent-event', {
+                        agent_id: agentID,
+                        type: eventType,
+                        data: raw,
+                    });
+                }
+            } catch (err) {
+                console.warn('[shim] bridge poll failed:', err);
+            } finally {
+                setTimeout(pollBridgeEvents, 350);
+            }
+        }
+        pollBridgeEvents();
+
+        // 挂载到 window
+        window.go = { main: { App: AppShim } };
+        window.runtime = RuntimeShim;
+
+        console.log('[shim] ✓ Wails runtime shim loaded (debug mode)');
+        console.log('[shim] API endpoint:', API);
+    })();
+</script>

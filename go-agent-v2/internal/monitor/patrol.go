@@ -12,6 +12,7 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // ========================================
@@ -122,7 +123,7 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 	now := time.Now()
 	agents, err := p.agentStore.List(ctx, "")
 	if err != nil {
-		logger.Errorw("patrol: list agents failed", "error", err)
+		logger.Errorw("patrol: list agents failed", logger.FieldError, err)
 		return &PatrolResult{OK: false, Ts: now, Error: err.Error(), Summary: emptySummary()}
 	}
 
@@ -153,7 +154,7 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 		a.Status = status
 		a.StagnantSec = stagnant
 		if _, err := p.agentStore.Upsert(ctx, &a); err != nil {
-			logger.Debugw("patrol: upsert failed", "agent_id", a.AgentID, "error", err)
+			logger.Debugw("patrol: upsert failed", logger.FieldAgentID, a.AgentID, logger.FieldError, err)
 		}
 	}
 
@@ -163,6 +164,11 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 		Summary: summarize(snapshots),
 		Agents:  snapshots,
 	}
+
+	logger.Debug("patrol: cycle complete",
+		logger.FieldCount, len(snapshots),
+		"unhealthy", result.Summary["unhealthy"],
+	)
 
 	// SSE 推送
 	if p.eventBus != nil {
@@ -183,19 +189,20 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 
 // Start 启动定期巡检 (goroutine + ticker)。
 func (p *Patrol) Start(ctx context.Context) {
-	go func() {
+	util.SafeGo(func() {
 		ticker := time.NewTicker(time.Duration(defaultIntervalSec) * time.Second)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
+				logger.Info("patrol: stopped (context cancelled)")
 				return
 			case <-ticker.C:
 				p.RunOnce(ctx)
 			}
 		}
-	}()
+	})
 	logger.Infow("patrol started", "interval_sec", defaultIntervalSec)
 }
 

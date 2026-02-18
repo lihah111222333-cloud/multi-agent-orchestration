@@ -25,6 +25,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 		)
 	`)
 	if err != nil {
+		logger.Error("migrate: create schema_version table failed", logger.FieldError, err)
 		return fmt.Errorf("create schema_version table: %w", err)
 	}
 
@@ -64,6 +65,15 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 	}
 
 	// 执行未应用的迁移
+	pending := 0
+	for _, name := range sqlFiles {
+		if !applied[name] {
+			pending++
+		}
+	}
+	if pending > 0 {
+		logger.Infow("migrate: applying pending migrations", logger.FieldCount, pending)
+	}
 	for _, name := range sqlFiles {
 		if applied[name] {
 			continue
@@ -93,7 +103,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 			return fmt.Errorf("commit migration %s: %w", name, err)
 		}
 
-		logger.Infow("migration applied", "version", name)
+		logger.Infow("migration applied", logger.FieldVersion, name)
 	}
 
 	return nil

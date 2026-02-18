@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/store"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 const (
@@ -121,6 +122,29 @@ func NewWorkspaceManager(
 
 func (m *WorkspaceManager) RootDir() string { return m.rootDir }
 
+// saveFileOrLog 保存文件状态记录, 失败时记录日志 (不中断流程)。
+func (m *WorkspaceManager) saveFileOrLog(ctx context.Context, file *store.WorkspaceRunFile) {
+	if _, err := m.runs.SaveFile(ctx, file); err != nil {
+		logger.Warn("workspace: save file state failed",
+			logger.FieldRunKey, file.RunKey,
+			logger.FieldPath, file.RelativePath,
+			logger.FieldStatus, file.State,
+			logger.FieldError, err,
+		)
+	}
+}
+
+// updateRunStatusOrLog 更新 run 状态, 失败时记录日志 (不中断流程)。
+func (m *WorkspaceManager) updateRunStatusOrLog(ctx context.Context, runKey, status, updatedBy string, meta map[string]any) {
+	if _, err := m.runs.UpdateRunStatus(ctx, runKey, status, updatedBy, meta); err != nil {
+		logger.Warn("workspace: update run status failed",
+			logger.FieldRunKey, runKey,
+			logger.FieldStatus, status,
+			logger.FieldError, err,
+		)
+	}
+}
+
 func (m *WorkspaceManager) CreateRun(ctx context.Context, req WorkspaceCreateRequest) (*store.WorkspaceRun, error) {
 	runKey := strings.TrimSpace(req.RunKey)
 	if runKey == "" {
@@ -168,7 +192,7 @@ func (m *WorkspaceManager) CreateRun(ctx context.Context, req WorkspaceCreateReq
 
 	copied, copiedBytes, err := m.bootstrapFiles(ctx, saved, req.Files)
 	if err != nil {
-		_, _ = m.runs.UpdateRunStatus(ctx, saved.RunKey, WorkspaceRunStatusFailed, req.CreatedBy, map[string]any{
+		m.updateRunStatusOrLog(ctx, saved.RunKey, WorkspaceRunStatusFailed, req.CreatedBy, map[string]any{
 			"error": err.Error(),
 		})
 		return nil, err
@@ -273,7 +297,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 		}
 		result.Status = finalStatus
 		result.FinishedAt = time.Now()
-		_, _ = m.runs.UpdateRunStatus(ctx, run.RunKey, finalStatus, updatedBy, map[string]any{
+		m.updateRunStatusOrLog(ctx, run.RunKey, finalStatus, updatedBy, map[string]any{
 			"dry_run":   req.DryRun,
 			"merged":    result.Merged,
 			"conflicts": result.Conflicts,
@@ -343,7 +367,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 		if wsInfo.Size() > m.maxFileBytes {
 			result.Errors++
 			msg := fmt.Sprintf("workspace file too large: %d bytes > %d", wsInfo.Size(), m.maxFileBytes)
-			_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 				RunKey:       run.RunKey,
 				RelativePath: rel,
 				State:        WorkspaceFileStateError,
@@ -356,7 +380,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 		wsHash, err := hashFile(path)
 		if err != nil {
 			result.Errors++
-			_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 				RunKey:       run.RunKey,
 				RelativePath: rel,
 				State:        WorkspaceFileStateError,
@@ -370,7 +394,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 		if !isPathWithinRoot(run.SourceRoot, sourcePath) {
 			result.Errors++
 			msg := "target path escapes source root"
-			_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 				RunKey:          run.RunKey,
 				RelativePath:    rel,
 				WorkspaceSHA256: wsHash,
@@ -384,7 +408,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 		sourceBefore, err := hashFileIfExists(sourcePath)
 		if err != nil {
 			result.Errors++
-			_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 				RunKey:             run.RunKey,
 				RelativePath:       rel,
 				WorkspaceSHA256:    wsHash,
@@ -406,7 +430,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 
 		if baseline != "" && wsHash == baseline {
 			result.Unchanged++
-			_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 				RunKey:             run.RunKey,
 				RelativePath:       rel,
 				BaselineSHA256:     baseline,
@@ -422,7 +446,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 		if baseline != "" && sourceBefore != "" && sourceBefore != baseline {
 			result.Conflicts++
 			reason := "source changed since baseline"
-			_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 				RunKey:             run.RunKey,
 				RelativePath:       rel,
 				BaselineSHA256:     baseline,
@@ -436,7 +460,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 		}
 
 		if req.DryRun {
-			_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 				RunKey:             run.RunKey,
 				RelativePath:       rel,
 				BaselineSHA256:     baseline,
@@ -451,7 +475,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 
 		if err := copyFileAtomic(path, sourcePath, wsInfo.Mode().Perm()); err != nil {
 			result.Errors++
-			_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 				RunKey:             run.RunKey,
 				RelativePath:       rel,
 				BaselineSHA256:     baseline,
@@ -467,7 +491,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 		sourceAfter, hashErr := hashFileIfExists(sourcePath)
 		if hashErr != nil {
 			result.Errors++
-			_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 				RunKey:             run.RunKey,
 				RelativePath:       rel,
 				BaselineSHA256:     baseline,
@@ -481,7 +505,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 		}
 
 		result.Merged++
-		_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 			RunKey:             run.RunKey,
 			RelativePath:       rel,
 			BaselineSHA256:     baseline,
@@ -506,7 +530,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 			sourceBefore, hashErr := hashFileIfExists(sourcePath)
 			if hashErr != nil {
 				result.Errors++
-				_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+				m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 					RunKey:             run.RunKey,
 					RelativePath:       rel,
 					BaselineSHA256:     trackedFile.BaselineSHA256,
@@ -520,7 +544,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 			if trackedFile.BaselineSHA256 != "" && sourceBefore != "" && sourceBefore != trackedFile.BaselineSHA256 {
 				result.Conflicts++
 				reason := "delete conflict: source changed since baseline"
-				_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+				m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 					RunKey:             run.RunKey,
 					RelativePath:       rel,
 					BaselineSHA256:     trackedFile.BaselineSHA256,
@@ -540,7 +564,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 
 			if err := os.Remove(sourcePath); err != nil && !os.IsNotExist(err) {
 				result.Errors++
-				_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+				m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 					RunKey:             run.RunKey,
 					RelativePath:       rel,
 					BaselineSHA256:     trackedFile.BaselineSHA256,
@@ -552,7 +576,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 				continue
 			}
 			result.Merged++
-			_, _ = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
+			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
 				RunKey:             run.RunKey,
 				RelativePath:       rel,
 				BaselineSHA256:     trackedFile.BaselineSHA256,

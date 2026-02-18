@@ -3,47 +3,49 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 func main() {
+	logger.Init("development")
+
 	addr := "ws://127.0.0.1:4500"
 	if len(os.Args) > 1 {
 		addr = os.Args[1]
 	}
 
-	log.Printf("connecting to %s ...", addr)
+	logger.Info("connecting", logger.FieldAddr, addr)
 	conn, _, err := websocket.DefaultDialer.Dial(addr, nil)
 	if err != nil {
-		log.Fatalf("dial: %v", err)
+		logger.Fatal("dial failed", logger.Any(logger.FieldError, err))
 	}
 	defer conn.Close()
-	log.Println("connected!")
+	logger.Info("connected")
 
 	// 后台读取所有消息 (包括通知)
-	go func() {
+	util.SafeGo(func() {
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
-				log.Printf("read error: %v", err)
+				logger.Error("read error", logger.Any(logger.FieldError, err))
 				return
 			}
 			// 美化 JSON
 			var pretty json.RawMessage
 			if json.Unmarshal(msg, &pretty) == nil {
 				out, _ := json.MarshalIndent(pretty, "", "  ")
-				fmt.Printf("\n<<< RECV:\n%s\n", out)
+				logger.Info("recv", "data", string(out))
 			} else {
-				fmt.Printf("\n<<< RECV: %s\n", msg)
+				logger.Info("recv", "data", string(msg))
 			}
 		}
-	}()
+	})
 
 	// 1. 发送 thread/start
 	req1 := map[string]any{
@@ -52,14 +54,17 @@ func main() {
 		"method":  "thread/start",
 		"params":  map[string]any{"cwd": "."},
 	}
-	data1, _ := json.Marshal(req1)
-	log.Printf(">>> SEND: %s", data1)
+	data1, err := json.Marshal(req1)
+	if err != nil {
+		logger.Fatal("marshal thread/start", logger.Any(logger.FieldError, err))
+	}
+	logger.Info(">>> SEND", "data", string(data1))
 	if err := conn.WriteMessage(websocket.TextMessage, data1); err != nil {
-		log.Fatalf("write thread/start: %v", err)
+		logger.Fatal("write thread/start failed", logger.Any(logger.FieldError, err))
 	}
 
 	// 等待 thread/start 响应 + 可能的通知
-	log.Println("waiting 20s for thread/start response (codex spawn + health check)...")
+	logger.Info("waiting 20s for thread/start response (codex spawn + health check)...")
 	time.Sleep(20 * time.Second)
 
 	// 2. 发送 turn/start (用 thread-* 的 ID)
@@ -70,15 +75,20 @@ func main() {
 		"method":  "thread/list",
 		"params":  map[string]any{},
 	}
-	data2, _ := json.Marshal(req2)
-	log.Printf(">>> SEND: %s", data2)
-	conn.WriteMessage(websocket.TextMessage, data2)
+	data2, err := json.Marshal(req2)
+	if err != nil {
+		logger.Fatal("marshal thread/list", logger.Any(logger.FieldError, err))
+	}
+	logger.Info(">>> SEND", "data", string(data2))
+	if err := conn.WriteMessage(websocket.TextMessage, data2); err != nil {
+		logger.Error("write thread/list failed", logger.Any(logger.FieldError, err))
+	}
 	time.Sleep(2 * time.Second)
 
 	// 等用户 Ctrl+C
-	log.Println("listening for notifications... Ctrl+C to exit")
+	logger.Info("listening for notifications... Ctrl+C to exit")
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 	<-sig
-	log.Println("bye")
+	logger.Info("bye")
 }

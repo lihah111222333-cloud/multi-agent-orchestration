@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 // PromptTemplateStore 提示词模板存储。
@@ -27,13 +28,15 @@ func (s *PromptTemplateStore) Save(ctx context.Context, t *PromptTemplate) (*Pro
 	if existing != nil {
 		varsJSON, _ := json.Marshal(existing.Variables)
 		tagsJSON, _ := json.Marshal(existing.Tags)
-		_, _ = s.pool.Exec(ctx,
+		if _, err := s.pool.Exec(ctx,
 			`INSERT INTO prompt_versions (prompt_key, title, agent_key, tool_name, prompt_text,
 			   variables, tags, enabled, created_by, updated_by, source_updated_at)
 			 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11)`,
 			existing.PromptKey, existing.Title, existing.AgentKey, existing.ToolName,
 			existing.PromptText, string(varsJSON), string(tagsJSON), existing.Enabled,
-			existing.CreatedBy, existing.UpdatedBy, existing.UpdatedAt)
+			existing.CreatedBy, existing.UpdatedBy, existing.UpdatedAt); err != nil {
+			logger.Warn("store: save prompt version failed", "prompt_key", existing.PromptKey, logger.FieldError, err)
+		}
 	}
 
 	varsJSON, _ := json.Marshal(t.Variables)

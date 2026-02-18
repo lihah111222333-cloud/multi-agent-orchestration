@@ -13,15 +13,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -32,6 +33,53 @@ type App struct {
 	group    string               // 分组名称
 	autoN    int                  // 自动启动数量
 	wailsApp *application.App
+}
+
+const callAPISampleEvery int64 = 30
+const callAPISlowThreshold = 1200 * time.Millisecond
+const bridgeNotifySampleEvery int64 = 120
+
+var callAPIRequestSeq atomic.Int64
+var bridgeNotifySeq atomic.Int64
+
+func isCallAPIHotMethod(method string) bool {
+	switch method {
+	case "thread/list", "workspace/run/list", "thread/messages":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldLogCallAPIBegin(method string, reqID int64) bool {
+	if reqID <= 6 {
+		return true
+	}
+	if !isCallAPIHotMethod(method) {
+		return true
+	}
+	return reqID%callAPISampleEvery == 0
+}
+
+func shouldLogCallAPIDone(method string, reqID int64, duration time.Duration) bool {
+	if reqID <= 6 {
+		return true
+	}
+	if duration >= callAPISlowThreshold {
+		return true
+	}
+	if !isCallAPIHotMethod(method) {
+		return true
+	}
+	return reqID%callAPISampleEvery == 0
+}
+
+func shouldLogBridgeNotify(method string, seq int64) bool {
+	lower := strings.ToLower(method)
+	if strings.Contains(lower, "delta") || strings.Contains(lower, "output") {
+		return seq%bridgeNotifySampleEvery == 0
+	}
+	return true
 }
 
 // NewApp 创建 App 实例。
@@ -57,10 +105,10 @@ func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) er
 
 func (a *App) shutdown() {
 	done := make(chan struct{})
-	go func() {
+	util.SafeGo(func() {
 		a.mgr.StopAll()
 		close(done)
-	}()
+	})
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -79,19 +127,58 @@ func (a *App) shutdown() {
 //	const dag = await window.go.main.App.CallAPI("resource_task_get_dag", '{"dag_id":"xxx"}')
 //
 // 覆盖: 线程生命周期, 对话控制, 技能管理, 模型/配置, MCP, 命令执行, 日志查询 等。
-func (a *App) CallAPI(method, paramsJSON string) (string, error) {
+func (a *App) CallAPI(method, paramsJSON string) (resultJSON string, callErr error) {
+	start := time.Now()
+	reqID := callAPIRequestSeq.Add(1)
+	if shouldLogCallAPIBegin(method, reqID) {
+		logger.Info("CallAPI begin", logger.FieldReqID, reqID, logger.FieldMethod, method)
+	}
+	defer func() {
+		duration := time.Since(start)
+		if callErr != nil {
+			logger.Warn("CallAPI failed",
+				logger.FieldReqID, reqID,
+				logger.FieldMethod, method,
+				logger.FieldDurationMS, duration.Milliseconds(),
+				logger.FieldError, callErr)
+			return
+		}
+		if shouldLogCallAPIDone(method, reqID, duration) {
+			if duration >= callAPISlowThreshold {
+				logger.Warn("CallAPI slow",
+					logger.FieldReqID, reqID,
+					logger.FieldMethod, method,
+					logger.FieldDurationMS, duration.Milliseconds())
+			} else {
+				logger.Info("CallAPI done",
+					logger.FieldReqID, reqID,
+					logger.FieldMethod, method,
+					logger.FieldDurationMS, duration.Milliseconds())
+			}
+		}
+	}()
+
 	// UI 辅助方法 (不经过 apiserver)
 	switch method {
 	case "ui/selectProjectDir":
 		path := a.SelectProjectDir()
-		data, _ := json.Marshal(map[string]string{"path": path})
+		data, err := json.Marshal(map[string]string{"path": path})
+		if err != nil {
+			return "", fmt.Errorf("ui/selectProjectDir: marshal: %w", err)
+		}
 		return string(data), nil
 	case "ui/selectFiles":
 		paths := a.SelectFiles()
-		data, _ := json.Marshal(map[string]any{"paths": paths})
+		data, err := json.Marshal(map[string]any{"paths": paths})
+		if err != nil {
+			return "", fmt.Errorf("ui/selectFiles: marshal: %w", err)
+		}
 		return string(data), nil
 	case "ui/buildInfo":
-		data, _ := json.Marshal(currentBuildInfo())
+		data, err := json.Marshal(currentBuildInfo())
+		if err != nil {
+			return "", fmt.Errorf("ui/buildInfo: marshal: %w", err)
+		}
 		return string(data), nil
 	}
 
@@ -102,9 +189,11 @@ func (a *App) CallAPI(method, paramsJSON string) (string, error) {
 		params = json.RawMessage("{}")
 	}
 
-	result, err := a.srv.InvokeMethod(context.Background(), method, params)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	result, err := a.srv.InvokeMethod(ctx, method, params)
 	if err != nil {
-		slog.Warn("CallAPI failed", "method", method, "error", err)
 		return "", err
 	}
 
@@ -124,10 +213,10 @@ func (a *App) CallAPI(method, paramsJSON string) (string, error) {
 // 约束: 前端仅做 UI，不应自行实现浏览器/系统文件选择能力。
 // 目录选择必须统一走此 Wails/Go 原生桥接入口。
 func (a *App) SelectProjectDir() string {
-	slog.Info("SelectProjectDir: invoked")
+	logger.Info("SelectProjectDir: invoked")
 
 	if a.wailsApp == nil {
-		slog.Warn("SelectProjectDir: wails app not ready")
+		logger.Warn("SelectProjectDir: wails app not ready")
 		return ""
 	}
 
@@ -145,21 +234,21 @@ func (a *App) SelectProjectDir() string {
 		dialog.AttachToWindow(current)
 	}
 
-	slog.Info("SelectProjectDir: opening Wails folder dialog")
+	logger.Info("SelectProjectDir: opening Wails folder dialog")
 	path, err := dialog.PromptForSingleSelection()
 	if err != nil {
 		if isDialogCancelError(err) {
-			slog.Info("SelectProjectDir: dialog cancelled by user")
+			logger.Info("SelectProjectDir: dialog cancelled by user")
 			return ""
 		}
-		slog.Warn("SelectProjectDir: Wails dialog failed", "error", err)
+		logger.Warn("SelectProjectDir: Wails dialog failed", logger.FieldError, err)
 		return ""
 	}
 	if path == "" {
-		slog.Info("SelectProjectDir: dialog cancelled by user")
+		logger.Info("SelectProjectDir: dialog cancelled by user")
 		return ""
 	}
-	slog.Info("SelectProjectDir: selected", "path", path)
+	logger.Info("SelectProjectDir: selected", logger.FieldPath, path)
 	return path
 }
 
@@ -168,10 +257,10 @@ func (a *App) SelectProjectDir() string {
 // 约束: 前端仅做 UI，不应实现任何浏览器侧文件系统选择兜底。
 // 附件选择必须统一走此 Wails/Go 原生桥接入口。
 func (a *App) SelectFiles() []string {
-	slog.Info("SelectFiles: invoked")
+	logger.Info("SelectFiles: invoked")
 
 	if a.wailsApp == nil {
-		slog.Warn("SelectFiles: wails app not ready")
+		logger.Warn("SelectFiles: wails app not ready")
 		return []string{}
 	}
 
@@ -188,21 +277,21 @@ func (a *App) SelectFiles() []string {
 		dialog.AttachToWindow(current)
 	}
 
-	slog.Info("SelectFiles: opening Wails file dialog")
+	logger.Info("SelectFiles: opening Wails file dialog")
 	paths, err := dialog.PromptForMultipleSelection()
 	if err != nil {
 		if isDialogCancelError(err) {
-			slog.Info("SelectFiles: dialog cancelled by user")
+			logger.Info("SelectFiles: dialog cancelled by user")
 			return []string{}
 		}
-		slog.Warn("SelectFiles: Wails dialog failed", "error", err)
+		logger.Warn("SelectFiles: Wails dialog failed", logger.FieldError, err)
 		return []string{}
 	}
 	if len(paths) == 0 {
-		slog.Info("SelectFiles: dialog cancelled by user")
+		logger.Info("SelectFiles: dialog cancelled by user")
 		return []string{}
 	}
-	slog.Info("SelectFiles: selected", "count", len(paths))
+	logger.Info("SelectFiles: selected", logger.FieldCount, len(paths))
 	return paths
 }
 
@@ -220,39 +309,58 @@ func isDialogCancelError(err error) bool {
 
 // LaunchAgent 启动一个 Agent (通过 apiserver, 注入完整工具链)。
 func (a *App) LaunchAgent(name, prompt, cwd string) (string, error) {
-	slog.Info("ui: launch agent", logger.FieldSource, "ui",
+	logger.Info("ui: launch agent", logger.FieldSource, "ui",
 		logger.FieldComponent, "agent", "name", name)
 
-	params, _ := json.Marshal(map[string]string{
+	params, err := json.Marshal(map[string]string{
 		"model": "",
 		"cwd":   cwd,
 	})
+	if err != nil {
+		return "", fmt.Errorf("launch agent: marshal params: %w", err)
+	}
 	result, err := a.srv.InvokeMethod(context.Background(), "thread/start", params)
 	if err != nil {
 		return "", fmt.Errorf("launch agent: %w", err)
 	}
 
+	resultMap := util.ToMapAny(result)
+
 	// 发送初始 prompt (如果有)
-	resultMap, ok := result.(map[string]any)
-	if ok && prompt != "" {
-		if thread, ok2 := resultMap["thread"].(map[string]any); ok2 {
-			if id, ok3 := thread["id"].(string); ok3 {
-				turnParams, _ := json.Marshal(map[string]string{
-					"threadId": id,
-					"prompt":   prompt,
-				})
-				_, _ = a.srv.InvokeMethod(context.Background(), "turn/start", turnParams)
+	if prompt != "" {
+		// 用结构体提取 thread.id，避免深层类型断言链
+		type threadResult struct {
+			Thread struct {
+				ID string `json:"id"`
+			} `json:"thread"`
+		}
+		var tr threadResult
+		if raw, marshalErr := json.Marshal(resultMap); marshalErr == nil {
+			_ = json.Unmarshal(raw, &tr)
+		}
+		if tr.Thread.ID != "" {
+			turnParams, marshalErr := json.Marshal(map[string]string{
+				"threadId": tr.Thread.ID,
+				"prompt":   prompt,
+			})
+			if marshalErr != nil {
+				logger.Warn("turn/start marshal failed", logger.FieldError, marshalErr)
+			} else if _, err := a.srv.InvokeMethod(context.Background(), "turn/start", turnParams); err != nil {
+				logger.Warn("turn/start invoke failed", logger.FieldError, err)
 			}
 		}
 	}
 
-	data, _ := json.Marshal(resultMap)
+	data, err := json.Marshal(resultMap)
+	if err != nil {
+		return "", fmt.Errorf("launch agent: marshal result: %w", err)
+	}
 	return string(data), nil
 }
 
 // LaunchBatch 批量启动 N 个 Agent。
 func (a *App) LaunchBatch(count int, cwd string) error {
-	slog.Info("ui: launch batch", logger.FieldSource, "ui",
+	logger.Info("ui: launch batch", logger.FieldSource, "ui",
 		logger.FieldComponent, "agent", "count", count, "group", a.group)
 	for i := 1; i <= count; i++ {
 		name := fmt.Sprintf("Agent %d", i)
@@ -268,7 +376,7 @@ func (a *App) LaunchBatch(count int, cwd string) error {
 
 // SubmitInput 向 Agent 发送消息。
 func (a *App) SubmitInput(agentID, prompt string) error {
-	slog.Info("ui: submit input", logger.FieldSource, "ui",
+	logger.Info("ui: submit input", logger.FieldSource, "ui",
 		logger.FieldComponent, "chat", logger.FieldAgentID, agentID,
 		"prompt_len", len(prompt))
 	return a.mgr.Submit(agentID, prompt, nil, nil)
@@ -276,7 +384,7 @@ func (a *App) SubmitInput(agentID, prompt string) error {
 
 // SubmitWithFiles 向 Agent 发送消息 + 附件。
 func (a *App) SubmitWithFiles(agentID, prompt string, images, files []string) error {
-	slog.Info("ui: submit with files", logger.FieldSource, "ui",
+	logger.Info("ui: submit with files", logger.FieldSource, "ui",
 		logger.FieldComponent, "chat", logger.FieldAgentID, agentID,
 		"images", len(images), "files", len(files))
 	return a.mgr.Submit(agentID, prompt, images, files)
@@ -284,7 +392,7 @@ func (a *App) SubmitWithFiles(agentID, prompt string, images, files []string) er
 
 // SendCommand 向 Agent 发送斜杠命令。
 func (a *App) SendCommand(agentID, cmd, args string) error {
-	slog.Info("ui: send command", logger.FieldSource, "ui",
+	logger.Info("ui: send command", logger.FieldSource, "ui",
 		logger.FieldComponent, "command", logger.FieldAgentID, agentID,
 		"cmd", cmd)
 	return a.mgr.SendCommand(agentID, cmd, args)
@@ -292,10 +400,10 @@ func (a *App) SendCommand(agentID, cmd, args string) error {
 
 // StopAgent 停止一个 Agent (非阻塞)。
 func (a *App) StopAgent(id string) error {
-	slog.Info("ui: stop agent", logger.FieldSource, "ui",
+	logger.Info("ui: stop agent", logger.FieldSource, "ui",
 		logger.FieldComponent, "agent", logger.FieldAgentID, id)
 	done := make(chan error, 1)
-	go func() { done <- a.mgr.Stop(id) }()
+	util.SafeGo(func() { done <- a.mgr.Stop(id) })
 
 	select {
 	case err := <-done:
@@ -315,7 +423,11 @@ func (a *App) GetGroup() string { return a.group }
 
 // GetBuildInfo 返回当前桌面应用构建信息(JSON字符串)。
 func (a *App) GetBuildInfo() string {
-	data, _ := json.Marshal(currentBuildInfo())
+	data, err := json.Marshal(currentBuildInfo())
+	if err != nil {
+		logger.Warn("GetBuildInfo: marshal failed", logger.FieldError, err)
+		return "{}"
+	}
 	return string(data)
 }
 
@@ -380,7 +492,7 @@ func (a *App) SaveClipboardImage(base64Data string) (string, error) {
 		return "", fmt.Errorf("write temp file: %w", err)
 	}
 
-	slog.Info("ui: saved clipboard image", logger.FieldSource, "ui",
+	logger.Info("ui: saved clipboard image", logger.FieldSource, "ui",
 		logger.FieldComponent, "clipboard", "path", tmpFile.Name(), "size", len(data))
 	return tmpFile.Name(), nil
 }
@@ -413,21 +525,27 @@ func (a *App) OpenNewWindow(group string, n int) error {
 // 事件链路:
 // codex raw event -> apiserver.Notify(method,payload) -> Wails runtime Events -> Vue 渲染。
 func (a *App) handleBridgeNotification(method string, params any) {
+	notifyID := bridgeNotifySeq.Add(1)
+	start := time.Now()
+	publishDebugBridgeEvent(method, params)
+
 	if a.wailsApp == nil {
+		if shouldLogBridgeNotify(method, notifyID) {
+			logger.Info("bridge notify buffered without wails runtime",
+				"notify_id", notifyID,
+				"method", method,
+				"duration_ms", time.Since(start).Milliseconds())
+		}
 		return
 	}
 
-	payloadMap := map[string]any{}
-	switch p := params.(type) {
-	case map[string]any:
-		payloadMap = p
-	default:
-		if raw, err := json.Marshal(params); err == nil {
-			_ = json.Unmarshal(raw, &payloadMap)
-		}
-	}
+	payloadMap := util.ToMapAny(params)
 
-	rawPayload, _ := json.Marshal(payloadMap)
+	rawPayload, marshalErr := json.Marshal(payloadMap)
+	if marshalErr != nil {
+		logger.Debug("wails: notify bridge rawPayload marshal", logger.FieldError, marshalErr)
+		rawPayload = []byte("{}")
+	}
 	// 通用桥接事件: 前端可统一订阅 bridge-event 自行按 type 渲染。
 	a.wailsApp.Event.Emit("bridge-event", map[string]any{
 		"type":    method,
@@ -437,6 +555,13 @@ func (a *App) handleBridgeNotification(method string, params any) {
 
 	threadID, _ := payloadMap["threadId"].(string)
 	if strings.TrimSpace(threadID) == "" {
+		if shouldLogBridgeNotify(method, notifyID) {
+			logger.Info("bridge notify emitted",
+				"notify_id", notifyID,
+				"method", method,
+				"channels", 1,
+				"duration_ms", time.Since(start).Milliseconds())
+		}
 		return
 	}
 
@@ -446,4 +571,12 @@ func (a *App) handleBridgeNotification(method string, params any) {
 		"type":     method,
 		"data":     string(rawPayload),
 	})
+	if shouldLogBridgeNotify(method, notifyID) {
+		logger.Info("bridge notify emitted",
+			"notify_id", notifyID,
+			"method", method,
+			"thread_id", threadID,
+			"channels", 2,
+			"duration_ms", time.Since(start).Milliseconds())
+	}
 }

@@ -151,10 +151,10 @@ export function useProjectStore() {
       const short = segments.slice(-2).join('/') || path;
       return { value: path, label: short, full: path };
     })]),
-    normalizePath,
+
     setActive,
     addProject,
-    removeProject,
+
     openModal,
     closeModal,
     confirmModal,

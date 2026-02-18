@@ -2,7 +2,7 @@ function normalizeEventType(eventType) {
   return (eventType || '').toString().trim().toLowerCase();
 }
 
-export function isDeltaLikeEvent(eventType) {
+function isDeltaLikeEvent(eventType) {
   const normalized = normalizeEventType(eventType);
   if (!normalized) return false;
   return normalized.includes('delta');
@@ -29,5 +29,5 @@ export function shouldScheduleRuntimeSync({
   if (minInterval <= 0) {
     return true;
   }
-  return now-last >= minInterval;
+  return now - last >= minInterval;
 }

@@ -5,10 +5,8 @@ import {
   defaultLayoutForMode,
   normalizeChatLayout,
   normalizeCmdLayout,
-  resolveMainAgent,
   deriveChatAgents,
   deriveCmdAgents,
-  pickMostRecentAgent,
 } from './thread-view.model.js';
 import {
   assertThreadStoreStateWhitelist,
@@ -16,7 +14,6 @@ import {
   THREAD_STORE_RUNTIME_STATE_KEYS,
 } from './thread-state-whitelist.js';
 import {
-  isDeltaLikeEvent,
   shouldScheduleRuntimeSync,
 } from './thread-runtime-sync-policy.js';
 import {
@@ -75,15 +72,9 @@ logInfo('thread', 'state.whitelist.applied', {
   runtime_accessor_keys: THREAD_STORE_RUNTIME_STATE_KEYS.length,
 });
 
-const inflightMessagesByThread = {};
-const recentMessageLoadAtByThread = {};
-const historyLoadedByThread = {};
-const MESSAGE_LOAD_COOLDOWN_MS = 800;
-const AGENT_EVENT_LOG_SAMPLE = 120;
+
 const RUNTIME_SYNC_DEBOUNCE_MS = 80;
 const RUNTIME_SYNC_DELTA_MIN_INTERVAL_MS = 240;
-let agentEventSeq = 0;
-let bridgeEventSeq = 0;
 let runtimeSyncPromise = null;
 let runtimeSyncPending = false;
 let runtimeSyncTimer = 0;
@@ -251,15 +242,7 @@ function getThreadsByMode(mode) {
 
 function getCurrentThreadId(mode) {
   if (mode === 'cmd') {
-    const visible = getThreadsByMode('cmd');
-    const visibleIds = new Set(visible.map((item) => item.id));
-    if (state.activeCmdThreadId && visibleIds.has(state.activeCmdThreadId)) {
-      return state.activeCmdThreadId;
-    }
-    return pickMostRecentAgent({
-      threads: visible,
-      meta: state.agentMetaById,
-    }) || visible[0]?.id || '';
+    return state.activeCmdThreadId || '';
   }
   return state.activeThreadId;
 }
@@ -268,15 +251,6 @@ function displayName(thread) {
   if (!thread?.id) return '';
   const alias = (state.agentMetaById[thread.id]?.alias || '').toString().trim();
   return alias || thread.name || thread.id;
-}
-
-function choosePreferredThreadId(list, currentId) {
-  const items = Array.isArray(list) ? list : [];
-  const normalizedCurrent = (currentId || '').toString();
-  if (normalizedCurrent && items.some((item) => item?.id === normalizedCurrent)) {
-    return normalizedCurrent;
-  }
-  return (items[0]?.id || '').toString();
 }
 
 function normalizeThread(item) {
@@ -327,6 +301,21 @@ function applyRuntimeSnapshot(snapshot) {
   state.agentMetaById = data.agentMetaById && typeof data.agentMetaById === 'object'
     ? data.agentMetaById
     : {};
+  if (Object.prototype.hasOwnProperty.call(data, PREF_ACTIVE_THREAD_ID)) {
+    state.activeThreadId = (data[PREF_ACTIVE_THREAD_ID] || '').toString();
+  }
+  if (Object.prototype.hasOwnProperty.call(data, PREF_ACTIVE_CMD_THREAD_ID)) {
+    state.activeCmdThreadId = (data[PREF_ACTIVE_CMD_THREAD_ID] || '').toString();
+  }
+  if (Object.prototype.hasOwnProperty.call(data, PREF_MAIN_AGENT_ID)) {
+    state.mainAgentId = (data[PREF_MAIN_AGENT_ID] || '').toString();
+  }
+  if (data[PREF_VIEW_CHAT] && typeof data[PREF_VIEW_CHAT] === 'object') {
+    state.viewPrefs.chat = data[PREF_VIEW_CHAT];
+  }
+  if (data[PREF_VIEW_CMD] && typeof data[PREF_VIEW_CMD] === 'object') {
+    state.viewPrefs.cmd = data[PREF_VIEW_CMD];
+  }
 }
 
 async function syncRuntimeState() {
@@ -371,23 +360,12 @@ function handleAgentEvent(evt) {
   const threadId = evt?.agent_id || evt?.threadId || '';
   const eventType = (evt?.type || '').toString();
   if (!threadId) return;
-
-  const seq = ++agentEventSeq;
-  const sampled = seq % AGENT_EVENT_LOG_SAMPLE === 0 || !isDeltaLikeEvent(eventType);
-  if (sampled) logDebug('event', 'agent.received', { seq, thread_id: threadId, type: eventType });
   scheduleRuntimeSync(eventType);
 }
 
 function handleBridgeEvent(evt) {
   const eventType = (evt?.type || evt?.method || '').toString();
   if (!eventType) return;
-  const seq = ++bridgeEventSeq;
-  if (seq % AGENT_EVENT_LOG_SAMPLE === 0 || !isDeltaLikeEvent(eventType)) {
-    logDebug('event', 'bridge.received', {
-      seq,
-      type: eventType,
-    });
-  }
   scheduleRuntimeSync(eventType);
 }
 
@@ -396,35 +374,8 @@ async function refreshThreads() {
   const start = perfNow();
   state.loadingThreads = true;
   try {
-    await Promise.all([
-      callAPI('thread/list', {}),
-      loadRemotePreferences(),
-    ]);
+    await callAPI('thread/list', {});
     await syncRuntimeState();
-
-    const resolvedMain = resolveMainAgent({
-      mainAgentId: state.mainAgentId,
-      threads: state.threads,
-      meta: state.agentMetaById,
-    });
-    setMainAgent(resolvedMain);
-
-    const preferredChatActive = choosePreferredThreadId(state.threads, state.activeThreadId);
-    if (preferredChatActive !== (state.activeThreadId || '')) {
-      saveActiveThread(preferredChatActive || '');
-    }
-    if (!state.activeThreadId && state.threads.length > 0) {
-      saveActiveThread(preferredChatActive || state.threads[0].id);
-    }
-
-    const cmdThreads = getThreadsByMode('cmd');
-    const preferredCmdActive = choosePreferredThreadId(cmdThreads, state.activeCmdThreadId);
-    if (preferredCmdActive !== (state.activeCmdThreadId || '')) {
-      saveActiveCmdThread(preferredCmdActive || '');
-    }
-    if (!state.activeCmdThreadId && cmdThreads.length > 0) {
-      saveActiveCmdThread(preferredCmdActive || getCurrentThreadId('cmd'));
-    }
     logDebug('thread', 'list.refreshed', {
       count: state.threads.length,
       active_chat: state.activeThreadId,
@@ -483,81 +434,41 @@ async function stopThread(threadId) {
   });
 }
 
-async function loadMessages(threadId, limit = 300, options = {}) {
+async function loadMessages(threadId, limit = 300) {
   if (!threadId) return;
   const start = perfNow();
-  const force = options?.force === true;
-  if (!force && historyLoadedByThread[threadId]) {
-    logDebug('thread', 'messages.skip.cached', { thread_id: threadId });
-    return;
-  }
-  if (inflightMessagesByThread[threadId]) {
-    logDebug('thread', 'messages.skip.inflight', { thread_id: threadId });
-    return inflightMessagesByThread[threadId];
-  }
-
-  const now = Date.now();
-  const last = recentMessageLoadAtByThread[threadId] || 0;
-  if (now - last < MESSAGE_LOAD_COOLDOWN_MS) {
-    logDebug('thread', 'messages.skip.cooldown', {
+  try {
+    const res = await callAPI('thread/messages', { threadId, limit });
+    await syncRuntimeState();
+    logInfo('thread', 'messages.loaded', {
       thread_id: threadId,
-      elapsed_ms: now - last,
+      count: Array.isArray(res?.messages) ? res.messages.length : 0,
+      duration_ms: Math.round(perfNow() - start),
     });
-    return;
-  }
-  recentMessageLoadAtByThread[threadId] = now;
-
-  const task = callAPI('thread/messages', { threadId, limit })
-    .then((res) => {
-      return syncRuntimeState().then(() => res);
-    })
-    .then((res) => {
-      historyLoadedByThread[threadId] = true;
-      logInfo('thread', 'messages.loaded', {
-        thread_id: threadId,
-        count: Array.isArray(res?.messages) ? res.messages.length : 0,
-        duration_ms: Math.round(perfNow() - start),
-      });
-    })
-    .catch((error) => {
-      logWarn('thread', 'messages.load.failed', {
-        thread_id: threadId,
-        error,
-        duration_ms: Math.round(perfNow() - start),
-      });
-      throw error;
-    })
-    .finally(() => {
-      delete inflightMessagesByThread[threadId];
+  } catch (error) {
+    logWarn('thread', 'messages.load.failed', {
+      thread_id: threadId,
+      error,
+      duration_ms: Math.round(perfNow() - start),
     });
-
-  inflightMessagesByThread[threadId] = task;
-  return task;
-}
-
-function buildTurnInput(prompt, attachments = []) {
-  const input = [];
-  const text = (prompt || '').trim();
-  if (text) {
-    input.push({ type: 'text', text });
+    throw error;
   }
-
-  for (const item of attachments) {
-    const path = (item?.path || '').trim();
-    if (!path) continue;
-    if (item.kind === 'image') {
-      input.push({ type: 'localImage', path });
-    } else {
-      input.push({ type: 'fileContent', path });
-    }
-  }
-  return input;
 }
 
 async function sendMessage(threadId, prompt, attachments = []) {
   const text = (prompt || '').trim();
   const hasAttachments = attachments.length > 0;
   if (!threadId || (!text && !hasAttachments)) return;
+
+  const input = [];
+  if (text) {
+    input.push({ type: 'text', text });
+  }
+  for (const item of attachments) {
+    const path = (item?.path || '').trim();
+    if (!path) continue;
+    input.push(item.kind === 'image' ? { type: 'localImage', path } : { type: 'fileContent', path });
+  }
 
   const start = perfNow();
   logInfo('thread', 'send.start', {
@@ -567,10 +478,7 @@ async function sendMessage(threadId, prompt, attachments = []) {
   });
   state.sending = true;
   try {
-    await callAPI('turn/start', {
-      threadId,
-      input: buildTurnInput(text, attachments),
-    });
+    await callAPI('turn/start', { threadId, input });
     await syncRuntimeState();
     logInfo('thread', 'send.done', {
       thread_id: threadId,
@@ -616,34 +524,6 @@ function promptRenameThread(threadId) {
       error,
     });
   });
-}
-
-async function loadRemotePreferences() {
-  try {
-    const res = await callAPI('ui/preferences/getAll', {});
-    if (!res || typeof res !== 'object') return;
-
-    if (Object.prototype.hasOwnProperty.call(res, PREF_ACTIVE_THREAD_ID)) {
-      const val = (res.activeThreadId || '').toString();
-      state.activeThreadId = val;
-    }
-    if (Object.prototype.hasOwnProperty.call(res, PREF_ACTIVE_CMD_THREAD_ID)) {
-      const val = (res.activeCmdThreadId || '').toString();
-      state.activeCmdThreadId = val;
-    }
-    if (Object.prototype.hasOwnProperty.call(res, PREF_MAIN_AGENT_ID)) {
-      const val = (res.mainAgentId || '').toString();
-      state.mainAgentId = val;
-    }
-    if (res[PREF_VIEW_CHAT] && typeof res[PREF_VIEW_CHAT] === 'object') {
-      state.viewPrefs.chat = res['viewPrefs.chat'];
-    }
-    if (res[PREF_VIEW_CMD] && typeof res[PREF_VIEW_CMD] === 'object') {
-      state.viewPrefs.cmd = res['viewPrefs.cmd'];
-    }
-  } catch (error) {
-    logWarn('thread', 'prefs.load.failed', { error });
-  }
 }
 
 export function useThreadStore() {

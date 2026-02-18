@@ -19,7 +19,7 @@ export async function requestHistoryLoad(threadStore, threadId, options = {}) {
 
   if (options.force) {
     const limit = Number.isFinite(options.limit) && options.limit > 0 ? options.limit : 300;
-    await threadStore.loadMessages(threadId, limit, { force: true });
+    await threadStore.loadMessages(threadId, limit);
     return true;
   }
 
@@ -504,7 +504,7 @@ export const UnifiedChatPage = {
 
                 <div class="cmd-thread-actions">
                   <button class="btn btn-ghost btn-xs" @click.stop="selectThread(card.id)">打开</button>
-                  <button class="btn btn-ghost btn-xs" @click.stop="threadStore.loadMessages(card.id, 300, { force: true })">历史</button>
+                  <button class="btn btn-ghost btn-xs" @click.stop="threadStore.loadMessages(card.id, 300)">历史</button>
                   <button class="btn btn-ghost btn-xs" @click.stop="threadStore.promptRenameThread(card.id)">改名</button>
                   <button class="btn btn-ghost btn-xs" @click.stop="threadStore.stopThread(card.id)">停止</button>
                 </div>

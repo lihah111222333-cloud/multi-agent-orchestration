@@ -2,7 +2,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from '../l
 import { callAPI, getBuildInfo, onAgentEvent, onBridgeEvent } from './services/api.js';
 import { SidebarNav } from './components/SidebarNav.js';
 import { ProjectModal } from './components/ProjectModal.js';
-import { ChatPage } from './pages/ChatPage.js';
+import { UnifiedChatPage } from './pages/UnifiedChatPage.js';
 import { DataPage } from './pages/DataPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { useProjectStore } from './stores/projects.js';
@@ -26,7 +26,7 @@ export const AppRoot = {
   components: {
     SidebarNav,
     ProjectModal,
-    ChatPage,
+    UnifiedChatPage,
     DataPage,
     SettingsPage,
   },
@@ -259,8 +259,9 @@ export const AppRoot = {
       <SidebarNav :items="NAV_ITEMS" :page="page" @change="page = $event" />
 
       <main id="content">
-        <ChatPage
+        <UnifiedChatPage
           v-if="page === 'chat'"
+          mode="chat"
           :project-store="projectStore"
           :thread-store="threadStore"
         />

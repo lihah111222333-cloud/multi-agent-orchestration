@@ -1469,6 +1469,32 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 		return map[string]any{}, nil
 	}
 	snapshot := s.uiRuntime.Snapshot()
+	prefs := map[string]any{}
+	if s.prefManager != nil {
+		loaded, err := s.prefManager.GetAll(ctx)
+		if err != nil {
+			logger.Warn("ui/state/get: load preferences failed", logger.FieldError, err)
+		} else {
+			prefs = loaded
+		}
+	}
+
+	resolvedMain := resolveMainAgentPreference(snapshot, prefs)
+	if resolvedMain != asString(prefs["mainAgentId"]) {
+		s.uiRuntime.SetMainAgent(resolvedMain)
+		snapshot = s.uiRuntime.Snapshot()
+		persistResolvedUIPreference(ctx, s.prefManager, "mainAgentId", resolvedMain, prefs["mainAgentId"])
+		prefs["mainAgentId"] = resolvedMain
+	}
+
+	resolvedActiveThreadID := resolvePreferredThreadID(snapshot.Threads, asString(prefs["activeThreadId"]))
+	persistResolvedUIPreference(ctx, s.prefManager, "activeThreadId", resolvedActiveThreadID, prefs["activeThreadId"])
+	prefs["activeThreadId"] = resolvedActiveThreadID
+
+	resolvedActiveCmdThreadID := resolvePreferredCmdThreadID(snapshot.Threads, resolvedMain, asString(prefs["activeCmdThreadId"]))
+	persistResolvedUIPreference(ctx, s.prefManager, "activeCmdThreadId", resolvedActiveCmdThreadID, prefs["activeCmdThreadId"])
+	prefs["activeCmdThreadId"] = resolvedActiveCmdThreadID
+
 	result := map[string]any{
 		"threads":            snapshot.Threads,
 		"statuses":           snapshot.Statuses,
@@ -1476,6 +1502,9 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 		"diffTextByThread":   snapshot.DiffTextByThread,
 		"agentMetaById":      snapshot.AgentMetaByID,
 		"workspaceRunsByKey": snapshot.WorkspaceRunsByKey,
+		"activeThreadId":     resolvedActiveThreadID,
+		"activeCmdThreadId":  resolvedActiveCmdThreadID,
+		"mainAgentId":        resolvedMain,
 	}
 	if snapshot.WorkspaceFeatureEnabled != nil {
 		result["workspaceFeatureEnabled"] = *snapshot.WorkspaceFeatureEnabled
@@ -1483,24 +1512,11 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 	if snapshot.WorkspaceLastError != "" {
 		result["workspaceLastError"] = snapshot.WorkspaceLastError
 	}
-
-	if s.prefManager != nil {
-		prefs, err := s.prefManager.GetAll(ctx)
-		if err != nil {
-			logger.Warn("ui/state/get: load preferences failed", logger.FieldError, err)
-		} else {
-			for _, key := range []string{
-				"activeThreadId",
-				"activeCmdThreadId",
-				"mainAgentId",
-				"viewPrefs.chat",
-				"viewPrefs.cmd",
-			} {
-				if value, ok := prefs[key]; ok {
-					result[key] = value
-				}
-			}
-		}
+	if value, ok := prefs["viewPrefs.chat"]; ok {
+		result["viewPrefs.chat"] = value
+	}
+	if value, ok := prefs["viewPrefs.cmd"]; ok {
+		result["viewPrefs.cmd"] = value
 	}
 
 	return result, nil
@@ -1515,4 +1531,110 @@ func asString(value any) string {
 	default:
 		return ""
 	}
+}
+
+func persistResolvedUIPreference(ctx context.Context, manager *uistate.PreferenceManager, key, resolved string, original any) {
+	if manager == nil {
+		return
+	}
+	if resolved == asString(original) {
+		return
+	}
+	if err := manager.Set(ctx, key, resolved); err != nil {
+		logger.Warn("ui/state/get: persist resolved preference failed",
+			logger.FieldKey, key,
+			logger.FieldError, err,
+		)
+	}
+}
+
+func resolveMainAgentPreference(snapshot uistate.RuntimeSnapshot, prefs map[string]any) string {
+	preferred := strings.TrimSpace(asString(prefs["mainAgentId"]))
+	if hasThread(snapshot.Threads, preferred) {
+		return preferred
+	}
+
+	for _, thread := range snapshot.Threads {
+		id := strings.TrimSpace(thread.ID)
+		if id == "" {
+			continue
+		}
+		meta := snapshot.AgentMetaByID[id]
+		if meta.IsMain {
+			return id
+		}
+	}
+
+	for _, thread := range snapshot.Threads {
+		id := strings.TrimSpace(thread.ID)
+		if id == "" {
+			continue
+		}
+		meta := snapshot.AgentMetaByID[id]
+		if looksLikeMainAgent(thread.Name) || looksLikeMainAgent(meta.Alias) {
+			return id
+		}
+	}
+	return ""
+}
+
+func resolvePreferredThreadID(threads []uistate.ThreadSnapshot, preferred string) string {
+	id := strings.TrimSpace(preferred)
+	if hasThread(threads, id) {
+		return id
+	}
+	return firstThreadID(threads)
+}
+
+func resolvePreferredCmdThreadID(threads []uistate.ThreadSnapshot, mainAgentID, preferred string) string {
+	mainID := strings.TrimSpace(mainAgentID)
+	candidates := make([]uistate.ThreadSnapshot, 0, len(threads))
+	for _, thread := range threads {
+		id := strings.TrimSpace(thread.ID)
+		if id == "" {
+			continue
+		}
+		if mainID != "" && id == mainID {
+			continue
+		}
+		candidates = append(candidates, thread)
+	}
+	if len(candidates) == 0 {
+		candidates = threads
+	}
+	return resolvePreferredThreadID(candidates, preferred)
+}
+
+func hasThread(threads []uistate.ThreadSnapshot, id string) bool {
+	target := strings.TrimSpace(id)
+	if target == "" {
+		return false
+	}
+	for _, thread := range threads {
+		if strings.TrimSpace(thread.ID) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func firstThreadID(threads []uistate.ThreadSnapshot) string {
+	for _, thread := range threads {
+		id := strings.TrimSpace(thread.ID)
+		if id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func looksLikeMainAgent(name string) bool {
+	value := strings.ToLower(strings.TrimSpace(name))
+	if value == "" {
+		return false
+	}
+	return strings.Contains(value, "主agent") ||
+		strings.Contains(value, "主 agent") ||
+		strings.Contains(value, "main agent") ||
+		value == "main"
 }

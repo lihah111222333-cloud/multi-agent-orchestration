@@ -12,7 +12,7 @@ export const BACKEND_THREAD_STATUSES = Object.freeze([
 
 const BACKEND_THREAD_STATUS_SET = new Set(BACKEND_THREAD_STATUSES);
 
-const STATUS_LABEL_ZH = Object.freeze({
+export const STATUS_LABEL_ZH = Object.freeze({
   idle: '空闲',
   starting: '启动中',
   thinking: '思考中',

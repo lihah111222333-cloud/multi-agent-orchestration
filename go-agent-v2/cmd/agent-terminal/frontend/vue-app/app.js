@@ -117,7 +117,6 @@ export const AppRoot = {
       threadId = await threadStore.startThread(projectStore.state.active || '.');
       if (!threadId) return '';
 
-      threadStore.saveActiveThread(threadId);
       await threadStore.loadMessages(threadId);
       return threadId;
     }
@@ -143,48 +142,16 @@ export const AppRoot = {
     }
 
     async function refreshDashboardByPage(targetPage) {
-      switch (targetPage) {
-        case 'agents': {
-          const res = await callAPI('dashboard/agentStatus', {});
-          dashboard.agents = res?.agents || [];
-          break;
-        }
-        case 'dags': {
-          const res = await callAPI('dashboard/dags', {});
-          dashboard.dags = res?.dags || [];
-          break;
-        }
-        case 'tasks': {
-          const [acks, traces] = await Promise.all([
-            callAPI('dashboard/taskAcks', {}),
-            callAPI('dashboard/taskTraces', {}),
-          ]);
-          dashboard.taskAcks = acks?.acks || [];
-          dashboard.taskTraces = traces?.traces || [];
-          break;
-        }
-        case 'skills': {
-          const res = await callAPI('dashboard/skills', {});
-          dashboard.skills = res?.skills || [];
-          break;
-        }
-        case 'commands': {
-          const [cards, prompts] = await Promise.all([
-            callAPI('dashboard/commandCards', {}),
-            callAPI('dashboard/prompts', {}),
-          ]);
-          dashboard.commandCards = cards?.cards || [];
-          dashboard.prompts = prompts?.prompts || [];
-          break;
-        }
-        case 'memory': {
-          const res = await callAPI('dashboard/sharedFiles', {});
-          dashboard.memory = res?.files || [];
-          break;
-        }
-        default:
-          break;
-      }
+      if (targetPage === 'chat' || targetPage === 'settings') return;
+      const res = await callAPI('ui/dashboard/get', { page: targetPage });
+      dashboard.agents = Array.isArray(res?.agents) ? res.agents : [];
+      dashboard.dags = Array.isArray(res?.dags) ? res.dags : [];
+      dashboard.taskAcks = Array.isArray(res?.taskAcks) ? res.taskAcks : [];
+      dashboard.taskTraces = Array.isArray(res?.taskTraces) ? res.taskTraces : [];
+      dashboard.skills = Array.isArray(res?.skills) ? res.skills : [];
+      dashboard.commandCards = Array.isArray(res?.commandCards) ? res.commandCards : [];
+      dashboard.prompts = Array.isArray(res?.prompts) ? res.prompts : [];
+      dashboard.memory = Array.isArray(res?.memory) ? res.memory : [];
     }
 
     async function bootstrap() {

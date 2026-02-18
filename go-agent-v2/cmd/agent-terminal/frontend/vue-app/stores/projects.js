@@ -2,9 +2,6 @@ import { reactive, computed } from '../../lib/vue.esm-browser.prod.js';
 import { callAPI, selectProjectDir } from '../services/api.js';
 import { logDebug, logInfo, logWarn } from '../services/log.js';
 
-const PREF_PROJECTS_LIST = 'projects.list';
-const PREF_PROJECTS_ACTIVE = 'projects.active';
-
 function normalizePath(path) {
   let value = (path || '').trim();
   if (!value) return '';
@@ -22,48 +19,82 @@ const state = reactive({
   browsing: false,
 });
 
-function persistRemote(key, value) {
-  callAPI('ui/preferences/set', { key, value })
-    .catch((error) => {
-      logDebug('project', 'prefs.save.failed', { key, error });
+function normalizeProjectList(input) {
+  if (!Array.isArray(input)) return [];
+  const projects = [];
+  for (const item of input) {
+    const normalized = normalizePath((item || '').toString());
+    if (!normalized || normalized === '.') continue;
+    if (projects.includes(normalized)) continue;
+    projects.push(normalized);
+  }
+  return projects;
+}
+
+function applyProjectsState(payload) {
+  const projects = normalizeProjectList(payload?.projects);
+  let active = normalizePath((payload?.active || '.').toString()) || '.';
+  if (active !== '.' && !projects.includes(active)) {
+    active = '.';
+  }
+  state.projects = projects;
+  state.active = active;
+}
+
+async function callProjectAPI(method, params = {}) {
+  if (typeof globalThis.__AO_PROJECTS_CALL_API__ === 'function') {
+    return globalThis.__AO_PROJECTS_CALL_API__(method, params);
+  }
+  return callAPI(method, params);
+}
+
+async function reloadProjects() {
+  try {
+    const res = await callProjectAPI('ui/projects/get', {});
+    applyProjectsState(res || {});
+    logDebug('project', 'state.reloaded', {
+      count: state.projects.length,
+      active: state.active,
     });
+  } catch (error) {
+    logWarn('project', 'state.reload.failed', { error });
+  }
 }
 
-function persist() {
-  persistRemote(PREF_PROJECTS_LIST, state.projects);
-  persistRemote(PREF_PROJECTS_ACTIVE, state.active || '.');
+async function setActive(path) {
+  const next = normalizePath(path) || '.';
+  try {
+    const res = await callProjectAPI('ui/projects/setActive', { path: next });
+    applyProjectsState(res || {});
+    logInfo('project', 'active.changed', { active: state.active });
+  } catch (error) {
+    logWarn('project', 'active.set.failed', { path: next, error });
+  }
 }
 
-function ensureActive() {
-  if (state.active === '.' || state.projects.includes(state.active)) return;
-  state.active = '.';
-  persist();
-}
-
-function setActive(path) {
-  state.active = normalizePath(path) || '.';
-  persist();
-  logInfo('project', 'active.changed', { active: state.active });
-}
-
-function addProject(path) {
+async function addProject(path) {
   const normalized = normalizePath(path);
   if (!normalized || normalized === '.') return false;
-  if (!state.projects.includes(normalized)) {
-    state.projects.push(normalized);
+  try {
+    const res = await callProjectAPI('ui/projects/add', { path: normalized });
+    applyProjectsState(res || {});
+    logInfo('project', 'added', { path: normalized, total: state.projects.length });
+    return true;
+  } catch (error) {
+    logWarn('project', 'add.failed', { path: normalized, error });
+    return false;
   }
-  state.active = normalized;
-  persist();
-  logInfo('project', 'added', { path: normalized, total: state.projects.length });
-  return true;
 }
 
-function removeProject(path) {
+async function removeProject(path) {
   const target = normalizePath(path);
-  state.projects = state.projects.filter((item) => item !== target);
-  if (state.active === target) state.active = '.';
-  persist();
-  logInfo('project', 'removed', { path: target, total: state.projects.length });
+  try {
+    const res = await callProjectAPI('ui/projects/remove', { path: target });
+    applyProjectsState(res || {});
+    logInfo('project', 'removed', { path: target, total: state.projects.length });
+  } catch (error) {
+    logWarn('project', 'remove.failed', { path: target, error });
+  }
 }
 
 function openModal(defaultPath = '') {
@@ -105,42 +136,26 @@ async function browseDirectory() {
 }
 
 function confirmModal() {
-  const ok = addProject(state.modalPath);
-  if (ok) {
-    closeModal();
-  }
-  logInfo('project', 'modal.confirm', {
-    ok,
-    path: normalizePath(state.modalPath),
-  });
-  return ok;
+  return addProject(state.modalPath)
+    .then((ok) => {
+      if (ok) {
+        closeModal();
+      }
+      logInfo('project', 'modal.confirm', {
+        ok,
+        path: normalizePath(state.modalPath),
+      });
+      return ok;
+    });
 }
 
 function quickAdd() {
   openModal();
 }
 
-async function loadRemoteProjects() {
-  try {
-    const res = await callAPI('ui/preferences/getAll', {});
-    if (!res || typeof res !== 'object') return;
-
-    if (Array.isArray(res[PREF_PROJECTS_LIST])) {
-      state.projects = res[PREF_PROJECTS_LIST];
-    }
-    if (Object.prototype.hasOwnProperty.call(res, PREF_PROJECTS_ACTIVE)) {
-      const val = normalizePath(res[PREF_PROJECTS_ACTIVE]);
-      if (val) {
-        state.active = val;
-      }
-    }
-  } catch (error) {
-    logWarn('project', 'prefs.load.failed', { error });
-  }
-}
-
-// Initial load
-loadRemoteProjects().then(() => ensureActive());
+reloadProjects().catch((error) => {
+  logWarn('project', 'state.bootstrap.failed', { error });
+});
 
 
 export function useProjectStore() {
@@ -154,6 +169,8 @@ export function useProjectStore() {
 
     setActive,
     addProject,
+    removeProject,
+    reloadProjects,
 
     openModal,
     closeModal,

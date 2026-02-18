@@ -14,9 +14,6 @@ import {
   THREAD_STORE_RUNTIME_STATE_KEYS,
 } from './thread-state-whitelist.js';
 import {
-  shouldScheduleRuntimeSync,
-} from './thread-runtime-sync-policy.js';
-import {
   normalizeStatus,
 } from '../services/status.js';
 
@@ -72,13 +69,9 @@ logInfo('thread', 'state.whitelist.applied', {
   runtime_accessor_keys: THREAD_STORE_RUNTIME_STATE_KEYS.length,
 });
 
-
-const RUNTIME_SYNC_DEBOUNCE_MS = 80;
-const RUNTIME_SYNC_DELTA_MIN_INTERVAL_MS = 240;
 let runtimeSyncPromise = null;
 let runtimeSyncPending = false;
-let runtimeSyncTimer = 0;
-let runtimeLastSyncAtMs = 0;
+const preferenceWriteQueueByKey = new Map();
 
 function perfNow() {
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
@@ -88,18 +81,32 @@ function perfNow() {
 }
 
 function persistRemote(prefKey, value) {
-  callAPI('ui/preferences/set', { key: prefKey, value })
+  return callAPI('ui/preferences/set', { key: prefKey, value });
+}
+
+function persistPreferenceAndSync(prefKey, value, logMeta = {}) {
+  const queueKey = (prefKey || '').toString();
+  const prev = preferenceWriteQueueByKey.get(queueKey) || Promise.resolve();
+  const current = prev
+    .catch(() => { })
+    .then(() => persistRemote(queueKey, value))
+    .then(() => syncRuntimeState())
     .catch((error) => {
-      logDebug('thread', 'prefs.persist.failed', { key: prefKey, error });
+      logDebug('thread', 'prefs.persist.failed', { key: prefKey, error, ...logMeta });
     });
+  preferenceWriteQueueByKey.set(queueKey, current);
+  current.finally(() => {
+    if (preferenceWriteQueueByKey.get(queueKey) === current) {
+      preferenceWriteQueueByKey.delete(queueKey);
+    }
+  });
 }
 
 function saveActiveThread(id) {
   const next = id || '';
   if (state.activeThreadId === next) return;
   const prev = state.activeThreadId || '';
-  state.activeThreadId = next;
-  persistRemote(PREF_ACTIVE_THREAD_ID, state.activeThreadId);
+  persistPreferenceAndSync(PREF_ACTIVE_THREAD_ID, next, { previous: prev, current: next });
   logDebug('thread', 'activeChat.changed', {
     from: prev,
     to: next,
@@ -110,8 +117,7 @@ function saveActiveCmdThread(id) {
   const next = id || '';
   if (state.activeCmdThreadId === next) return;
   const prev = state.activeCmdThreadId || '';
-  state.activeCmdThreadId = next;
-  persistRemote(PREF_ACTIVE_CMD_THREAD_ID, state.activeCmdThreadId);
+  persistPreferenceAndSync(PREF_ACTIVE_CMD_THREAD_ID, next, { previous: prev, current: next });
   logDebug('thread', 'activeCmd.changed', {
     from: prev,
     to: next,
@@ -124,9 +130,7 @@ function setMainAgent(threadId) {
     return;
   }
   const prev = state.mainAgentId;
-  state.mainAgentId = id;
-  persistRemote(PREF_MAIN_AGENT_ID, id);
-  syncRuntimeState().catch(() => { });
+  persistPreferenceAndSync(PREF_MAIN_AGENT_ID, id, { previous: prev, current: id });
   logInfo('thread', 'mainAgent.changed', {
     previous: prev,
     current: id,
@@ -337,36 +341,16 @@ async function syncRuntimeState() {
   return runtimeSyncPromise;
 }
 
-function scheduleRuntimeSync(reason = '') {
-  if (!shouldScheduleRuntimeSync({
-    eventType: reason,
-    nowMs: Date.now(),
-    lastSyncAtMs: runtimeLastSyncAtMs,
-    minIntervalMs: RUNTIME_SYNC_DELTA_MIN_INTERVAL_MS,
-    timerActive: runtimeSyncTimer !== 0,
-  })) {
-    return;
-  }
-  runtimeSyncTimer = window.setTimeout(() => {
-    runtimeSyncTimer = 0;
-    runtimeLastSyncAtMs = Date.now();
-    syncRuntimeState().catch((error) => {
-      logWarn('thread', 'state.sync.failed', { error, by_event: reason });
-    });
-  }, RUNTIME_SYNC_DEBOUNCE_MS);
-}
-
-function handleAgentEvent(evt) {
-  const threadId = evt?.agent_id || evt?.threadId || '';
-  const eventType = (evt?.type || '').toString();
-  if (!threadId) return;
-  scheduleRuntimeSync(eventType);
+function handleAgentEvent() {
+  // runtime sync is backend-driven by bridge event `ui/state/changed`
 }
 
 function handleBridgeEvent(evt) {
   const eventType = (evt?.type || evt?.method || '').toString();
-  if (!eventType) return;
-  scheduleRuntimeSync(eventType);
+  if (eventType !== 'ui/state/changed') return;
+  syncRuntimeState().catch((error) => {
+    logWarn('thread', 'state.sync.failed', { error, by_event: eventType });
+  });
 }
 
 

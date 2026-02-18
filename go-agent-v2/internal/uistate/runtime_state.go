@@ -3,6 +3,7 @@ package uistate
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -269,7 +270,11 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 		}
 		role := strings.ToLower(strings.TrimSpace(rec.Role))
 		if role == "user" {
-			m.appendUserLocked(id, rec.Content, nil, ts)
+			var payload map[string]any
+			if len(rec.Metadata) > 0 {
+				_ = json.Unmarshal(rec.Metadata, &payload)
+			}
+			m.appendUserLocked(id, rec.Content, extractUserAttachmentsFromPayload(payload), ts)
 			continue
 		}
 
@@ -313,6 +318,94 @@ func hydrateContentPayload(rec HistoryRecord, payload map[string]any) {
 	if _, ok := payload["output"]; !ok {
 		payload["output"] = rec.Content
 	}
+}
+
+func extractUserAttachmentsFromPayload(payload map[string]any) []TimelineAttachment {
+	if payload == nil {
+		return nil
+	}
+	rawInput, ok := payload["input"]
+	if !ok {
+		return nil
+	}
+	list, ok := rawInput.([]any)
+	if !ok {
+		return nil
+	}
+	attachments := make([]TimelineAttachment, 0, len(list))
+	for _, raw := range list {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		typeValue, _ := item["type"].(string)
+		kind := strings.ToLower(strings.TrimSpace(typeValue))
+		switch kind {
+		case "image":
+			path := extractFirstString(item, "url")
+			path = strings.TrimSpace(path)
+			if path == "" {
+				continue
+			}
+			attachments = append(attachments, TimelineAttachment{
+				Kind:       "image",
+				Name:       attachmentName(path),
+				Path:       path,
+				PreviewURL: attachmentPreview(path),
+			})
+		case "localimage":
+			path := extractFirstString(item, "path")
+			path = strings.TrimSpace(path)
+			if path == "" {
+				continue
+			}
+			attachments = append(attachments, TimelineAttachment{
+				Kind:       "image",
+				Name:       attachmentName(path),
+				Path:       path,
+				PreviewURL: attachmentPreview(path),
+			})
+		case "mention", "filecontent":
+			path := extractFirstString(item, "path")
+			path = strings.TrimSpace(path)
+			if path == "" {
+				continue
+			}
+			attachments = append(attachments, TimelineAttachment{
+				Kind: "file",
+				Name: attachmentName(path),
+				Path: path,
+			})
+		}
+	}
+	return attachments
+}
+
+func attachmentName(path string) string {
+	value := strings.TrimSpace(path)
+	if value == "" {
+		return ""
+	}
+	base := strings.TrimSpace(filepath.Base(value))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return value
+	}
+	return base
+}
+
+func attachmentPreview(path string) string {
+	value := strings.TrimSpace(path)
+	if value == "" {
+		return ""
+	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "http://") ||
+		strings.HasPrefix(lower, "https://") ||
+		strings.HasPrefix(lower, "data:image/") ||
+		strings.HasPrefix(lower, "file://") {
+		return value
+	}
+	return "file://" + value
 }
 
 // ReplaceWorkspaceRuns replaces workspace run cache.
@@ -402,6 +495,8 @@ type resolvedFields struct {
 	file     string
 	files    []string
 	exitCode *int
+	planDone *bool
+	planSet  bool
 }
 
 type runtimeEventHandler func(*RuntimeManager, string, resolvedFields, map[string]any, time.Time)
@@ -461,6 +556,11 @@ func resolveEventFields(normalized NormalizedEvent, payload map[string]any) reso
 	}
 	if code, ok := extractExitCode(payload["exit_code"]); ok {
 		fields.exitCode = &code
+	}
+	if planText, planDone, ok := extractPlanSnapshot(payload); ok {
+		fields.text = planText
+		fields.planSet = true
+		fields.planDone = &planDone
 	}
 	return fields
 }
@@ -535,6 +635,14 @@ func handleApprovalRequestEvent(m *RuntimeManager, threadID string, fields resol
 }
 
 func handlePlanDeltaEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
+	if fields.planSet {
+		planDone := false
+		if fields.planDone != nil {
+			planDone = *fields.planDone
+		}
+		m.setPlanLocked(threadID, fields.text, planDone, ts)
+		return
+	}
 	m.appendPlanLocked(threadID, fields.text, ts)
 }
 
@@ -943,6 +1051,149 @@ func (m *RuntimeManager) appendPlanLocked(threadID, delta string, ts time.Time) 
 	m.patchTimelineItemLocked(threadID, index, func(item *TimelineItem) {
 		item.Text = item.Text + delta
 	})
+}
+
+func (m *RuntimeManager) setPlanLocked(threadID, text string, done bool, ts time.Time) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return
+	}
+	rt := m.runtime[threadID]
+	if rt.planIndex < 0 {
+		rt.planIndex = m.pushTimelineItemLocked(threadID, TimelineItem{
+			Kind: "plan",
+			Text: trimmed,
+			Done: done,
+		}, ts)
+		return
+	}
+	index := rt.planIndex
+	list := m.timelineLocked(threadID)
+	if index < 0 || index >= len(list) {
+		return
+	}
+	m.patchTimelineItemLocked(threadID, index, func(item *TimelineItem) {
+		item.Text = trimmed
+		item.Done = done
+	})
+}
+
+type planEntry struct {
+	step   string
+	status string
+}
+
+func extractPlanSnapshot(payload map[string]any) (string, bool, bool) {
+	entries, explanation := extractPlanEntries(payload)
+	if len(entries) == 0 {
+		return "", false, false
+	}
+	text, done := formatPlanSnapshot(entries, explanation)
+	if strings.TrimSpace(text) == "" {
+		return "", false, false
+	}
+	return text, done, true
+}
+
+func extractPlanEntries(payload map[string]any) ([]planEntry, string) {
+	if payload == nil {
+		return nil, ""
+	}
+	entries := parsePlanEntriesAny(payload["plan"])
+	explanation := extractPlanExplanation(payload["explanation"])
+	if len(entries) > 0 {
+		return entries, explanation
+	}
+	for _, key := range []string{"msg", "data", "payload"} {
+		nested, ok := payload[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		entries = parsePlanEntriesAny(nested["plan"])
+		if explanation == "" {
+			explanation = extractPlanExplanation(nested["explanation"])
+		}
+		if len(entries) > 0 {
+			return entries, explanation
+		}
+	}
+	return nil, explanation
+}
+
+func parsePlanEntriesAny(raw any) []planEntry {
+	items, ok := raw.([]any)
+	if !ok || len(items) == 0 {
+		return nil
+	}
+	out := make([]planEntry, 0, len(items))
+	for _, item := range items {
+		entryMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		step := strings.TrimSpace(extractFirstString(entryMap, "step", "title", "text", "content"))
+		if step == "" {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(extractFirstString(entryMap, "status", "state")))
+		if status == "" {
+			status = "pending"
+		}
+		out = append(out, planEntry{step: step, status: status})
+	}
+	return out
+}
+
+func extractPlanExplanation(raw any) string {
+	text, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func formatPlanSnapshot(entries []planEntry, explanation string) (string, bool) {
+	total := len(entries)
+	if total == 0 {
+		return "", false
+	}
+	completed := 0
+	lines := make([]string, 0, total+2)
+	for index, entry := range entries {
+		if planStatusDone(entry.status) {
+			completed += 1
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s %s", index+1, planStatusSymbol(entry.status), entry.step))
+	}
+	header := fmt.Sprintf("✓ 已完成 %d/%d 项任务", completed, total)
+	if explanation != "" {
+		lines = append([]string{header, explanation}, lines...)
+	} else {
+		lines = append([]string{header}, lines...)
+	}
+	return strings.Join(lines, "\n"), completed == total
+}
+
+func planStatusSymbol(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "success", "done", "finished":
+		return "☑"
+	case "in_progress", "running", "doing", "active":
+		return "◐"
+	case "failed", "error", "blocked":
+		return "⚠"
+	default:
+		return "○"
+	}
+}
+
+func planStatusDone(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "success", "done", "finished":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *RuntimeManager) completeTurnLocked(threadID string, ts time.Time) {

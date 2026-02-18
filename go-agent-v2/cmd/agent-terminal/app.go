@@ -170,6 +170,8 @@ func (a *App) CallAPI(method, paramsJSON string) (resultJSON string, callErr err
 		result, err = a.handleUISelectFiles()
 	case "ui/buildInfo":
 		result, err = a.handleUIBuildInfo()
+	case "ui/copyText":
+		result, err = a.handleUICopyText(paramsJSON)
 	default:
 		// 通用 JSON-RPC 调用
 		var params json.RawMessage
@@ -208,6 +210,32 @@ func (a *App) handleUISelectFiles() (any, error) {
 
 func (a *App) handleUIBuildInfo() (any, error) {
 	return currentBuildInfo(), nil
+}
+
+func (a *App) handleUICopyText(paramsJSON string) (any, error) {
+	var request struct {
+		Text string `json:"text"`
+	}
+	if strings.TrimSpace(paramsJSON) != "" {
+		if err := json.Unmarshal([]byte(paramsJSON), &request); err != nil {
+			return nil, apperrors.Wrap(err, "App.handleUICopyText", "unmarshal params")
+		}
+	}
+
+	text := strings.TrimSpace(request.Text)
+	if text == "" {
+		return map[string]any{"ok": false}, nil
+	}
+	if a.wailsApp == nil || a.wailsApp.Clipboard == nil {
+		return nil, apperrors.Newf("App.handleUICopyText", "clipboard bridge not ready")
+	}
+	if ok := a.wailsApp.Clipboard.SetText(text); !ok {
+		return nil, apperrors.Newf("App.handleUICopyText", "set clipboard text failed")
+	}
+
+	logger.Info("ui: copied text to clipboard", logger.FieldSource, "ui",
+		logger.FieldComponent, "clipboard", "length", len(text))
+	return map[string]any{"ok": true}, nil
 }
 
 // ========================================

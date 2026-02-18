@@ -634,38 +634,8 @@ func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) 
 
 		// 快速路径: 客户端响应 (有 id + 无 method + 有 result/error)
 		// 直接从 raw bytes 解析 int64 ID → pending map 查找, 零 alloc
-		if len(env.ID) > 0 && string(env.ID) != "null" && env.Method == "" && (len(env.Result) > 0 || len(env.Error) > 0) {
-			if reqID, ok := parseIntID(env.ID); ok {
-				s.pendingMu.Lock()
-				ch, found := s.pending[reqID]
-				s.pendingMu.Unlock()
-
-				if found {
-					resp := &Response{
-						JSONRPC: jsonrpcVersion,
-						ID:      reqID,
-					}
-					if len(env.Result) > 0 {
-						var result any
-						if err := json.Unmarshal(env.Result, &result); err != nil {
-							logger.Warn("app-server: unmarshal client response result", logger.FieldError, err)
-						}
-						resp.Result = result
-					}
-					if len(env.Error) > 0 {
-						var rpcErr RPCError
-						if err := json.Unmarshal(env.Error, &rpcErr); err != nil {
-							logger.Warn("app-server: unmarshal client response error", logger.FieldError, err)
-						}
-						resp.Error = &rpcErr
-					}
-					select {
-					case ch <- resp:
-					default:
-					}
-					continue
-				}
-			}
+		if s.handleClientResponse(env) {
+			continue
 		}
 
 		// 正常请求/通知: 复用已解析的字段
@@ -685,6 +655,48 @@ func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) 
 			return
 		}
 	}
+}
+
+func (s *Server) handleClientResponse(env rpcEnvelope) bool {
+	if len(env.ID) == 0 || string(env.ID) == "null" || env.Method != "" {
+		return false
+	}
+	if len(env.Result) == 0 && len(env.Error) == 0 {
+		return false
+	}
+	reqID, ok := parseIntID(env.ID)
+	if !ok {
+		return false
+	}
+	s.pendingMu.Lock()
+	ch, found := s.pending[reqID]
+	s.pendingMu.Unlock()
+	if !found {
+		return false
+	}
+	resp := &Response{
+		JSONRPC: jsonrpcVersion,
+		ID:      reqID,
+	}
+	if len(env.Result) > 0 {
+		var result any
+		if err := json.Unmarshal(env.Result, &result); err != nil {
+			logger.Warn("app-server: unmarshal client response result", logger.FieldError, err)
+		}
+		resp.Result = result
+	}
+	if len(env.Error) > 0 {
+		var rpcErr RPCError
+		if err := json.Unmarshal(env.Error, &rpcErr); err != nil {
+			logger.Warn("app-server: unmarshal client response error", logger.FieldError, err)
+		}
+		resp.Error = &rpcErr
+	}
+	select {
+	case ch <- resp:
+	default:
+	}
+	return true
 }
 
 // handleParsedMessage 复用已解析的 rpcEnvelope 分发请求 (避免二次 Unmarshal)。
@@ -748,6 +760,7 @@ var payloadExtractKeys = []string{
 	"text", "summary", "args", "arguments", "output",
 	"id", "type", "item_id", "callId", "call_id",
 	"file_path", "path", "chunk", "stream",
+	"plan", "explanation",
 }
 
 func mergePayloadFromMap(payload map[string]any, data map[string]any) {
@@ -1117,9 +1130,24 @@ func (s *Server) persistMessage(agentID string, event codex.Event, method string
 }
 
 // PersistUserMessage 持久化用户消息 (从 turn/start 调用)。
-func (s *Server) PersistUserMessage(agentID, prompt string) {
+func (s *Server) PersistUserMessage(agentID, prompt string, input []UserInput) {
 	if s.msgStore == nil {
 		return
+	}
+
+	var metadata json.RawMessage
+	if len(input) > 0 {
+		raw, err := json.Marshal(map[string]any{
+			"input": input,
+		})
+		if err != nil {
+			logger.Warn("app-server: persist user message metadata marshal failed",
+				logger.FieldAgentID, agentID,
+				logger.FieldError, err,
+			)
+		} else {
+			metadata = raw
+		}
 	}
 
 	msg := &store.AgentMessage{
@@ -1128,6 +1156,7 @@ func (s *Server) PersistUserMessage(agentID, prompt string) {
 		EventType: "user_message",
 		Method:    "turn/start",
 		Content:   prompt,
+		Metadata:  metadata,
 	}
 
 	ctx, cancel := toolCtx()
@@ -1405,15 +1434,7 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 			logger.Debug("app-server: unmarshal tool arguments", logger.FieldToolName, call.Tool, logger.FieldError, err)
 		}
 	}
-	filePath := ""
-	if argMap != nil {
-		for _, key := range []string{"file_path", "path", "file"} {
-			if v, ok := argMap[key].(string); ok && strings.TrimSpace(v) != "" {
-				filePath = strings.TrimSpace(v)
-				break
-			}
-		}
-	}
+	filePath := extractToolFilePath(argMap)
 
 	logger.Info("dynamic-tool: completed",
 		logger.FieldSource, "codex",
@@ -1427,25 +1448,7 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 	)
 
 	// 广播到前端 — 让 UI 可以显示 LSP 调用
-	notifyPayload := map[string]any{
-		"threadId":   agentID,
-		"agent":      agentID,
-		"tool":       call.Tool,
-		"callId":     call.CallID,
-		"arguments":  argMap,
-		"file":       filePath,
-		"success":    success,
-		"totalCalls": count,
-		"elapsedMs":  elapsed.Milliseconds(),
-		"resultLen":  len(result),
-	}
-	if result != "" {
-		if len(result) > 500 {
-			notifyPayload["resultPreview"] = result[:500]
-		} else {
-			notifyPayload["resultPreview"] = result
-		}
-	}
+	notifyPayload := buildToolNotifyPayload(agentID, call, argMap, filePath, success, count, elapsed, result)
 	s.Notify("dynamic-tool/called", notifyPayload)
 
 	// 持久化可观测事件, 便于重启后回放工具调用链路。
@@ -1463,6 +1466,56 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 	if err := proc.Client.SendDynamicToolResult(call.CallID, result, event.RequestID); err != nil {
 		logger.Warn("app-server: send tool result failed", logger.FieldAgentID, agentID, logger.FieldToolName, call.Tool, logger.FieldError, err)
 	}
+}
+
+func extractToolFilePath(args map[string]any) string {
+	if args == nil {
+		return ""
+	}
+	for _, key := range []string{"file_path", "path", "file"} {
+		value, ok := args[key].(string)
+		if !ok {
+			continue
+		}
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func buildToolNotifyPayload(
+	agentID string,
+	call codex.DynamicToolCallData,
+	argMap map[string]any,
+	filePath string,
+	success bool,
+	count int64,
+	elapsed time.Duration,
+	result string,
+) map[string]any {
+	payload := map[string]any{
+		"threadId":   agentID,
+		"agent":      agentID,
+		"tool":       call.Tool,
+		"callId":     call.CallID,
+		"arguments":  argMap,
+		"file":       filePath,
+		"success":    success,
+		"totalCalls": count,
+		"elapsedMs":  elapsed.Milliseconds(),
+		"resultLen":  len(result),
+	}
+	if result == "" {
+		return payload
+	}
+	if len(result) > 500 {
+		payload["resultPreview"] = result[:500]
+		return payload
+	}
+	payload["resultPreview"] = result
+	return payload
 }
 
 // lspHover 调用 LSP hover。

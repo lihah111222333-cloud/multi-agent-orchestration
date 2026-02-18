@@ -128,25 +128,32 @@ func (c *Client) Spawn(ctx context.Context) error {
 	deadline := time.Now().Add(15 * time.Second)
 
 	if c.Port > 0 {
-		// 已知端口: 直接 health check
-		backoff := 100 * time.Millisecond
-		for time.Now().Before(deadline) {
-			if err := c.Health(); err == nil {
-				logger.Infow("codex: health check passed", logger.FieldPort, c.Port)
-				return nil
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(backoff):
-			}
-			backoff = min(backoff*2, 2*time.Second)
-		}
-		logger.Warn("codex: health check timeout", logger.FieldPort, c.Port)
-		return apperrors.Newf("Client.Spawn", "health check timeout on port %d", c.Port)
+		return c.waitForKnownPort(ctx, deadline)
 	}
 
 	// port 0: 先等 stdout, 再尝试解析端口, 再扫描
+	return c.discoverPort(ctx, deadline, &stdoutBuf)
+}
+
+func (c *Client) waitForKnownPort(ctx context.Context, deadline time.Time) error {
+	backoff := 100 * time.Millisecond
+	for time.Now().Before(deadline) {
+		if err := c.Health(); err == nil {
+			logger.Infow("codex: health check passed", logger.FieldPort, c.Port)
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, 2*time.Second)
+	}
+	logger.Warn("codex: health check timeout", logger.FieldPort, c.Port)
+	return apperrors.Newf("Client.Spawn", "health check timeout on port %d", c.Port)
+}
+
+func (c *Client) discoverPort(ctx context.Context, deadline time.Time, stdoutBuf *bytes.Buffer) error {
 	backoff := 200 * time.Millisecond
 	for time.Now().Before(deadline) {
 		select {
@@ -170,7 +177,6 @@ func (c *Client) Spawn(ctx context.Context) error {
 			return nil
 		}
 	}
-
 	return apperrors.New("Client.Spawn", "port discovery timeout (port 0 mode)")
 }
 

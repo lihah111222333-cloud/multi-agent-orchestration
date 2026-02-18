@@ -463,8 +463,8 @@ func (s *Server) resourceSharedFileWrite(args json.RawMessage) string {
 	if err := json.Unmarshal(args, &p); err != nil {
 		return toolError(pkgerr.Wrap(err, "ResourceTool.FileWrite", "invalid args"))
 	}
-	if p.Path == "" || p.Content == "" {
-		return `{"error":"path and content are required"}`
+	if strings.TrimSpace(p.Path) == "" {
+		return `{"error":"path is required"}`
 	}
 
 	ctx, cancel := toolCtx()

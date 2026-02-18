@@ -177,6 +177,22 @@ export async function saveClipboardImage(base64Payload) {
   return path;
 }
 
+export async function copyTextToClipboard(text) {
+  const payload = {
+    text: (text || '').toString(),
+  };
+  if (!payload.text.trim()) return false;
+  const res = await callAPI('ui/copyText', payload);
+  return Boolean(res?.ok);
+}
+
+export async function resolveThreadIdentity(threadId) {
+  const id = (threadId || '').toString().trim();
+  if (!id) return {};
+  const res = await callAPI('thread/resolve', { threadId: id });
+  return res && typeof res === 'object' ? res : {};
+}
+
 export async function getBuildInfo() {
   const raw = await callByID(METHOD_IDS.GET_BUILD_INFO);
   const info = parseMaybeJSON(raw);

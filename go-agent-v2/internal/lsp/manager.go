@@ -12,6 +12,7 @@ package lsp
 
 import (
 	"context"
+	"net/url"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -304,6 +305,13 @@ func pathToURI(path string) string {
 	if strings.HasPrefix(path, "file://") {
 		return path
 	}
-	abs, _ := filepath.Abs(path)
-	return "file://" + abs
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	abs = filepath.ToSlash(abs)
+	if !strings.HasPrefix(abs, "/") {
+		abs = "/" + abs
+	}
+	return (&url.URL{Scheme: "file", Path: abs}).String()
 }

@@ -305,6 +305,30 @@ func writeDebugPollJSON(w http.ResponseWriter, resp map[string]any, pollID int64
 	return true
 }
 
+func handleFirstPoll(w http.ResponseWriter, pollID int64, pp debugPollParams, start time.Time) bool {
+	if pp.after > 0 {
+		return false
+	}
+	_, lastID, queueDepth, _ := readDebugBridgeEvents(0, 1)
+	resp := map[string]any{
+		"events":  []debugBridgeEvent{},
+		"last_id": lastID,
+	}
+	if !writeDebugPollJSON(w, resp, pollID, start, "after", pp.after, "limit", pp.effectiveLimit, "last_id", lastID, "queue_depth", queueDepth) {
+		return true
+	}
+	if queueDepth > 0 || pollID%debugBridgePollSampleEvery == 0 {
+		logger.Info("debug bridge: poll cursor sync",
+			"poll_id", pollID,
+			"after", pp.after,
+			"limit", pp.effectiveLimit,
+			"last_id", lastID,
+			"queue_depth", queueDepth,
+			logger.FieldDurationMS, time.Since(start).Milliseconds())
+	}
+	return true
+}
+
 func handleDebugBridgeEvents(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	pollID := debugBridgeMetrics.pollRequestTotal.Add(1)
@@ -321,27 +345,13 @@ func handleDebugBridgeEvents(w http.ResponseWriter, r *http.Request) {
 	pp := parseDebugPollParams(r, pollID)
 
 	// 首次连接（after<=0）只返回游标，不回放历史事件，防止刷新后事件洪峰卡死前端。
-	if pp.after <= 0 {
-		_, lastID, queueDepth, _ := readDebugBridgeEvents(0, 1)
-		resp := map[string]any{
-			"events":  []debugBridgeEvent{},
-			"last_id": lastID,
-		}
-		if !writeDebugPollJSON(w, resp, pollID, start, "after", pp.after, "limit", pp.effectiveLimit, "last_id", lastID, "queue_depth", queueDepth) {
-			return
-		}
-		if queueDepth > 0 || pollID%debugBridgePollSampleEvery == 0 {
-			logger.Info("debug bridge: poll cursor sync",
-				"poll_id", pollID,
-				"after", pp.after,
-				"limit", pp.effectiveLimit,
-				"last_id", lastID,
-				"queue_depth", queueDepth,
-				logger.FieldDurationMS, time.Since(start).Milliseconds())
-		}
+	if handleFirstPoll(w, pollID, pp, start) {
 		return
 	}
+	serveDebugPollEvents(w, pollID, pp, start)
+}
 
+func serveDebugPollEvents(w http.ResponseWriter, pollID int64, pp debugPollParams, start time.Time) {
 	events, lastID, queueDepth, oldestID := readDebugBridgeEvents(pp.after, pp.effectiveLimit)
 	if events == nil {
 		events = []debugBridgeEvent{}

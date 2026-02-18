@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/multi-agent/go-agent-v2/internal/store"
@@ -87,3 +89,33 @@ func TestValidateBootstrapFile_RejectTooLarge(t *testing.T) {
 	}
 }
 
+func TestHandleDeletedFiles_RejectPathTraversal(t *testing.T) {
+	m := &WorkspaceManager{}
+	run := &store.WorkspaceRun{
+		RunKey:     "run-1",
+		SourceRoot: t.TempDir(),
+	}
+	tracked := map[string]store.WorkspaceRunFile{
+		"../outside.txt": {
+			RunKey:         "run-1",
+			RelativePath:   "../outside.txt",
+			BaselineSHA256: "baseline",
+		},
+	}
+	result := &WorkspaceMergeResult{}
+
+	m.handleDeletedFiles(context.Background(), run, tracked, map[string]bool{}, result, WorkspaceMergeRequest{})
+
+	if result.Errors != 1 {
+		t.Fatalf("errors = %d, want 1", result.Errors)
+	}
+	if len(result.Files) != 1 {
+		t.Fatalf("files len = %d, want 1", len(result.Files))
+	}
+	if result.Files[0].Action != "error" {
+		t.Fatalf("action = %q, want error", result.Files[0].Action)
+	}
+	if !strings.Contains(result.Files[0].Reason, "path traversal") {
+		t.Fatalf("reason = %q, want path traversal hint", result.Files[0].Reason)
+	}
+}

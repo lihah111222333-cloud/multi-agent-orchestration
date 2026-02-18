@@ -48,9 +48,14 @@ var classifyMap = map[string]classifyResult{
 	"file_change_approval_request": {UITypeApprovalRequest, UIStatusRunning},
 
 	// Turn Lifecycle
-	"turn_started":  {UITypeTurnStarted, UIStatusThinking},
-	"turn_complete": {UITypeTurnComplete, UIStatusIdle},
-	"idle":          {UITypeTurnComplete, UIStatusIdle},
+	"turn_started":              {UITypeTurnStarted, UIStatusThinking},
+	"task_started":              {UITypeTurnStarted, UIStatusThinking},
+	"codex/event/task_started":  {UITypeTurnStarted, UIStatusThinking},
+	"turn_complete":             {UITypeTurnComplete, UIStatusIdle},
+	"task_complete":             {UITypeTurnComplete, UIStatusIdle},
+	"codex/event/task_complete": {UITypeTurnComplete, UIStatusIdle},
+	"turn/completed":            {UITypeTurnComplete, UIStatusIdle},
+	"idle":                      {UITypeTurnComplete, UIStatusIdle},
 
 	// Plan / Diff
 	"plan_delta":  {UITypePlanDelta, UIStatusThinking},

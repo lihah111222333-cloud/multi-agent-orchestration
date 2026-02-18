@@ -48,6 +48,7 @@ const runtimeRootState = reactive({
   timelinesByThread: {},
   diffTextByThread: {},
   agentMetaById: {},
+  agentRuntimeById: {},
 });
 
 for (const key of THREAD_STORE_RUNTIME_STATE_KEYS) {
@@ -304,6 +305,9 @@ function applyRuntimeSnapshot(snapshot) {
   state.diffTextByThread = nextDiffs;
   state.agentMetaById = data.agentMetaById && typeof data.agentMetaById === 'object'
     ? data.agentMetaById
+    : {};
+  state.agentRuntimeById = data.agentRuntimeById && typeof data.agentRuntimeById === 'object'
+    ? data.agentRuntimeById
     : {};
   if (Object.prototype.hasOwnProperty.call(data, PREF_ACTIVE_THREAD_ID)) {
     state.activeThreadId = (data[PREF_ACTIVE_THREAD_ID] || '').toString();

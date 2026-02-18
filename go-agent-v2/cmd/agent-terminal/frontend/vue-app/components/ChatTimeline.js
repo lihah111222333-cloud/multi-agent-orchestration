@@ -9,6 +9,15 @@ export const ChatTimeline = {
   },
   setup(props) {
     let updateSeq = 0;
+    const presenceVisibleStatuses = new Set([
+      'starting',
+      'thinking',
+      'waiting',
+      'responding',
+      'running',
+      'editing',
+      'syncing',
+    ]);
     watch(
       () => props.items.length,
       (next, prev) => {
@@ -20,6 +29,18 @@ export const ChatTimeline = {
           seq: updateSeq,
           length: next || 0,
           last_kind: last?.kind || '',
+        });
+      },
+      { immediate: true },
+    );
+    watch(
+      () => props.activeStatus,
+      (next, prev) => {
+        if (next === prev) return;
+        logDebug('ui', 'timeline.presence.status', {
+          previous: prev || '',
+          current: next || '',
+          visible: showAgentPresence(next, props.items) ? 1 : 0,
         });
       },
       { immediate: true },
@@ -69,6 +90,22 @@ export const ChatTimeline = {
       return att?.kind === 'image' ? 'IMG' : 'FILE';
     }
 
+    function attachmentPreview(att) {
+      if (!att || att.kind !== 'image') return '';
+      const preview = (att.previewUrl || '').toString().trim();
+      if (preview) return preview;
+      const path = (att.path || '').toString().trim();
+      if (!path) return '';
+      const lower = path.toLowerCase();
+      if (lower.startsWith('http://')
+        || lower.startsWith('https://')
+        || lower.startsWith('data:image/')
+        || lower.startsWith('file://')) {
+        return path;
+      }
+      return `file://${path}`;
+    }
+
     function formatTime(ts) {
       if (!ts) return '';
       const date = new Date(ts);
@@ -99,15 +136,50 @@ export const ChatTimeline = {
       return '';
     }
 
-    function showAgentPresence(status) {
-      return ['starting', 'thinking', 'waiting', 'responding'].includes((status || '').toString());
+    function hasPendingProcess(items) {
+      const list = Array.isArray(items) ? items : [];
+      for (let index = list.length - 1; index >= 0; index -= 1) {
+        const item = list[index];
+        if (!item || !item.kind) continue;
+        if (item.kind === 'thinking' && !item.done) return true;
+        if (item.kind === 'plan' && !item.done) return true;
+        if (item.kind === 'command' && item.status === 'running') return true;
+        if (item.kind === 'file' && item.status === 'editing') return true;
+        if (item.kind === 'approval' && item.status === 'pending') return true;
+      }
+      return false;
     }
 
-    function presenceLabel(status) {
+    function latestPendingLabel(items) {
+      const list = Array.isArray(items) ? items : [];
+      for (let index = list.length - 1; index >= 0; index -= 1) {
+        const item = list[index];
+        if (!item || !item.kind) continue;
+        if (item.kind === 'command' && item.status === 'running') return '执行中';
+        if (item.kind === 'file' && item.status === 'editing') return '修改中';
+        if (item.kind === 'approval' && item.status === 'pending') return '等待确认';
+        if (item.kind === 'plan' && !item.done) return '规划中';
+        if (item.kind === 'thinking' && !item.done) return '思考中';
+      }
+      return '';
+    }
+
+    function showAgentPresence(status, items = []) {
+      const value = (status || '').toString();
+      if (presenceVisibleStatuses.has(value)) return true;
+      return hasPendingProcess(items);
+    }
+
+    function presenceLabel(status, items = []) {
       const value = (status || '').toString();
       if (value === 'starting') return '启动中';
       if (value === 'waiting') return '等待中';
       if (value === 'responding') return '回复中';
+      if (value === 'running') return '执行中';
+      if (value === 'editing') return '修改中';
+      if (value === 'syncing') return '同步中';
+      const pending = latestPendingLabel(items);
+      if (pending) return pending;
       return '思考中';
     }
 
@@ -115,6 +187,7 @@ export const ChatTimeline = {
       roleLabel,
       stateLabel,
       attachmentType,
+      attachmentPreview,
       formatTime,
       bubbleRole,
       isDialog,
@@ -146,9 +219,20 @@ export const ChatTimeline = {
             </header>
             <pre class="chat-item-body">{{ item.text }}</pre>
             <div v-if="(item.attachments || []).length > 0" class="chat-attachment-list">
-              <span v-for="(att, idx) in item.attachments" :key="idx" class="chat-attachment-pill">
+              <span
+                v-for="(att, idx) in item.attachments"
+                :key="idx"
+                class="chat-attachment-pill"
+                :class="{ 'has-image': Boolean(attachmentPreview(att)) }"
+              >
                 <span class="attachment-kind">{{ attachmentType(att) }}</span>
                 <span class="attachment-name">{{ att.name || att.path }}</span>
+                <img
+                  v-if="attachmentPreview(att)"
+                  class="chat-attachment-image"
+                  :src="attachmentPreview(att)"
+                  :alt="att.name || 'image attachment'"
+                />
               </span>
             </div>
           </section>
@@ -193,11 +277,11 @@ export const ChatTimeline = {
         </section>
       </article>
 
-      <div v-if="showAgentPresence(activeStatus)" class="chat-presence-row">
+      <div v-if="showAgentPresence(activeStatus, items)" class="chat-presence-row">
         <div class="chat-item-avatar chat-item-avatar-presence">AI</div>
         <div class="chat-presence-pill">
           <span class="chat-presence-dot"></span>
-          <span>{{ presenceLabel(activeStatus) }}</span>
+          <span>{{ presenceLabel(activeStatus, items) }}</span>
         </div>
       </div>
     </div>

@@ -10,6 +10,7 @@ import { ChatTimeline } from '../components/ChatTimeline.js';
 import { DiffPanel } from '../components/DiffPanel.js';
 import { ComposerBar } from '../components/ComposerBar.js';
 import { statusLabel, normalizeStatus } from '../services/status.js';
+import { copyTextToClipboard, resolveThreadIdentity } from '../services/api.js';
 import { useComposerStore } from '../stores/composer.js';
 
 export async function requestHistoryLoad(threadStore, threadId, options = {}) {
@@ -44,7 +45,9 @@ export const UnifiedChatPage = {
     const composer = useComposerStore();
     const workspaceRef = ref(null);
     const dragging = ref(false);
+    const copyState = ref('idle');
     let scrollTimer = 0;
+    let copyStateTimer = 0;
 
     const isCmd = computed(() => props.mode === 'cmd');
     const modeKey = computed(() => (isCmd.value ? 'cmd' : 'chat'));
@@ -89,6 +92,10 @@ export const UnifiedChatPage = {
     const activeTimeline = computed(() => props.threadStore.getThreadTimeline(selectedThreadId.value));
     const activeDiffText = computed(() => props.threadStore.getThreadDiff(selectedThreadId.value));
     const activeStatus = computed(() => normalizeStatus(props.threadStore.getThreadStatus(selectedThreadId.value)));
+    const activeRuntime = computed(() => {
+      const map = props.threadStore.state.agentRuntimeById || {};
+      return map[selectedThreadId.value] || null;
+    });
     const shouldAutoScroll = ref(true);
     const timelineSignal = computed(() => {
       const list = activeTimeline.value || [];
@@ -98,6 +105,11 @@ export const UnifiedChatPage = {
     });
 
     const noActiveThread = computed(() => !selectedThreadId.value);
+    const copyButtonLabel = computed(() => {
+      if (copyState.value === 'done') return '已复制';
+      if (copyState.value === 'error') return '复制失败';
+      return '复制信息';
+    });
 
     const showOverview = computed(() => {
       if (isCmd.value) return false;
@@ -273,6 +285,50 @@ export const UnifiedChatPage = {
       cmdCardCols.value = value;
     }
 
+    async function copySelectedThreadId() {
+      const threadId = (selectedThreadId.value || '').toString();
+      if (!threadId) return;
+      const runtime = activeRuntime.value || {};
+      let resolved = {};
+      const existingCodexThreadID = (runtime.codexThreadId || '').toString().trim();
+      if (!existingCodexThreadID) {
+        try {
+          resolved = await resolveThreadIdentity(threadId);
+        } catch {
+          resolved = {};
+        }
+      }
+      const codexThreadID = existingCodexThreadID || (resolved.codexThreadId || '').toString().trim();
+      const resolvedPort = Number.isFinite(Number(runtime.port))
+        ? Number(runtime.port)
+        : (Number.isFinite(Number(resolved.port)) ? Number(resolved.port) : null);
+      const payload = {
+        agentId: threadId,
+        codexThreadId: codexThreadID,
+        uuid: codexThreadID,
+        name: activeThread.value ? props.threadStore.displayName(activeThread.value) : threadId,
+        status: activeStatus.value,
+        isMainAgent: threadId === mainAgentId.value,
+        port: resolvedPort,
+        copiedAt: new Date().toISOString(),
+      };
+      const text = JSON.stringify(payload, null, 2);
+      if (copyStateTimer) {
+        window.clearTimeout(copyStateTimer);
+        copyStateTimer = 0;
+      }
+      try {
+        const ok = await copyTextToClipboard(text);
+        copyState.value = ok ? 'done' : 'error';
+      } catch {
+        copyState.value = 'error';
+      }
+      copyStateTimer = window.setTimeout(() => {
+        copyState.value = 'idle';
+        copyStateTimer = 0;
+      }, 1200);
+    }
+
     function timelinePreview(threadId) {
       const items = props.threadStore.getThreadTimeline(threadId) || [];
       return items
@@ -335,6 +391,10 @@ export const UnifiedChatPage = {
         window.clearTimeout(scrollTimer);
         scrollTimer = 0;
       }
+      if (copyStateTimer) {
+        window.clearTimeout(copyStateTimer);
+        copyStateTimer = 0;
+      }
     });
 
     return {
@@ -349,6 +409,7 @@ export const UnifiedChatPage = {
       activeDiffText,
       activeStatus,
       noActiveThread,
+      copyButtonLabel,
       layoutMode,
       cmdCardCols,
       splitRatio,
@@ -368,6 +429,7 @@ export const UnifiedChatPage = {
       setChatMix,
       setCmdLayout,
       setCmdCardCols,
+      copySelectedThreadId,
       timelinePreview,
       diffPreview,
       onResizeStart,
@@ -405,9 +467,16 @@ export const UnifiedChatPage = {
         <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" @click="loadCurrentHistory">加载历史</button>
         <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" @click="threadStore.refreshThreads">刷新</button>
 
-        <select v-if="!isCmd" class="agent-selector" v-model="selectedThreadId">
-          <option v-for="thread in chatThreadOptions" :key="thread.id" :value="thread.id">{{ threadStore.displayName(thread) }}</option>
-        </select>
+        <div v-if="!isCmd" class="thread-selector-group">
+          <select class="agent-selector" v-model="selectedThreadId">
+            <option v-for="thread in chatThreadOptions" :key="thread.id" :value="thread.id">{{ threadStore.displayName(thread) }}</option>
+          </select>
+          <button
+            v-if="selectedThreadId"
+            class="btn btn-ghost btn-xs"
+            @click="copySelectedThreadId"
+          >{{ copyButtonLabel }}</button>
+        </div>
         <button
           v-if="!isCmd && selectedThreadId"
           class="btn btn-ghost btn-xs"
@@ -425,6 +494,10 @@ export const UnifiedChatPage = {
           class="btn btn-ghost btn-xs"
           @click="threadStore.stopThread(selectedThreadId)"
         >停止</button>
+        <div v-if="!isCmd" class="chat-status" :title="selectedThreadId || '未选择会话'">
+          <span class="status-dot" :class="activeStatus"></span>
+          <span>{{ noActiveThread ? '未选择会话' : statusLabel(activeStatus) }}</span>
+        </div>
 
       </div>
 

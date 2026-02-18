@@ -291,32 +291,7 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 		"actor", actor,
 	)
 
-	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(execCtx, "sh", "-c", command)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = util.NewLimitedWriter(&stdout, maxOutputLim)
-	cmd.Stderr = util.NewLimitedWriter(&stderr, maxOutputLim)
-
-	execErr := cmd.Run()
-	exitCode := 0
-	if execErr != nil {
-		if exitErr, ok := execErr.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			exitCode = -1
-		}
-	}
-
-	// 截断输出
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\n--- STDERR ---\n" + stderr.String()
-	}
-	if len(output) > maxOutputLim {
-		output = output[:maxOutputLim] + "\n...[truncated]"
-	}
+	output, exitCode, execErr := runShellCommand(ctx, command, timeout)
 
 	status := "success"
 	errText := ""
@@ -365,6 +340,39 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 		ExitCode: exitCode,
 		Run:      updated,
 	}, nil
+}
+
+func runShellCommand(ctx context.Context, command string, timeoutSec int) (output string, exitCode int, err error) {
+	timeout := util.ClampInt(timeoutSec, minTimeoutSec, maxTimeoutSec)
+	if timeout == 0 {
+		timeout = defaultTimeoutSec
+	}
+	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(execCtx, "sh", "-c", command)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = util.NewLimitedWriter(&stdout, maxOutputLim)
+	cmd.Stderr = util.NewLimitedWriter(&stderr, maxOutputLim)
+
+	execErr := cmd.Run()
+	exitCode = 0
+	if execErr != nil {
+		if exitErr, ok := execErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+		}
+	}
+
+	output = stdout.String()
+	if stderr.Len() > 0 {
+		output += "\n--- STDERR ---\n" + stderr.String()
+	}
+	if len(output) > maxOutputLim {
+		output = output[:maxOutputLim] + "\n...[truncated]"
+	}
+	return output, exitCode, execErr
 }
 
 // ========================================

@@ -14,11 +14,13 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -356,11 +358,71 @@ func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicT
 type asTurnStartInput struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+	URL  string `json:"url,omitempty"`
+	Path string `json:"path,omitempty"`
+	Name string `json:"name,omitempty"`
+}
+
+func isRemoteImageURL(raw string) bool {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch {
+	case strings.HasPrefix(value, "http://"),
+		strings.HasPrefix(value, "https://"),
+		strings.HasPrefix(value, "data:image/"):
+		return true
+	default:
+		return false
+	}
+}
+
+func mentionNameFromPath(path string) string {
+	base := strings.TrimSpace(filepath.Base(strings.TrimSpace(path)))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return "file"
+	}
+	return base
+}
+
+func buildTurnStartInputs(prompt string, images, files []string) []asTurnStartInput {
+	inputs := make([]asTurnStartInput, 0, 1+len(images)+len(files))
+	trimmedPrompt := strings.TrimSpace(prompt)
+	if trimmedPrompt != "" || (len(images) == 0 && len(files) == 0) {
+		inputs = append(inputs, asTurnStartInput{Type: "text", Text: prompt})
+	}
+
+	for _, raw := range images {
+		path := strings.TrimSpace(raw)
+		if path == "" {
+			continue
+		}
+		if isRemoteImageURL(path) {
+			inputs = append(inputs, asTurnStartInput{Type: "image", URL: path})
+			continue
+		}
+		inputs = append(inputs, asTurnStartInput{Type: "localImage", Path: path})
+	}
+
+	for _, raw := range files {
+		path := strings.TrimSpace(raw)
+		if path == "" {
+			continue
+		}
+		inputs = append(inputs, asTurnStartInput{
+			Type: "mention",
+			Name: mentionNameFromPath(path),
+			Path: path,
+		})
+	}
+
+	if len(inputs) == 0 {
+		inputs = append(inputs, asTurnStartInput{Type: "text", Text: prompt})
+	}
+	return inputs
 }
 
 // Submit 发送用户 prompt (app-server JSON-RPC turn/start)。
 func (c *AppServerClient) Submit(prompt string, images, files []string, outputSchema json.RawMessage) error {
-	inputs := []asTurnStartInput{{Type: "text", Text: prompt}}
+	inputs := buildTurnStartInputs(prompt, images, files)
 
 	params := map[string]any{
 		"threadId": c.ThreadID,
@@ -536,68 +598,83 @@ func (c *AppServerClient) readLoop() {
 			)
 			continue
 		}
+		if dropped, preview, convID := shouldDropLegacyMirrorNotification(msg); dropped {
+			logger.Info("codex: dropped legacy mirror stream notification",
+				logger.FieldMethod, msg.Method,
+				"conversation_id", convID,
+				"preview", preview,
+			)
+			continue
+		}
 
 		// Response: 交给 pending call
-		if msg.ID != nil && msg.Method == "" {
-			if val, ok := c.pending.Load(*msg.ID); ok {
-				pc := val.(*pendingCall)
-				if msg.Error != nil {
-					pc.err = apperrors.Newf("AppServerClient.readLoop", "rpc error: %s (code %d)", msg.Error.Message, msg.Error.Code)
-					logger.Warn("codex: RPC error response",
-						logger.FieldID, *msg.ID,
-						"code", msg.Error.Code,
-						"message", msg.Error.Message,
-					)
-				} else {
-					pc.result = msg.Result
-				}
-				close(pc.done)
-			} else {
-				logger.Warn("codex: orphan RPC response (no pending call)",
-					logger.FieldID, *msg.ID,
-					"result_len", len(msg.Result),
-				)
-			}
+		if c.handleRPCResponse(msg) {
 			continue
 		}
 
-		// Server Request 或 Notification: 转为 Event, 交给 handler
-		event := c.jsonRPCToEvent(msg)
-		if event.Type == "" {
-			logger.Warn("codex: readLoop skipped message with empty event type",
-				logger.FieldMethod, msg.Method,
-				"has_id", msg.ID != nil,
-				logger.FieldParamsLen, len(msg.Params),
-			)
-			continue
-		}
-
-		// 如果是 server request, 携带 requestID 让 handler 回复
-		if msg.ID != nil && msg.Method != "" {
-			event.RequestID = msg.ID
-			logger.Debug("codex: server request received",
-				logger.FieldID, *msg.ID,
-				logger.FieldMethod, msg.Method,
-				logger.FieldEventType, event.Type,
-			)
-		}
-
-		c.handlerMu.RLock()
-		h := c.handler
-		c.handlerMu.RUnlock()
-		if h == nil {
-			logger.Warn("codex: readLoop dropping event (no handler registered)",
-				logger.FieldEventType, event.Type,
-				logger.FieldMethod, msg.Method,
-			)
-			continue
-		}
-		h(event)
-
-		if event.Type == EventError || event.Type == EventShutdownComplete {
+		if c.handleRPCEvent(msg) {
 			return
 		}
 	}
+}
+
+func (c *AppServerClient) handleRPCResponse(msg jsonRPCMessage) bool {
+	if msg.ID == nil || msg.Method != "" {
+		return false
+	}
+	value, ok := c.pending.Load(*msg.ID)
+	if !ok {
+		logger.Warn("codex: orphan RPC response (no pending call)",
+			logger.FieldID, *msg.ID,
+			"result_len", len(msg.Result),
+		)
+		return true
+	}
+	pc := value.(*pendingCall)
+	if msg.Error != nil {
+		pc.err = apperrors.Newf("AppServerClient.readLoop", "rpc error: %s (code %d)", msg.Error.Message, msg.Error.Code)
+		logger.Warn("codex: RPC error response",
+			logger.FieldID, *msg.ID,
+			"code", msg.Error.Code,
+			"message", msg.Error.Message,
+		)
+	} else {
+		pc.result = msg.Result
+	}
+	close(pc.done)
+	return true
+}
+
+func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
+	event := c.jsonRPCToEvent(msg)
+	if event.Type == "" {
+		logger.Warn("codex: readLoop skipped message with empty event type",
+			logger.FieldMethod, msg.Method,
+			"has_id", msg.ID != nil,
+			logger.FieldParamsLen, len(msg.Params),
+		)
+		return false
+	}
+	if msg.ID != nil && msg.Method != "" {
+		event.RequestID = msg.ID
+		logger.Debug("codex: server request received",
+			logger.FieldID, *msg.ID,
+			logger.FieldMethod, msg.Method,
+			logger.FieldEventType, event.Type,
+		)
+	}
+	c.handlerMu.RLock()
+	handler := c.handler
+	c.handlerMu.RUnlock()
+	if handler == nil {
+		logger.Warn("codex: readLoop dropping event (no handler registered)",
+			logger.FieldEventType, event.Type,
+			logger.FieldMethod, msg.Method,
+		)
+		return false
+	}
+	handler(event)
+	return event.Type == EventError || event.Type == EventShutdownComplete
 }
 
 // jsonRPCToEvent 将 JSON-RPC notification 转为 codex Event。
@@ -813,6 +890,104 @@ func truncateBytes(b []byte, max int) string {
 	return string(b[:max]) + "...(truncated)"
 }
 
+var legacyMirrorStreamMethods = map[string]struct{}{
+	"agent/event/agent_message_delta":         {},
+	"agent/event/agent_message_content_delta": {},
+	"codex/event/agent_message_delta":         {},
+	"codex/event/agent_message_content_delta": {},
+	"agent/event/agent_reasoning_delta":       {},
+	"agent/event/agent_reasoning_raw_delta":   {},
+	"codex/event/agent_reasoning_delta":       {},
+	"codex/event/agent_reasoning_raw_delta":   {},
+	"codex/event/reasoning_content_delta":     {},
+	"agent/event/exec_command_output_delta":   {},
+	"codex/event/exec_command_output_delta":   {},
+	"codex/event/plan_delta":                  {},
+}
+
+func shouldDropLegacyMirrorNotification(msg jsonRPCMessage) (bool, string, string) {
+	if msg.ID != nil {
+		return false, "", ""
+	}
+
+	var payload map[string]any
+	if len(msg.Params) == 0 || json.Unmarshal(msg.Params, &payload) != nil {
+		return false, "", ""
+	}
+	if payload == nil {
+		return false, "", ""
+	}
+
+	conversationID, hasConversationID := payload["conversationId"].(string)
+	if !hasConversationID || strings.TrimSpace(conversationID) == "" {
+		return false, "", ""
+	}
+
+	msgObj, ok := payload["msg"].(map[string]any)
+	if !ok {
+		return false, "", ""
+	}
+	preview := extractLegacyMirrorPreview(msgObj)
+	if preview == "" {
+		return false, "", ""
+	}
+
+	if !isLegacyMirrorEnvelope(msg.Method, payload) {
+		return false, "", ""
+	}
+	return true, preview, conversationID
+}
+
+func isLegacyMirrorEnvelope(method string, payload map[string]any) bool {
+	if _, ok := legacyMirrorStreamMethods[method]; ok {
+		return true
+	}
+
+	if _, ok := payload["threadId"]; ok {
+		return false
+	}
+	if _, ok := payload["turnId"]; ok {
+		return false
+	}
+	if _, ok := payload["itemId"]; ok {
+		return false
+	}
+	if _, ok := payload["outputIndex"]; ok {
+		return false
+	}
+	if _, ok := payload["contentIndex"]; ok {
+		return false
+	}
+	_, hasLegacyID := payload["id"]
+	return hasLegacyID
+}
+
+func extractLegacyMirrorPreview(msgObj map[string]any) string {
+	for _, key := range []string{"delta", "text", "content", "output", "message"} {
+		value, ok := msgObj[key].(string)
+		if !ok {
+			continue
+		}
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		return truncateString(trimmed, 80)
+	}
+	return ""
+}
+
+func truncateString(s string, max int) string {
+	if max <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "...(truncated)"
+}
+
 // asWriteJSON 线程安全写入 WebSocket JSON。
 func (c *AppServerClient) asWriteJSON(v any) error {
 	c.wsMu.Lock()
@@ -876,10 +1051,26 @@ func (c *AppServerClient) Shutdown() error {
 
 // Kill 强制终止子进程。
 func (c *AppServerClient) Kill() error {
-	if c.Cmd != nil && c.Cmd.Process != nil {
-		return c.Cmd.Process.Kill()
+	if c.Cmd == nil || c.Cmd.Process == nil {
+		return nil
 	}
-	return nil
+	killErr := c.Cmd.Process.Kill()
+	if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+		return killErr
+	}
+	waitErr := c.Cmd.Wait()
+	if waitErr == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(waitErr, &exitErr) {
+		return nil
+	}
+	waitMsg := waitErr.Error()
+	if strings.Contains(waitMsg, "Wait was already called") || strings.Contains(waitMsg, "no child processes") {
+		return nil
+	}
+	return waitErr
 }
 
 // Running 返回是否在运行。

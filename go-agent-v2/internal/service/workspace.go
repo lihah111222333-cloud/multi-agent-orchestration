@@ -250,6 +250,30 @@ func (m *WorkspaceManager) AbortRun(ctx context.Context, runKey, updatedBy, reas
 	})
 }
 
+// transitionToMerging 将 run 状态从 active 转换为 merging, 返回 run 记录或错误。
+func (m *WorkspaceManager) transitionToMerging(ctx context.Context, runKey, updatedBy string, dryRun bool) (*store.WorkspaceRun, error) {
+	run, transitioned, err := m.runs.TryTransitionRunStatus(
+		ctx, runKey,
+		WorkspaceRunStatusActive, WorkspaceRunStatusMerging, updatedBy,
+		map[string]any{"dry_run": dryRun, "started_at": time.Now().Format(time.RFC3339)},
+	)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "WorkspaceManager.MergeRun", "transition to merging")
+	}
+	if transitioned {
+		return run, nil
+	}
+	current, err := m.runs.GetRun(ctx, runKey)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "WorkspaceManager.MergeRun", "load run status")
+	}
+	if current == nil {
+		return nil, apperrors.Newf("WorkspaceManager.MergeRun", "run %q not found", runKey)
+	}
+	return nil, apperrors.Newf("WorkspaceManager.MergeRun", "run %q status is %s, expected %s",
+		runKey, current.Status, WorkspaceRunStatusActive)
+}
+
 func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeRequest) (*WorkspaceMergeResult, error) {
 	runKey := strings.TrimSpace(req.RunKey)
 	if runKey == "" {
@@ -257,27 +281,9 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 	}
 	updatedBy := strings.TrimSpace(req.UpdatedBy)
 
-	run, transitioned, err := m.runs.TryTransitionRunStatus(
-		ctx,
-		runKey,
-		WorkspaceRunStatusActive,
-		WorkspaceRunStatusMerging,
-		updatedBy,
-		map[string]any{"dry_run": req.DryRun, "started_at": time.Now().Format(time.RFC3339)},
-	)
+	run, err := m.transitionToMerging(ctx, runKey, updatedBy, req.DryRun)
 	if err != nil {
-		return nil, apperrors.Wrap(err, "WorkspaceManager.MergeRun", "transition to merging")
-	}
-	if !transitioned {
-		current, err := m.runs.GetRun(ctx, runKey)
-		if err != nil {
-			return nil, apperrors.Wrap(err, "WorkspaceManager.MergeRun", "load run status")
-		}
-		if current == nil {
-			return nil, apperrors.Newf("WorkspaceManager.MergeRun", "run %q not found", runKey)
-		}
-		return nil, apperrors.Newf("WorkspaceManager.MergeRun", "run %q status is %s, expected %s",
-			runKey, current.Status, WorkspaceRunStatusActive)
+		return nil, err
 	}
 
 	result := &WorkspaceMergeResult{
@@ -546,71 +552,91 @@ func (m *WorkspaceManager) handleDeletedFiles(
 		if seen[rel] {
 			continue
 		}
-		sourcePath := filepath.Join(run.SourceRoot, rel)
+		normalizedRel, normErr := normalizeRelativePath(rel)
+		if normErr != nil {
+			recordMergeError(result, rel, normErr.Error())
+			continue
+		}
+		if seen[normalizedRel] {
+			continue
+		}
+		sourcePath := filepath.Join(run.SourceRoot, normalizedRel)
+		if !isPathWithinRoot(run.SourceRoot, sourcePath) {
+			recordMergeError(result, normalizedRel, "target path escapes source root")
+			continue
+		}
 		sourceBefore, hashErr := hashFileIfExists(sourcePath)
 		if hashErr != nil {
 			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey: run.RunKey, RelativePath: rel,
+				RunKey: run.RunKey, RelativePath: normalizedRel,
 				BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
 				State: WorkspaceFileStateError, LastError: hashErr.Error(),
 			})
-			recordMergeError(result, rel, hashErr.Error())
+			recordMergeError(result, normalizedRel, hashErr.Error())
 			continue
 		}
 		if trackedFile.BaselineSHA256 != "" && sourceBefore != "" && sourceBefore != trackedFile.BaselineSHA256 {
 			result.Conflicts++
 			reason := "delete conflict: source changed since baseline"
 			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey: run.RunKey, RelativePath: rel,
+				RunKey: run.RunKey, RelativePath: normalizedRel,
 				BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
 				State: WorkspaceFileStateConflict, LastError: reason,
 			})
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "conflict", Reason: reason})
+			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: normalizedRel, Action: "conflict", Reason: reason})
 			continue
 		}
 
 		if req.DryRun {
 			result.Merged++
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "would_delete"})
+			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: normalizedRel, Action: "would_delete"})
 			continue
 		}
 
 		if err := os.Remove(sourcePath); err != nil && !os.IsNotExist(err) {
 			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-				RunKey: run.RunKey, RelativePath: rel,
+				RunKey: run.RunKey, RelativePath: normalizedRel,
 				BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
 				State: WorkspaceFileStateError, LastError: err.Error(),
 			})
-			recordMergeError(result, rel, err.Error())
+			recordMergeError(result, normalizedRel, err.Error())
 			continue
 		}
 		result.Merged++
 		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-			RunKey: run.RunKey, RelativePath: rel,
+			RunKey: run.RunKey, RelativePath: normalizedRel,
 			BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
 			SourceSHA256After: "", State: WorkspaceFileStateMerged,
 		})
-		result.Files = append(result.Files, WorkspaceMergeFileResult{Path: rel, Action: "deleted"})
+		result.Files = append(result.Files, WorkspaceMergeFileResult{Path: normalizedRel, Action: "deleted"})
 	}
 }
 
-// validateBootstrapFile 验证单个引导文件 (路径安全+大小限制+类型检查)。
-func (m *WorkspaceManager) validateBootstrapFile(sourcePath, rel string) (os.FileInfo, error) {
-	info, err := os.Lstat(sourcePath)
-	if err != nil {
-		return nil, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "bootstrap stat %s", rel)
+// validateBootstrapFile 验证单个引导文件 (类型/大小/累计大小)。
+func validateBootstrapFile(
+	run *store.WorkspaceRun,
+	rel string,
+	info os.FileInfo,
+	totalBytes, maxFileBytes, maxTotalBytes int64,
+) error {
+	if run == nil {
+		return apperrors.New("WorkspaceManager.bootstrapFiles", "run is nil")
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap symlink not allowed: %s", rel)
+		return apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap symlink not allowed: %s", rel)
 	}
 	if info.IsDir() {
-		return nil, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap path is directory: %s", rel)
+		return apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap path is directory: %s", rel)
 	}
-	if info.Size() > m.maxFileBytes {
-		return nil, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap file too large %s (%d bytes > %d)",
-			rel, info.Size(), m.maxFileBytes)
+	if info.Size() > maxFileBytes {
+		return apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap file too large %s (%d bytes > %d)",
+			rel, info.Size(), maxFileBytes)
 	}
-	return info, nil
+	if totalBytes > maxTotalBytes {
+		return apperrors.Newf("WorkspaceManager.bootstrapFiles", "total bootstrap bytes exceed limit (%d > %d)",
+			totalBytes, maxTotalBytes)
+	}
+	return nil
 }
 
 func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.WorkspaceRun, files []string) (int, int64, error) {
@@ -639,15 +665,15 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap path escapes source root: %s", rel)
 		}
 
-		info, err := m.validateBootstrapFile(sourcePath, rel)
+		info, err := os.Lstat(sourcePath)
 		if err != nil {
+			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "bootstrap stat %s", rel)
+		}
+		nextTotalBytes := totalBytes + info.Size()
+		if err := validateBootstrapFile(run, rel, info, nextTotalBytes, m.maxFileBytes, m.maxTotalBytes); err != nil {
 			return copied, totalBytes, err
 		}
-		totalBytes += info.Size()
-		if totalBytes > m.maxTotalBytes {
-			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "total bootstrap bytes exceed limit (%d > %d)",
-				totalBytes, m.maxTotalBytes)
-		}
+		totalBytes = nextTotalBytes
 
 		targetPath := filepath.Join(run.WorkspacePath, rel)
 		if !isPathWithinRoot(run.WorkspacePath, targetPath) {

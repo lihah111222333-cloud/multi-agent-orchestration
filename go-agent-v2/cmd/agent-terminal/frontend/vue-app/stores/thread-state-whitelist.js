@@ -13,6 +13,7 @@ const RUNTIME_STATE_KEYS = Object.freeze([
   'timelinesByThread',
   'diffTextByThread',
   'agentMetaById',
+  'agentRuntimeById',
 ]);
 
 export const THREAD_STORE_UI_LOCAL_STATE_WHITELIST = UI_LOCAL_STATE_KEYS;

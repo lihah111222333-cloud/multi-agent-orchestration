@@ -141,80 +141,94 @@ func sanitizeTopology(raw map[string]any) map[string]any {
 	gwIDs := map[string]bool{}
 
 	for idx, gwRaw := range gateways {
-		gw, ok := gwRaw.(map[string]any)
+		normalizedGateway, ok := sanitizeGateway(gwRaw, idx, gwIDs)
 		if !ok {
 			continue
 		}
-
-		gwID := strings.TrimSpace(fmt.Sprint(gw["id"]))
-		if gwID == "" || gwID == "<nil>" {
-			gwID = fmt.Sprintf("gateway_%d", idx+1)
-		}
-		if gwIDs[gwID] {
-			continue
-		}
-		gwIDs[gwID] = true
-
-		gwName := strings.TrimSpace(fmt.Sprint(gw["name"]))
-		if gwName == "" || gwName == "<nil>" {
-			gwName = gwID
-		}
-		gwDesc := strings.TrimSpace(fmt.Sprint(gw["description"]))
-		if gwDesc == "<nil>" {
-			gwDesc = ""
-		}
-		gwCaps := extractStringSlice(gw["capabilities"])
-
-		agentsRaw, ok := gw["agents"].([]any)
-		if !ok || len(agentsRaw) == 0 {
-			continue
-		}
+		agentsRaw := normalizedGateway["agents_raw"].([]any)
+		gwID := normalizedGateway["id"].(string)
 
 		var normalizedAgents []map[string]any
 		agentIDs := map[string]bool{}
 		for j, agentRaw := range agentsRaw {
-			agent, ok := agentRaw.(map[string]any)
-			if !ok {
-				continue
+			normalizedAgent, ok := sanitizeAgent(agentRaw, gwID, j, agentIDs)
+			if ok {
+				normalizedAgents = append(normalizedAgents, normalizedAgent)
 			}
-			agentID := strings.TrimSpace(fmt.Sprint(agent["id"]))
-			if agentID == "" || agentID == "<nil>" {
-				agentID = fmt.Sprintf("%s_agent_%d", gwID, j+1)
-			}
-			if agentIDs[agentID] {
-				continue
-			}
-			agentIDs[agentID] = true
-
-			agentName := strings.TrimSpace(fmt.Sprint(agent["name"]))
-			if agentName == "" || agentName == "<nil>" {
-				agentName = agentID
-			}
-			normalizedAgents = append(normalizedAgents, map[string]any{
-				"id":           agentID,
-				"name":         agentName,
-				"capabilities": extractStringSlice(agent["capabilities"]),
-				"depends_on":   extractStringSlice(agent["depends_on"]),
-			})
 		}
 
 		if len(normalizedAgents) == 0 {
 			continue
 		}
 
-		resultGateways = append(resultGateways, map[string]any{
-			"id":           gwID,
-			"name":         gwName,
-			"description":  gwDesc,
-			"capabilities": gwCaps,
-			"agents":       normalizedAgents,
-		})
+		delete(normalizedGateway, "agents_raw")
+		normalizedGateway["agents"] = normalizedAgents
+		resultGateways = append(resultGateways, normalizedGateway)
 	}
 
 	if len(resultGateways) == 0 {
 		return nil
 	}
 	return map[string]any{"gateways": resultGateways}
+}
+
+func sanitizeGateway(raw any, idx int, seen map[string]bool) (map[string]any, bool) {
+	gateway, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	agentsRaw, ok := gateway["agents"].([]any)
+	if !ok || len(agentsRaw) == 0 {
+		return nil, false
+	}
+	gatewayID := strings.TrimSpace(fmt.Sprint(gateway["id"]))
+	if gatewayID == "" || gatewayID == "<nil>" {
+		gatewayID = fmt.Sprintf("gateway_%d", idx+1)
+	}
+	if seen[gatewayID] {
+		return nil, false
+	}
+	seen[gatewayID] = true
+	gatewayName := strings.TrimSpace(fmt.Sprint(gateway["name"]))
+	if gatewayName == "" || gatewayName == "<nil>" {
+		gatewayName = gatewayID
+	}
+	gatewayDesc := strings.TrimSpace(fmt.Sprint(gateway["description"]))
+	if gatewayDesc == "<nil>" {
+		gatewayDesc = ""
+	}
+	return map[string]any{
+		"id":           gatewayID,
+		"name":         gatewayName,
+		"description":  gatewayDesc,
+		"capabilities": extractStringSlice(gateway["capabilities"]),
+		"agents_raw":   agentsRaw,
+	}, true
+}
+
+func sanitizeAgent(raw any, gwID string, idx int, seen map[string]bool) (map[string]any, bool) {
+	agent, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	agentID := strings.TrimSpace(fmt.Sprint(agent["id"]))
+	if agentID == "" || agentID == "<nil>" {
+		agentID = fmt.Sprintf("%s_agent_%d", gwID, idx+1)
+	}
+	if seen[agentID] {
+		return nil, false
+	}
+	seen[agentID] = true
+	agentName := strings.TrimSpace(fmt.Sprint(agent["name"]))
+	if agentName == "" || agentName == "<nil>" {
+		agentName = agentID
+	}
+	return map[string]any{
+		"id":           agentID,
+		"name":         agentName,
+		"capabilities": extractStringSlice(agent["capabilities"]),
+		"depends_on":   extractStringSlice(agent["depends_on"]),
+	}, true
 }
 
 // extractStringSlice 安全提取 []string。
@@ -246,74 +260,12 @@ func scoreOutputQuality(text string) int {
 	if value == "" {
 		return 0
 	}
-
-	// 长度分 (最多 60)
-	score := len([]rune(value)) / 20
-	if score > 60 {
-		score = 60
-	}
-
-	// 行数分 (最多 20)
-	var lines []string
-	for _, line := range strings.Split(value, "\n") {
-		if strings.TrimSpace(line) != "" {
-			lines = append(lines, line)
-		}
-	}
-	lineScore := len(lines) * 2
-	if lineScore > 20 {
-		lineScore = 20
-	}
+	score := scoreLengthDim(value)
+	lineScore, lines := scoreLineDim(value)
 	score += lineScore
-
-	// 错误关键词扣分
-	lower := strings.ToLower(value)
-	for _, token := range []string{"超时", "失败", "error", "exception", "无法", "unknown"} {
-		if strings.Contains(lower, token) {
-			score -= 20
-			break
-		}
-	}
-
-	// 词元多样性
-	tokens := summaryUnitRe.FindAllString(value, -1)
-	lowerTokens := make([]string, len(tokens))
-	uniqueTokens := map[string]bool{}
-	for i, t := range tokens {
-		lt := strings.ToLower(t)
-		lowerTokens[i] = lt
-		uniqueTokens[lt] = true
-	}
-
-	if len(uniqueTokens) >= 20 {
-		score += 10
-	}
-
-	if len(tokens) >= 20 {
-		ratio := float64(len(uniqueTokens)) / float64(len(tokens))
-		if ratio < 0.30 {
-			score -= 20
-		} else if ratio < 0.45 {
-			score -= 10
-		}
-	}
-
-	// 行重复度
-	if len(lines) >= 4 {
-		normalizedLines := make([]string, len(lines))
-		uniqueLines := map[string]bool{}
-		for i, l := range lines {
-			n := normalizeWhitespace(strings.ToLower(l))
-			normalizedLines[i] = n
-			uniqueLines[n] = true
-		}
-		lineRatio := float64(len(uniqueLines)) / float64(len(normalizedLines))
-		if lineRatio < 0.50 {
-			score -= 20
-		} else if lineRatio < 0.70 {
-			score -= 10
-		}
-	}
+	score += penalizeErrorKeywords(strings.ToLower(value))
+	score += scoreDiversityDim(value)
+	score += penalizeLineRepetition(lines)
 
 	if score < 0 {
 		return 0
@@ -322,6 +274,80 @@ func scoreOutputQuality(text string) int {
 		return 100
 	}
 	return score
+}
+
+func scoreLengthDim(value string) int {
+	score := len([]rune(value)) / 20
+	if score > 60 {
+		return 60
+	}
+	return score
+}
+
+func scoreLineDim(value string) (int, []string) {
+	lines := make([]string, 0, 8)
+	for _, line := range strings.Split(value, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	score := len(lines) * 2
+	if score > 20 {
+		score = 20
+	}
+	return score, lines
+}
+
+func penalizeErrorKeywords(lower string) int {
+	for _, token := range []string{"超时", "失败", "error", "exception", "无法", "unknown"} {
+		if strings.Contains(lower, token) {
+			return -20
+		}
+	}
+	return 0
+}
+
+func scoreDiversityDim(value string) int {
+	tokens := summaryUnitRe.FindAllString(value, -1)
+	uniqueTokens := map[string]bool{}
+	for _, token := range tokens {
+		uniqueTokens[strings.ToLower(token)] = true
+	}
+	score := 0
+	if len(uniqueTokens) >= 20 {
+		score += 10
+	}
+	if len(tokens) < 20 {
+		return score
+	}
+	ratio := float64(len(uniqueTokens)) / float64(len(tokens))
+	if ratio < 0.30 {
+		return score - 20
+	}
+	if ratio < 0.45 {
+		return score - 10
+	}
+	return score
+}
+
+func penalizeLineRepetition(lines []string) int {
+	if len(lines) < 4 {
+		return 0
+	}
+	uniqueLines := map[string]bool{}
+	for _, line := range lines {
+		normalized := normalizeWhitespace(strings.ToLower(line))
+		uniqueLines[normalized] = true
+	}
+	lineRatio := float64(len(uniqueLines)) / float64(len(lines))
+	if lineRatio < 0.50 {
+		return -20
+	}
+	if lineRatio < 0.70 {
+		return -10
+	}
+	return 0
 }
 
 // normalizeWhitespace 合并连续空白为单个空格。

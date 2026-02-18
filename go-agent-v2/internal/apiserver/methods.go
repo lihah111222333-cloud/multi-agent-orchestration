@@ -49,6 +49,7 @@ func (s *Server) registerMethods() {
 	s.methods["thread/list"] = s.threadList
 	s.methods["thread/loaded/list"] = s.threadLoadedList
 	s.methods["thread/read"] = typedHandler(s.threadReadTyped)
+	s.methods["thread/resolve"] = typedHandler(s.threadResolveTyped)
 	s.methods["thread/messages"] = typedHandler(s.threadMessagesTyped)
 	s.methods["thread/backgroundTerminals/clean"] = s.threadBgTerminalsClean
 
@@ -493,12 +494,56 @@ func (s *Server) threadReadTyped(ctx context.Context, p threadIDParams) (any, er
 	})
 }
 
+func (s *Server) threadResolveTyped(ctx context.Context, p threadIDParams) (any, error) {
+	id := strings.TrimSpace(p.ThreadID)
+	if id == "" {
+		return nil, apperrors.New("Server.threadResolve", "threadId is required")
+	}
+
+	result := map[string]any{
+		"threadId": id,
+	}
+
+	var codexThreadID string
+	for _, info := range s.mgr.List() {
+		if strings.TrimSpace(info.ID) != id {
+			continue
+		}
+		if state := strings.TrimSpace(string(info.State)); state != "" {
+			result["state"] = state
+		}
+		if port := info.Port; port > 0 {
+			result["port"] = port
+		}
+		codexThreadID = strings.TrimSpace(info.ThreadID)
+		break
+	}
+
+	if codexThreadID == "" {
+		codexThreadID = strings.TrimSpace(s.resolveHistoricalCodexThreadID(ctx, id))
+	}
+	if codexThreadID != "" {
+		result["codexThreadId"] = codexThreadID
+	}
+	if isLikelyCodexThreadID(codexThreadID) {
+		result["uuid"] = codexThreadID
+	}
+	result["hasHistory"] = s.threadExistsInHistory(ctx, id)
+
+	return result, nil
+}
+
 // threadMessagesParams thread/messages 请求参数。
 type threadMessagesParams struct {
 	ThreadID string `json:"threadId"`
 	Limit    int    `json:"limit,omitempty"`
 	Before   int64  `json:"before,omitempty"` // cursor: id < before
 }
+
+const (
+	threadMessageHydrationMaxRecords = 5000
+	threadMessageHydrationPageSize   = 500
+)
 
 func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams) (any, error) {
 	if p.ThreadID == "" {
@@ -516,9 +561,41 @@ func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.threadMessages", "list messages by agent")
 	}
+	total, totalErr := s.msgStore.CountByAgent(ctx, p.ThreadID)
+	if totalErr != nil {
+		logger.Warn("thread/messages: count messages failed",
+			logger.FieldThreadID, p.ThreadID,
+			logger.FieldError, totalErr,
+		)
+	}
+
 	if s.uiRuntime != nil {
-		records := make([]uistate.HistoryRecord, 0, len(msgs))
-		for _, msg := range msgs {
+		hydrateMsgs := msgs
+		if p.Before == 0 {
+			hydrateLimit := calculateHydrationLoadLimit(len(msgs), total)
+			if hydrateLimit > len(msgs) {
+				allMsgs, loadErr := s.loadHistoryForHydration(ctx, p.ThreadID, hydrateLimit)
+				if loadErr != nil {
+					logger.Warn("thread/messages: hydrate load full history failed",
+						logger.FieldThreadID, p.ThreadID,
+						logger.FieldError, loadErr,
+						"hydrate_limit", hydrateLimit,
+					)
+				} else {
+					hydrateMsgs = allMsgs
+				}
+			}
+			if total > threadMessageHydrationMaxRecords {
+				logger.Warn("thread/messages: hydration capped by max records",
+					logger.FieldThreadID, p.ThreadID,
+					"total", total,
+					"hydrate_max", threadMessageHydrationMaxRecords,
+				)
+			}
+		}
+
+		records := make([]uistate.HistoryRecord, 0, len(hydrateMsgs))
+		for _, msg := range hydrateMsgs {
 			records = append(records, uistate.HistoryRecord{
 				ID:        msg.ID,
 				Role:      msg.Role,
@@ -530,14 +607,67 @@ func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams
 			})
 		}
 		s.uiRuntime.HydrateHistory(p.ThreadID, records)
+		logger.Debug("thread/messages: history hydrated",
+			logger.FieldThreadID, p.ThreadID,
+			"response_count", len(msgs),
+			"hydrate_count", len(hydrateMsgs),
+			"total", total,
+			"before", p.Before,
+		)
 	}
-
-	total, _ := s.msgStore.CountByAgent(ctx, p.ThreadID)
 
 	return map[string]any{
 		"messages": msgs,
 		"total":    total,
 	}, nil
+}
+
+func calculateHydrationLoadLimit(initialCount int, total int64) int {
+	if initialCount < 0 {
+		initialCount = 0
+	}
+	limit := initialCount
+	if total > int64(limit) {
+		limit = int(total)
+	}
+	if limit > threadMessageHydrationMaxRecords {
+		limit = threadMessageHydrationMaxRecords
+	}
+	return limit
+}
+
+func (s *Server) loadHistoryForHydration(ctx context.Context, threadID string, limit int) ([]store.AgentMessage, error) {
+	if s.msgStore == nil || limit <= 0 {
+		return []store.AgentMessage{}, nil
+	}
+
+	result := make([]store.AgentMessage, 0, minInt(limit, threadMessageHydrationPageSize))
+	before := int64(0)
+
+	for len(result) < limit {
+		batchLimit := minInt(threadMessageHydrationPageSize, limit-len(result))
+		batch, err := s.msgStore.ListByAgent(ctx, threadID, batchLimit, before)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		result = append(result, batch...)
+		if len(batch) < batchLimit {
+			break
+		}
+		before = batch[len(batch)-1].ID
+	}
+
+	return result, nil
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // ========================================
@@ -581,15 +711,21 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 	}
 
 	prompt, images, files := extractInputs(p.Input)
+	logger.Info("turn/start: input prepared",
+		logger.FieldThreadID, p.ThreadID,
+		"text_len", len(prompt),
+		"images", len(images),
+		"files", len(files),
+	)
 	if err := proc.Client.Submit(prompt, images, files, p.OutputSchema); err != nil {
 		return nil, apperrors.Wrap(err, "Server.turnStart", "submit prompt")
 	}
 	if s.uiRuntime != nil {
-		s.uiRuntime.AppendUserMessage(p.ThreadID, prompt, nil)
+		s.uiRuntime.AppendUserMessage(p.ThreadID, prompt, buildUserTimelineAttachments(images, files))
 	}
 
 	// 持久化用户消息
-	util.SafeGo(func() { s.PersistUserMessage(p.ThreadID, prompt) })
+	util.SafeGo(func() { s.PersistUserMessage(p.ThreadID, prompt, p.Input) })
 
 	turnID := fmt.Sprintf("turn-%d", time.Now().UnixMilli())
 	return turnStartResponse{
@@ -1202,7 +1338,19 @@ func isMeaningfulSessionMessage(msg store.AgentMessage) bool {
 	return false
 }
 
-func resolveResumeThreadIDFromMessages(messages []store.AgentMessage) string {
+func appendUniqueThreadID(dst []string, seen map[string]struct{}, candidate string) []string {
+	id := strings.TrimSpace(candidate)
+	if !isLikelyCodexThreadID(id) {
+		return dst
+	}
+	if _, ok := seen[id]; ok {
+		return dst
+	}
+	seen[id] = struct{}{}
+	return append(dst, id)
+}
+
+func resolveResumeThreadIDsFromMessages(messages []store.AgentMessage) []string {
 	type sessionCandidate struct {
 		threadID   string
 		meaningful bool
@@ -1236,31 +1384,51 @@ func resolveResumeThreadIDFromMessages(messages []store.AgentMessage) string {
 	}
 	flush()
 
+	result := make([]string, 0, len(sessions)+2)
+	seen := map[string]struct{}{}
 	for i := len(sessions) - 1; i >= 0; i-- {
 		if sessions[i].meaningful {
-			return sessions[i].threadID
+			result = appendUniqueThreadID(result, seen, sessions[i].threadID)
 		}
 	}
-	if len(sessions) > 0 {
-		return sessions[len(sessions)-1].threadID
+	for i := len(sessions) - 1; i >= 0; i-- {
+		if !sessions[i].meaningful {
+			result = appendUniqueThreadID(result, seen, sessions[i].threadID)
+		}
 	}
 
 	// 回退：无明确会话边界时，直接扫描任意 metadata 中的可用线程 ID。
 	for _, msg := range messages {
 		if tid := metadataThreadID(msg.Metadata); tid != "" {
-			return tid
+			result = appendUniqueThreadID(result, seen, tid)
 		}
 	}
-	return ""
+	return result
+}
+
+func resolveResumeThreadIDFromMessages(messages []store.AgentMessage) string {
+	ids := resolveResumeThreadIDsFromMessages(messages)
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
 }
 
 func (s *Server) resolveHistoricalCodexThreadID(ctx context.Context, agentID string) string {
-	if s.msgStore == nil {
+	ids := s.resolveHistoricalCodexThreadIDs(ctx, agentID)
+	if len(ids) == 0 {
 		return ""
+	}
+	return ids[0]
+}
+
+func (s *Server) resolveHistoricalCodexThreadIDs(ctx context.Context, agentID string) []string {
+	if s.msgStore == nil {
+		return nil
 	}
 	id := strings.TrimSpace(agentID)
 	if id == "" {
-		return ""
+		return nil
 	}
 
 	dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -1272,9 +1440,26 @@ func (s *Server) resolveHistoricalCodexThreadID(ctx context.Context, agentID str
 			logger.FieldThreadID, id,
 			logger.FieldError, err,
 		)
-		return ""
+		return nil
 	}
-	return resolveResumeThreadIDFromMessages(msgs)
+	return resolveResumeThreadIDsFromMessages(msgs)
+}
+
+func isHistoricalResumeCandidateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "no rollout found for thread id"),
+		strings.Contains(msg, "failed to load rollout"),
+		strings.Contains(msg, "invalid thread id"),
+		strings.Contains(msg, "thread/resume returned empty thread id"),
+		strings.Contains(msg, "thread/resume returned empty response without fallback thread id"):
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd string) (*runner.AgentProcess, error) {
@@ -1289,11 +1474,11 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	if !s.threadExistsInHistory(ctx, id) {
 		return nil, apperrors.Newf("Server.ensureThreadReady", "thread %s not found", id)
 	}
-	resumeThreadID := id
-	if !isLikelyCodexThreadID(resumeThreadID) {
-		if resolved := s.resolveHistoricalCodexThreadID(ctx, id); resolved != "" {
-			resumeThreadID = resolved
-		}
+	resumeCandidates := make([]string, 0, 4)
+	if isLikelyCodexThreadID(id) {
+		resumeCandidates = append(resumeCandidates, id)
+	} else {
+		resumeCandidates = append(resumeCandidates, s.resolveHistoricalCodexThreadIDs(ctx, id)...)
 	}
 
 	launchCwd := strings.TrimSpace(cwd)
@@ -1314,16 +1499,37 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	if proc == nil {
 		return nil, apperrors.Newf("Server.ensureThreadReady", "thread %s loaded but not found", id)
 	}
-	if !isLikelyCodexThreadID(resumeThreadID) {
+	if len(resumeCandidates) == 0 {
 		logger.Warn("turn/start: no valid historical codex thread id, continue with fresh session",
 			logger.FieldThreadID, id,
 		)
 		return proc, nil
 	}
-	if err := proc.Client.ResumeThread(codex.ResumeThreadRequest{
-		ThreadID: resumeThreadID,
-		Cwd:      launchCwd,
-	}); err != nil {
+	var lastResumeErr error
+	for _, resumeThreadID := range resumeCandidates {
+		err := proc.Client.ResumeThread(codex.ResumeThreadRequest{
+			ThreadID: resumeThreadID,
+			Cwd:      launchCwd,
+		})
+		if err == nil {
+			logger.Info("turn/start: historical thread auto-loaded",
+				logger.FieldThreadID, id,
+				"resume_thread_id", resumeThreadID,
+				logger.FieldCwd, launchCwd,
+			)
+			return proc, nil
+		}
+
+		lastResumeErr = err
+		if isHistoricalResumeCandidateError(err) {
+			logger.Warn("turn/start: historical resume candidate unavailable, try next",
+				logger.FieldThreadID, id,
+				"resume_thread_id", resumeThreadID,
+				logger.FieldError, err,
+			)
+			continue
+		}
+
 		if stopErr := s.mgr.Stop(id); stopErr != nil {
 			logger.Warn("turn/start: auto-loaded thread stop after resume failed",
 				logger.FieldThreadID, id,
@@ -1333,9 +1539,19 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 		return nil, apperrors.Wrapf(err, "Server.ensureThreadReady", "resume historical thread %s", id)
 	}
 
-	logger.Info("turn/start: historical thread auto-loaded",
+	if lastResumeErr != nil && !isHistoricalResumeCandidateError(lastResumeErr) {
+		if stopErr := s.mgr.Stop(id); stopErr != nil {
+			logger.Warn("turn/start: auto-loaded thread stop after resume failed",
+				logger.FieldThreadID, id,
+				logger.FieldError, stopErr,
+			)
+		}
+		return nil, apperrors.Wrapf(lastResumeErr, "Server.ensureThreadReady", "resume historical thread %s", id)
+	}
+
+	logger.Warn("turn/start: no available historical rollout, continue with fresh session",
 		logger.FieldThreadID, id,
-		"resume_thread_id", resumeThreadID,
+		"candidate_count", len(resumeCandidates),
 		logger.FieldCwd, launchCwd,
 	)
 	return proc, nil
@@ -1402,6 +1618,50 @@ func extractInputs(inputs []UserInput) (prompt string, images, files []string) {
 	}
 	prompt = strings.Join(texts, "\n")
 	return
+}
+
+func buildUserTimelineAttachments(images, files []string) []uistate.TimelineAttachment {
+	attachments := make([]uistate.TimelineAttachment, 0, len(images)+len(files))
+	for _, raw := range images {
+		path := strings.TrimSpace(raw)
+		if path == "" {
+			continue
+		}
+		name := strings.TrimSpace(filepath.Base(path))
+		if name == "" || name == "." || name == string(filepath.Separator) {
+			name = path
+		}
+		previewURL := path
+		lower := strings.ToLower(path)
+		if !strings.HasPrefix(lower, "http://") &&
+			!strings.HasPrefix(lower, "https://") &&
+			!strings.HasPrefix(lower, "data:image/") &&
+			!strings.HasPrefix(lower, "file://") {
+			previewURL = "file://" + path
+		}
+		attachments = append(attachments, uistate.TimelineAttachment{
+			Kind:       "image",
+			Name:       name,
+			Path:       path,
+			PreviewURL: previewURL,
+		})
+	}
+	for _, raw := range files {
+		path := strings.TrimSpace(raw)
+		if path == "" {
+			continue
+		}
+		name := strings.TrimSpace(filepath.Base(path))
+		if name == "" || name == "." || name == string(filepath.Separator) {
+			name = path
+		}
+		attachments = append(attachments, uistate.TimelineAttachment{
+			Kind: "file",
+			Name: name,
+			Path: path,
+		})
+	}
+	return attachments
 }
 
 // ========================================
@@ -1657,6 +1917,26 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 		"activeCmdThreadId":  resolvedActiveCmdThreadID,
 		"mainAgentId":        resolvedMain,
 	}
+	agentRuntimeByID := map[string]map[string]any{}
+	if s.mgr != nil {
+		for _, info := range s.mgr.List() {
+			id := strings.TrimSpace(info.ID)
+			if id == "" {
+				continue
+			}
+			item := map[string]any{
+				"state": string(info.State),
+			}
+			if port := info.Port; port > 0 {
+				item["port"] = port
+			}
+			if codexThreadID := strings.TrimSpace(info.ThreadID); codexThreadID != "" {
+				item["codexThreadId"] = codexThreadID
+			}
+			agentRuntimeByID[id] = item
+		}
+	}
+	result["agentRuntimeById"] = agentRuntimeByID
 	if snapshot.WorkspaceFeatureEnabled != nil {
 		result["workspaceFeatureEnabled"] = *snapshot.WorkspaceFeatureEnabled
 	}

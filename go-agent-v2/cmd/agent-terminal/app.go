@@ -328,19 +328,10 @@ func (a *App) LaunchAgent(name, prompt, cwd string) (string, error) {
 
 	// 发送初始 prompt (如果有)
 	if prompt != "" {
-		// 用结构体提取 thread.id，避免深层类型断言链
-		type threadResult struct {
-			Thread struct {
-				ID string `json:"id"`
-			} `json:"thread"`
-		}
-		var tr threadResult
-		if raw, marshalErr := json.Marshal(resultMap); marshalErr == nil {
-			_ = json.Unmarshal(raw, &tr)
-		}
-		if tr.Thread.ID != "" {
+		threadID := extractThreadID(resultMap)
+		if threadID != "" {
 			turnParams, marshalErr := json.Marshal(map[string]string{
-				"threadId": tr.Thread.ID,
+				"threadId": threadID,
 				"prompt":   prompt,
 			})
 			if marshalErr != nil {
@@ -356,6 +347,23 @@ func (a *App) LaunchAgent(name, prompt, cwd string) (string, error) {
 		return "", fmt.Errorf("launch agent: marshal result: %w", err)
 	}
 	return string(data), nil
+}
+
+// extractThreadID 从 thread/start 结果中提取 thread.id (直接类型断言, 零序列化)。
+func extractThreadID(resultMap map[string]any) string {
+	thread, ok := resultMap["thread"]
+	if !ok {
+		return ""
+	}
+	tm, ok := thread.(map[string]any)
+	if !ok {
+		return ""
+	}
+	id, ok := tm["id"].(string)
+	if !ok {
+		return ""
+	}
+	return id
 }
 
 // LaunchBatch 批量启动 N 个 Agent。

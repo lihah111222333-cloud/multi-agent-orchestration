@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -47,7 +48,19 @@ func shortCommit(revision string) string {
 	return revision
 }
 
+var (
+	buildInfoOnce   sync.Once
+	cachedBuildInfo BuildInfo
+)
+
 func currentBuildInfo() BuildInfo {
+	buildInfoOnce.Do(func() {
+		cachedBuildInfo = computeBuildInfo()
+	})
+	return cachedBuildInfo
+}
+
+func computeBuildInfo() BuildInfo {
 	vcsRevision, vcsTime, vcsModified := readGoBuildVCS()
 
 	version := strings.TrimSpace(buildVersion)

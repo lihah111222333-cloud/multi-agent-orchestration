@@ -895,10 +895,14 @@ type limitedWriter struct {
 	written int
 }
 
+// Write 写入 p, 超限后静默丢弃。
+//
+// 语义: 超限时返回 len(p) 而非 (0, ErrShortWrite), 避免 exec.Cmd 等
+// 调用方误认为管道断裂。未超限时返回实际写入字节数以满足 io.Writer 契约。
 func (lw *limitedWriter) Write(p []byte) (int, error) {
 	remain := lw.limit - lw.written
 	if remain <= 0 {
-		return len(p), nil // 静默丢弃
+		return len(p), nil // 静默丢弃, 对调用方透明
 	}
 	if len(p) > remain {
 		p = p[:remain]

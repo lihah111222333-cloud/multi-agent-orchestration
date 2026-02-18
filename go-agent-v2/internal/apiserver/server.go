@@ -56,10 +56,11 @@ const (
 
 // Server JSON-RPC WebSocket 服务器。
 type Server struct {
-	mgr     *runner.AgentManager
-	lsp     *lsp.Manager
-	cfg     *config.Config
-	methods map[string]Handler
+	mgr      *runner.AgentManager
+	lsp      *lsp.Manager
+	cfg      *config.Config
+	methods  map[string]Handler
+	dynTools map[string]func(json.RawMessage) string // 动态工具注册表
 
 	// 消息持久化
 	msgStore *store.AgentMessageStore
@@ -137,6 +138,7 @@ func New(deps Deps) *Server {
 		lsp:                deps.LSP,
 		cfg:                deps.Config,
 		methods:            make(map[string]Handler),
+		dynTools:           make(map[string]func(json.RawMessage) string),
 		conns:              make(map[string]*connEntry),
 		pending:            make(map[int64]chan *Response),
 		diagCache:          make(map[string][]lsp.Diagnostic),
@@ -190,7 +192,40 @@ func New(deps Deps) *Server {
 	}
 	s.skillSvc = service.NewSkillService(skillsDir)
 	s.registerMethods()
+	s.registerDynamicTools()
 	return s
+}
+
+// registerDynamicTools 注册所有动态工具处理函数。
+//
+// 新增工具只需一行: s.dynTools["tool_name"] = s.toolHandler
+func (s *Server) registerDynamicTools() {
+	// LSP 工具
+	s.dynTools["lsp_hover"] = s.lspHover
+	s.dynTools["lsp_open_file"] = s.lspOpenFile
+	s.dynTools["lsp_diagnostics"] = s.lspDiagnostics
+
+	// 编排工具
+	s.dynTools["orchestration_list_agents"] = func(_ json.RawMessage) string { return s.orchestrationListAgents() }
+	s.dynTools["orchestration_send_message"] = s.orchestrationSendMessage
+	s.dynTools["orchestration_launch_agent"] = s.orchestrationLaunchAgent
+	s.dynTools["orchestration_stop_agent"] = s.orchestrationStopAgent
+
+	// 资源工具
+	s.dynTools["task_create_dag"] = s.resourceTaskCreateDAG
+	s.dynTools["task_get_dag"] = s.resourceTaskGetDAG
+	s.dynTools["task_update_node"] = s.resourceTaskUpdateNode
+	s.dynTools["command_list"] = s.resourceCommandList
+	s.dynTools["command_get"] = s.resourceCommandGet
+	s.dynTools["prompt_list"] = s.resourcePromptList
+	s.dynTools["prompt_get"] = s.resourcePromptGet
+	s.dynTools["shared_file_read"] = s.resourceSharedFileRead
+	s.dynTools["shared_file_write"] = s.resourceSharedFileWrite
+	s.dynTools["workspace_create_run"] = s.resourceWorkspaceCreateRun
+	s.dynTools["workspace_get_run"] = s.resourceWorkspaceGetRun
+	s.dynTools["workspace_list_runs"] = s.resourceWorkspaceListRuns
+	s.dynTools["workspace_merge_run"] = s.resourceWorkspaceMergeRun
+	s.dynTools["workspace_abort_run"] = s.resourceWorkspaceAbortRun
 }
 
 // InvokeMethod 内部调用 JSON-RPC 方法 (不经过 WebSocket)。
@@ -676,6 +711,38 @@ func mergePayloadFromMap(payload map[string]any, data map[string]any) {
 	}
 }
 
+// walkNestedJSON 遍历 msg/data/payload 嵌套层, 对每个解析出的 map[string]any 调用 fn。
+//
+// 统一处理四种嵌套类型: map[string]any / string / json.RawMessage / []byte。
+// mergePayloadFields 和 extractEventContent 共用此逻辑。
+func walkNestedJSON(m map[string]any, fn func(map[string]any)) {
+	for _, key := range []string{"msg", "data", "payload"} {
+		v, ok := m[key]
+		if !ok {
+			continue
+		}
+		switch nested := v.(type) {
+		case map[string]any:
+			fn(nested)
+		case string:
+			var nm map[string]any
+			if json.Unmarshal([]byte(nested), &nm) == nil {
+				fn(nm)
+			}
+		case json.RawMessage:
+			var nm map[string]any
+			if json.Unmarshal(nested, &nm) == nil {
+				fn(nm)
+			}
+		case []byte:
+			var nm map[string]any
+			if json.Unmarshal(nested, &nm) == nil {
+				fn(nm)
+			}
+		}
+	}
+}
+
 func mergePayloadFields(payload map[string]any, raw json.RawMessage) {
 	if len(raw) == 0 {
 		return
@@ -687,33 +754,9 @@ func mergePayloadFields(payload map[string]any, raw json.RawMessage) {
 	}
 
 	mergePayloadFromMap(payload, dataMap)
-
-	for _, nestedKey := range []string{"msg", "data", "payload"} {
-		v, ok := dataMap[nestedKey]
-		if !ok {
-			continue
-		}
-
-		switch nested := v.(type) {
-		case map[string]any:
-			mergePayloadFromMap(payload, nested)
-		case string:
-			var nestedMap map[string]any
-			if err := json.Unmarshal([]byte(nested), &nestedMap); err == nil {
-				mergePayloadFromMap(payload, nestedMap)
-			}
-		case json.RawMessage:
-			var nestedMap map[string]any
-			if err := json.Unmarshal(nested, &nestedMap); err == nil {
-				mergePayloadFromMap(payload, nestedMap)
-			}
-		case []byte:
-			var nestedMap map[string]any
-			if err := json.Unmarshal(nested, &nestedMap); err == nil {
-				mergePayloadFromMap(payload, nestedMap)
-			}
-		}
-	}
+	walkNestedJSON(dataMap, func(nested map[string]any) {
+		mergePayloadFromMap(payload, nested)
+	})
 }
 
 func normalizeFiles(raw any) []string {
@@ -1076,42 +1119,13 @@ func extractEventContent(event codex.Event) string {
 		return s
 	}
 
-	for _, key := range []string{"msg", "data", "payload"} {
-		v, ok := m[key]
-		if !ok {
-			continue
+	var result string
+	walkNestedJSON(m, func(nested map[string]any) {
+		if result == "" {
+			result = extract(nested)
 		}
-
-		switch nested := v.(type) {
-		case map[string]any:
-			if s := extract(nested); s != "" {
-				return s
-			}
-		case string:
-			var nestedMap map[string]any
-			if err := json.Unmarshal([]byte(nested), &nestedMap); err == nil {
-				if s := extract(nestedMap); s != "" {
-					return s
-				}
-			}
-		case json.RawMessage:
-			var nestedMap map[string]any
-			if err := json.Unmarshal(nested, &nestedMap); err == nil {
-				if s := extract(nestedMap); s != "" {
-					return s
-				}
-			}
-		case []byte:
-			var nestedMap map[string]any
-			if err := json.Unmarshal(nested, &nestedMap); err == nil {
-				if s := extract(nestedMap); s != "" {
-					return s
-				}
-			}
-		}
-	}
-
-	return ""
+	})
+	return result
 }
 
 // handleApprovalRequest 处理审批事件: Server→Client 请求 → 等回复 → 回传 codex。
@@ -1279,52 +1293,9 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 
 	var result string
 
-	switch call.Tool {
-	case "lsp_hover":
-		result = s.lspHover(call.Arguments)
-	case "lsp_open_file":
-		result = s.lspOpenFile(call.Arguments)
-	case "lsp_diagnostics":
-		result = s.lspDiagnostics(call.Arguments)
-	// ── 编排工具 ──
-	case "orchestration_list_agents":
-		result = s.orchestrationListAgents()
-	case "orchestration_send_message":
-		result = s.orchestrationSendMessage(call.Arguments)
-	case "orchestration_launch_agent":
-		result = s.orchestrationLaunchAgent(call.Arguments)
-	case "orchestration_stop_agent":
-		result = s.orchestrationStopAgent(call.Arguments)
-	// ── 资源工具 ──
-	case "task_create_dag":
-		result = s.resourceTaskCreateDAG(call.Arguments)
-	case "task_get_dag":
-		result = s.resourceTaskGetDAG(call.Arguments)
-	case "task_update_node":
-		result = s.resourceTaskUpdateNode(call.Arguments)
-	case "command_list":
-		result = s.resourceCommandList(call.Arguments)
-	case "command_get":
-		result = s.resourceCommandGet(call.Arguments)
-	case "prompt_list":
-		result = s.resourcePromptList(call.Arguments)
-	case "prompt_get":
-		result = s.resourcePromptGet(call.Arguments)
-	case "shared_file_read":
-		result = s.resourceSharedFileRead(call.Arguments)
-	case "shared_file_write":
-		result = s.resourceSharedFileWrite(call.Arguments)
-	case "workspace_create_run":
-		result = s.resourceWorkspaceCreateRun(call.Arguments)
-	case "workspace_get_run":
-		result = s.resourceWorkspaceGetRun(call.Arguments)
-	case "workspace_list_runs":
-		result = s.resourceWorkspaceListRuns(call.Arguments)
-	case "workspace_merge_run":
-		result = s.resourceWorkspaceMergeRun(call.Arguments)
-	case "workspace_abort_run":
-		result = s.resourceWorkspaceAbortRun(call.Arguments)
-	default:
+	if handler, ok := s.dynTools[call.Tool]; ok {
+		result = handler(call.Arguments)
+	} else {
 		result = fmt.Sprintf("unknown tool: %s", call.Tool)
 	}
 

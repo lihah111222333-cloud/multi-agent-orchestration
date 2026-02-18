@@ -653,8 +653,9 @@ var methodToEventMap = map[string]string{
 	"agent/event/collab_agent_interaction_end":   EventCollabAgentInteractionEnd,
 
 	// legacy codex/event/*
-	"codex/event/task_started":                   EventTurnStarted,
-	"codex/event/task_complete":                  EventTurnComplete,
+	"codex/event/task_started": EventTurnStarted,
+	// 注意: `codex/event/task_complete` 与 `turn/completed` 语义重复。
+	// 这里故意不折叠为 EventTurnComplete，保持 raw method，避免重复 turn/completed。
 	"codex/event/session_configured":             EventSessionConfigured,
 	"codex/event/agent_message":                  EventAgentMessage,
 	"codex/event/agent_message_delta":            EventAgentMessageDelta,

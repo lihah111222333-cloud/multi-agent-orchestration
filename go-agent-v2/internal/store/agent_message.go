@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,6 +21,7 @@ type AgentMessage struct {
 	EventType string          `db:"event_type" json:"eventType"`
 	Method    string          `db:"method" json:"method"`
 	Content   string          `db:"content" json:"content"`
+	DedupKey  string          `db:"dedup_key" json:"-"`
 	Metadata  json.RawMessage `db:"metadata" json:"metadata,omitempty"`
 	CreatedAt time.Time       `db:"created_at" json:"createdAt"`
 }
@@ -48,16 +50,102 @@ func sanitizeMetadata(raw json.RawMessage) json.RawMessage {
 	return json.RawMessage(fallback)
 }
 
+// BuildMessageDedupKey 生成消息去重键。
+//
+// 仅对已知可能重复的“幂等事件”生成 key（例如 turn/completed）。
+// 返回空字符串表示不参与数据库去重。
+func BuildMessageDedupKey(eventType, method string, metadata json.RawMessage) string {
+	normalizedEvent := strings.ToLower(strings.TrimSpace(eventType))
+	normalizedMethod := strings.ToLower(strings.TrimSpace(method))
+	if !shouldBuildMessageDedupKey(normalizedEvent, normalizedMethod) {
+		return ""
+	}
+	if len(metadata) == 0 {
+		return ""
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return ""
+	}
+
+	id := firstNonEmpty(
+		lookupNestedString(payload, "turn", "id"),
+		lookupNestedString(payload, "msg", "turn_id"),
+		lookupNestedString(payload, "turn_id"),
+		lookupNestedString(payload, "id"),
+		lookupNestedString(payload, "call_id"),
+		lookupNestedString(payload, "callId"),
+		lookupNestedString(payload, "tool_call_id"),
+	)
+	if id == "" {
+		return ""
+	}
+
+	scope := normalizedMethod
+	if scope == "" {
+		scope = normalizedEvent
+	}
+	if scope == "" {
+		return ""
+	}
+	return scope + "|" + id
+}
+
+func shouldBuildMessageDedupKey(eventType, method string) bool {
+	switch method {
+	case "turn/completed", "codex/event/task_complete", "dynamic-tool/called", "item/tool/call":
+		return true
+	}
+	switch eventType {
+	case "turn_complete", "codex/event/task_complete", "dynamic_tool_call":
+		return true
+	}
+	return false
+}
+
+func lookupNestedString(payload map[string]any, path ...string) string {
+	var current any = payload
+	for _, key := range path {
+		obj, ok := current.(map[string]any)
+		if !ok {
+			return ""
+		}
+		next, ok := obj[key]
+		if !ok {
+			return ""
+		}
+		current = next
+	}
+	s, ok := current.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(s)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 // Insert 写入单条消息。
 func (s *AgentMessageStore) Insert(ctx context.Context, msg *AgentMessage) error {
 	if msg.CreatedAt.IsZero() {
 		msg.CreatedAt = time.Now()
 	}
+	msg.DedupKey = strings.TrimSpace(msg.DedupKey)
 	msg.Metadata = sanitizeMetadata(msg.Metadata)
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO agent_messages (agent_id, role, event_type, method, content, metadata, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		msg.AgentID, msg.Role, msg.EventType, msg.Method, msg.Content, msg.Metadata, msg.CreatedAt)
+		`INSERT INTO agent_messages (agent_id, role, event_type, method, content, metadata, created_at, dedup_key)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		 ON CONFLICT (agent_id, dedup_key) WHERE dedup_key <> '' DO NOTHING`,
+		msg.AgentID, msg.Role, msg.EventType, msg.Method, msg.Content, msg.Metadata, msg.CreatedAt, msg.DedupKey)
 	return err
 }
 

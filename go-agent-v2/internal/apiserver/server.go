@@ -998,6 +998,7 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 func (s *Server) persistMessage(agentID string, event codex.Event, method string) {
 	role := classifyEventRole(event.Type)
 	content := extractEventContent(event)
+	dedupKey := store.BuildMessageDedupKey(event.Type, method, event.Data)
 
 	msg := &store.AgentMessage{
 		AgentID:   agentID,
@@ -1005,6 +1006,7 @@ func (s *Server) persistMessage(agentID string, event codex.Event, method string
 		EventType: event.Type,
 		Method:    method,
 		Content:   content,
+		DedupKey:  dedupKey,
 		Metadata:  event.Data,
 	}
 
@@ -1065,6 +1067,7 @@ func (s *Server) persistSyntheticMessage(agentID, role, eventType, method, conte
 		EventType: eventType,
 		Method:    method,
 		Content:   content,
+		DedupKey:  store.BuildMessageDedupKey(eventType, method, raw),
 		Metadata:  raw,
 	}
 

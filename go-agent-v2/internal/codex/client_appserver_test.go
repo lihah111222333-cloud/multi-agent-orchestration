@@ -34,7 +34,7 @@ func TestMethodToEventMap_PackageLevel(t *testing.T) {
 		{"agent/event/shutdown_complete", EventShutdownComplete},
 		{"agent/event/error", EventError},
 		{"codex/event/task_started", EventTurnStarted},
-		{"codex/event/task_complete", EventTurnComplete},
+		{"codex/event/task_complete", "codex/event/task_complete"},
 		{"codex/event/agent_message_content_delta", EventAgentMessageDelta},
 		{"codex/event/item_completed", "item/completed"},
 	}

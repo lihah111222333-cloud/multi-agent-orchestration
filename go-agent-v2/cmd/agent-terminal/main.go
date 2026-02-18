@@ -166,15 +166,8 @@ func main() {
 
 	// ─── Wails App ───
 	appSvc := NewApp(*group, *n, appSrv, mgr)
-	if *debug {
-		// 事件同时分发到 debug bridge (浏览器轮询) 和 Wails bridge (桌面窗口)
-		appSrv.SetNotifyHook(func(method string, params any) {
-			publishDebugBridgeEvent(method, params)
-			appSvc.handleBridgeNotification(method, params)
-		})
-	} else {
-		appSrv.SetNotifyHook(appSvc.handleBridgeNotification)
-	}
+	// 统一通过 App 桥接转发，避免 debug 模式重复 publish 同一事件。
+	appSrv.SetNotifyHook(appSvc.handleBridgeNotification)
 
 	app := application.New(application.Options{
 		Name: "Agent Orchestrator",

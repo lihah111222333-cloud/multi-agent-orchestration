@@ -142,6 +142,7 @@ func main() {
 		SkillsDir: ".agent/skills",
 	}
 	appSrv := apiserver.New(deps)
+	setupAppServerLSPRoot(appSrv)
 
 	util.SafeGo(func() {
 		if err := appSrv.ListenAndServe(ctx, apiAddr); err != nil {
@@ -211,4 +212,20 @@ func main() {
 	if err := app.Run(); err != nil {
 		logger.Error("wails app failed", logger.FieldError, err)
 	}
+}
+
+type lspRootSetupper interface {
+	SetupLSP(rootDir string)
+}
+
+func setupAppServerLSPRoot(server lspRootSetupper) {
+	if server == nil {
+		return
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		logger.Warn("setup app-server lsp root failed", logger.FieldError, err)
+		return
+	}
+	server.SetupLSP(cwd)
 }

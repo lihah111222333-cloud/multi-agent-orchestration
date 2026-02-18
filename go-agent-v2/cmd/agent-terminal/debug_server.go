@@ -63,6 +63,8 @@ var debugBridgeMetrics = struct {
 	pollWriteFailTotal atomic.Int64
 }{}
 
+var debugBridgeEnabled atomic.Bool
+
 func shouldLogBridgePublish(method string, seq int64) bool {
 	lower := strings.ToLower(method)
 	if strings.Contains(lower, "delta") || strings.Contains(lower, "output") || strings.Contains(lower, "stream") {
@@ -74,6 +76,10 @@ func shouldLogBridgePublish(method string, seq int64) bool {
 // publishDebugBridgeEvent 将 Go 桥接事件写入调试队列。
 // 约束：前端不直接连 SSE，仅通过此 Go 队列拉取事件。
 func publishDebugBridgeEvent(method string, params any) {
+	if !debugBridgeEnabled.Load() {
+		return
+	}
+
 	payloadMap := util.ToMapAny(params)
 
 	rawPayload, err := json.Marshal(payloadMap)
@@ -180,6 +186,7 @@ func startDebugServer(ctx context.Context, uiPort int, apiBaseURL string) {
 		logger.Error("debug: frontend directory not found")
 		return
 	}
+	debugBridgeEnabled.Store(true)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/select-project-dir", handleDebugSelectProjectDir)

@@ -27,6 +27,12 @@ var (
 	// 危险执行关键词。
 	reDangerousExec = regexp.MustCompile(`(?i)\b(DROP|TRUNCATE|ALTER|GRANT|REVOKE|CREATE\s+DATABASE|CREATE\s+SCHEMA)\b`)
 
+	// 危险 SQL 函数 (读取文件、大对象等)，在只读查询中也需拦截。
+	reDangerousFunctions = regexp.MustCompile(
+		`(?i)\b(pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|` +
+			`lo_import|lo_export|lo_get|lo_put|` +
+			`pg_execute_server_program|dblink|dblink_exec)\b`)
+
 	// 执行白名单 (首关键词必须是这些)。
 	executeWhitelist = map[string]bool{
 		"INSERT": true, "UPDATE": true, "DELETE": true, "MERGE": true,
@@ -62,7 +68,7 @@ func FirstSQLKeyword(sql string) string {
 }
 
 // ValidateReadOnlyQuery 验证只读查询 (对应 Python _validate_read_only_query)。
-// 先去除字面量再检测写入关键词。
+// 先去除字面量再检测写入关键词和危险函数。
 func ValidateReadOnlyQuery(sql string) error {
 	if err := ValidateSingleStatement(sql); err != nil {
 		return err
@@ -70,6 +76,9 @@ func ValidateReadOnlyQuery(sql string) error {
 	stripped := StripSQLLiterals(sql)
 	if reWriteKeywords.MatchString(stripped) {
 		return ErrReadOnlyViolation
+	}
+	if reDangerousFunctions.MatchString(stripped) {
+		return ErrDangerousSQL
 	}
 	return nil
 }

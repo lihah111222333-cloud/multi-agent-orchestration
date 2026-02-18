@@ -58,6 +58,19 @@ const (
 
 // Server JSON-RPC WebSocket 服务器。
 type Server struct {
+	// ========================================
+	// 锁职责说明
+	// ========================================
+	// 以下锁保护各自独立的数据, 不存在嵌套获取关系。
+	// mu:           conns map (WebSocket 连接管理)
+	// pendingMu:    pending map (Server→Client 请求跟踪)
+	// diagMu:       diagCache (LSP 诊断缓存)
+	// toolCallMu:   toolCallCount (工具调用计数)
+	// fileChangeMu: fileChangeByThread (文件变更跟踪)
+	// skillsMu:     agentSkills (技能配置)
+	// sseMu:        sseClients (SSE 推送)
+	// notifyHookMu: notifyHook (桌面端通知钩子)
+	// ========================================
 	mgr      *runner.AgentManager
 	lsp      *lsp.Manager
 	cfg      *config.Config
@@ -322,7 +335,35 @@ func (s *Server) SetNotifyHook(h func(method string, params any)) {
 // Notify 向所有连接广播 JSON-RPC 通知 (WebSocket + SSE)。
 func (s *Server) Notify(method string, params any) {
 	s.syncUIRuntimeFromNotify(method, params)
+	payload := util.ToMapAny(params)
+	s.broadcastNotification(method, payload)
 
+	if shouldEmitUIStateChanged(method, payload) {
+		s.broadcastNotification("ui/state/changed", map[string]any{
+			"source": method,
+		})
+	}
+}
+
+func shouldEmitUIStateChanged(method string, payload map[string]any) bool {
+	if method == "" || method == "ui/state/changed" {
+		return false
+	}
+	if strings.HasPrefix(method, "workspace/run/") {
+		return true
+	}
+	threadID, _ := payload["threadId"].(string)
+	if strings.TrimSpace(threadID) != "" {
+		return true
+	}
+	agentID, _ := payload["agent_id"].(string)
+	if strings.TrimSpace(agentID) != "" {
+		return true
+	}
+	return false
+}
+
+func (s *Server) broadcastNotification(method string, params any) {
 	s.notifyHookMu.RLock()
 	hook := s.notifyHook
 	s.notifyHookMu.RUnlock()
@@ -435,10 +476,12 @@ func (s *Server) SendRequest(connID, method string, params any) (*Response, erro
 	logger.Info("app-server: sent request to client", logger.FieldConn, connID, logger.FieldMethod, method, logger.FieldID, reqID)
 
 	// 等待客户端响应 (5 分钟超时)
+	timer := time.NewTimer(5 * time.Minute)
+	defer timer.Stop()
 	select {
 	case resp := <-ch:
 		return resp, nil
-	case <-time.After(5 * time.Minute):
+	case <-timer.C:
 		return nil, pkgerr.Newf("Server.SendRequest", "request %d timed out waiting for client response", reqID)
 	}
 }
@@ -1061,7 +1104,7 @@ func (s *Server) persistMessage(agentID string, event codex.Event, method string
 		Metadata:  event.Data,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := toolCtx()
 	defer cancel()
 
 	if err := s.msgStore.Insert(ctx, msg); err != nil {
@@ -1087,7 +1130,7 @@ func (s *Server) PersistUserMessage(agentID, prompt string) {
 		Content:   prompt,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := toolCtx()
 	defer cancel()
 
 	if err := s.msgStore.Insert(ctx, msg); err != nil {
@@ -1122,7 +1165,7 @@ func (s *Server) persistSyntheticMessage(agentID, role, eventType, method, conte
 		Metadata:  raw,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := toolCtx()
 	defer cancel()
 	return s.msgStore.Insert(ctx, msg)
 }

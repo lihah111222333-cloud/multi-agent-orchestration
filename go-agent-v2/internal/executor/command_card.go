@@ -296,8 +296,8 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 
 	cmd := exec.CommandContext(execCtx, "sh", "-c", command)
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.Stdout = util.NewLimitedWriter(&stdout, maxOutputLim)
+	cmd.Stderr = util.NewLimitedWriter(&stderr, maxOutputLim)
 
 	execErr := cmd.Run()
 	exitCode := 0

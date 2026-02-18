@@ -108,18 +108,7 @@ func (s *Server) registerMethods() {
 	s.methods["log/filters"] = s.logFilters
 
 	// § 12. Dashboard 数据查询 (12 methods, 替代 Wails Dashboard 绑定)
-	s.methods["dashboard/agentStatus"] = s.dashAgentStatus
-	s.methods["dashboard/dags"] = s.dashDAGs
-	s.methods["dashboard/dagDetail"] = s.dashDAGDetail
-	s.methods["dashboard/taskAcks"] = s.dashTaskAcks
-	s.methods["dashboard/taskTraces"] = s.dashTaskTraces
-	s.methods["dashboard/commandCards"] = s.dashCommandCards
-	s.methods["dashboard/prompts"] = s.dashPrompts
-	s.methods["dashboard/sharedFiles"] = s.dashSharedFiles
-	s.methods["dashboard/skills"] = s.dashSkills
-	s.methods["dashboard/auditLogs"] = s.dashAuditLogs
-	s.methods["dashboard/aiLogs"] = s.dashAILogs
-	s.methods["dashboard/busLogs"] = s.dashBusLogs
+	s.registerDashboardMethods()
 
 	// § 13. Workspace Run (双通道编排: 虚拟目录 + PG 状态)
 	s.methods["workspace/run/create"] = s.workspaceRunCreate
@@ -132,6 +121,11 @@ func (s *Server) registerMethods() {
 	s.methods["ui/preferences/get"] = typedHandler(s.uiPreferencesGet)
 	s.methods["ui/preferences/set"] = typedHandler(s.uiPreferencesSet)
 	s.methods["ui/preferences/getAll"] = s.uiPreferencesGetAll
+	s.methods["ui/projects/get"] = s.uiProjectsGet
+	s.methods["ui/projects/add"] = typedHandler(s.uiProjectsAdd)
+	s.methods["ui/projects/remove"] = typedHandler(s.uiProjectsRemove)
+	s.methods["ui/projects/setActive"] = typedHandler(s.uiProjectsSetActive)
+	s.methods["ui/dashboard/get"] = typedHandler(s.uiDashboardGet)
 	s.methods["ui/state/get"] = s.uiStateGet
 }
 
@@ -1000,8 +994,8 @@ func (s *Server) commandExecTyped(ctx context.Context, p commandExecParams) (any
 	var stdout, stderr strings.Builder
 	stdout.Grow(4096)
 	stderr.Grow(4096)
-	cmd.Stdout = &limitedWriter{w: &stdout, limit: maxOutputSize}
-	cmd.Stderr = &limitedWriter{w: &stderr, limit: maxOutputSize}
+	cmd.Stdout = util.NewLimitedWriter(&stdout, maxOutputSize)
+	cmd.Stderr = util.NewLimitedWriter(&stderr, maxOutputSize)
 
 	start := time.Now()
 	err := cmd.Run()
@@ -1031,30 +1025,6 @@ func (s *Server) commandExecTyped(ctx context.Context, p commandExecParams) (any
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 	}, nil
-}
-
-// limitedWriter 限制写入字节数, 超出后静默丢弃。
-type limitedWriter struct {
-	w       *strings.Builder
-	limit   int
-	written int
-}
-
-// Write 写入 p, 超限后静默丢弃。
-//
-// 语义: 超限时返回 len(p) 而非 (0, ErrShortWrite), 避免 exec.Cmd 等
-// 调用方误认为管道断裂。未超限时返回实际写入字节数以满足 io.Writer 契约。
-func (lw *limitedWriter) Write(p []byte) (int, error) {
-	remain := lw.limit - lw.written
-	if remain <= 0 {
-		return len(p), nil // 静默丢弃, 对调用方透明
-	}
-	if len(p) > remain {
-		p = p[:remain]
-	}
-	n, err := lw.w.Write(p)
-	lw.written += n
-	return n, err
 }
 
 // ========================================

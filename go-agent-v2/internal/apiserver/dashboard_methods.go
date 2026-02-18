@@ -36,6 +36,11 @@ func dashCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 10*time.Second)
 }
 
+// toolCtx 资源工具通用 5 秒超时上下文。
+func toolCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 5*time.Second)
+}
+
 // isNilStore 安全检测 store 是否为 nil (处理 typed nil 指针)。
 //
 // Go 中 `(*SomeStore)(nil)` 作为 `any` 参数传入时 `store == nil` 返回 false,
@@ -53,11 +58,6 @@ func isNilStore(store any) bool {
 // 封装 dashboard/xxx 方法的共享骨架:
 //
 //	nil store check → typedHandler unmarshal → dashCtx timeout → query → error→empty fallback → wrap
-//
-// 用法:
-//
-//	s.methods["dashboard/dags"] = dashList[dagParams]("dags", s.dagStore,
-//	    func(ctx context.Context, p dagParams) (any, error) { return s.dagStore.ListDAGs(ctx, ...) })
 func dashList[P any](key string, store any, query func(ctx context.Context, p P) (any, error)) Handler {
 	return typedHandler(func(_ context.Context, p P) (any, error) {
 		if isNilStore(store) {
@@ -74,299 +74,154 @@ func dashList[P any](key string, store any, query func(ctx context.Context, p P)
 	})
 }
 
+// clampLimit 统一 dashboard 分页限制 (默认 defaultVal, 最大 2000)。
+func clampLimit(v, defaultVal int) int {
+	if v <= 0 || v > 2000 {
+		return defaultVal
+	}
+	return v
+}
+
 // ========================================
-// § 12. Dashboard 数据查询
+// § 12. Dashboard 数据查询 — typed params
 // ========================================
 
-// dashAgentStatus 查询所有 Agent 状态。
-func (s *Server) dashAgentStatus(_ context.Context, params json.RawMessage) (any, error) {
-	if s.agentStatusStore == nil {
-		return map[string]any{"agents": []any{}}, nil
-	}
-	var p struct {
-		Status string `json:"status"`
-	}
-	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
-			logger.Warn("dashboard/agentStatus: unmarshal params", logger.FieldError, err)
-		}
-	}
-	ctx, cancel := dashCtx()
-	defer cancel()
-	list, err := s.agentStatusStore.List(ctx, p.Status)
-	if err != nil {
-		logger.Warn("dashboard/agentStatus failed", logger.FieldError, err)
-		return map[string]any{"agents": []any{}}, nil
-	}
-	return map[string]any{"agents": list}, nil
+type dashAgentStatusParams struct {
+	Status string `json:"status"`
 }
 
-// dashDAGs 查询 DAG 列表。
-func (s *Server) dashDAGs(_ context.Context, params json.RawMessage) (any, error) {
-	if s.dagStore == nil {
-		return map[string]any{"dags": []any{}}, nil
-	}
-	var p struct {
-		Keyword string `json:"keyword"`
-		Status  string `json:"status"`
-		Limit   int    `json:"limit"`
-	}
-	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
-			logger.Warn("dashboard/dags: unmarshal params", logger.FieldError, err)
-		}
-	}
-	if p.Limit <= 0 || p.Limit > 2000 {
-		p.Limit = 100
-	}
-	ctx, cancel := dashCtx()
-	defer cancel()
-	list, err := s.dagStore.ListDAGs(ctx, p.Keyword, p.Status, p.Limit)
-	if err != nil {
-		logger.Warn("dashboard/dags failed", logger.FieldError, err)
-		return map[string]any{"dags": []any{}}, nil
-	}
-	return map[string]any{"dags": list}, nil
+type dashDAGParams struct {
+	Keyword string `json:"keyword"`
+	Status  string `json:"status"`
+	Limit   int    `json:"limit"`
 }
 
-// dashTaskAcks 查询任务工单列表。
-func (s *Server) dashTaskAcks(_ context.Context, params json.RawMessage) (any, error) {
-	if s.taskAckStore == nil {
-		return map[string]any{"acks": []any{}}, nil
-	}
-	var p struct {
-		Keyword    string `json:"keyword"`
-		Status     string `json:"status"`
-		Priority   string `json:"priority"`
-		AssignedTo string `json:"assignedTo"`
-		Limit      int    `json:"limit"`
-	}
-	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
-			logger.Warn("dashboard/taskAcks: unmarshal params", logger.FieldError, err)
-		}
-	}
-	if p.Limit <= 0 || p.Limit > 2000 {
-		p.Limit = 100
-	}
-	ctx, cancel := dashCtx()
-	defer cancel()
-	list, err := s.taskAckStore.List(ctx, p.Keyword, p.Status, p.Priority, p.AssignedTo, p.Limit)
-	if err != nil {
-		logger.Warn("dashboard/taskAcks failed", logger.FieldError, err)
-		return map[string]any{"acks": []any{}}, nil
-	}
-	return map[string]any{"acks": list}, nil
+type dashTaskAckParams struct {
+	Keyword    string `json:"keyword"`
+	Status     string `json:"status"`
+	Priority   string `json:"priority"`
+	AssignedTo string `json:"assignedTo"`
+	Limit      int    `json:"limit"`
 }
 
-// dashTaskTraces 查询任务追踪列表。
-func (s *Server) dashTaskTraces(_ context.Context, params json.RawMessage) (any, error) {
-	if s.taskTraceStore == nil {
-		return map[string]any{"traces": []any{}}, nil
-	}
-	var p struct {
-		AgentID string `json:"agentId"`
-		Keyword string `json:"keyword"`
-		Limit   int    `json:"limit"`
-	}
-	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
-			logger.Warn("dashboard/taskTraces: unmarshal params", logger.FieldError, err)
-		}
-	}
-	if p.Limit <= 0 || p.Limit > 2000 {
-		p.Limit = 100
-	}
-	ctx, cancel := dashCtx()
-	defer cancel()
-	list, err := s.taskTraceStore.List(ctx, p.AgentID, p.Keyword, nil, p.Limit)
-	if err != nil {
-		logger.Warn("dashboard/taskTraces failed", logger.FieldError, err)
-		return map[string]any{"traces": []any{}}, nil
-	}
-	return map[string]any{"traces": list}, nil
+type dashTaskTraceParams struct {
+	AgentID string `json:"agentId"`
+	Keyword string `json:"keyword"`
+	Limit   int    `json:"limit"`
 }
 
-// dashCommandCards 查询命令卡列表。
-func (s *Server) dashCommandCards(_ context.Context, params json.RawMessage) (any, error) {
-	if s.cmdStore == nil {
-		return map[string]any{"cards": []any{}}, nil
-	}
-	var p struct {
-		Keyword string `json:"keyword"`
-		Limit   int    `json:"limit"`
-	}
-	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
-			logger.Warn("dashboard/commandCards: unmarshal params", logger.FieldError, err)
-		}
-	}
-	if p.Limit <= 0 || p.Limit > 2000 {
-		p.Limit = 100
-	}
-	ctx, cancel := dashCtx()
-	defer cancel()
-	list, err := s.cmdStore.List(ctx, p.Keyword, p.Limit)
-	if err != nil {
-		logger.Warn("dashboard/commandCards failed", logger.FieldError, err)
-		return map[string]any{"cards": []any{}}, nil
-	}
-	return map[string]any{"cards": list}, nil
+type dashCommandCardParams struct {
+	Keyword string `json:"keyword"`
+	Limit   int    `json:"limit"`
 }
 
-// dashPrompts 查询提示词模板列表。
-func (s *Server) dashPrompts(_ context.Context, params json.RawMessage) (any, error) {
-	if s.promptStore == nil {
-		return map[string]any{"prompts": []any{}}, nil
-	}
-	var p struct {
-		AgentKey string `json:"agentKey"`
-		Keyword  string `json:"keyword"`
-		Limit    int    `json:"limit"`
-	}
-	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
-			logger.Warn("dashboard/prompts: unmarshal params", logger.FieldError, err)
-		}
-	}
-	if p.Limit <= 0 || p.Limit > 2000 {
-		p.Limit = 100
-	}
-	ctx, cancel := dashCtx()
-	defer cancel()
-	list, err := s.promptStore.List(ctx, p.AgentKey, p.Keyword, p.Limit)
-	if err != nil {
-		logger.Warn("dashboard/prompts failed", logger.FieldError, err)
-		return map[string]any{"prompts": []any{}}, nil
-	}
-	return map[string]any{"prompts": list}, nil
+type dashPromptParams struct {
+	AgentKey string `json:"agentKey"`
+	Keyword  string `json:"keyword"`
+	Limit    int    `json:"limit"`
 }
 
-// dashSharedFiles 查询共享文件列表。
-func (s *Server) dashSharedFiles(_ context.Context, params json.RawMessage) (any, error) {
-	if s.fileStore == nil {
-		return map[string]any{"files": []any{}}, nil
-	}
-	var p struct {
-		Prefix string `json:"prefix"`
-		Limit  int    `json:"limit"`
-	}
-	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
-			logger.Warn("dashboard/sharedFiles: unmarshal params", logger.FieldError, err)
-		}
-	}
-	if p.Limit <= 0 || p.Limit > 2000 {
-		p.Limit = 500
-	}
-	ctx, cancel := dashCtx()
-	defer cancel()
-	list, err := s.fileStore.List(ctx, p.Prefix, p.Limit)
-	if err != nil {
-		logger.Warn("dashboard/sharedFiles failed", logger.FieldError, err)
-		return map[string]any{"files": []any{}}, nil
-	}
-	return map[string]any{"files": list}, nil
+type dashSharedFileParams struct {
+	Prefix string `json:"prefix"`
+	Limit  int    `json:"limit"`
 }
 
-// dashSkills 扫描 .agent/skills/ 目录。
-func (s *Server) dashSkills(_ context.Context, _ json.RawMessage) (any, error) {
-	if s.skillSvc == nil {
-		return map[string]any{"skills": []any{}}, nil
-	}
-	list, err := s.skillSvc.ListSkills()
-	if err != nil {
-		logger.Warn("dashboard/skills failed", logger.FieldError, err)
-		return map[string]any{"skills": []any{}}, nil
-	}
-	return map[string]any{"skills": list}, nil
+type dashAuditLogParams struct {
+	EventType string `json:"eventType"`
+	Action    string `json:"action"`
+	Actor     string `json:"actor"`
+	Keyword   string `json:"keyword"`
+	Limit     int    `json:"limit"`
 }
 
-// dashAuditLogs 查询审计日志。
-func (s *Server) dashAuditLogs(_ context.Context, params json.RawMessage) (any, error) {
-	if s.auditLogStore == nil {
-		return map[string]any{"logs": []any{}}, nil
-	}
-	var p struct {
-		EventType string `json:"eventType"`
-		Action    string `json:"action"`
-		Actor     string `json:"actor"`
-		Keyword   string `json:"keyword"`
-		Limit     int    `json:"limit"`
-	}
-	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
-			logger.Warn("dashboard/auditLogs: unmarshal params", logger.FieldError, err)
-		}
-	}
-	if p.Limit <= 0 || p.Limit > 2000 {
-		p.Limit = 100
-	}
-	ctx, cancel := dashCtx()
-	defer cancel()
-	list, err := s.auditLogStore.List(ctx, p.EventType, p.Action, p.Actor, p.Keyword, p.Limit)
-	if err != nil {
-		logger.Warn("dashboard/auditLogs failed", logger.FieldError, err)
-		return map[string]any{"logs": []any{}}, nil
-	}
-	return map[string]any{"logs": list}, nil
+type dashAILogParams struct {
+	Category string `json:"category"`
+	Keyword  string `json:"keyword"`
+	Limit    int    `json:"limit"`
 }
 
-// dashAILogs 查询 AI 调用日志。
-func (s *Server) dashAILogs(_ context.Context, params json.RawMessage) (any, error) {
-	if s.aiLogStore == nil {
-		return map[string]any{"logs": []any{}}, nil
-	}
-	var p struct {
-		Category string `json:"category"`
-		Keyword  string `json:"keyword"`
-		Limit    int    `json:"limit"`
-	}
-	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
-			logger.Warn("dashboard/aiLogs: unmarshal params", logger.FieldError, err)
-		}
-	}
-	if p.Limit <= 0 || p.Limit > 2000 {
-		p.Limit = 100
-	}
-	ctx, cancel := dashCtx()
-	defer cancel()
-	list, err := s.aiLogStore.Query(ctx, p.Category, p.Keyword, p.Limit)
-	if err != nil {
-		logger.Warn("dashboard/aiLogs failed", logger.FieldError, err)
-		return map[string]any{"logs": []any{}}, nil
-	}
-	return map[string]any{"logs": list}, nil
+type dashBusLogParams struct {
+	Category string `json:"category"`
+	Severity string `json:"severity"`
+	Keyword  string `json:"keyword"`
+	Limit    int    `json:"limit"`
 }
 
-// dashBusLogs 查询总线异常日志。
-func (s *Server) dashBusLogs(_ context.Context, params json.RawMessage) (any, error) {
-	if s.busLogStore == nil {
-		return map[string]any{"logs": []any{}}, nil
-	}
-	var p struct {
-		Category string `json:"category"`
-		Severity string `json:"severity"`
-		Keyword  string `json:"keyword"`
-		Limit    int    `json:"limit"`
-	}
-	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
-			logger.Warn("dashboard/busLogs: unmarshal params", logger.FieldError, err)
+// ========================================
+// § 12. Dashboard 方法注册
+// ========================================
+
+// registerDashboardMethods 注册所有 dashboard/* 方法。
+func (s *Server) registerDashboardMethods() {
+	// — 列表查询 (全部使用 dashList 模板) —
+
+	s.methods["dashboard/agentStatus"] = dashList[dashAgentStatusParams]("agents", s.agentStatusStore,
+		func(ctx context.Context, p dashAgentStatusParams) (any, error) {
+			return s.agentStatusStore.List(ctx, p.Status)
+		})
+
+	s.methods["dashboard/dags"] = dashList[dashDAGParams]("dags", s.dagStore,
+		func(ctx context.Context, p dashDAGParams) (any, error) {
+			return s.dagStore.ListDAGs(ctx, p.Keyword, p.Status, clampLimit(p.Limit, 100))
+		})
+
+	s.methods["dashboard/taskAcks"] = dashList[dashTaskAckParams]("acks", s.taskAckStore,
+		func(ctx context.Context, p dashTaskAckParams) (any, error) {
+			return s.taskAckStore.List(ctx, p.Keyword, p.Status, p.Priority, p.AssignedTo, clampLimit(p.Limit, 100))
+		})
+
+	s.methods["dashboard/taskTraces"] = dashList[dashTaskTraceParams]("traces", s.taskTraceStore,
+		func(ctx context.Context, p dashTaskTraceParams) (any, error) {
+			return s.taskTraceStore.List(ctx, p.AgentID, p.Keyword, nil, clampLimit(p.Limit, 100))
+		})
+
+	s.methods["dashboard/commandCards"] = dashList[dashCommandCardParams]("cards", s.cmdStore,
+		func(ctx context.Context, p dashCommandCardParams) (any, error) {
+			return s.cmdStore.List(ctx, p.Keyword, clampLimit(p.Limit, 100))
+		})
+
+	s.methods["dashboard/prompts"] = dashList[dashPromptParams]("prompts", s.promptStore,
+		func(ctx context.Context, p dashPromptParams) (any, error) {
+			return s.promptStore.List(ctx, p.AgentKey, p.Keyword, clampLimit(p.Limit, 100))
+		})
+
+	s.methods["dashboard/sharedFiles"] = dashList[dashSharedFileParams]("files", s.fileStore,
+		func(ctx context.Context, p dashSharedFileParams) (any, error) {
+			return s.fileStore.List(ctx, p.Prefix, clampLimit(p.Limit, 500))
+		})
+
+	s.methods["dashboard/auditLogs"] = dashList[dashAuditLogParams]("logs", s.auditLogStore,
+		func(ctx context.Context, p dashAuditLogParams) (any, error) {
+			return s.auditLogStore.List(ctx, p.EventType, p.Action, p.Actor, p.Keyword, clampLimit(p.Limit, 100))
+		})
+
+	s.methods["dashboard/aiLogs"] = dashList[dashAILogParams]("logs", s.aiLogStore,
+		func(ctx context.Context, p dashAILogParams) (any, error) {
+			return s.aiLogStore.Query(ctx, p.Category, p.Keyword, clampLimit(p.Limit, 100))
+		})
+
+	s.methods["dashboard/busLogs"] = dashList[dashBusLogParams]("logs", s.busLogStore,
+		func(ctx context.Context, p dashBusLogParams) (any, error) {
+			return s.busLogStore.List(ctx, p.Category, p.Severity, p.Keyword, clampLimit(p.Limit, 100))
+		})
+
+	// — Skills (无 DB store, 不走 dashList) —
+
+	s.methods["dashboard/skills"] = func(_ context.Context, _ json.RawMessage) (any, error) {
+		if s.skillSvc == nil {
+			return map[string]any{"skills": []any{}}, nil
 		}
+		list, err := s.skillSvc.ListSkills()
+		if err != nil {
+			logger.Warn("dashboard/skills failed", logger.FieldError, err)
+			return map[string]any{"skills": []any{}}, nil
+		}
+		return map[string]any{"skills": list}, nil
 	}
-	if p.Limit <= 0 || p.Limit > 2000 {
-		p.Limit = 100
-	}
-	ctx, cancel := dashCtx()
-	defer cancel()
-	list, err := s.busLogStore.List(ctx, p.Category, p.Severity, p.Keyword, p.Limit)
-	if err != nil {
-		logger.Warn("dashboard/busLogs failed", logger.FieldError, err)
-		return map[string]any{"logs": []any{}}, nil
-	}
-	return map[string]any{"logs": list}, nil
+
+	// — DAG Detail (非列表, 不走 dashList) —
+
+	s.methods["dashboard/dagDetail"] = s.dashDAGDetail
 }
 
 // ========================================

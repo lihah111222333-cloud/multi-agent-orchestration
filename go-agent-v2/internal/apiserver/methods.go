@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1350,6 +1351,34 @@ func appendUniqueThreadID(dst []string, seen map[string]struct{}, candidate stri
 	return append(dst, id)
 }
 
+func buildResumeCandidates(threadID string, resolved []string) []string {
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return nil
+	}
+	if isLikelyCodexThreadID(id) {
+		return []string{id}
+	}
+
+	candidates := make([]string, 0, len(resolved))
+	seen := map[string]struct{}{}
+	for _, candidate := range resolved {
+		value := strings.TrimSpace(candidate)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		candidates = append(candidates, value)
+	}
+	if len(candidates) > 0 {
+		return candidates
+	}
+	return []string{id}
+}
+
 func resolveResumeThreadIDsFromMessages(messages []store.AgentMessage) []string {
 	type sessionCandidate struct {
 		threadID   string
@@ -1603,21 +1632,79 @@ func (s *Server) sendSlashCommandWithArgs(params json.RawMessage, command string
 func extractInputs(inputs []UserInput) (prompt string, images, files []string) {
 	var texts []string
 	for _, inp := range inputs {
-		switch inp.Type {
+		switch strings.ToLower(strings.TrimSpace(inp.Type)) {
 		case "text":
 			texts = append(texts, inp.Text)
 		case "image":
-			images = append(images, inp.URL)
-		case "localImage":
-			images = append(images, inp.Path)
-		case "fileContent", "mention":
-			files = append(files, inp.Path)
+			if value := strings.TrimSpace(inp.URL); value != "" {
+				images = append(images, value)
+				continue
+			}
+			if value := strings.TrimSpace(inp.Path); value != "" {
+				images = append(images, value)
+			}
+		case "localimage":
+			if value := strings.TrimSpace(inp.Path); value != "" {
+				images = append(images, value)
+			}
+		case "filecontent", "mention", "file":
+			if value := strings.TrimSpace(inp.Path); value != "" {
+				files = append(files, value)
+			}
 		case "skill":
 			texts = append(texts, fmt.Sprintf("[skill:%s] %s", inp.Name, inp.Content))
 		}
 	}
 	prompt = strings.Join(texts, "\n")
 	return
+}
+
+func buildAttachmentName(path string) string {
+	value := strings.TrimSpace(path)
+	if value == "" {
+		return ""
+	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "data:image/") {
+		ext := strings.TrimSpace(strings.TrimPrefix(lower, "data:image/"))
+		if idx := strings.Index(ext, ";"); idx >= 0 {
+			ext = ext[:idx]
+		}
+		ext = strings.TrimSpace(ext)
+		if ext == "" {
+			return "image"
+		}
+		return "image." + ext
+	}
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		if parsed, err := url.Parse(value); err == nil {
+			base := strings.TrimSpace(filepath.Base(parsed.Path))
+			if base != "" && base != "." && base != string(filepath.Separator) {
+				return base
+			}
+		}
+		return value
+	}
+	base := strings.TrimSpace(filepath.Base(value))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return value
+	}
+	return base
+}
+
+func buildAttachmentPreviewURL(path string) string {
+	value := strings.TrimSpace(path)
+	if value == "" {
+		return ""
+	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "http://") ||
+		strings.HasPrefix(lower, "https://") ||
+		strings.HasPrefix(lower, "data:image/") ||
+		strings.HasPrefix(lower, "file://") {
+		return value
+	}
+	return (&url.URL{Scheme: "file", Path: value}).String()
 }
 
 func buildUserTimelineAttachments(images, files []string) []uistate.TimelineAttachment {
@@ -1627,23 +1714,11 @@ func buildUserTimelineAttachments(images, files []string) []uistate.TimelineAtta
 		if path == "" {
 			continue
 		}
-		name := strings.TrimSpace(filepath.Base(path))
-		if name == "" || name == "." || name == string(filepath.Separator) {
-			name = path
-		}
-		previewURL := path
-		lower := strings.ToLower(path)
-		if !strings.HasPrefix(lower, "http://") &&
-			!strings.HasPrefix(lower, "https://") &&
-			!strings.HasPrefix(lower, "data:image/") &&
-			!strings.HasPrefix(lower, "file://") {
-			previewURL = "file://" + path
-		}
 		attachments = append(attachments, uistate.TimelineAttachment{
 			Kind:       "image",
-			Name:       name,
+			Name:       buildAttachmentName(path),
 			Path:       path,
-			PreviewURL: previewURL,
+			PreviewURL: buildAttachmentPreviewURL(path),
 		})
 	}
 	for _, raw := range files {
@@ -1651,13 +1726,9 @@ func buildUserTimelineAttachments(images, files []string) []uistate.TimelineAtta
 		if path == "" {
 			continue
 		}
-		name := strings.TrimSpace(filepath.Base(path))
-		if name == "" || name == "." || name == string(filepath.Separator) {
-			name = path
-		}
 		attachments = append(attachments, uistate.TimelineAttachment{
 			Kind: "file",
-			Name: name,
+			Name: buildAttachmentName(path),
 			Path: path,
 		})
 	}

@@ -103,7 +103,7 @@ export const ChatTimeline = {
         || lower.startsWith('file://')) {
         return path;
       }
-      return `file://${path}`;
+      return encodeURI(`file://${path}`);
     }
 
     function formatTime(ts) {

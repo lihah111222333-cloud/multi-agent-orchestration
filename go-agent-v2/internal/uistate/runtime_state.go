@@ -3,6 +3,7 @@ package uistate
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -386,6 +387,27 @@ func attachmentName(path string) string {
 	if value == "" {
 		return ""
 	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "data:image/") {
+		ext := strings.TrimSpace(strings.TrimPrefix(lower, "data:image/"))
+		if idx := strings.Index(ext, ";"); idx >= 0 {
+			ext = ext[:idx]
+		}
+		ext = strings.TrimSpace(ext)
+		if ext == "" {
+			return "image"
+		}
+		return "image." + ext
+	}
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		if parsed, err := url.Parse(value); err == nil {
+			base := strings.TrimSpace(filepath.Base(parsed.Path))
+			if base != "" && base != "." && base != string(filepath.Separator) {
+				return base
+			}
+		}
+		return value
+	}
 	base := strings.TrimSpace(filepath.Base(value))
 	if base == "" || base == "." || base == string(filepath.Separator) {
 		return value
@@ -405,7 +427,7 @@ func attachmentPreview(path string) string {
 		strings.HasPrefix(lower, "file://") {
 		return value
 	}
-	return "file://" + value
+	return (&url.URL{Scheme: "file", Path: value}).String()
 }
 
 // ReplaceWorkspaceRuns replaces workspace run cache.

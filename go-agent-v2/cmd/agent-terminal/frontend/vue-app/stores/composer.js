@@ -26,13 +26,21 @@ function removeAttachment(index) {
 }
 
 function pushAttachment(attachment) {
-  if (!attachment?.path) return;
-  if (state.attachments.some((item) => item.path === attachment.path)) return;
-  state.attachments.push(attachment);
+  const path = (attachment?.path || '').trim();
+  const previewUrl = (attachment?.previewUrl || '').trim();
+  const key = path || previewUrl;
+  if (!key) return;
+  if (state.attachments.some((item) => ((item.path || '').trim() || (item.previewUrl || '').trim()) === key)) return;
+  state.attachments.push({
+    ...attachment,
+    path,
+    previewUrl,
+  });
   logInfo('composer', 'attachment.added', {
     kind: attachment.kind,
     name: attachment.name,
     count: state.attachments.length,
+    has_path: Boolean(path),
   });
 }
 

@@ -132,6 +132,44 @@ func TestIsHistoricalResumeCandidateError(t *testing.T) {
 	}
 }
 
+// ========================================
+// buildResumeCandidates 测试 (TDD RED)
+// ========================================
+
+func TestBuildResumeCandidates_UUIDThread_UsesDirectly(t *testing.T) {
+	uuid := "019c718c-5e83-73e1-8582-ed7f4fa04312"
+	got := buildResumeCandidates(uuid, nil)
+	if len(got) != 1 || got[0] != uuid {
+		t.Fatalf("got %v, want [%s]", got, uuid)
+	}
+}
+
+func TestBuildResumeCandidates_NonUUID_WithResolved_UsesResolved(t *testing.T) {
+	resolved := []string{
+		"019c7185-68a1-7e72-9d6c-396cfa3a3ce4",
+		"019c7185-6f21-7a21-bd41-a3c0ee28d6dd",
+	}
+	got := buildResumeCandidates("thread-12345", resolved)
+	if len(got) != 2 || got[0] != resolved[0] || got[1] != resolved[1] {
+		t.Fatalf("got %v, want %v", got, resolved)
+	}
+}
+
+func TestBuildResumeCandidates_NonUUID_NoResolved_FallsBackToOriginal(t *testing.T) {
+	// 核心 bug 场景: 非 UUID 且解析失败 → 不应丢弃，应回退到原始 ID 让 codex 自行决定。
+	got := buildResumeCandidates("thread-12345", nil)
+	if len(got) != 1 || got[0] != "thread-12345" {
+		t.Fatalf("expected fallback to original id, got %v", got)
+	}
+}
+
+func TestBuildResumeCandidates_NonUUID_EmptyResolved_FallsBackToOriginal(t *testing.T) {
+	got := buildResumeCandidates("thread-12345", []string{})
+	if len(got) != 1 || got[0] != "thread-12345" {
+		t.Fatalf("expected fallback to original id, got %v", got)
+	}
+}
+
 func mustJSON(raw string) json.RawMessage {
 	return json.RawMessage(raw)
 }

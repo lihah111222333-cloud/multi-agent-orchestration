@@ -449,13 +449,45 @@ async function sendMessage(threadId, prompt, attachments = []) {
   if (!threadId || (!text && !hasAttachments)) return;
 
   const input = [];
+  let localImageCount = 0;
+  let remoteImageCount = 0;
+  let fileCount = 0;
+  let droppedAttachmentCount = 0;
   if (text) {
     input.push({ type: 'text', text });
   }
   for (const item of attachments) {
     const path = (item?.path || '').trim();
-    if (!path) continue;
-    input.push(item.kind === 'image' ? { type: 'localImage', path } : { type: 'fileContent', path });
+    const previewUrl = (item?.previewUrl || '').trim();
+    if (item?.kind === 'image') {
+      if (path) {
+        input.push({ type: 'localImage', path });
+        localImageCount += 1;
+        continue;
+      }
+      if (previewUrl) {
+        input.push({ type: 'image', url: previewUrl });
+        remoteImageCount += 1;
+        continue;
+      }
+      droppedAttachmentCount += 1;
+      continue;
+    }
+    if (!path) {
+      droppedAttachmentCount += 1;
+      continue;
+    }
+    input.push({ type: 'fileContent', path });
+    fileCount += 1;
+  }
+
+  if (input.length === 0) {
+    logWarn('thread', 'send.skipped.emptyInput', {
+      thread_id: threadId,
+      attachments: attachments.length,
+      dropped_attachments: droppedAttachmentCount,
+    });
+    return;
   }
 
   const start = perfNow();
@@ -463,6 +495,10 @@ async function sendMessage(threadId, prompt, attachments = []) {
     thread_id: threadId,
     text_len: text.length,
     attachments: attachments.length,
+    local_images: localImageCount,
+    inline_images: remoteImageCount,
+    files: fileCount,
+    dropped_attachments: droppedAttachmentCount,
   });
   state.sending = true;
   try {

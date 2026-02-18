@@ -7,7 +7,6 @@ import { logDebug, logInfo, logWarn, logError } from './log.js';
 const METHOD_IDS = Object.freeze({
   CALL_API: 1055257995,
   GET_BUILD_INFO: 3168473285,
-  GET_GROUP: 4127719990,
   SAVE_CLIPBOARD_IMAGE: 3932748547,
   SELECT_FILES: 937743440,
   SELECT_PROJECT_DIR: 373469749,
@@ -189,7 +188,7 @@ export async function getBuildInfo() {
 }
 
 export function onAgentEvent(callback) {
-  let off = () => {};
+  let off = () => { };
   const wrapped = (evt) => {
     const normalized = normalizeRuntimeEventEnvelope(evt);
     agentEventCount += 1;
@@ -229,7 +228,7 @@ export function onAgentEvent(callback) {
 }
 
 export function onBridgeEvent(callback) {
-  let off = () => {};
+  let off = () => { };
   const wrapped = (evt) => {
     const normalized = normalizeRuntimeEventEnvelope(evt);
     bridgeEventCount += 1;
@@ -266,11 +265,4 @@ export function onBridgeEvent(callback) {
     };
   });
   return () => off();
-}
-
-export async function getGroup() {
-  const value = await callByID(METHOD_IDS.GET_GROUP);
-  const group = typeof value === 'string' ? value : '';
-  logDebug('api', 'group.read', { group });
-  return group;
 }

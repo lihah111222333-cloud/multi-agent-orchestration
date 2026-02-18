@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -163,4 +164,19 @@ func LoadFromEnv(ptr any) {
 			fv.SetBool(EnvBool(envName, defBool))
 		}
 	}
+}
+
+// SafeGo 在新 goroutine 中安全执行 fn，捕获 panic 并记录日志 + 堆栈。
+func SafeGo(fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("goroutine panicked",
+					logger.FieldError, r,
+					"stack", string(debug.Stack()),
+				)
+			}
+		}()
+		fn()
+	}()
 }

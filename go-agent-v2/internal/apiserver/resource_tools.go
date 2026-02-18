@@ -7,13 +7,13 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	"github.com/multi-agent/go-agent-v2/internal/store"
+	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -255,7 +255,7 @@ func (s *Server) resourceTaskCreateDAG(args json.RawMessage) string {
 		} `json:"nodes"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.CreateDAG", "invalid args"))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -269,7 +269,7 @@ func (s *Server) resourceTaskCreateDAG(args json.RawMessage) string {
 		Status:      "draft",
 	})
 	if err != nil {
-		return toolError(fmt.Errorf("create dag: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.CreateDAG", "create dag"))
 	}
 
 	// 创建节点
@@ -305,17 +305,17 @@ func (s *Server) resourceTaskGetDAG(args json.RawMessage) string {
 		DagKey string `json:"dag_key"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.GetDAG", "invalid args"))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	dag, nodes, err := s.dagStore.GetDAGDetail(ctx, p.DagKey)
 	if err != nil {
-		return toolError(fmt.Errorf("get dag: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.GetDAG", "get dag"))
 	}
 	if dag == nil {
-		return toolError(fmt.Errorf("dag %s not found", p.DagKey))
+		return toolError(pkgerr.Newf("ResourceTool.GetDAG", "dag %s not found", p.DagKey))
 	}
 
 	data, _ := json.Marshal(map[string]any{
@@ -333,7 +333,7 @@ func (s *Server) resourceTaskUpdateNode(args json.RawMessage) string {
 		Result  string `json:"result"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.UpdateNode", "invalid args"))
 	}
 
 	var result any
@@ -345,7 +345,7 @@ func (s *Server) resourceTaskUpdateNode(args json.RawMessage) string {
 	defer cancel()
 	node, err := s.dagStore.UpdateNodeStatus(ctx, p.DagKey, p.NodeKey, p.Status, result)
 	if err != nil {
-		return toolError(fmt.Errorf("update node: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.UpdateNode", "update node"))
 	}
 	if node == nil {
 		return `{"error":"node not found"}`
@@ -368,7 +368,7 @@ func (s *Server) resourceCommandList(args json.RawMessage) string {
 	defer cancel()
 	cards, err := s.cmdStore.List(ctx, p.Keyword, 50)
 	if err != nil {
-		return toolError(fmt.Errorf("list commands: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.CommandList", "list commands"))
 	}
 	data, _ := json.Marshal(cards)
 	return string(data)
@@ -379,17 +379,17 @@ func (s *Server) resourceCommandGet(args json.RawMessage) string {
 		CardKey string `json:"card_key"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.CommandGet", "invalid args"))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	card, err := s.cmdStore.Get(ctx, p.CardKey)
 	if err != nil {
-		return toolError(fmt.Errorf("get command: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.CommandGet", "get command"))
 	}
 	if card == nil {
-		return toolError(fmt.Errorf("command %s not found", p.CardKey))
+		return toolError(pkgerr.Newf("ResourceTool.CommandGet", "command %s not found", p.CardKey))
 	}
 	data, _ := json.Marshal(card)
 	return string(data)
@@ -407,7 +407,7 @@ func (s *Server) resourcePromptList(args json.RawMessage) string {
 	defer cancel()
 	prompts, err := s.promptStore.List(ctx, "", p.Keyword, 50)
 	if err != nil {
-		return toolError(fmt.Errorf("list prompts: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.PromptList", "list prompts"))
 	}
 	data, _ := json.Marshal(prompts)
 	return string(data)
@@ -418,17 +418,17 @@ func (s *Server) resourcePromptGet(args json.RawMessage) string {
 		PromptKey string `json:"prompt_key"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.PromptGet", "invalid args"))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	prompt, err := s.promptStore.Get(ctx, p.PromptKey)
 	if err != nil {
-		return toolError(fmt.Errorf("get prompt: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.PromptGet", "get prompt"))
 	}
 	if prompt == nil {
-		return toolError(fmt.Errorf("prompt %s not found", p.PromptKey))
+		return toolError(pkgerr.Newf("ResourceTool.PromptGet", "prompt %s not found", p.PromptKey))
 	}
 	data, _ := json.Marshal(prompt)
 	return string(data)
@@ -439,17 +439,17 @@ func (s *Server) resourceSharedFileRead(args json.RawMessage) string {
 		Path string `json:"path"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.FileRead", "invalid args"))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	file, err := s.fileStore.Read(ctx, p.Path)
 	if err != nil {
-		return toolError(fmt.Errorf("read file: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.FileRead", "read file"))
 	}
 	if file == nil {
-		return toolError(fmt.Errorf("file %s not found", p.Path))
+		return toolError(pkgerr.Newf("ResourceTool.FileRead", "file %s not found", p.Path))
 	}
 	data, _ := json.Marshal(file)
 	return string(data)
@@ -461,7 +461,7 @@ func (s *Server) resourceSharedFileWrite(args json.RawMessage) string {
 		Content string `json:"content"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.FileWrite", "invalid args"))
 	}
 	if p.Path == "" || p.Content == "" {
 		return `{"error":"path and content are required"}`
@@ -471,7 +471,7 @@ func (s *Server) resourceSharedFileWrite(args json.RawMessage) string {
 	defer cancel()
 	file, err := s.fileStore.Write(ctx, p.Path, p.Content, "agent")
 	if err != nil {
-		return toolError(fmt.Errorf("write file: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.FileWrite", "write file"))
 	}
 
 	logger.Info("resource: file written", logger.FieldPath, p.Path, logger.FieldLen, len(p.Content))
@@ -481,7 +481,7 @@ func (s *Server) resourceSharedFileWrite(args json.RawMessage) string {
 
 func (s *Server) resourceWorkspaceCreateRun(args json.RawMessage) string {
 	if s.workspaceMgr == nil {
-		return toolError(fmt.Errorf("workspace manager not initialized"))
+		return toolError(pkgerr.New("ResourceTool.WorkspaceCreate", "workspace manager not initialized"))
 	}
 	var p struct {
 		RunKey     string   `json:"run_key"`
@@ -492,7 +492,7 @@ func (s *Server) resourceWorkspaceCreateRun(args json.RawMessage) string {
 		Metadata   any      `json:"metadata"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.WorkspaceCreate", "invalid args"))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -517,13 +517,13 @@ func (s *Server) resourceWorkspaceCreateRun(args json.RawMessage) string {
 
 func (s *Server) resourceWorkspaceGetRun(args json.RawMessage) string {
 	if s.workspaceMgr == nil {
-		return toolError(fmt.Errorf("workspace manager not initialized"))
+		return toolError(pkgerr.New("ResourceTool.WorkspaceGet", "workspace manager not initialized"))
 	}
 	var p struct {
 		RunKey string `json:"run_key"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.WorkspaceGet", "invalid args"))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -532,7 +532,7 @@ func (s *Server) resourceWorkspaceGetRun(args json.RawMessage) string {
 		return toolError(err)
 	}
 	if run == nil {
-		return toolError(fmt.Errorf("workspace run %s not found", p.RunKey))
+		return toolError(pkgerr.Newf("ResourceTool.WorkspaceGet", "workspace run %s not found", p.RunKey))
 	}
 	data, _ := json.Marshal(run)
 	return string(data)
@@ -540,7 +540,7 @@ func (s *Server) resourceWorkspaceGetRun(args json.RawMessage) string {
 
 func (s *Server) resourceWorkspaceListRuns(args json.RawMessage) string {
 	if s.workspaceMgr == nil {
-		return toolError(fmt.Errorf("workspace manager not initialized"))
+		return toolError(pkgerr.New("ResourceTool.WorkspaceList", "workspace manager not initialized"))
 	}
 	var p struct {
 		Status string `json:"status"`
@@ -565,7 +565,7 @@ func (s *Server) resourceWorkspaceListRuns(args json.RawMessage) string {
 
 func (s *Server) resourceWorkspaceMergeRun(args json.RawMessage) string {
 	if s.workspaceMgr == nil {
-		return toolError(fmt.Errorf("workspace manager not initialized"))
+		return toolError(pkgerr.New("ResourceTool.WorkspaceMerge", "workspace manager not initialized"))
 	}
 	var p struct {
 		RunKey        string `json:"run_key"`
@@ -574,7 +574,7 @@ func (s *Server) resourceWorkspaceMergeRun(args json.RawMessage) string {
 		DeleteRemoved bool   `json:"delete_removed"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.WorkspaceMerge", "invalid args"))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -597,7 +597,7 @@ func (s *Server) resourceWorkspaceMergeRun(args json.RawMessage) string {
 
 func (s *Server) resourceWorkspaceAbortRun(args json.RawMessage) string {
 	if s.workspaceMgr == nil {
-		return toolError(fmt.Errorf("workspace manager not initialized"))
+		return toolError(pkgerr.New("ResourceTool.WorkspaceAbort", "workspace manager not initialized"))
 	}
 	var p struct {
 		RunKey    string `json:"run_key"`
@@ -605,7 +605,7 @@ func (s *Server) resourceWorkspaceAbortRun(args json.RawMessage) string {
 		Reason    string `json:"reason"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(pkgerr.Wrap(err, "ResourceTool.WorkspaceAbort", "invalid args"))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

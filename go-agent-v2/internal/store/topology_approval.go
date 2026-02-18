@@ -4,9 +4,10 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 // TopologyApprovalStore 拓扑审批存储。
@@ -21,7 +22,7 @@ func NewTopologyApprovalStore(pool *pgxpool.Pool) *TopologyApprovalStore {
 func (s *TopologyApprovalStore) Create(ctx context.Context, a *TopologyApproval) (*TopologyApproval, error) {
 	proposalJSON, err := json.Marshal(a.ProposalJSON)
 	if err != nil {
-		return nil, fmt.Errorf("topology_approval: marshal proposal: %w", err)
+		return nil, pkgerr.Wrap(err, "TopologyApproval.Create", "marshal proposal")
 	}
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO topology_approvals (proposal_hash, proposal_json, status, requested_by, expires_at, created_at, updated_at)

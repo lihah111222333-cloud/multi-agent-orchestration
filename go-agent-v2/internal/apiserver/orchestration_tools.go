@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -88,14 +89,14 @@ func (s *Server) orchestrationSendMessage(args json.RawMessage) string {
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(apperrors.Wrap(err, "orchestrationSendMessage", "unmarshal args"))
 	}
 	if p.AgentID == "" || p.Message == "" {
 		return `{"error":"agent_id and message are required"}`
 	}
 
 	if err := s.mgr.Submit(p.AgentID, p.Message, nil, nil); err != nil {
-		return toolError(fmt.Errorf("send failed: %w", err))
+		return toolError(apperrors.Wrap(err, "orchestrationSendMessage", "submit message"))
 	}
 
 	logger.Info("orchestration: message sent", "to", p.AgentID, logger.FieldLen, len(p.Message))
@@ -111,7 +112,7 @@ func (s *Server) orchestrationLaunchAgent(args json.RawMessage) string {
 		WorkspaceRunKey string `json:"workspace_run_key"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(apperrors.Wrap(err, "orchestrationLaunchAgent", "unmarshal args"))
 	}
 	if p.Name == "" {
 		return `{"error":"name is required"}`
@@ -119,11 +120,11 @@ func (s *Server) orchestrationLaunchAgent(args json.RawMessage) string {
 
 	if p.WorkspaceRunKey != "" {
 		if s.workspaceMgr == nil {
-			return toolError(fmt.Errorf("workspace manager not initialized"))
+			return toolError(apperrors.New("orchestrationLaunchAgent", "workspace manager not initialized"))
 		}
 		workspacePath, err := s.workspaceMgr.ResolveRunWorkspace(context.Background(), p.WorkspaceRunKey)
 		if err != nil {
-			return toolError(fmt.Errorf("resolve workspace run %s: %w", p.WorkspaceRunKey, err))
+			return toolError(apperrors.Wrapf(err, "orchestrationLaunchAgent", "resolve workspace run %s", p.WorkspaceRunKey))
 		}
 		p.Cwd = workspacePath
 	}
@@ -133,7 +134,7 @@ func (s *Server) orchestrationLaunchAgent(args json.RawMessage) string {
 
 	// fork-bomb 保护
 	if len(s.mgr.List()) >= maxAgents {
-		return toolError(fmt.Errorf("max agents (%d) reached", maxAgents))
+		return toolError(apperrors.Newf("orchestrationLaunchAgent", "max agents (%d) reached", maxAgents))
 	}
 
 	// 生成唯一 ID
@@ -147,7 +148,7 @@ func (s *Server) orchestrationLaunchAgent(args json.RawMessage) string {
 	tools := s.buildAllDynamicTools()
 
 	if err := s.mgr.Launch(ctx, id, p.Name, p.Prompt, p.Cwd, tools); err != nil {
-		return toolError(fmt.Errorf("launch failed: %w", err))
+		return toolError(apperrors.Wrap(err, "orchestrationLaunchAgent", "launch agent"))
 	}
 
 	logger.Info("orchestration: agent launched", logger.FieldID, id, logger.FieldName, p.Name, logger.FieldCwd, p.Cwd, logger.FieldRunKey, p.WorkspaceRunKey)
@@ -166,14 +167,14 @@ func (s *Server) orchestrationStopAgent(args json.RawMessage) string {
 		AgentID string `json:"agent_id"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return toolError(fmt.Errorf("invalid args: %w", err))
+		return toolError(apperrors.Wrap(err, "orchestrationStopAgent", "unmarshal args"))
 	}
 	if p.AgentID == "" {
 		return `{"error":"agent_id is required"}`
 	}
 
 	if err := s.mgr.Stop(p.AgentID); err != nil {
-		return toolError(fmt.Errorf("stop failed: %w", err))
+		return toolError(apperrors.Wrap(err, "orchestrationStopAgent", "stop agent"))
 	}
 
 	logger.Info("orchestration: agent stopped", logger.FieldID, p.AgentID)

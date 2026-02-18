@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multi-agent/go-agent-v2/internal/store"
+	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
@@ -134,7 +135,7 @@ func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, param
 		 RETURNING `+runCols,
 		cardKey, requestedBy, paramsJSON, rendered, riskLevel, status, needsReview)
 	if err != nil {
-		return nil, fmt.Errorf("insert command_card_runs: %w", err)
+		return nil, pkgerr.Wrap(err, "CommandCard.Prepare", "insert run")
 	}
 	run, err := store.CollectOneExported[store.CommandCardRun](rows)
 	if err != nil {
@@ -507,7 +508,7 @@ func renderTemplate(tmpl string, params map[string]string) (string, error) {
 	if idx := strings.Index(result, "{"); idx >= 0 {
 		end := strings.Index(result[idx:], "}")
 		if end > 0 {
-			return "", fmt.Errorf("命令模板缺少参数: %s", result[idx:idx+end+1])
+			return "", pkgerr.Newf("CommandCard.renderTemplate", "命令模板缺少参数: %s", result[idx:idx+end+1])
 		}
 	}
 	return result, nil

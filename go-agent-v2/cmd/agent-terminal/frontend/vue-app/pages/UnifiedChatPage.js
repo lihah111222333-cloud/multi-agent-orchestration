@@ -27,15 +27,6 @@ export async function requestHistoryLoad(threadStore, threadId, options = {}) {
   return true;
 }
 
-export function pickChatSelectableThreads(threads, loadedThreadMap, loadedThreadListReady) {
-  const list = Array.isArray(threads) ? threads : [];
-  if (!loadedThreadListReady) return list;
-  const loaded = loadedThreadMap && typeof loadedThreadMap === 'object'
-    ? loadedThreadMap
-    : {};
-  return list.filter((thread) => loaded[(thread?.id || '').toString()] === true);
-}
-
 export const UnifiedChatPage = {
   name: 'UnifiedChatPage',
   components: {
@@ -92,16 +83,19 @@ export const UnifiedChatPage = {
     const activeThread = computed(() => threads.value.find((item) => item.id === selectedThreadId.value) || null);
     const chatThreadOptions = computed(() => {
       if (isCmd.value) return [];
-      return pickChatSelectableThreads(
-        threads.value,
-        props.threadStore.state.loadedThreadIds,
-        props.threadStore.state.loadedThreadListReady,
-      );
+      return threads.value;
     });
 
     const activeTimeline = computed(() => props.threadStore.getThreadTimeline(selectedThreadId.value));
     const activeDiffText = computed(() => props.threadStore.getThreadDiff(selectedThreadId.value));
     const activeStatus = computed(() => normalizeStatus(props.threadStore.getThreadStatus(selectedThreadId.value)));
+    const shouldAutoScroll = ref(true);
+    const timelineSignal = computed(() => {
+      const list = activeTimeline.value || [];
+      const last = list[list.length - 1] || null;
+      const signalText = `${last?.text || ''}${last?.output || ''}${last?.preview || ''}`;
+      return `${selectedThreadId.value}|${list.length}|${last?.id || ''}|${signalText.length}|${last?.status || ''}|${activeStatus.value}`;
+    });
 
     const noActiveThread = computed(() => !selectedThreadId.value);
 
@@ -111,6 +105,37 @@ export const UnifiedChatPage = {
     });
 
     const showWorkspace = computed(() => true);
+
+    function resolveChatScroller() {
+      const root = workspaceRef.value;
+      if (root && typeof root.querySelector === 'function') {
+        const within = root.querySelector('.chat-messages-vue');
+        if (within) return within;
+      }
+      return document.querySelector('.chat-messages-vue');
+    }
+
+    function distanceFromBottom(el) {
+      if (!el) return 0;
+      return el.scrollHeight - el.scrollTop - el.clientHeight;
+    }
+
+    function isNearBottom(el, threshold = 96) {
+      return distanceFromBottom(el) <= threshold;
+    }
+
+    function scheduleScrollToBottom(force = false) {
+      if (scrollTimer) {
+        window.clearTimeout(scrollTimer);
+      }
+      scrollTimer = window.setTimeout(async () => {
+        await nextTick();
+        const el = resolveChatScroller();
+        if (!el) return;
+        if (!force && !shouldAutoScroll.value) return;
+        el.scrollTop = el.scrollHeight;
+      }, 40);
+    }
 
     const stats = computed(() => {
       const summary = {
@@ -212,26 +237,26 @@ export const UnifiedChatPage = {
 
     watch(
       () => selectedThreadId.value,
-      (id) => {
+      async (id) => {
         if (!id) return;
-        requestHistoryLoad(props.threadStore, id).catch(() => {
+        shouldAutoScroll.value = true;
+        try {
+          await requestHistoryLoad(props.threadStore, id);
+        } catch {
           // ignore: real-time stream may still backfill timeline
-        });
+        }
+        scheduleScrollToBottom(true);
       },
       { immediate: true },
     );
 
     watch(
-      () => activeTimeline.value.length,
+      () => timelineSignal.value,
       () => {
-        if (scrollTimer) {
-          window.clearTimeout(scrollTimer);
-        }
-        scrollTimer = window.setTimeout(async () => {
-          await nextTick();
-          const el = document.querySelector('.chat-messages-vue');
-          if (el) el.scrollTop = el.scrollHeight;
-        }, 60);
+        const el = resolveChatScroller();
+        shouldAutoScroll.value = !el || isNearBottom(el);
+        if (!shouldAutoScroll.value) return;
+        scheduleScrollToBottom(true);
       },
     );
 
@@ -252,7 +277,9 @@ export const UnifiedChatPage = {
       const attachments = [...composer.state.attachments];
       if (!text.trim() && attachments.length === 0) return;
       composer.clearComposer();
+      shouldAutoScroll.value = true;
       await props.threadStore.sendMessage(threadId, text, attachments);
+      scheduleScrollToBottom(true);
     }
 
     async function loadCurrentHistory() {

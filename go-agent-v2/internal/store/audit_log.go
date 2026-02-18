@@ -3,7 +3,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -16,7 +15,7 @@ func NewAuditLogStore(pool *pgxpool.Pool) *AuditLogStore { return &AuditLogStore
 
 // Append 追加审计事件。
 func (s *AuditLogStore) Append(ctx context.Context, e *AuditEvent) error {
-	extraJSON, _ := json.Marshal(e.Extra)
+	extraJSON := mustMarshalJSON(e.Extra)
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO audit_events (ts, event_type, action, result, actor, target, detail, level, extra)
 		 VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,

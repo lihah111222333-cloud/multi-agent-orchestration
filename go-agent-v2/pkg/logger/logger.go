@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 var (
@@ -49,7 +51,7 @@ func Init(env string) {
 // 调用者应在退出前调用 ShutdownFileHandler() 关闭文件。
 func InitWithFile(logDir string) error {
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return fmt.Errorf("create log dir: %w", err)
+		return pkgerr.Wrap(err, "Logger.Init", "create log dir")
 	}
 
 	date := time.Now().Format("2006-01-02")
@@ -57,7 +59,7 @@ func InitWithFile(logDir string) error {
 
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return fmt.Errorf("open log file: %w", err)
+		return pkgerr.Wrap(err, "Logger.Init", "open log file")
 	}
 	logFile = f
 

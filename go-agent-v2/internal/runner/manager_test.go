@@ -92,27 +92,3 @@ func TestHandleEvent_CallbackFires(t *testing.T) {
 		t.Errorf("callback[1] = %q, want %q", received[1], "agent-42:turn_complete")
 	}
 }
-
-// TestEventStateMap_Completeness 验证 eventStateMap 包含所有预期映射。
-func TestEventStateMap_Completeness(t *testing.T) {
-	// 确保 map 至少覆盖 6 个核心事件
-	expected := map[string]AgentState{
-		codex.EventTurnStarted:      StateThinking,
-		codex.EventIdle:             StateIdle,
-		codex.EventTurnComplete:     StateIdle,
-		codex.EventExecCommandBegin: StateRunning,
-		codex.EventError:            StateError,
-		codex.EventShutdownComplete: StateStopped,
-	}
-
-	for eventType, wantState := range expected {
-		got, ok := eventStateMap[eventType]
-		if !ok {
-			t.Errorf("eventStateMap missing key %q", eventType)
-			continue
-		}
-		if got != wantState {
-			t.Errorf("eventStateMap[%q] = %q, want %q", eventType, got, wantState)
-		}
-	}
-}

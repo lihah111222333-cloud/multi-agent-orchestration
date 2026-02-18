@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -13,7 +12,9 @@ import (
 type InteractionStore struct{ BaseStore }
 
 // NewInteractionStore 创建交互存储。
-func NewInteractionStore(pool *pgxpool.Pool) *InteractionStore { return &InteractionStore{NewBaseStore(pool)} }
+func NewInteractionStore(pool *pgxpool.Pool) *InteractionStore {
+	return &InteractionStore{NewBaseStore(pool)}
+}
 
 const interactionCols = `id, thread_id, parent_id, sender, receiver, msg_type, status,
 	requires_review, reviewed_by, review_note, reviewed_at,
@@ -21,7 +22,7 @@ const interactionCols = `id, thread_id, parent_id, sender, receiver, msg_type, s
 
 // Create 创建交互记录 (对应 Python create_interaction)。
 func (s *InteractionStore) Create(ctx context.Context, i *Interaction) (*Interaction, error) {
-	payloadJSON, _ := json.Marshal(i.Payload)
+	payloadJSON := mustMarshalJSON(i.Payload)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO agent_interactions (thread_id, parent_id, sender, receiver, msg_type, status,
 		   requires_review, payload, updated_at)

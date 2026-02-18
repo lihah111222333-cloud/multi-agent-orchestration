@@ -1,6 +1,8 @@
+//go:build e2e
+
 // rpc_e2e_test.go — 端对端测试 JSON-RPC thread/start + turn/start。
 //
-// 运行: go test -v -run TestRPCE2E -timeout 60s ./cmd/rpc-test/
+// 运行: go test -tags=e2e -v -run TestRPCE2E -timeout 60s ./cmd/rpc-test/
 // 需要先启动 app-server: ./app-server --listen ws://127.0.0.1:4500
 package main
 

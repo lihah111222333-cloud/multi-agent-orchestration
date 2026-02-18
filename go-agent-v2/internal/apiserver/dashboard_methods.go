@@ -7,10 +7,10 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"time"
 
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -376,22 +376,22 @@ func (s *Server) dashBusLogs(_ context.Context, params json.RawMessage) (any, er
 // dashDAGDetail 查询 DAG 详情 (含节点)。
 func (s *Server) dashDAGDetail(_ context.Context, params json.RawMessage) (any, error) {
 	if s.dagStore == nil {
-		return nil, fmt.Errorf("dag store not initialized")
+		return nil, apperrors.New("Server.dashDAGDetail", "dag store not initialized")
 	}
 	var p struct {
 		DAGKey string `json:"dagKey"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, apperrors.Wrap(err, "Server.dashDAGDetail", "unmarshal params")
 	}
 	if p.DAGKey == "" {
-		return nil, fmt.Errorf("dagKey is required")
+		return nil, apperrors.New("Server.dashDAGDetail", "dagKey is required")
 	}
 	ctx, cancel := dashCtx()
 	defer cancel()
 	dag, nodes, err := s.dagStore.GetDAGDetail(ctx, p.DAGKey)
 	if err != nil {
-		return nil, fmt.Errorf("dashboard/dagDetail: %w", err)
+		return nil, apperrors.Wrap(err, "Server.dashDAGDetail", "get DAG detail")
 	}
 	return map[string]any{"dag": dag, "nodes": nodes}, nil
 }

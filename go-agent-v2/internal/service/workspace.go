@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/store"
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -89,17 +90,17 @@ func NewWorkspaceManager(
 	maxTotalBytes int64,
 ) (*WorkspaceManager, error) {
 	if runStore == nil {
-		return nil, fmt.Errorf("workspace manager: run store is required")
+		return nil, apperrors.New("NewWorkspaceManager", "run store is required")
 	}
 	if strings.TrimSpace(rootDir) == "" {
 		rootDir = ".agent/workspaces"
 	}
 	absRoot, err := filepath.Abs(rootDir)
 	if err != nil {
-		return nil, fmt.Errorf("workspace manager: abs root: %w", err)
+		return nil, apperrors.Wrap(err, "NewWorkspaceManager", "abs root")
 	}
 	if err := os.MkdirAll(absRoot, 0o750); err != nil {
-		return nil, fmt.Errorf("workspace manager: create root: %w", err)
+		return nil, apperrors.Wrap(err, "NewWorkspaceManager", "create root dir")
 	}
 	if maxFiles <= 0 {
 		maxFiles = 5000
@@ -151,28 +152,28 @@ func (m *WorkspaceManager) CreateRun(ctx context.Context, req WorkspaceCreateReq
 		runKey = fmt.Sprintf("run-%d", time.Now().UnixMilli())
 	}
 	if !workspaceRunKeyRe.MatchString(runKey) {
-		return nil, fmt.Errorf("workspace/create: invalid runKey %q", runKey)
+		return nil, apperrors.Newf("WorkspaceManager.CreateRun", "invalid runKey %q", runKey)
 	}
 
 	sourceRoot, err := filepath.Abs(strings.TrimSpace(req.SourceRoot))
 	if err != nil {
-		return nil, fmt.Errorf("workspace/create: invalid sourceRoot: %w", err)
+		return nil, apperrors.Wrap(err, "WorkspaceManager.CreateRun", "invalid sourceRoot")
 	}
 	stat, err := os.Stat(sourceRoot)
 	if err != nil {
-		return nil, fmt.Errorf("workspace/create: stat sourceRoot: %w", err)
+		return nil, apperrors.Wrap(err, "WorkspaceManager.CreateRun", "stat sourceRoot")
 	}
 	if !stat.IsDir() {
-		return nil, fmt.Errorf("workspace/create: sourceRoot must be directory")
+		return nil, apperrors.New("WorkspaceManager.CreateRun", "sourceRoot must be directory")
 	}
 
 	runBase := filepath.Join(m.rootDir, runKey)
 	if !isPathWithinRoot(m.rootDir, runBase) {
-		return nil, fmt.Errorf("workspace/create: run path escapes workspace root")
+		return nil, apperrors.New("WorkspaceManager.CreateRun", "run path escapes workspace root")
 	}
 	workspacePath := filepath.Join(runBase, "workspace")
 	if err := os.MkdirAll(workspacePath, 0o750); err != nil {
-		return nil, fmt.Errorf("workspace/create: create workspace dir: %w", err)
+		return nil, apperrors.Wrap(err, "WorkspaceManager.CreateRun", "create workspace dir")
 	}
 
 	run := &store.WorkspaceRun{
@@ -187,7 +188,7 @@ func (m *WorkspaceManager) CreateRun(ctx context.Context, req WorkspaceCreateReq
 	}
 	saved, err := m.runs.SaveRun(ctx, run)
 	if err != nil {
-		return nil, fmt.Errorf("workspace/create: save run: %w", err)
+		return nil, apperrors.Wrap(err, "WorkspaceManager.CreateRun", "save run")
 	}
 
 	copied, copiedBytes, err := m.bootstrapFiles(ctx, saved, req.Files)
@@ -206,7 +207,7 @@ func (m *WorkspaceManager) CreateRun(ctx context.Context, req WorkspaceCreateReq
 	saved.UpdatedBy = req.CreatedBy
 	saved, err = m.runs.SaveRun(ctx, saved)
 	if err != nil {
-		return nil, fmt.Errorf("workspace/create: finalize run metadata: %w", err)
+		return nil, apperrors.Wrap(err, "WorkspaceManager.CreateRun", "finalize run metadata")
 	}
 	return saved, nil
 }
@@ -225,20 +226,20 @@ func (m *WorkspaceManager) ResolveRunWorkspace(ctx context.Context, runKey strin
 		return "", err
 	}
 	if run == nil {
-		return "", fmt.Errorf("workspace/run %q not found", runKey)
+		return "", apperrors.Newf("WorkspaceManager.ResolveRunWorkspace", "run %q not found", runKey)
 	}
 	if run.Status == WorkspaceRunStatusAborted || run.Status == WorkspaceRunStatusFailed {
-		return "", fmt.Errorf("workspace/run %q is %s", runKey, run.Status)
+		return "", apperrors.Newf("WorkspaceManager.ResolveRunWorkspace", "run %q is %s", runKey, run.Status)
 	}
 	path, err := filepath.Abs(run.WorkspacePath)
 	if err != nil {
 		return "", err
 	}
 	if !isPathWithinRoot(m.rootDir, path) {
-		return "", fmt.Errorf("workspace/run %q path escapes workspace root", runKey)
+		return "", apperrors.Newf("WorkspaceManager.ResolveRunWorkspace", "run %q path escapes workspace root", runKey)
 	}
 	if _, err := os.Stat(path); err != nil {
-		return "", fmt.Errorf("workspace/run %q workspace path unavailable: %w", runKey, err)
+		return "", apperrors.Wrapf(err, "WorkspaceManager.ResolveRunWorkspace", "run %q workspace path unavailable", runKey)
 	}
 	return path, nil
 }
@@ -252,7 +253,7 @@ func (m *WorkspaceManager) AbortRun(ctx context.Context, runKey, updatedBy, reas
 func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeRequest) (*WorkspaceMergeResult, error) {
 	runKey := strings.TrimSpace(req.RunKey)
 	if runKey == "" {
-		return nil, fmt.Errorf("workspace/merge: runKey is required")
+		return nil, apperrors.New("WorkspaceManager.MergeRun", "runKey is required")
 	}
 	updatedBy := strings.TrimSpace(req.UpdatedBy)
 
@@ -265,17 +266,17 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 		map[string]any{"dry_run": req.DryRun, "started_at": time.Now().Format(time.RFC3339)},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("workspace/merge: transition to merging: %w", err)
+		return nil, apperrors.Wrap(err, "WorkspaceManager.MergeRun", "transition to merging")
 	}
 	if !transitioned {
 		current, err := m.runs.GetRun(ctx, runKey)
 		if err != nil {
-			return nil, fmt.Errorf("workspace/merge: load run status: %w", err)
+			return nil, apperrors.Wrap(err, "WorkspaceManager.MergeRun", "load run status")
 		}
 		if current == nil {
-			return nil, fmt.Errorf("workspace/merge: run %q not found", runKey)
+			return nil, apperrors.Newf("WorkspaceManager.MergeRun", "run %q not found", runKey)
 		}
-		return nil, fmt.Errorf("workspace/merge: run %q status is %s, expected %s",
+		return nil, apperrors.Newf("WorkspaceManager.MergeRun", "run %q status is %s, expected %s",
 			runKey, current.Status, WorkspaceRunStatusActive)
 	}
 
@@ -308,7 +309,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 
 	trackedRows, err := m.runs.ListFiles(ctx, run.RunKey, "", m.maxFiles*4)
 	if err != nil {
-		return nil, fmt.Errorf("workspace/merge: list tracked files: %w", err)
+		return nil, apperrors.Wrap(err, "WorkspaceManager.MergeRun", "list tracked files")
 	}
 	tracked := make(map[string]store.WorkspaceRunFile, len(trackedRows))
 	for _, row := range trackedRows {
@@ -332,7 +333,7 @@ func (m *WorkspaceManager) MergeRun(ctx context.Context, req WorkspaceMergeReque
 		}
 		fileCount++
 		if fileCount > m.maxFiles {
-			return fmt.Errorf("workspace/merge: too many files in workspace (%d > %d)", fileCount, m.maxFiles)
+			return apperrors.Newf("WorkspaceManager.MergeRun", "too many files in workspace (%d > %d)", fileCount, m.maxFiles)
 		}
 		if d.Type()&os.ModeSymlink != 0 {
 			result.Errors++
@@ -602,55 +603,55 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 	for _, raw := range files {
 		rel, err := normalizeRelativePath(raw)
 		if err != nil {
-			return copied, totalBytes, fmt.Errorf("workspace/create: invalid bootstrap file %q: %w", raw, err)
+			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "invalid bootstrap file %q", raw)
 		}
 		if _, ok := seen[rel]; ok {
 			continue
 		}
 		seen[rel] = struct{}{}
 		if len(seen) > m.maxFiles {
-			return copied, totalBytes, fmt.Errorf("workspace/create: bootstrap files exceed limit (%d)", m.maxFiles)
+			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap files exceed limit (%d)", m.maxFiles)
 		}
 
 		sourcePath := filepath.Join(run.SourceRoot, rel)
 		if !isPathWithinRoot(run.SourceRoot, sourcePath) {
-			return copied, totalBytes, fmt.Errorf("workspace/create: bootstrap path escapes source root: %s", rel)
+			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap path escapes source root: %s", rel)
 		}
 
 		info, err := os.Lstat(sourcePath)
 		if err != nil {
-			return copied, totalBytes, fmt.Errorf("workspace/create: bootstrap stat %s: %w", rel, err)
+			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "bootstrap stat %s", rel)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return copied, totalBytes, fmt.Errorf("workspace/create: bootstrap symlink not allowed: %s", rel)
+			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap symlink not allowed: %s", rel)
 		}
 		if info.IsDir() {
-			return copied, totalBytes, fmt.Errorf("workspace/create: bootstrap path is directory: %s", rel)
+			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap path is directory: %s", rel)
 		}
 		if info.Size() > m.maxFileBytes {
-			return copied, totalBytes, fmt.Errorf("workspace/create: bootstrap file too large %s (%d bytes > %d)",
+			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap file too large %s (%d bytes > %d)",
 				rel, info.Size(), m.maxFileBytes)
 		}
 		totalBytes += info.Size()
 		if totalBytes > m.maxTotalBytes {
-			return copied, totalBytes, fmt.Errorf("workspace/create: total bootstrap bytes exceed limit (%d > %d)",
+			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "total bootstrap bytes exceed limit (%d > %d)",
 				totalBytes, m.maxTotalBytes)
 		}
 
 		targetPath := filepath.Join(run.WorkspacePath, rel)
 		if !isPathWithinRoot(run.WorkspacePath, targetPath) {
-			return copied, totalBytes, fmt.Errorf("workspace/create: bootstrap target escapes workspace: %s", rel)
+			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap target escapes workspace: %s", rel)
 		}
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0o750); err != nil {
-			return copied, totalBytes, fmt.Errorf("workspace/create: mkdir target dir for %s: %w", rel, err)
+			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "mkdir target dir for %s", rel)
 		}
 		if err := copyFileAtomic(sourcePath, targetPath, info.Mode().Perm()); err != nil {
-			return copied, totalBytes, fmt.Errorf("workspace/create: copy bootstrap file %s: %w", rel, err)
+			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "copy bootstrap file %s", rel)
 		}
 
 		hash, err := hashFile(sourcePath)
 		if err != nil {
-			return copied, totalBytes, fmt.Errorf("workspace/create: hash bootstrap source %s: %w", rel, err)
+			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "hash bootstrap source %s", rel)
 		}
 		_, err = m.runs.SaveFile(ctx, &store.WorkspaceRunFile{
 			RunKey:             run.RunKey,
@@ -662,7 +663,7 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 			State:              WorkspaceFileStateSynced,
 		})
 		if err != nil {
-			return copied, totalBytes, fmt.Errorf("workspace/create: save bootstrap file state %s: %w", rel, err)
+			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "save bootstrap file state %s", rel)
 		}
 		copied++
 	}
@@ -672,13 +673,13 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 func normalizeRelativePath(path string) (string, error) {
 	p := filepath.Clean(strings.TrimSpace(path))
 	if p == "" || p == "." {
-		return "", fmt.Errorf("path is empty")
+		return "", apperrors.New("normalizeRelativePath", "path is empty")
 	}
 	if filepath.IsAbs(p) {
-		return "", fmt.Errorf("absolute path is not allowed")
+		return "", apperrors.New("normalizeRelativePath", "absolute path is not allowed")
 	}
 	if p == ".." || strings.HasPrefix(p, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("path traversal is not allowed")
+		return "", apperrors.New("normalizeRelativePath", "path traversal is not allowed")
 	}
 	return p, nil
 }
@@ -711,7 +712,7 @@ func copyFileAtomic(source, target string, perm os.FileMode) error {
 	}
 
 	if stat, err := os.Lstat(target); err == nil && stat.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("target is symlink: %s", target)
+		return apperrors.Newf("copyFileAtomic", "target is symlink: %s", target)
 	}
 
 	tmp, err := os.CreateTemp(filepath.Dir(target), ".workspace-merge-*")

@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -26,7 +26,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 	`)
 	if err != nil {
 		logger.Error("migrate: create schema_version table failed", logger.FieldError, err)
-		return fmt.Errorf("create schema_version table: %w", err)
+		return apperrors.Wrap(err, "Migrate", "create schema_version table")
 	}
 
 	// 读取迁移文件
@@ -36,7 +36,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 			logger.Info("no migrations directory found, skipping")
 			return nil
 		}
-		return fmt.Errorf("read migrations dir: %w", err)
+		return apperrors.Wrap(err, "Migrate", "read migrations dir")
 	}
 
 	// 过滤并排序 .sql 文件
@@ -51,7 +51,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 	// 查询已执行版本
 	rows, err := pool.Query(ctx, `SELECT version FROM schema_version`)
 	if err != nil {
-		return fmt.Errorf("query schema_version: %w", err)
+		return apperrors.Wrap(err, "Migrate", "query schema_version")
 	}
 	defer rows.Close()
 
@@ -59,7 +59,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 	for rows.Next() {
 		var v string
 		if err := rows.Scan(&v); err != nil {
-			return fmt.Errorf("scan schema_version: %w", err)
+			return apperrors.Wrap(err, "Migrate", "scan schema_version")
 		}
 		applied[v] = true
 	}
@@ -81,26 +81,26 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 
 		sqlBytes, err := os.ReadFile(filepath.Join(migrationsDir, name))
 		if err != nil {
-			return fmt.Errorf("read migration %s: %w", name, err)
+			return apperrors.Wrapf(err, "Migrate", "read migration %s", name)
 		}
 
 		tx, err := pool.Begin(ctx)
 		if err != nil {
-			return fmt.Errorf("begin tx for %s: %w", name, err)
+			return apperrors.Wrapf(err, "Migrate", "begin tx for %s", name)
 		}
 
 		if _, err := tx.Exec(ctx, string(sqlBytes)); err != nil {
 			_ = tx.Rollback(ctx)
-			return fmt.Errorf("exec migration %s: %w", name, err)
+			return apperrors.Wrapf(err, "Migrate", "exec migration %s", name)
 		}
 
 		if _, err := tx.Exec(ctx, `INSERT INTO schema_version (version) VALUES ($1)`, name); err != nil {
 			_ = tx.Rollback(ctx)
-			return fmt.Errorf("record migration %s: %w", name, err)
+			return apperrors.Wrapf(err, "Migrate", "record migration %s", name)
 		}
 
 		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("commit migration %s: %w", name, err)
+			return apperrors.Wrapf(err, "Migrate", "commit migration %s", name)
 		}
 
 		logger.Infow("migration applied", logger.FieldVersion, name)

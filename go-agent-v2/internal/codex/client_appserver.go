@@ -26,6 +26,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
@@ -143,7 +144,7 @@ func (c *AppServerClient) SetEventHandler(h EventHandler) {
 func (c *AppServerClient) Spawn(ctx context.Context) error {
 	if c.Port > 0 {
 		if err := checkPortFree(c.Port); err != nil {
-			return fmt.Errorf("codex: port %d occupied: %w", c.Port, err)
+			return apperrors.Wrapf(err, "AppServerClient.Spawn", "port %d occupied", c.Port)
 		}
 	}
 
@@ -158,7 +159,7 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 	c.Cmd.Stderr = c.stderrCollector
 
 	if err := c.Cmd.Start(); err != nil {
-		return fmt.Errorf("codex: spawn app-server failed: %w", err)
+		return apperrors.Wrap(err, "AppServerClient.Spawn", "spawn app-server")
 	}
 
 	// 等待 WebSocket 可用 (默认最多 30 秒, 同时受 ctx 控制)
@@ -170,7 +171,7 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			_ = c.Kill()
-			return fmt.Errorf("codex: spawn cancelled: %w", ctx.Err())
+			return apperrors.Wrap(ctx.Err(), "AppServerClient.Spawn", "spawn cancelled")
 		default:
 		}
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", c.Port), 500*time.Millisecond)
@@ -182,7 +183,7 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 		time.Sleep(300 * time.Millisecond)
 	}
 	_ = c.Kill()
-	return fmt.Errorf("codex: app-server startup timeout on port %d", c.Port)
+	return apperrors.Newf("AppServerClient.Spawn", "app-server startup timeout on port %d", c.Port)
 }
 
 // connectWS 连接 WebSocket 并启动 readLoop。
@@ -195,7 +196,7 @@ func (c *AppServerClient) connectWS() error {
 
 	conn, _, err := dialer.DialContext(c.ctx, wsURL, nil)
 	if err != nil {
-		return fmt.Errorf("codex: app-server ws connect: %w", err)
+		return apperrors.Wrap(err, "AppServerClient.connectWS", "ws connect")
 	}
 	c.ws = conn
 	util.SafeGo(func() { c.readLoop() })
@@ -228,7 +229,7 @@ func (c *AppServerClient) call(method string, params any, timeout time.Duration)
 	case <-pc.done:
 		return pc.result, pc.err
 	case <-time.After(timeout):
-		return nil, fmt.Errorf("codex: %s timeout", method)
+		return nil, apperrors.Newf("AppServerClient.call", "%s timeout", method)
 	case <-c.ctx.Done():
 		return nil, c.ctx.Err()
 	}
@@ -316,7 +317,7 @@ func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicT
 	}, 30*time.Second)
 	if err != nil {
 		logger.Error("codex: thread/start FAILED", logger.FieldPort, c.Port, logger.FieldError, err)
-		return "", fmt.Errorf("codex: thread/start: %w", err)
+		return "", apperrors.Wrap(err, "AppServerClient.ThreadStart", "thread/start")
 	}
 
 	var resp struct {
@@ -326,11 +327,11 @@ func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicT
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
 		logger.Error("codex: thread/start decode FAILED", logger.FieldPort, c.Port, logger.FieldRaw, string(result), logger.FieldError, err)
-		return "", fmt.Errorf("codex: thread/start decode: %w (raw: %s)", err, result)
+		return "", apperrors.Wrapf(err, "AppServerClient.ThreadStart", "thread/start decode (raw: %s)", result)
 	}
 	if resp.Thread.ID == "" {
 		logger.Error("codex: thread/start returned empty thread ID", logger.FieldPort, c.Port, logger.FieldRaw, string(result))
-		return "", fmt.Errorf("codex: thread/start returned empty thread ID (raw: %s)", result)
+		return "", apperrors.Newf("AppServerClient.ThreadStart", "thread/start returned empty thread ID (raw: %s)", result)
 	}
 	c.ThreadID = resp.Thread.ID
 	logger.Info("codex: thread/start OK",
@@ -416,14 +417,63 @@ func (c *AppServerClient) ListThreads() ([]ThreadInfo, error) {
 	return []ThreadInfo{{ThreadID: c.ThreadID}}, nil
 }
 
-// ResumeThread 恢复会话 (app-server 模式暂不支持)。
-func (c *AppServerClient) ResumeThread(_ ResumeThreadRequest) error {
-	return fmt.Errorf("codex: resume not supported in app-server mode")
+type asThreadResumeParams struct {
+	ThreadID string `json:"threadId"`
+	Path     string `json:"path,omitempty"`
+	Cwd      string `json:"cwd,omitempty"`
+}
+
+func parseThreadResumeResult(raw json.RawMessage, fallbackID string) (string, error) {
+	fallback := strings.TrimSpace(fallbackID)
+	if len(strings.TrimSpace(string(raw))) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		if fallback == "" {
+			return "", apperrors.New("parseThreadResumeResult", "thread/resume returned empty response without fallback thread ID")
+		}
+		return fallback, nil
+	}
+
+	var resp struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return "", apperrors.Wrap(err, "parseThreadResumeResult", "thread/resume decode")
+	}
+	if id := strings.TrimSpace(resp.Thread.ID); id != "" {
+		return id, nil
+	}
+	if fallback != "" {
+		return fallback, nil
+	}
+	return "", apperrors.New("parseThreadResumeResult", "thread/resume returned empty thread ID")
+}
+
+// ResumeThread 恢复会话 (app-server JSON-RPC thread/resume)。
+func (c *AppServerClient) ResumeThread(req ResumeThreadRequest) error {
+	id := strings.TrimSpace(req.ThreadID)
+	if id == "" {
+		return apperrors.New("AppServerClient.ResumeThread", "thread/resume requires thread ID")
+	}
+	result, err := c.call("thread/resume", asThreadResumeParams{
+		ThreadID: id,
+		Path:     strings.TrimSpace(req.Cwd),
+		Cwd:      strings.TrimSpace(req.Cwd),
+	}, 30*time.Second)
+	if err != nil {
+		return apperrors.Wrap(err, "AppServerClient.ResumeThread", "thread/resume")
+	}
+	resolvedID, err := parseThreadResumeResult(result, id)
+	if err != nil {
+		return err
+	}
+	c.ThreadID = resolvedID
+	return nil
 }
 
 // ForkThread 分叉会话 (app-server 模式暂不支持)。
 func (c *AppServerClient) ForkThread(_ ForkThreadRequest) (*ForkThreadResponse, error) {
-	return nil, fmt.Errorf("codex: fork not supported in app-server mode")
+	return nil, apperrors.New("AppServerClient.ForkThread", "fork not supported in app-server mode")
 }
 
 // ========================================
@@ -480,7 +530,7 @@ func (c *AppServerClient) readLoop() {
 			if val, ok := c.pending.Load(*msg.ID); ok {
 				pc := val.(*pendingCall)
 				if msg.Error != nil {
-					pc.err = fmt.Errorf("codex rpc: %s (code %d)", msg.Error.Message, msg.Error.Code)
+					pc.err = apperrors.Newf("AppServerClient.readLoop", "rpc error: %s (code %d)", msg.Error.Message, msg.Error.Code)
 					logger.Warn("codex: RPC error response",
 						logger.FieldID, *msg.ID,
 						"code", msg.Error.Code,
@@ -756,7 +806,7 @@ func (c *AppServerClient) asWriteJSON(v any) error {
 	c.wsMu.Lock()
 	defer c.wsMu.Unlock()
 	if c.ws == nil {
-		return fmt.Errorf("codex: ws not connected")
+		return apperrors.New("AppServerClient.asWriteJSON", "ws not connected")
 	}
 	return c.ws.WriteJSON(v)
 }
@@ -774,7 +824,7 @@ func (c *AppServerClient) SpawnAndConnect(ctx context.Context, prompt, cwd, mode
 
 	if err := c.Initialize(); err != nil {
 		_ = c.Kill()
-		return fmt.Errorf("codex: initialize: %w", err)
+		return apperrors.Wrap(err, "AppServerClient.SpawnAndConnect", "initialize")
 	}
 
 	threadID, err := c.ThreadStart(cwd, model, dynamicTools)

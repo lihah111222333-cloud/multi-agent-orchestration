@@ -118,24 +118,6 @@ async function blobToDataURL(blob) {
   });
 }
 
-function buildTurnInput() {
-  const input = [];
-  const text = (state.text || '').trim();
-  if (text) {
-    input.push({ type: 'text', text });
-  }
-
-  for (const item of state.attachments) {
-    if (!item.path) continue;
-    if (item.kind === 'image') {
-      input.push({ type: 'localImage', path: item.path });
-    } else {
-      input.push({ type: 'fileContent', path: item.path });
-    }
-  }
-
-  return input;
-}
 
 export function useComposerStore() {
   return {
@@ -148,6 +130,6 @@ export function useComposerStore() {
     removeAttachment,
     attachByPicker,
     handlePaste,
-    buildTurnInput,
+
   };
 }

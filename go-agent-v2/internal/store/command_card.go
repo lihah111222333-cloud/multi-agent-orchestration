@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -26,7 +25,7 @@ func (s *CommandCardStore) Save(ctx context.Context, c *CommandCard) (*CommandCa
 	// 版本快照
 	existing, _ := s.Get(ctx, c.CardKey)
 	if existing != nil {
-		schemaJSON, _ := json.Marshal(existing.ArgsSchema)
+		schemaJSON := mustMarshalJSON(existing.ArgsSchema)
 		if _, err := s.pool.Exec(ctx,
 			`INSERT INTO command_card_versions (card_key, title, description, command_template,
 			   args_schema, risk_level, enabled, created_by, updated_by, source_updated_at)
@@ -38,7 +37,7 @@ func (s *CommandCardStore) Save(ctx context.Context, c *CommandCard) (*CommandCa
 		}
 	}
 
-	schemaJSON, _ := json.Marshal(c.ArgsSchema)
+	schemaJSON := mustMarshalJSON(c.ArgsSchema)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO command_cards (card_key, title, description, command_template, args_schema,
 		   risk_level, enabled, created_by, updated_by, updated_at)

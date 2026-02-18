@@ -123,15 +123,13 @@ export function logError(scope, event, fields = {}) {
   emit('error', scope, event, fields);
 }
 
-export function getLogLevel() {
+function getLogLevel() {
   return currentLevel;
 }
 
-export function isDebugLogEnabled() {
-  return currentLevel === 'debug';
-}
 
-export function setLogLevel(level) {
+
+function setLogLevel(level) {
   const normalized = normalizeLevel(level);
   if (!normalized) return false;
   currentLevel = normalized;
@@ -144,11 +142,11 @@ export function setLogLevel(level) {
   return true;
 }
 
-export function getLogBuffer() {
+function getLogBuffer() {
   return ringBuffer.slice();
 }
 
-export function clearLogBuffer() {
+function clearLogBuffer() {
   ringBuffer.splice(0, ringBuffer.length);
 }
 

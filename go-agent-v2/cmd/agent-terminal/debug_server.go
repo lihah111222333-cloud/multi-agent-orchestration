@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
@@ -239,24 +240,19 @@ func startDebugServer(ctx context.Context, uiPort int, apiBaseURL string) {
 // handleDebugBridgeEvents 返回 Go 统一收集的桥接事件。
 //
 // GET /bridge/events?after=<id>&limit=<n>
-func handleDebugBridgeEvents(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	pollID := debugBridgeMetrics.pollRequestTotal.Add(1)
+// debugPollParams 解析后的轮询参数。
+type debugPollParams struct {
+	after          int64
+	effectiveLimit int
+}
 
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+// parseDebugPollParams 从请求解析 after/limit 查询参数。
+func parseDebugPollParams(r *http.Request, pollID int64) debugPollParams {
 	q := r.URL.Query()
 	afterRaw := strings.TrimSpace(q.Get("after"))
 	limitRaw := strings.TrimSpace(q.Get("limit"))
 
-	after := int64(0)
+	var after int64
 	if afterRaw != "" {
 		v, err := strconv.ParseInt(afterRaw, 10, 64)
 		if err != nil {
@@ -288,33 +284,57 @@ func handleDebugBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		effectiveLimit = 200
 	}
 
+	return debugPollParams{after: after, effectiveLimit: effectiveLimit}
+}
+
+// writeDebugPollJSON 编码 JSON 响应, 写入失败时记录日志。返回 true 表示成功。
+func writeDebugPollJSON(w http.ResponseWriter, resp map[string]any, pollID int64, start time.Time, logFields ...any) bool {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		writeFailTotal := debugBridgeMetrics.pollWriteFailTotal.Add(1)
+		fields := append([]any{
+			"poll_id", pollID,
+			logger.FieldDurationMS, time.Since(start).Milliseconds(),
+			"write_fail_total", writeFailTotal,
+			logger.FieldError, err,
+		}, logFields...)
+		logger.Warn("debug bridge: poll write failed", fields...)
+		return false
+	}
+	debugBridgeMetrics.pollResponseTotal.Add(1)
+	return true
+}
+
+func handleDebugBridgeEvents(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	pollID := debugBridgeMetrics.pollRequestTotal.Add(1)
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	pp := parseDebugPollParams(r, pollID)
+
 	// 首次连接（after<=0）只返回游标，不回放历史事件，防止刷新后事件洪峰卡死前端。
-	if after <= 0 {
+	if pp.after <= 0 {
 		_, lastID, queueDepth, _ := readDebugBridgeEvents(0, 1)
 		resp := map[string]any{
 			"events":  []debugBridgeEvent{},
 			"last_id": lastID,
 		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			writeFailTotal := debugBridgeMetrics.pollWriteFailTotal.Add(1)
-			logger.Warn("debug bridge: poll cursor sync write failed",
-				"poll_id", pollID,
-				"after", after,
-				"limit", effectiveLimit,
-				"last_id", lastID,
-				"queue_depth", queueDepth,
-				logger.FieldDurationMS, time.Since(start).Milliseconds(),
-				"write_fail_total", writeFailTotal,
-				logger.FieldError, err)
+		if !writeDebugPollJSON(w, resp, pollID, start, "after", pp.after, "limit", pp.effectiveLimit, "last_id", lastID, "queue_depth", queueDepth) {
 			return
 		}
-		debugBridgeMetrics.pollResponseTotal.Add(1)
 		if queueDepth > 0 || pollID%debugBridgePollSampleEvery == 0 {
 			logger.Info("debug bridge: poll cursor sync",
 				"poll_id", pollID,
-				"after", after,
-				"limit", effectiveLimit,
+				"after", pp.after,
+				"limit", pp.effectiveLimit,
 				"last_id", lastID,
 				"queue_depth", queueDepth,
 				logger.FieldDurationMS, time.Since(start).Milliseconds())
@@ -322,7 +342,7 @@ func handleDebugBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, lastID, queueDepth, oldestID := readDebugBridgeEvents(after, effectiveLimit)
+	events, lastID, queueDepth, oldestID := readDebugBridgeEvents(pp.after, pp.effectiveLimit)
 	if events == nil {
 		events = []debugBridgeEvent{}
 	}
@@ -335,12 +355,12 @@ func handleDebugBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		servedFirstID = events[0].ID
 		servedLastID = events[eventCount-1].ID
 	}
-	laggingCursor := after > 0 && oldestID > 0 && after < oldestID-1
-	truncated := eventCount > 0 && eventCount >= effectiveLimit && servedLastID < lastID
+	laggingCursor := pp.after > 0 && oldestID > 0 && pp.after < oldestID-1
+	truncated := eventCount > 0 && eventCount >= pp.effectiveLimit && servedLastID < lastID
 	if laggingCursor {
 		logger.Warn("debug bridge: poll cursor behind queue head",
 			"poll_id", pollID,
-			"after", after,
+			"after", pp.after,
 			"oldest_id", oldestID,
 			"last_id", lastID,
 			"queue_depth", queueDepth,
@@ -352,28 +372,15 @@ func handleDebugBridgeEvents(w http.ResponseWriter, r *http.Request) {
 		"last_id": lastID,
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		writeFailTotal := debugBridgeMetrics.pollWriteFailTotal.Add(1)
-		logger.Warn("debug bridge: poll response write failed",
-			"poll_id", pollID,
-			"after", after,
-			"limit", effectiveLimit,
-			"event_count", eventCount,
-			"last_id", lastID,
-			"queue_depth", queueDepth,
-			logger.FieldDurationMS, time.Since(start).Milliseconds(),
-			"write_fail_total", writeFailTotal,
-			logger.FieldError, err)
+	if !writeDebugPollJSON(w, resp, pollID, start, "after", pp.after, "limit", pp.effectiveLimit, "event_count", eventCount, "last_id", lastID, "queue_depth", queueDepth) {
 		return
 	}
 
-	debugBridgeMetrics.pollResponseTotal.Add(1)
 	if eventCount > 0 || laggingCursor || truncated || pollID%debugBridgePollSampleEvery == 0 {
 		logger.Info("debug bridge: poll served",
 			"poll_id", pollID,
-			"after", after,
-			"limit", effectiveLimit,
+			"after", pp.after,
+			"limit", pp.effectiveLimit,
 			"event_count", eventCount,
 			"served_first_id", servedFirstID,
 			"served_last_id", servedLastID,
@@ -483,9 +490,9 @@ end try`
 		if err != nil {
 			detail := strings.TrimSpace(string(out))
 			if detail != "" {
-				return "", fmt.Errorf("osascript choose folder failed: %w (%s)", err, detail)
+				return "", apperrors.Wrapf(err, "selectProjectDirNative", "osascript choose folder failed (%s)", detail)
 			}
-			return "", fmt.Errorf("osascript choose folder failed: %w", err)
+			return "", apperrors.Wrap(err, "selectProjectDirNative", "osascript choose folder failed")
 		}
 		return strings.TrimSpace(string(out)), nil
 	case "windows":
@@ -519,7 +526,7 @@ end try`
 				continue
 			}
 		}
-		return "", fmt.Errorf("no supported folder picker found on %s", runtime.GOOS)
+		return "", apperrors.Newf("selectProjectDirNative", "no supported folder picker found on %s", runtime.GOOS)
 	}
 }
 
@@ -547,9 +554,9 @@ end try`
 		if err != nil {
 			detail := strings.TrimSpace(string(out))
 			if detail != "" {
-				return nil, fmt.Errorf("osascript choose file failed: %w (%s)", err, detail)
+				return nil, apperrors.Wrapf(err, "selectFilesNative", "osascript choose file failed (%s)", detail)
 			}
-			return nil, fmt.Errorf("osascript choose file failed: %w", err)
+			return nil, apperrors.Wrap(err, "selectFilesNative", "osascript choose file failed")
 		}
 		return splitPickerOutput(string(out)), nil
 	case "windows":
@@ -583,7 +590,7 @@ end try`
 				continue
 			}
 		}
-		return nil, fmt.Errorf("no supported file picker found on %s", runtime.GOOS)
+		return nil, apperrors.Newf("selectFilesNative", "no supported file picker found on %s", runtime.GOOS)
 	}
 }
 

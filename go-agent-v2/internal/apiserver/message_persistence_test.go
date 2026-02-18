@@ -89,6 +89,7 @@ func TestMessagePersistence_20Agents(t *testing.T) {
 	start := time.Now()
 
 	var wg sync.WaitGroup
+	writeErrs := make(chan error, numAgents*4)
 	agentIDs := make([]string, numAgents)
 	scenarioByAgent := make([]string, numAgents)
 	expectedByAgent := make([]int, numAgents)
@@ -126,13 +127,21 @@ func TestMessagePersistence_20Agents(t *testing.T) {
 					Type: e.eventType,
 					Data: dataBytes,
 				}
-				method := mapEventToMethod(e.eventType)
+				method, err := resolveEventMethodStrict(e.eventType, nil)
+				if err != nil {
+					writeErrs <- fmt.Errorf("agent=%d scenario=%s event=%s: %w", i, scenarioByAgent[i], e.eventType, err)
+					continue
+				}
 				srv.persistMessage(agentID, event, method)
 			}
 		}(events)
 	}
 
 	wg.Wait()
+	close(writeErrs)
+	for err := range writeErrs {
+		t.Error(err)
+	}
 
 	writeTime := time.Since(start)
 	t.Logf("Write phase completed: agents=%d in %v", numAgents, writeTime)
@@ -434,6 +443,7 @@ func TestMessagePersistence_ChaosReadWrite_RealWorld(t *testing.T) {
 	scenarioCounts := map[string]int{}
 	doneReaders := make(chan struct{})
 	readErrs := make(chan error, readerWorkers*32)
+	writeErrs := make(chan error, numAgents*rounds*8)
 	var readOps atomic.Int64
 
 	var readersWG sync.WaitGroup
@@ -560,7 +570,14 @@ func TestMessagePersistence_ChaosReadWrite_RealWorld(t *testing.T) {
 						Type: e.eventType,
 						Data: dataBytes,
 					}
-					method := mapEventToMethod(e.eventType)
+					method, err := resolveEventMethodStrict(e.eventType, nil)
+					if err != nil {
+						select {
+						case writeErrs <- fmt.Errorf("writer agent=%d round=%d scenario=%s event=%s: %w", i, round, scenario, e.eventType, err):
+						default:
+						}
+						continue
+					}
 					srv.persistMessage(agentID, event, method)
 					expected++
 
@@ -572,10 +589,18 @@ func TestMessagePersistence_ChaosReadWrite_RealWorld(t *testing.T) {
 
 				if injectUnknown && rng.Intn(100) < 45 {
 					unknownType := fmt.Sprintf("chaos_unknown_%d_%d", i, round)
+					method, err := resolveEventMethodStrict(unknownType, []string{"chaos_unknown_"})
+					if err != nil {
+						select {
+						case writeErrs <- fmt.Errorf("writer unknown agent=%d round=%d event=%s: %w", i, round, unknownType, err):
+						default:
+						}
+						continue
+					}
 					srv.persistMessage(agentID, codex.Event{
 						Type: unknownType,
 						Data: json.RawMessage(`{"note":"fallback mapping path"}`),
-					}, mapEventToMethod(unknownType))
+					}, method)
 					expected++
 				}
 			}
@@ -589,14 +614,21 @@ func TestMessagePersistence_ChaosReadWrite_RealWorld(t *testing.T) {
 	close(doneReaders)
 	readersWG.Wait()
 	close(readErrs)
+	close(writeErrs)
 
 	var readValidationErrs int
 	for err := range readErrs {
 		readValidationErrs++
 		t.Errorf("read validation: %v", err)
 	}
+	var writeValidationErrs int
+	for err := range writeErrs {
+		writeValidationErrs++
+		t.Errorf("write validation: %v", err)
+	}
 
-	t.Logf("Chaos write done: %v, reader ops=%d, read validation errors=%d", writeTime, readOps.Load(), readValidationErrs)
+	t.Logf("Chaos write done: %v, reader ops=%d, read validation errors=%d, write validation errors=%d",
+		writeTime, readOps.Load(), readValidationErrs, writeValidationErrs)
 
 	t.Log("=== Chaos verify persisted counts ===")
 	for i, agentID := range agentIDs {
@@ -740,6 +772,26 @@ func envBoolWithDefault(key string, defaultValue bool) bool {
 	default:
 		return defaultValue
 	}
+}
+
+func resolveEventMethodStrict(eventType string, fallbackAllowPrefixes []string) (string, error) {
+	if method, ok := eventMethodMap[eventType]; ok {
+		return method, nil
+	}
+	for _, prefix := range passthroughEventPrefixes {
+		if strings.HasPrefix(eventType, prefix) {
+			return eventType, nil
+		}
+	}
+	if strings.Contains(eventType, "/") {
+		return eventType, nil
+	}
+	for _, prefix := range fallbackAllowPrefixes {
+		if strings.HasPrefix(eventType, prefix) {
+			return "agent/event/" + eventType, nil
+		}
+	}
+	return "", fmt.Errorf("unmapped event type (strict mode): %s", eventType)
 }
 
 func shufflePersistenceEvents(events []persistenceEvent, rng *rand.Rand) {

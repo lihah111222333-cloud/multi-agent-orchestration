@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -96,7 +97,7 @@ func (c *Client) Spawn(ctx context.Context) error {
 	// 指定端口时先检查是否空闲
 	if c.Port > 0 {
 		if err := checkPortFree(c.Port); err != nil {
-			return fmt.Errorf("codex: port %d occupied: %w", c.Port, err)
+			return apperrors.Wrapf(err, "Client.Spawn", "port %d occupied", c.Port)
 		}
 	}
 
@@ -115,7 +116,7 @@ func (c *Client) Spawn(ctx context.Context) error {
 	c.Cmd.Stderr = c.stderrCollector
 
 	if err := c.Cmd.Start(); err != nil {
-		return fmt.Errorf("codex: spawn failed: %w", err)
+		return apperrors.Wrap(err, "Client.Spawn", "spawn codex http-api")
 	}
 
 	logger.Infow("codex: process spawned",
@@ -142,7 +143,7 @@ func (c *Client) Spawn(ctx context.Context) error {
 			backoff = min(backoff*2, 2*time.Second)
 		}
 		logger.Warn("codex: health check timeout", logger.FieldPort, c.Port)
-		return fmt.Errorf("codex: health check timeout on port %d", c.Port)
+		return apperrors.Newf("Client.Spawn", "health check timeout on port %d", c.Port)
 	}
 
 	// port 0: 先等 stdout, 再尝试解析端口, 再扫描
@@ -170,7 +171,7 @@ func (c *Client) Spawn(ctx context.Context) error {
 		}
 	}
 
-	return fmt.Errorf("codex: port discovery timeout (port 0 mode)")
+	return apperrors.New("Client.Spawn", "port discovery timeout (port 0 mode)")
 }
 
 // setPort 更新实际端口。
@@ -265,7 +266,7 @@ func (c *Client) Health() error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("codex: health status %d", resp.StatusCode)
+		return apperrors.Newf("Client.Health", "health status %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -294,7 +295,7 @@ func (c *Client) DeleteThread(threadID string) error {
 // ResumeThread 恢复已有会话 (对应 CLI: codex resume <id> [path])。
 func (c *Client) ResumeThread(req ResumeThreadRequest) error {
 	if req.ThreadID == "" {
-		return fmt.Errorf("codex: resume requires thread_id")
+		return apperrors.New("Client.ResumeThread", "resume requires thread_id")
 	}
 	if err := c.postJSON("/threads/"+req.ThreadID+"/resume", req, nil, http.StatusOK, http.StatusCreated); err != nil {
 		return err
@@ -306,7 +307,7 @@ func (c *Client) ResumeThread(req ResumeThreadRequest) error {
 // ForkThread 分叉会话 (对应 CLI: codex fork <id> [path])。
 func (c *Client) ForkThread(req ForkThreadRequest) (*ForkThreadResponse, error) {
 	if req.SourceThreadID == "" {
-		return nil, fmt.Errorf("codex: fork requires source_thread_id")
+		return nil, apperrors.New("Client.ForkThread", "fork requires source_thread_id")
 	}
 	var result ForkThreadResponse
 	if err := c.postJSON("/threads/"+req.SourceThreadID+"/fork", req, &result, http.StatusOK, http.StatusCreated); err != nil {
@@ -328,12 +329,12 @@ func (c *Client) postJSON(path string, reqBody any, out any, okStatus ...int) er
 	}
 	resp, err := c.httpCli.Post(c.baseURL+path, "application/json", bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("codex: POST %s: %w", path, err)
+		return apperrors.Wrapf(err, "Client.postJSON", "POST %s", path)
 	}
 	defer resp.Body.Close()
 	if !statusOK(resp.StatusCode, okStatus) {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("codex: POST %s status %d: %s", path, resp.StatusCode, body)
+		return apperrors.Newf("Client.postJSON", "POST %s status %d: %s", path, resp.StatusCode, body)
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
@@ -360,7 +361,7 @@ func (c *Client) doRequest(method, path string, okStatus ...int) error {
 	}
 	defer resp.Body.Close()
 	if !statusOK(resp.StatusCode, okStatus) {
-		return fmt.Errorf("codex: %s %s status %d", method, path, resp.StatusCode)
+		return apperrors.Newf("Client.doRequest", "%s %s status %d", method, path, resp.StatusCode)
 	}
 	return nil
 }
@@ -383,7 +384,7 @@ func statusOK(code int, allowed []int) bool {
 // Submit 发送对话 (纯 HTTP POST)。
 func (c *Client) Submit(prompt string, images, files []string, outputSchema json.RawMessage) error {
 	if c.ThreadID == "" {
-		return fmt.Errorf("codex: no thread_id for submit")
+		return apperrors.New("Client.Submit", "no thread_id for submit")
 	}
 
 	reqBody := SubmitMessage{
@@ -400,25 +401,25 @@ func (c *Client) Submit(prompt string, images, files []string, outputSchema json
 	url := fmt.Sprintf("%s/threads/%s/submit", c.baseURL, c.ThreadID)
 	resp, err := c.httpCli.Post(url, "application/json", bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("codex: submit http: %w", err)
+		return apperrors.Wrap(err, "Client.Submit", "submit http")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("codex: submit status %d: %s", resp.StatusCode, body)
+		return apperrors.Newf("Client.Submit", "submit status %d: %s", resp.StatusCode, body)
 	}
 	return nil
 }
 
 // SendCommand 发送斜杠命令 (纯 REST 客户端不支持, 需使用 AppServerClient)。
 func (c *Client) SendCommand(cmd, args string) error {
-	return fmt.Errorf("codex: slash commands not supported in REST client, use AppServerClient")
+	return apperrors.New("Client.SendCommand", "slash commands not supported in REST client, use AppServerClient")
 }
 
 // SendDynamicToolResult 回传动态工具结果 (纯 REST 客户端不支持, 需使用 AppServerClient)。
 func (c *Client) SendDynamicToolResult(callID, output string, requestID *int64) error {
-	return fmt.Errorf("codex: dynamic tool result not supported in REST client, use AppServerClient")
+	return apperrors.New("Client.SendDynamicToolResult", "dynamic tool result not supported in REST client, use AppServerClient")
 }
 
 // ========================================

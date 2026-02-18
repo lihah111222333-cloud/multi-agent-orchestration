@@ -1,3 +1,5 @@
+//go:build e2e
+
 // rpc-test — 直接测试 app-server JSON-RPC 方法。
 package main
 

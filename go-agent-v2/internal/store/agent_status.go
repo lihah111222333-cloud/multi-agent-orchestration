@@ -4,18 +4,20 @@ package store
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"regexp"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 // AgentStatusStore Agent 状态存储。
 type AgentStatusStore struct{ BaseStore }
 
 // NewAgentStatusStore 创建。
-func NewAgentStatusStore(pool *pgxpool.Pool) *AgentStatusStore { return &AgentStatusStore{NewBaseStore(pool)} }
+func NewAgentStatusStore(pool *pgxpool.Pool) *AgentStatusStore {
+	return &AgentStatusStore{NewBaseStore(pool)}
+}
 
 var agentIDRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
@@ -29,7 +31,7 @@ const asCols = "agent_id, agent_name, session_id, status, stagnant_sec, error, o
 // validateAgentID 验证 agent_id 格式 (对应 Python _normalize_agent_id)。
 func validateAgentID(id string) error {
 	if id == "" || !agentIDRe.MatchString(id) {
-		return fmt.Errorf("agent_id 格式非法: %q", id)
+		return apperrors.Newf("validateAgentID", "agent_id 格式非法: %q", id)
 	}
 	return nil
 }
@@ -61,7 +63,7 @@ func (s *AgentStatusStore) Upsert(ctx context.Context, a *AgentStatus) (*AgentSt
 	}
 	a.OutputTail = normalizeOutputTail(a.OutputTail)
 
-	outputJSON, _ := json.Marshal(a.OutputTail)
+	outputJSON := mustMarshalJSON(a.OutputTail)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO agent_status (agent_id, agent_name, session_id, status, stagnant_sec, error, output_tail, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW(), NOW())

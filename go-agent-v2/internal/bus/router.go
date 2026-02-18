@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 // AgentDiscoverer 服务发现接口 (由 store.AgentThreadStore 实现)。
@@ -62,7 +63,7 @@ func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prom
 	// 查表获取目标 Agent 的端点
 	endpoints, err := r.discover.ListRunning(ctx)
 	if err != nil {
-		return fmt.Errorf("router: discover agents: %w", err)
+		return apperrors.Wrap(err, "AgentRouter.DelegateTask", "discover agents")
 	}
 
 	var target *AgentEndpoint
@@ -73,13 +74,13 @@ func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prom
 		}
 	}
 	if target == nil {
-		return fmt.Errorf("router: agent %s not found or not running", toThreadID)
+		return apperrors.Newf("AgentRouter.DelegateTask", "agent %s not found or not running", toThreadID)
 	}
 
 	// 直接 HTTP POST submit 到目标 Agent
 	client := r.getOrCreateClient(target.ThreadID, target.Port)
 	if err := client.Submit(prompt, images, files, nil); err != nil {
-		return fmt.Errorf("router: submit to %s (port %d): %w", toThreadID, target.Port, err)
+		return apperrors.Wrapf(err, "AgentRouter.DelegateTask", "submit to %s (port %d)", toThreadID, target.Port)
 	}
 
 	// 发布委托事件到总线 (通知监听者)
@@ -90,7 +91,7 @@ func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prom
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("router: marshal delegate payload: %w", err)
+		return apperrors.Wrap(err, "AgentRouter.DelegateTask", "marshal delegate payload")
 	}
 	r.bus.Publish(Message{
 		Topic:   fmt.Sprintf("agent.%s.input", toThreadID),
@@ -107,7 +108,7 @@ func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prom
 func (r *AgentRouter) SendToAgent(ctx context.Context, threadID, prompt string) error {
 	endpoints, err := r.discover.ListRunning(ctx)
 	if err != nil {
-		return fmt.Errorf("router: discover: %w", err)
+		return apperrors.Wrap(err, "AgentRouter.SendToAgent", "discover")
 	}
 
 	for _, ep := range endpoints {
@@ -116,14 +117,14 @@ func (r *AgentRouter) SendToAgent(ctx context.Context, threadID, prompt string) 
 			return client.Submit(prompt, nil, nil, nil)
 		}
 	}
-	return fmt.Errorf("router: agent %s not found", threadID)
+	return apperrors.Newf("AgentRouter.SendToAgent", "agent %s not found", threadID)
 }
 
 // Broadcast 向所有运行中的 Agent 广播消息。
 func (r *AgentRouter) Broadcast(ctx context.Context, fromID, prompt string) error {
 	endpoints, err := r.discover.ListRunning(ctx)
 	if err != nil {
-		return fmt.Errorf("router: discover: %w", err)
+		return apperrors.Wrap(err, "AgentRouter.Broadcast", "discover")
 	}
 
 	var lastErr error

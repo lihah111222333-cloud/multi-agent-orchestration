@@ -12,11 +12,12 @@ package lsp
 
 import (
 	"context"
-	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 // ServerConfig 语言服务器配置。
@@ -249,7 +250,7 @@ func (m *Manager) ensureClient(cfg *ServerConfig) (*Client, error) {
 	// 检查命令是否可用
 	cmdPath, err := exec.LookPath(cfg.Command)
 	if err != nil {
-		return nil, fmt.Errorf("lsp: %s not found in PATH", cfg.Command)
+		return nil, apperrors.Newf("LSP.ensureClient", "%s not found in PATH", cfg.Command)
 	}
 
 	m.mu.Lock()

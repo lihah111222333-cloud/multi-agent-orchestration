@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { requestHistoryLoad, pickChatSelectableThreads } from '../UnifiedChatPage.js';
+import { requestHistoryLoad } from '../UnifiedChatPage.js';
 
 test('requestHistoryLoad loads selected thread history by default', async () => {
   const calls = [];
@@ -40,30 +40,4 @@ test('requestHistoryLoad ignores empty thread id', async () => {
   const loaded = await requestHistoryLoad(threadStore, '');
 
   assert.equal(loaded, false);
-});
-
-test('pickChatSelectableThreads keeps full list before loaded-list is ready', () => {
-  const threads = [
-    { id: 'thread-a' },
-    { id: 'thread-b' },
-  ];
-
-  const result = pickChatSelectableThreads(threads, { 'thread-a': true }, false);
-
-  assert.deepEqual(result.map((item) => item.id), ['thread-a', 'thread-b']);
-});
-
-test('pickChatSelectableThreads returns only loaded threads when ready', () => {
-  const threads = [
-    { id: 'thread-a' },
-    { id: 'thread-b' },
-    { id: 'thread-c' },
-  ];
-
-  const result = pickChatSelectableThreads(threads, {
-    'thread-a': true,
-    'thread-c': true,
-  }, true);
-
-  assert.deepEqual(result.map((item) => item.id), ['thread-a', 'thread-c']);
 });

@@ -7,12 +7,30 @@ export const ComposerBar = {
     disabled: { type: Boolean, default: false },
   },
   emits: ['send'],
+  data() {
+    return {
+      isComposing: false,
+    };
+  },
   methods: {
     onPaste(event) {
       logDebug('ui', 'composerBar.paste', {});
       this.composer.handlePaste(event);
     },
-    onSend() {
+    onCompositionStart() {
+      this.isComposing = true;
+    },
+    onCompositionEnd() {
+      this.isComposing = false;
+    },
+    onSend(event) {
+      const keyCode = Number(event?.keyCode || event?.which || 0);
+      if (event?.type === 'keydown' && (event?.isComposing || this.isComposing || keyCode === 229)) {
+        logDebug('ui', 'composerBar.send.blockedByComposition', {
+          key_code: keyCode,
+        });
+        return;
+      }
       logDebug('ui', 'composerBar.send.click', {
         disabled: this.disabled,
       });
@@ -50,6 +68,8 @@ export const ComposerBar = {
           placeholder="输入给 Agent 的内容，Enter 发送，Shift+Enter 换行"
           :disabled="disabled"
           @paste="onPaste"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
           @keydown.enter.exact.prevent="onSend"
         ></textarea>
         <button id="btnSend" class="btn btn-primary" :disabled="disabled || !composer.canSend.value" @click="onSend">发送</button>

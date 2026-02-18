@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -26,8 +25,8 @@ func (s *PromptTemplateStore) Save(ctx context.Context, t *PromptTemplate) (*Pro
 	// 版本快照: 若已存在，先写入 prompt_versions
 	existing, _ := s.Get(ctx, t.PromptKey)
 	if existing != nil {
-		varsJSON, _ := json.Marshal(existing.Variables)
-		tagsJSON, _ := json.Marshal(existing.Tags)
+		varsJSON := mustMarshalJSON(existing.Variables)
+		tagsJSON := mustMarshalJSON(existing.Tags)
 		if _, err := s.pool.Exec(ctx,
 			`INSERT INTO prompt_versions (prompt_key, title, agent_key, tool_name, prompt_text,
 			   variables, tags, enabled, created_by, updated_by, source_updated_at)
@@ -39,8 +38,8 @@ func (s *PromptTemplateStore) Save(ctx context.Context, t *PromptTemplate) (*Pro
 		}
 	}
 
-	varsJSON, _ := json.Marshal(t.Variables)
-	tagsJSON, _ := json.Marshal(t.Tags)
+	varsJSON := mustMarshalJSON(t.Variables)
+	tagsJSON := mustMarshalJSON(t.Tags)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO prompt_templates (prompt_key, title, agent_key, tool_name, prompt_text,
 		   variables, tags, description, enabled, created_by, updated_by, updated_at)

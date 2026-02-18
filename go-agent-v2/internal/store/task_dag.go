@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -25,7 +24,7 @@ const nodeCols = `id, dag_key, node_key, title, node_type, assigned_to,
 
 // SaveDAG 创建或更新 DAG 主表 (对应 Python save_task_dag)。
 func (s *TaskDAGStore) SaveDAG(ctx context.Context, d *TaskDAG) (*TaskDAG, error) {
-	metaJSON, _ := json.Marshal(d.Metadata)
+	metaJSON := mustMarshalJSON(d.Metadata)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO task_dags (dag_key, title, description, status, created_by, metadata)
 		 VALUES ($1, $2, $3, $4, $5, $6::jsonb)
@@ -82,8 +81,8 @@ func (s *TaskDAGStore) DeleteDAGs(ctx context.Context, dagKeys []string) (int64,
 
 // SaveNode 创建或更新节点 (对应 Python save_dag_node)。
 func (s *TaskDAGStore) SaveNode(ctx context.Context, n *TaskDAGNode) (*TaskDAGNode, error) {
-	depsJSON, _ := json.Marshal(n.DependsOn)
-	cfgJSON, _ := json.Marshal(n.Config)
+	depsJSON := mustMarshalJSON(n.DependsOn)
+	cfgJSON := mustMarshalJSON(n.Config)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO task_dag_nodes (dag_key, node_key, title, node_type, assigned_to,
 		   depends_on, command_ref, config)
@@ -103,7 +102,7 @@ func (s *TaskDAGStore) SaveNode(ctx context.Context, n *TaskDAGNode) (*TaskDAGNo
 
 // UpdateNodeStatus 更新节点状态 (对应 Python update_dag_node_status)。
 func (s *TaskDAGStore) UpdateNodeStatus(ctx context.Context, dagKey, nodeKey, status string, result any) (*TaskDAGNode, error) {
-	resJSON, _ := json.Marshal(result)
+	resJSON := mustMarshalJSON(result)
 	rows, err := s.pool.Query(ctx,
 		`UPDATE task_dag_nodes SET status=$1, result=$2::jsonb, updated_at=NOW()
 		 WHERE dag_key=$3 AND node_key=$4 RETURNING `+nodeCols,

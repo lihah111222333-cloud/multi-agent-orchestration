@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,8 +23,8 @@ const taskTraceCols = `id, trace_id, span_id, parent_span_id, span_name, compone
 
 // StartSpan 开始跟踪 (对应 Python start_task_trace_span)。
 func (s *TaskTraceStore) StartSpan(ctx context.Context, t *TaskTrace) (*TaskTrace, error) {
-	inJSON, _ := json.Marshal(t.Input)
-	metaJSON, _ := json.Marshal(t.Metadata)
+	inJSON := mustMarshalJSON(t.Input)
+	metaJSON := mustMarshalJSON(t.Metadata)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO task_traces (trace_id, span_id, parent_span_id, span_name, component,
 		   input_payload, status, metadata, started_at)
@@ -41,7 +40,7 @@ func (s *TaskTraceStore) StartSpan(ctx context.Context, t *TaskTrace) (*TaskTrac
 
 // FinishSpan 完成跟踪 (对应 Python finish_task_trace_span, 自动计算 duration)。
 func (s *TaskTraceStore) FinishSpan(ctx context.Context, traceID, spanID, status string, output any, errText string) (*TaskTrace, error) {
-	outJSON, _ := json.Marshal(output)
+	outJSON := mustMarshalJSON(output)
 	rows, err := s.pool.Query(ctx,
 		`UPDATE task_traces
 		 SET status=$1, output_payload=$2::jsonb, error_text=$3,
@@ -58,9 +57,9 @@ func (s *TaskTraceStore) FinishSpan(ctx context.Context, traceID, spanID, status
 
 // Create 直接创建完整记录。
 func (s *TaskTraceStore) Create(ctx context.Context, t *TaskTrace) (*TaskTrace, error) {
-	inJSON, _ := json.Marshal(t.Input)
-	outJSON, _ := json.Marshal(t.Output)
-	metaJSON, _ := json.Marshal(t.Metadata)
+	inJSON := mustMarshalJSON(t.Input)
+	outJSON := mustMarshalJSON(t.Output)
+	metaJSON := mustMarshalJSON(t.Metadata)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO task_traces (trace_id, span_id, parent_span_id, span_name, component,
 		   input_payload, output_payload, status, error_text, duration_ms, metadata, started_at, finished_at)

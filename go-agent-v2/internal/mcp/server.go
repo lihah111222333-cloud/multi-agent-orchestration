@@ -4,9 +4,9 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/multi-agent/go-agent-v2/internal/store"
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -116,10 +116,10 @@ func (s *Server) HandleTool(ctx context.Context, name string, args json.RawMessa
 		return s.stores.TopologyApproval.GetPending(ctx)
 	case "db_query":
 		if p.SQL == "" {
-			return nil, fmt.Errorf("db_query: sql is required")
+			return nil, apperrors.New("MCP.HandleTool", "db_query: sql is required")
 		}
 		return s.stores.DBQuery.Query(ctx, p.SQL, p.Limit)
 	default:
-		return nil, fmt.Errorf("unknown tool: %s", name)
+		return nil, apperrors.Newf("MCP.HandleTool", "unknown tool: %s", name)
 	}
 }

@@ -1,9 +1,9 @@
 import { reactive, computed } from '../../lib/vue.esm-browser.prod.js';
-import { selectProjectDir } from '../services/api.js';
+import { callAPI, selectProjectDir } from '../services/api.js';
 import { logDebug, logInfo, logWarn } from '../services/log.js';
 
-const STORAGE_KEY = 'agent-orchestrator.projects';
-const ACTIVE_KEY = 'agent-orchestrator.projects.active';
+const PREF_PROJECTS_LIST = 'projects.list';
+const PREF_PROJECTS_ACTIVE = 'projects.active';
 
 function normalizePath(path) {
   let value = (path || '').trim();
@@ -14,31 +14,24 @@ function normalizePath(path) {
   return value;
 }
 
-function loadList() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (error) {
-    logWarn('project', 'storage.load.failed', { error });
-    return [];
-  }
-}
-
 const state = reactive({
-  projects: loadList(),
-  active: normalizePath(localStorage.getItem(ACTIVE_KEY) || '.') || '.',
+  projects: [],
+  active: '.',
   showModal: false,
   modalPath: '',
   browsing: false,
 });
 
+function persistRemote(key, value) {
+  callAPI('ui/preferences/set', { key, value })
+    .catch((error) => {
+      logDebug('project', 'prefs.save.failed', { key, error });
+    });
+}
+
 function persist() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.projects));
-    localStorage.setItem(ACTIVE_KEY, state.active || '.');
-  } catch (error) {
-    logWarn('project', 'storage.persist.failed', { error });
-  }
+  persistRemote(PREF_PROJECTS_LIST, state.projects);
+  persistRemote(PREF_PROJECTS_ACTIVE, state.active || '.');
 }
 
 function ensureActive() {
@@ -127,7 +120,28 @@ function quickAdd() {
   openModal();
 }
 
-ensureActive();
+async function loadRemoteProjects() {
+  try {
+    const res = await callAPI('ui/preferences/getAll', {});
+    if (!res || typeof res !== 'object') return;
+
+    if (Array.isArray(res[PREF_PROJECTS_LIST])) {
+      state.projects = res[PREF_PROJECTS_LIST];
+    }
+    if (Object.prototype.hasOwnProperty.call(res, PREF_PROJECTS_ACTIVE)) {
+      const val = normalizePath(res[PREF_PROJECTS_ACTIVE]);
+      if (val) {
+        state.active = val;
+      }
+    }
+  } catch (error) {
+    logWarn('project', 'prefs.load.failed', { error });
+  }
+}
+
+// Initial load
+loadRemoteProjects().then(() => ensureActive());
+
 
 export function useProjectStore() {
   return {

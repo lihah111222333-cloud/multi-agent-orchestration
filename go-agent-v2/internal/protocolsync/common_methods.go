@@ -2,13 +2,14 @@ package protocolsync
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
 	"strings"
+
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 type MethodCatalog struct {
@@ -58,7 +59,7 @@ func FindProtocolCommonPath() (string, error) {
 		if fileExists(explicit) {
 			return explicit, nil
 		}
-		return "", fmt.Errorf("CODEX_RS_PROTOCOL_COMMON not found: %s", explicit)
+		return "", apperrors.Newf("protocolsync.FindProtocolCommonPath", "CODEX_RS_PROTOCOL_COMMON not found: %s", explicit)
 	}
 
 	if root := strings.TrimSpace(os.Getenv("CODEX_RS_ROOT")); root != "" {
@@ -66,12 +67,12 @@ func FindProtocolCommonPath() (string, error) {
 		if fileExists(candidate) {
 			return candidate, nil
 		}
-		return "", fmt.Errorf("CODEX_RS_ROOT set but common.rs missing: %s", candidate)
+		return "", apperrors.Newf("protocolsync.FindProtocolCommonPath", "CODEX_RS_ROOT set but common.rs missing: %s", candidate)
 	}
 
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
-		return "", fmt.Errorf("cannot resolve current file path")
+		return "", apperrors.New("protocolsync.FindProtocolCommonPath", "cannot resolve current file path")
 	}
 	moduleRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
 
@@ -90,27 +91,27 @@ func FindProtocolCommonPath() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("codex-rs protocol/common.rs not found; set CODEX_RS_PROTOCOL_COMMON or CODEX_RS_ROOT")
+	return "", apperrors.New("protocolsync.FindProtocolCommonPath", "codex-rs protocol/common.rs not found; set CODEX_RS_PROTOCOL_COMMON or CODEX_RS_ROOT")
 }
 
 func LoadMethodCatalog(commonPath string) (MethodCatalog, error) {
 	contentBytes, err := os.ReadFile(commonPath)
 	if err != nil {
-		return MethodCatalog{}, fmt.Errorf("read protocol common.rs: %w", err)
+		return MethodCatalog{}, apperrors.Wrap(err, "protocolsync.LoadMethodCatalog", "read protocol common.rs")
 	}
 	content := string(contentBytes)
 
 	requests, err := parseMacroMethods(content, "server_request_definitions!")
 	if err != nil {
-		return MethodCatalog{}, fmt.Errorf("parse server requests: %w", err)
+		return MethodCatalog{}, apperrors.Wrap(err, "protocolsync.LoadMethodCatalog", "parse server requests")
 	}
 	notifications, err := parseMacroMethods(content, "server_notification_definitions!")
 	if err != nil {
-		return MethodCatalog{}, fmt.Errorf("parse server notifications: %w", err)
+		return MethodCatalog{}, apperrors.Wrap(err, "protocolsync.LoadMethodCatalog", "parse server notifications")
 	}
 
 	if len(requests) == 0 || len(notifications) == 0 {
-		return MethodCatalog{}, fmt.Errorf("parsed empty methods (requests=%d notifications=%d)", len(requests), len(notifications))
+		return MethodCatalog{}, apperrors.Newf("protocolsync.LoadMethodCatalog", "parsed empty methods (requests=%d notifications=%d)", len(requests), len(notifications))
 	}
 
 	return MethodCatalog{
@@ -161,7 +162,7 @@ func parseMacroMethods(content, macroName string) (map[string]struct{}, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan macro block: %w", err)
+		return nil, apperrors.Wrap(err, "protocolsync.parseMacroMethods", "scan macro block")
 	}
 
 	return methods, nil
@@ -170,12 +171,12 @@ func parseMacroMethods(content, macroName string) (map[string]struct{}, error) {
 func extractMacroBlock(content, macroName string) (string, error) {
 	macroPos := strings.Index(content, macroName)
 	if macroPos < 0 {
-		return "", fmt.Errorf("macro not found: %s", macroName)
+		return "", apperrors.Newf("protocolsync.extractMacroBlock", "macro not found: %s", macroName)
 	}
 
 	openPos := strings.Index(content[macroPos:], "{")
 	if openPos < 0 {
-		return "", fmt.Errorf("macro body start not found: %s", macroName)
+		return "", apperrors.Newf("protocolsync.extractMacroBlock", "macro body start not found: %s", macroName)
 	}
 	openPos += macroPos
 
@@ -192,14 +193,14 @@ func extractMacroBlock(content, macroName string) (string, error) {
 			depth--
 			if depth == 0 {
 				if start < 0 || start > i {
-					return "", fmt.Errorf("invalid macro body bounds: %s", macroName)
+					return "", apperrors.Newf("protocolsync.extractMacroBlock", "invalid macro body bounds: %s", macroName)
 				}
 				return content[start:i], nil
 			}
 		}
 	}
 
-	return "", fmt.Errorf("macro body end not found: %s", macroName)
+	return "", apperrors.Newf("protocolsync.extractMacroBlock", "macro body end not found: %s", macroName)
 }
 
 func toLowerCamel(value string) string {

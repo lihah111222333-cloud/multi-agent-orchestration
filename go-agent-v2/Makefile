@@ -12,6 +12,9 @@ mcp:
 test:
 	go test ./... -race -count=1
 
+test-e2e:
+	go test -tags=e2e ./cmd/rpc-test/ -v -timeout 120s -count=1
+
 protocol-sync-check:
 	go test ./internal/codex -run TestProtocolMethodCoverage_FromCodexRs -count=1
 	go test ./internal/apiserver -run TestEventMethodMap_TargetMethodsKnownByProtocol -count=1

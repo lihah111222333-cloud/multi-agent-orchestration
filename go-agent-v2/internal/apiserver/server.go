@@ -28,6 +28,8 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	"github.com/multi-agent/go-agent-v2/internal/store"
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
+	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
@@ -82,6 +84,8 @@ type Server struct {
 	taskTraceStore   *store.TaskTraceStore
 	skillSvc         *service.SkillService
 	workspaceMgr     *service.WorkspaceManager
+	prefManager      *uistate.PreferenceManager
+	uiRuntime        *uistate.RuntimeManager
 
 	// 连接管理 (支持多 IDE 同时连接)
 	mu     sync.RWMutex
@@ -146,11 +150,14 @@ func New(deps Deps) *Server {
 		fileChangeByThread: make(map[string][]string),
 		agentSkills:        make(map[string][]string),
 		sseClients:         make(map[chan []byte]struct{}),
+		prefManager:        uistate.NewPreferenceManager(nil),
+		uiRuntime:          uistate.NewRuntimeManager(),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: checkLocalOrigin,
 		},
 	}
 	if deps.DB != nil {
+		s.prefManager = uistate.NewPreferenceManager(store.NewUIPreferenceStore(deps.DB))
 		s.msgStore = store.NewAgentMessageStore(deps.DB)
 		s.dagStore = store.NewTaskDAGStore(deps.DB)
 		s.cmdStore = store.NewCommandCardStore(deps.DB)
@@ -238,7 +245,7 @@ func (s *Server) InvokeMethod(ctx context.Context, method string, params json.Ra
 		return nil, nil
 	}
 	if resp.Error != nil {
-		return nil, fmt.Errorf("%s (code %d)", resp.Error.Message, resp.Error.Code)
+		return nil, pkgerr.Newf("Server.InvokeMethod", "%s (code %d)", resp.Error.Message, resp.Error.Code)
 	}
 	return resp.Result, nil
 }
@@ -298,7 +305,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 
 	logger.Info("app-server: listening", logger.FieldAddr, host)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return fmt.Errorf("app-server: %w", err)
+		return pkgerr.Wrap(err, "Server.ListenAndServe", "listen")
 	}
 	return nil
 }
@@ -314,6 +321,8 @@ func (s *Server) SetNotifyHook(h func(method string, params any)) {
 
 // Notify 向所有连接广播 JSON-RPC 通知 (WebSocket + SSE)。
 func (s *Server) Notify(method string, params any) {
+	s.syncUIRuntimeFromNotify(method, params)
+
 	s.notifyHookMu.RLock()
 	hook := s.notifyHook
 	s.notifyHookMu.RUnlock()
@@ -352,6 +361,28 @@ func (s *Server) Notify(method string, params any) {
 	}
 }
 
+func (s *Server) syncUIRuntimeFromNotify(method string, params any) {
+	if s.uiRuntime == nil {
+		return
+	}
+	payload := util.ToMapAny(params)
+	switch method {
+	case "workspace/run/created", "workspace/run/aborted":
+		run := util.ToMapAny(payload["run"])
+		if len(run) == 0 {
+			return
+		}
+		s.uiRuntime.UpsertWorkspaceRun(run)
+	case "workspace/run/merged":
+		runKey, _ := payload["runKey"].(string)
+		result := util.ToMapAny(payload["result"])
+		if len(result) == 0 {
+			return
+		}
+		s.uiRuntime.ApplyWorkspaceMergeResult(runKey, result)
+	}
+}
+
 // SendRequest 向指定连接发送 Server→Client 请求并等待响应 (§ 二)。
 //
 // 用于 approval 流程: requestApproval → client 审批 → 返回结果。
@@ -367,14 +398,14 @@ func (s *Server) SendRequest(connID, method string, params any) (*Response, erro
 	if params != nil {
 		raw, err := json.Marshal(params)
 		if err != nil {
-			return nil, fmt.Errorf("marshal params: %w", err)
+			return nil, pkgerr.Wrap(err, "Server.SendRequest", "marshal params")
 		}
 		req.Params = raw
 	}
 
 	data, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		return nil, pkgerr.Wrap(err, "Server.SendRequest", "marshal request")
 	}
 
 	// 创建 response channel
@@ -394,11 +425,11 @@ func (s *Server) SendRequest(connID, method string, params any) (*Response, erro
 	entry, ok := s.conns[connID]
 	s.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("connection %s not found", connID)
+		return nil, pkgerr.Newf("Server.SendRequest", "connection %s not found", connID)
 	}
 
 	if err := entry.writeMsg(websocket.TextMessage, data); err != nil {
-		return nil, fmt.Errorf("write to %s: %w", connID, err)
+		return nil, pkgerr.Wrapf(err, "Server.SendRequest", "write to %s", connID)
 	}
 
 	logger.Info("app-server: sent request to client", logger.FieldConn, connID, logger.FieldMethod, method, logger.FieldID, reqID)
@@ -408,7 +439,7 @@ func (s *Server) SendRequest(connID, method string, params any) (*Response, erro
 	case resp := <-ch:
 		return resp, nil
 	case <-time.After(5 * time.Minute):
-		return nil, fmt.Errorf("request %d timed out waiting for client response", reqID)
+		return nil, pkgerr.Newf("Server.SendRequest", "request %d timed out waiting for client response", reqID)
 	}
 }
 
@@ -425,7 +456,7 @@ func (s *Server) SendRequestToAll(method string, params any) (*Response, error) 
 	s.mu.RUnlock()
 
 	if firstConn == "" {
-		return nil, fmt.Errorf("no connected clients")
+		return nil, pkgerr.New("Server.SendRequestToAll", "no connected clients")
 	}
 	return s.SendRequest(firstConn, method, params)
 }
@@ -968,6 +999,26 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 		// 从 event.Data 提取前端常用字段到顶层 (含嵌套 msg/data/payload)。
 		mergePayloadFields(payload, event.Data)
 		s.enrichFileChangePayload(agentID, event.Type, method, payload)
+
+		// Normalize event for UI
+		normalized := uistate.NormalizeEvent(event.Type, method, event.Data)
+		payload["uiType"] = string(normalized.UIType)
+		payload["uiStatus"] = string(normalized.UIStatus)
+		if normalized.Text != "" {
+			payload["uiText"] = normalized.Text
+		}
+		if normalized.Command != "" {
+			payload["uiCommand"] = normalized.Command
+		}
+		if len(normalized.Files) > 0 {
+			payload["uiFiles"] = normalized.Files
+		}
+		if normalized.ExitCode != nil {
+			payload["uiExitCode"] = *normalized.ExitCode
+		}
+		if s.uiRuntime != nil {
+			s.uiRuntime.ApplyAgentEvent(agentID, normalized, payload)
+		}
 
 		// § 二 审批事件: 需要客户端回复 (双向请求)
 		switch event.Type {

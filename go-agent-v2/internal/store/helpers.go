@@ -8,14 +8,34 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
+
+// emptyJSON fallback 值: 不可序列化时返回空 JSON 对象。
+var emptyJSON = []byte("{}")
+
+// mustMarshalJSON 安全序列化: 失败时记录警告并返回 "{}"，不会 panic。
+//
+// 替代 store 层反复出现的 `data, _ := json.Marshal(v)` 模式，
+// 消除静默丢弃序列化错误的合规风险。
+func mustMarshalJSON(v any) []byte {
+	data, err := json.Marshal(v)
+	if err != nil {
+		logger.Warn("mustMarshalJSON: marshal failed, using fallback",
+			logger.Any("value_type", fmt.Sprintf("%T", v)),
+			logger.Any(logger.FieldError, err))
+		return emptyJSON
+	}
+	return data
+}
 
 // BaseStore 所有 Store 的嵌入基底，持有连接池。
 //
@@ -188,4 +208,38 @@ func DistinctMap(ctx context.Context, pool *pgxpool.Pool, table string, columns 
 		result[col] = vals
 	}
 	return result, nil
+}
+
+// ========================================
+// 通用 CRUD 操作 (DRY: 消除 store 间重复的 Delete/SetEnabled)
+// ========================================
+
+// DeleteByKey 按主键删除单条记录。
+func DeleteByKey(ctx context.Context, pool *pgxpool.Pool, table, keyCol, keyVal string) error {
+	sql := fmt.Sprintf("DELETE FROM %s WHERE %s = $1",
+		pgx.Identifier{table}.Sanitize(),
+		pgx.Identifier{keyCol}.Sanitize())
+	_, err := pool.Exec(ctx, sql, keyVal)
+	return err
+}
+
+// DeleteBatchByKeys 按主键批量删除。
+func DeleteBatchByKeys(ctx context.Context, pool *pgxpool.Pool, table, keyCol string, keys []string) (int64, error) {
+	sql := fmt.Sprintf("DELETE FROM %s WHERE %s = ANY($1::text[])",
+		pgx.Identifier{table}.Sanitize(),
+		pgx.Identifier{keyCol}.Sanitize())
+	tag, err := pool.Exec(ctx, sql, keys)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// SetEnabledByKey 启用/禁用记录。
+func SetEnabledByKey(ctx context.Context, pool *pgxpool.Pool, table, keyCol, keyVal, updatedBy string, enabled bool) error {
+	sql := fmt.Sprintf("UPDATE %s SET enabled=$1, updated_by=$2, updated_at=NOW() WHERE %s=$3",
+		pgx.Identifier{table}.Sanitize(),
+		pgx.Identifier{keyCol}.Sanitize())
+	_, err := pool.Exec(ctx, sql, enabled, updatedBy, keyVal)
+	return err
 }

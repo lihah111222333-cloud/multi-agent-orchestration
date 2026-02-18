@@ -44,7 +44,7 @@ func sanitizeMetadata(raw json.RawMessage) json.RawMessage {
 	if json.Valid(clean) {
 		return json.RawMessage(clean)
 	}
-	fallback, _ := json.Marshal(map[string]any{
+	fallback := mustMarshalJSON(map[string]any{
 		"raw": string(clean),
 	})
 	return json.RawMessage(fallback)
@@ -203,17 +203,21 @@ type AgentThreadInfo struct {
 
 // ListDistinctAgentIDs 返回所有有消息记录的 agent ID (按最近活跃排序)。
 func (s *AgentMessageStore) ListDistinctAgentIDs(ctx context.Context, limit int) ([]AgentThreadInfo, error) {
-	if limit <= 0 || limit > 1000 {
-		limit = 500
-	}
-	rows, err := s.pool.Query(ctx,
-		`SELECT agent_id, MAX(created_at) AS last_at
-		 FROM agent_messages
-		 GROUP BY agent_id
-		 ORDER BY last_at DESC
-		 LIMIT $1`, limit)
+	sql, args := buildListDistinctAgentIDsQuery(limit)
+	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
 	return collectRows[AgentThreadInfo](rows)
+}
+
+func buildListDistinctAgentIDsQuery(limit int) (string, []any) {
+	base := `SELECT agent_id, MAX(created_at) AS last_at
+		 FROM agent_messages
+		 GROUP BY agent_id
+		 ORDER BY last_at DESC`
+	if limit > 0 {
+		return base + "\n\t\t LIMIT $1", []any{limit}
+	}
+	return base, nil
 }

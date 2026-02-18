@@ -4,11 +4,11 @@ package store
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
@@ -58,19 +58,19 @@ func (s *DBQueryStore) Execute(ctx context.Context, sqlText string) (int64, erro
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("db_execute: begin tx: %w", err)
+		return 0, pkgerr.Wrap(err, "DBQuery.Execute", "begin tx")
 	}
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx, "SET LOCAL statement_timeout = '5s'"); err != nil {
-		return 0, fmt.Errorf("db_execute: set timeout: %w", err)
+		return 0, pkgerr.Wrap(err, "DBQuery.Execute", "set timeout")
 	}
 	tag, err := tx.Exec(ctx, sqlText)
 	if err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("db_execute: commit: %w", err)
+		return 0, pkgerr.Wrap(err, "DBQuery.Execute", "commit")
 	}
 	return tag.RowsAffected(), nil
 }

@@ -6,11 +6,12 @@ package store
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 // CodexMemoryStore 封装 codex_memory 表操作。
@@ -44,7 +45,7 @@ func scanMemoryRows(rows pgx.Rows) ([]CodexMemory, error) {
 		err := rows.Scan(&m.ID, &m.AgentID, &m.ThreadID, &m.MemoryType,
 			&m.Content, &m.Source, &m.CreatedAt, &m.UpdatedAt)
 		if err != nil {
-			return nil, fmt.Errorf("codex_memory: scan: %w", err)
+			return nil, pkgerr.Wrap(err, "CodexMemory.scan", "scan row")
 		}
 		result = append(result, m)
 	}
@@ -54,7 +55,7 @@ func scanMemoryRows(rows pgx.Rows) ([]CodexMemory, error) {
 // Create 创建一条记忆。
 func (s *CodexMemoryStore) Create(ctx context.Context, agentID, threadID, memoryType, content, source string) (*CodexMemory, error) {
 	if content == "" {
-		return nil, fmt.Errorf("codex_memory: content must not be empty")
+		return nil, pkgerr.New("CodexMemory.Create", "content must not be empty")
 	}
 	if memoryType == "" {
 		memoryType = "fact"
@@ -70,7 +71,7 @@ func (s *CodexMemoryStore) Create(ctx context.Context, agentID, threadID, memory
 	row := s.pool.QueryRow(ctx, sql, agentID, threadID, memoryType, content, source)
 	m, err := scanMemoryRow(row)
 	if err != nil {
-		return nil, fmt.Errorf("codex_memory: create: %w", err)
+		return nil, pkgerr.Wrap(err, "CodexMemory.Create", "insert")
 	}
 	return &m, nil
 }
@@ -81,7 +82,7 @@ func (s *CodexMemoryStore) Get(ctx context.Context, id int64) (*CodexMemory, err
 	row := s.pool.QueryRow(ctx, sql, id)
 	m, err := scanMemoryRow(row)
 	if err != nil {
-		return nil, fmt.Errorf("codex_memory: get %d: %w", id, err)
+		return nil, pkgerr.Wrapf(err, "CodexMemory.Get", "id %d", id)
 	}
 	return &m, nil
 }
@@ -99,7 +100,7 @@ func (s *CodexMemoryStore) List(ctx context.Context, agentID, memoryType string,
 	sql, params := qb.Build(memoryBaseSql, "created_at DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
-		return nil, fmt.Errorf("codex_memory: list: %w", err)
+		return nil, pkgerr.Wrap(err, "CodexMemory.List", "query")
 	}
 	return scanMemoryRows(rows)
 }
@@ -114,7 +115,7 @@ func (s *CodexMemoryStore) ByThread(ctx context.Context, threadID string, limit 
 	sql, params := qb.Build(memoryBaseSql, "created_at DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
-		return nil, fmt.Errorf("codex_memory: by_thread: %w", err)
+		return nil, pkgerr.Wrap(err, "CodexMemory.ByThread", "query")
 	}
 	return scanMemoryRows(rows)
 }
@@ -122,15 +123,15 @@ func (s *CodexMemoryStore) ByThread(ctx context.Context, threadID string, limit 
 // Update 更新记忆内容。
 func (s *CodexMemoryStore) Update(ctx context.Context, id int64, content string) error {
 	if content == "" {
-		return fmt.Errorf("codex_memory: content must not be empty")
+		return pkgerr.New("CodexMemory.Update", "content must not be empty")
 	}
 	sql := `UPDATE codex_memory SET content = $1, updated_at = $2 WHERE id = $3`
 	ct, err := s.pool.Exec(ctx, sql, content, time.Now(), id)
 	if err != nil {
-		return fmt.Errorf("codex_memory: update %d: %w", id, err)
+		return pkgerr.Wrapf(err, "CodexMemory.Update", "id %d", id)
 	}
 	if ct.RowsAffected() == 0 {
-		return fmt.Errorf("codex_memory: not found %d", id)
+		return pkgerr.Newf("CodexMemory.Update", "not found %d", id)
 	}
 	return nil
 }
@@ -140,10 +141,10 @@ func (s *CodexMemoryStore) Delete(ctx context.Context, id int64) error {
 	sql := `DELETE FROM codex_memory WHERE id = $1`
 	ct, err := s.pool.Exec(ctx, sql, id)
 	if err != nil {
-		return fmt.Errorf("codex_memory: delete %d: %w", id, err)
+		return pkgerr.Wrapf(err, "CodexMemory.Delete", "id %d", id)
 	}
 	if ct.RowsAffected() == 0 {
-		return fmt.Errorf("codex_memory: not found %d", id)
+		return pkgerr.Newf("CodexMemory.Delete", "not found %d", id)
 	}
 	return nil
 }
@@ -153,7 +154,7 @@ func (s *CodexMemoryStore) DeleteByAgent(ctx context.Context, agentID string) (i
 	sql := `DELETE FROM codex_memory WHERE agent_id = $1`
 	ct, err := s.pool.Exec(ctx, sql, agentID)
 	if err != nil {
-		return 0, fmt.Errorf("codex_memory: delete_by_agent: %w", err)
+		return 0, pkgerr.Wrap(err, "CodexMemory.DeleteByAgent", "exec")
 	}
 	return ct.RowsAffected(), nil
 }

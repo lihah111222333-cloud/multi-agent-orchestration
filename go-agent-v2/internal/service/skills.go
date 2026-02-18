@@ -1,10 +1,11 @@
 package service
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 // SkillInfo Skill 目录元数据。
@@ -55,7 +56,7 @@ func (s *SkillService) ListSkills() ([]SkillInfo, error) {
 // 含路径遍历防护: 拒绝包含 "/", "\", ".." 的名称。
 func (s *SkillService) ReadSkillContent(name string) (string, error) {
 	if name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
-		return "", fmt.Errorf("invalid skill name: %q", name)
+		return "", apperrors.Newf("SkillService.ReadSkillContent", "invalid skill name: %q", name)
 	}
 	path := filepath.Join(s.dir, name, "SKILL.md")
 	data, err := os.ReadFile(path)

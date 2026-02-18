@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -25,7 +24,7 @@ const taCols = `id, ack_key, title, description, assigned_to, requested_by,
 
 // Save 创建或更新 (UPSERT)。
 func (s *TaskAckStore) Save(ctx context.Context, a *TaskAck) (*TaskAck, error) {
-	metaJSON, _ := json.Marshal(a.Metadata)
+	metaJSON := mustMarshalJSON(a.Metadata)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO task_acks (ack_key, title, description, assigned_to, requested_by,
 		   priority, status, progress, ack_message, result_summary, metadata, due_at)

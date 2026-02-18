@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -133,7 +135,7 @@ func (m *AgentManager) findFreePort() (int, error) {
 		}
 	}
 
-	return 0, fmt.Errorf("runner: no free port found after %d attempts from %d, and fallback random port failed",
+	return 0, apperrors.Newf("AgentManager.findFreePort", "no free port found after %d attempts from %d, and fallback random port failed",
 		maxPortRetries, int(m.nextPort.Load())-maxPortRetries)
 }
 
@@ -152,7 +154,7 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 	m.mu.Lock()
 	if _, exists := m.agents[id]; exists {
 		m.mu.Unlock()
-		return fmt.Errorf("runner: agent %s already exists", id)
+		return apperrors.Newf("AgentManager.Launch", "agent %s already exists", id)
 	}
 
 	port, err := m.findFreePort()
@@ -192,37 +194,47 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 		}
 		m.mu.Unlock()
 		logger.Error("runner: launch failed", logger.FieldAgentID, id, logger.FieldPort, port, logger.FieldError, err)
-		return fmt.Errorf("runner: launch %s: %w", id, err)
+		return apperrors.Wrapf(err, "AgentManager.Launch", "launch %s", id)
 	}
 
 	logger.Infow("runner: agent launched", logger.FieldAgentID, id, logger.FieldPort, port)
 	return nil
 }
 
-// eventStateMap 声明式 事件类型→Agent 状态 映射。
-//
-// 新增事件→状态映射只需加一行，无需修改 handleEvent 逻辑。
-var eventStateMap = map[string]AgentState{
-	codex.EventTurnStarted:      StateThinking,
-	codex.EventIdle:             StateIdle,
-	codex.EventTurnComplete:     StateIdle,
-	codex.EventExecCommandBegin: StateRunning,
-	codex.EventError:            StateError,
-	codex.EventShutdownComplete: StateStopped,
-}
-
 // handleEvent 处理 Codex 事件 — 更新 Agent 状态并转发给 UI。
 func (m *AgentManager) handleEvent(proc *AgentProcess, event codex.Event) {
-	proc.mu.Lock()
-	if newState, ok := eventStateMap[event.Type]; ok {
-		logger.Debug("runner: state transition",
-			logger.FieldAgentID, proc.ID,
-			logger.FieldEventType, event.Type,
-			logger.FieldState, string(newState),
-		)
-		proc.State = newState
+	// 归一化事件以确定状态
+	normalized := uistate.NormalizeEvent(event.Type, "", event.Data)
+
+	var newState AgentState
+	switch normalized.UIStatus {
+	case uistate.UIStatusThinking:
+		newState = StateThinking
+	case uistate.UIStatusRunning:
+		newState = StateRunning
+	case uistate.UIStatusIdle:
+		newState = StateIdle
+	case uistate.UIStatusError:
+		newState = StateError
 	}
-	proc.mu.Unlock()
+
+	// 特殊状态处理
+	if event.Type == codex.EventShutdownComplete {
+		newState = StateStopped
+	}
+
+	if newState != "" {
+		proc.mu.Lock()
+		if proc.State != newState {
+			logger.Debug("runner: state transition",
+				logger.FieldAgentID, proc.ID,
+				logger.FieldEventType, event.Type,
+				logger.FieldState, string(newState),
+			)
+			proc.State = newState
+		}
+		proc.mu.Unlock()
+	}
 
 	m.mu.RLock()
 	handler := m.onEvent
@@ -263,14 +275,14 @@ func (m *AgentManager) Stop(id string) error {
 	proc, ok := m.agents[id]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("runner: agent %s not found", id)
+		return apperrors.Newf("AgentManager.Stop", "agent %s not found", id)
 	}
 	delete(m.agents, id)
 	m.mu.Unlock()
 
 	if err := proc.Client.Shutdown(); err != nil {
 		logger.Warn("runner: shutdown error", logger.FieldAgentID, id, logger.FieldError, err)
-		return fmt.Errorf("runner: stop %s: %w", id, err)
+		return apperrors.Wrapf(err, "AgentManager.Stop", "stop %s", id)
 	}
 
 	proc.mu.Lock()
@@ -332,7 +344,7 @@ func (m *AgentManager) get(id string) (*AgentProcess, error) {
 	proc, ok := m.agents[id]
 	m.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("runner: agent %s not found", id)
+		return nil, apperrors.Newf("AgentManager.get", "agent %s not found", id)
 	}
 	return proc, nil
 }

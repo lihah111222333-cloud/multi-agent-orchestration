@@ -21,6 +21,7 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -159,49 +160,54 @@ func (a *App) CallAPI(method, paramsJSON string) (resultJSON string, callErr err
 	}()
 
 	// UI 辅助方法 (不经过 apiserver)
+	var result any
+	var err error
+
 	switch method {
 	case "ui/selectProjectDir":
-		path := a.SelectProjectDir()
-		data, err := json.Marshal(map[string]string{"path": path})
-		if err != nil {
-			return "", fmt.Errorf("ui/selectProjectDir: marshal: %w", err)
-		}
-		return string(data), nil
+		result, err = a.handleUISelectProjectDir()
 	case "ui/selectFiles":
-		paths := a.SelectFiles()
-		data, err := json.Marshal(map[string]any{"paths": paths})
-		if err != nil {
-			return "", fmt.Errorf("ui/selectFiles: marshal: %w", err)
-		}
-		return string(data), nil
+		result, err = a.handleUISelectFiles()
 	case "ui/buildInfo":
-		data, err := json.Marshal(currentBuildInfo())
-		if err != nil {
-			return "", fmt.Errorf("ui/buildInfo: marshal: %w", err)
+		result, err = a.handleUIBuildInfo()
+	default:
+		// 通用 JSON-RPC 调用
+		var params json.RawMessage
+		if paramsJSON != "" {
+			params = json.RawMessage(paramsJSON)
+		} else {
+			params = json.RawMessage("{}")
 		}
-		return string(data), nil
+
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+
+		result, err = a.srv.InvokeMethod(ctx, method, params)
 	}
 
-	var params json.RawMessage
-	if paramsJSON != "" {
-		params = json.RawMessage(paramsJSON)
-	} else {
-		params = json.RawMessage("{}")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-
-	result, err := a.srv.InvokeMethod(ctx, method, params)
 	if err != nil {
 		return "", err
 	}
 
 	data, err := json.Marshal(result)
 	if err != nil {
-		return "", fmt.Errorf("marshal result: %w", err)
+		return "", apperrors.Wrap(err, "App.CallAPI", "marshal result")
 	}
 	return string(data), nil
+}
+
+func (a *App) handleUISelectProjectDir() (any, error) {
+	path := a.SelectProjectDir()
+	return map[string]string{"path": path}, nil
+}
+
+func (a *App) handleUISelectFiles() (any, error) {
+	paths := a.SelectFiles()
+	return map[string]any{"paths": paths}, nil
+}
+
+func (a *App) handleUIBuildInfo() (any, error) {
+	return currentBuildInfo(), nil
 }
 
 // ========================================
@@ -317,11 +323,11 @@ func (a *App) LaunchAgent(name, prompt, cwd string) (string, error) {
 		"cwd":   cwd,
 	})
 	if err != nil {
-		return "", fmt.Errorf("launch agent: marshal params: %w", err)
+		return "", apperrors.Wrap(err, "App.LaunchAgent", "marshal params")
 	}
 	result, err := a.srv.InvokeMethod(context.Background(), "thread/start", params)
 	if err != nil {
-		return "", fmt.Errorf("launch agent: %w", err)
+		return "", apperrors.Wrap(err, "App.LaunchAgent", "invoke thread/start")
 	}
 
 	resultMap := util.ToMapAny(result)
@@ -344,7 +350,7 @@ func (a *App) LaunchAgent(name, prompt, cwd string) (string, error) {
 
 	data, err := json.Marshal(resultMap)
 	if err != nil {
-		return "", fmt.Errorf("launch agent: marshal result: %w", err)
+		return "", apperrors.Wrap(err, "App.LaunchAgent", "marshal result")
 	}
 	return string(data), nil
 }
@@ -376,7 +382,7 @@ func (a *App) LaunchBatch(count int, cwd string) error {
 			name = fmt.Sprintf("%s-%d", a.group, i)
 		}
 		if _, err := a.LaunchAgent(name, "", cwd); err != nil {
-			return fmt.Errorf("launch %s: %w", name, err)
+			return apperrors.Wrapf(err, "App.LaunchBatch", "launch %s", name)
 		}
 	}
 	return nil
@@ -417,7 +423,7 @@ func (a *App) StopAgent(id string) error {
 	case err := <-done:
 		return err
 	case <-time.After(3 * time.Second):
-		return fmt.Errorf("stop %s: timeout", id)
+		return apperrors.Newf("App.StopAgent", "stop %s: timeout", id)
 	}
 }
 
@@ -486,18 +492,18 @@ func (a *App) SaveClipboardImage(base64Data string) (string, error) {
 		// 尝试 RawStdEncoding (无 padding)
 		data, err = base64.RawStdEncoding.DecodeString(base64Data)
 		if err != nil {
-			return "", fmt.Errorf("decode base64: %w", err)
+			return "", apperrors.Wrap(err, "App.SaveClipboardImage", "decode base64")
 		}
 	}
 
 	tmpFile, err := os.CreateTemp("", "clipboard-*.png")
 	if err != nil {
-		return "", fmt.Errorf("create temp file: %w", err)
+		return "", apperrors.Wrap(err, "App.SaveClipboardImage", "create temp file")
 	}
 	defer tmpFile.Close()
 
 	if _, err := tmpFile.Write(data); err != nil {
-		return "", fmt.Errorf("write temp file: %w", err)
+		return "", apperrors.Wrap(err, "App.SaveClipboardImage", "write temp file")
 	}
 
 	logger.Info("ui: saved clipboard image", logger.FieldSource, "ui",
@@ -513,7 +519,7 @@ func (a *App) SaveClipboardImage(base64Data string) (string, error) {
 func (a *App) OpenNewWindow(group string, n int) error {
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("get executable: %w", err)
+		return apperrors.Wrap(err, "App.OpenNewWindow", "get executable")
 	}
 	args := []string{}
 	if group != "" {

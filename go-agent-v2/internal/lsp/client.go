@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
@@ -69,11 +70,11 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 	var err error
 	c.stdin, err = c.cmd.StdinPipe()
 	if err != nil {
-		return fmt.Errorf("lsp: stdin pipe: %w", err)
+		return apperrors.Wrap(err, "LSP.Start", "stdin pipe")
 	}
 	stdoutPipe, err := c.cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("lsp: stdout pipe: %w", err)
+		return apperrors.Wrap(err, "LSP.Start", "stdout pipe")
 	}
 	c.stdout = bufio.NewReaderSize(stdoutPipe, 256*1024)
 	c.stderr, err = c.cmd.StderrPipe()
@@ -82,7 +83,7 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 	}
 
 	if err := c.cmd.Start(); err != nil {
-		return fmt.Errorf("lsp: start %s: %w", command, err)
+		return apperrors.Wrapf(err, "LSP.Start", "start %s", command)
 	}
 
 	logger.Infow("lsp: process started",
@@ -119,13 +120,13 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 	var initResult InitializeResult
 	if err := c.call("initialize", initParams, &initResult); err != nil {
 		_ = c.Stop()
-		return fmt.Errorf("lsp: initialize: %w", err)
+		return apperrors.Wrap(err, "LSP.Start", "initialize")
 	}
 
 	// initialized 通知 (无响应)
 	if err := c.notify("initialized", struct{}{}); err != nil {
 		_ = c.Stop()
-		return fmt.Errorf("lsp: initialized notify: %w", err)
+		return apperrors.Wrap(err, "LSP.Start", "initialized notify")
 	}
 
 	logger.Infow("lsp: initialize handshake complete", logger.FieldLanguage, c.language)
@@ -235,10 +236,10 @@ func (c *Client) call(method string, params any, result any) error {
 	select {
 	case resp, ok := <-ch:
 		if !ok {
-			return fmt.Errorf("lsp: connection closed while waiting for %s", method)
+			return apperrors.Newf("LSP.call", "connection closed while waiting for %s", method)
 		}
 		if resp.Error != nil {
-			return fmt.Errorf("lsp: %s error %d: %s", method, resp.Error.Code, resp.Error.Message)
+			return apperrors.Newf("LSP.call", "%s error %d: %s", method, resp.Error.Code, resp.Error.Message)
 		}
 		if result != nil && resp.Result != nil {
 			return json.Unmarshal(resp.Result, result)
@@ -246,7 +247,7 @@ func (c *Client) call(method string, params any, result any) error {
 		return nil
 	case <-time.After(30 * time.Second):
 		logger.Warn("lsp: call timeout", logger.FieldMethod, method, logger.FieldLanguage, c.language)
-		return fmt.Errorf("lsp: %s timeout (30s)", method)
+		return apperrors.Newf("LSP.call", "%s timeout (30s)", method)
 	}
 }
 
@@ -361,7 +362,7 @@ func (c *Client) readFrame() ([]byte, error) {
 		}
 	}
 	if contentLen <= 0 {
-		return nil, fmt.Errorf("lsp: invalid Content-Length: %d", contentLen)
+		return nil, apperrors.Newf("LSP.readFrame", "invalid Content-Length: %d", contentLen)
 	}
 
 	body := make([]byte, contentLen)

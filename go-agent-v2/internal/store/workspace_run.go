@@ -3,7 +3,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -24,7 +23,7 @@ const workspaceRunFileCols = `id, run_key, relative_path, baseline_sha256, works
 
 // SaveRun 创建或更新 run。
 func (s *WorkspaceRunStore) SaveRun(ctx context.Context, run *WorkspaceRun) (*WorkspaceRun, error) {
-	metaJSON, _ := json.Marshal(run.Metadata)
+	metaJSON := mustMarshalJSON(run.Metadata)
 	rows, err := s.pool.Query(ctx, `
 		INSERT INTO workspace_runs (
 			run_key, dag_key, source_root, workspace_path, status,
@@ -83,7 +82,7 @@ func (s *WorkspaceRunStore) ListRuns(ctx context.Context, status, dagKey string,
 
 // UpdateRunStatus 更新 run 状态与 metadata。
 func (s *WorkspaceRunStore) UpdateRunStatus(ctx context.Context, runKey, status, updatedBy string, metadata any) (*WorkspaceRun, error) {
-	metaJSON, _ := json.Marshal(metadata)
+	metaJSON := mustMarshalJSON(metadata)
 	rows, err := s.pool.Query(ctx, `
 		UPDATE workspace_runs
 		SET status = $1,
@@ -107,7 +106,7 @@ func (s *WorkspaceRunStore) TryTransitionRunStatus(
 	runKey, fromStatus, toStatus, updatedBy string,
 	metadata any,
 ) (*WorkspaceRun, bool, error) {
-	metaJSON, _ := json.Marshal(metadata)
+	metaJSON := mustMarshalJSON(metadata)
 	rows, err := s.pool.Query(ctx, `
 		UPDATE workspace_runs
 		SET status = $1,

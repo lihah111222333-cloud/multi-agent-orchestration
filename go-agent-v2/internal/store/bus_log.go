@@ -3,7 +3,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -18,7 +17,7 @@ func NewBusLogStore(pool *pgxpool.Pool) *BusLogStore { return &BusLogStore{NewBa
 
 // Record 记录异常 (写入失败仅 debug 日志，不影响主流程)。
 func (s *BusLogStore) Record(ctx context.Context, e *BusException) error {
-	extraJSON, _ := json.Marshal(e.Extra)
+	extraJSON := mustMarshalJSON(e.Extra)
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO bus_exception_logs (ts, category, severity, source, tool_name, message, traceback, extra)
 		 VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7::jsonb)`,

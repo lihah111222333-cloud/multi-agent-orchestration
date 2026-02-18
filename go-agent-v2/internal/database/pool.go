@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multi-agent/go-agent-v2/internal/config"
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -20,12 +21,12 @@ import (
 // 对应 Python db/postgres.py 的 _init_pool。
 func NewPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 	if cfg.PostgresConnStr == "" {
-		return nil, fmt.Errorf("POSTGRES_CONNECTION_STRING is required")
+		return nil, apperrors.New("NewPool", "POSTGRES_CONNECTION_STRING is required")
 	}
 
 	poolCfg, err := pgxpool.ParseConfig(cfg.PostgresConnStr)
 	if err != nil {
-		return nil, fmt.Errorf("parse postgres config: %w", err)
+		return nil, apperrors.Wrap(err, "NewPool", "parse postgres config")
 	}
 
 	poolCfg.MinConns = safeInt32(cfg.PostgresPoolMinSize, "PostgresPoolMinSize")
@@ -42,13 +43,13 @@ func NewPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
-		return nil, fmt.Errorf("create pool: %w", err)
+		return nil, apperrors.Wrap(err, "NewPool", "create pool")
 	}
 
 	// 验证连接
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("ping postgres: %w", err)
+		return nil, apperrors.Wrap(err, "NewPool", "ping postgres")
 	}
 
 	logger.Infow("postgres pool created",

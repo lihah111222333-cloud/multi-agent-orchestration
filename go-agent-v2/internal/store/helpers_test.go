@@ -1,8 +1,8 @@
-// helpers_test.go — QueryBuilder 表驱动测试。
-// 无 Python 直接对应 (Python 用动态 SQL 拼接，Go 用 QueryBuilder 封装相同逻辑)。
+// helpers_test.go — QueryBuilder + mustMarshalJSON 表驱动测试。
 package store
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -123,4 +123,70 @@ func TestQueryBuilderBuild(t *testing.T) {
 			t.Errorf("expected params [active, 10], got %v", params)
 		}
 	})
+}
+
+// TestMustMarshalJSON 验证 mustMarshalJSON 对各种输入的安全序列化行为。
+func TestMustMarshalJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    any
+		wantJSON string // 期望 json.Valid 且值相等
+	}{
+		{
+			name:     "normal_map",
+			input:    map[string]any{"key": "value", "n": 42},
+			wantJSON: `{"key":"value","n":42}`,
+		},
+		{
+			name:     "nil_input",
+			input:    nil,
+			wantJSON: `null`,
+		},
+		{
+			name:     "string_slice",
+			input:    []string{"a", "b"},
+			wantJSON: `["a","b"]`,
+		},
+		{
+			name:     "empty_map",
+			input:    map[string]any{},
+			wantJSON: `{}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mustMarshalJSON(tt.input)
+
+			if !json.Valid(got) {
+				t.Fatalf("mustMarshalJSON returned invalid JSON: %q", got)
+			}
+
+			// 比较反序列化后的值 (忽略 key 顺序)
+			var gotVal, wantVal any
+			if err := json.Unmarshal(got, &gotVal); err != nil {
+				t.Fatalf("unmarshal got: %v", err)
+			}
+			if err := json.Unmarshal([]byte(tt.wantJSON), &wantVal); err != nil {
+				t.Fatalf("unmarshal want: %v", err)
+			}
+
+			gotRe, _ := json.Marshal(gotVal)
+			wantRe, _ := json.Marshal(wantVal)
+			if string(gotRe) != string(wantRe) {
+				t.Errorf("mustMarshalJSON(%v) = %s, want %s", tt.input, got, tt.wantJSON)
+			}
+		})
+	}
+}
+
+// TestMustMarshalJSON_Unmarshalable 验证不可序列化输入回退为 "{}"。
+func TestMustMarshalJSON_Unmarshalable(t *testing.T) {
+	// chan 不可 JSON 序列化
+	ch := make(chan int)
+	got := mustMarshalJSON(ch)
+
+	if string(got) != "{}" {
+		t.Errorf("mustMarshalJSON(chan) = %s, want {}", got)
+	}
 }

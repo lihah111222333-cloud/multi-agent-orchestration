@@ -320,15 +320,6 @@ func (b *MessageBus) Seq() int64 {
 //   - filter "agent.a0" 匹配 "agent.a0", "agent.a0.output", "agent.a0.xxx"
 //   - filter "system" 匹配 "system", "system.health"
 func matchTopic(filter, topic string) bool {
-	if filter == TopicAll {
-		return true
-	}
-	if topic == filter {
-		return true
-	}
-	// 前缀匹配: filter="agent.a0" 匹配 topic="agent.a0.output"
-	if len(topic) > len(filter) && topic[:len(filter)] == filter && topic[len(filter)] == '.' {
-		return true
-	}
-	return false
+	return filter == TopicAll || topic == filter ||
+		(len(topic) > len(filter) && topic[:len(filter)] == filter && topic[len(filter)] == '.')
 }

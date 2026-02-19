@@ -809,6 +809,45 @@ a,
   background: rgba(56, 189, 248, 0.1);
 }
 
+.unified-chat-page .thread-rail-pin-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.88);
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
+}
+
+.unified-chat-page .thread-rail-pin-btn svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
+.unified-chat-page .thread-rail-pin-btn:hover {
+  border-color: rgba(56, 189, 248, 0.55);
+  color: var(--text-sec);
+  background: rgba(17, 33, 58, 0.92);
+}
+
+.unified-chat-page .thread-rail-pin-btn.active {
+  border-color: rgba(56, 189, 248, 0.78);
+  color: var(--primary);
+  background: rgba(56, 189, 248, 0.16);
+}
+
+.unified-chat-page .thread-rail-pin-btn:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+}
+
 .unified-chat-page .thread-rail-rename-btn {
   flex-shrink: 0;
   border: 1px solid rgba(148, 163, 184, 0.32);
@@ -2117,6 +2156,62 @@ a,
 .composer-token-chip.loading {
   border-color: rgba(56, 189, 248, 0.55);
   color: var(--text);
+}
+
+.composer-skill-hints {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.composer-skill-hints-label {
+  color: var(--text-subtle);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.composer-skill-hints-pending {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.composer-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(520px, 100%);
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.9);
+  color: var(--text-sec);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.composer-skill-chip.trigger {
+  border-color: rgba(56, 189, 248, 0.46);
+  color: #cfefff;
+}
+
+.composer-skill-chip.force {
+  border-color: rgba(248, 113, 113, 0.54);
+  color: #ffd4d4;
+}
+
+.composer-skill-chip-name {
+  color: var(--text);
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.composer-skill-chip-reason {
+  color: inherit;
+  opacity: 0.9;
+  word-break: break-all;
 }
 
 .chat-input-row-vue textarea,

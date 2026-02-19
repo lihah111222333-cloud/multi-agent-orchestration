@@ -238,6 +238,7 @@ export const AppRoot = {
       tasksItems,
       tasksFields,
       refreshBuildInfo,
+      refreshDashboardByPage,
       runCommandCard,
       runPromptTemplate,
     };

@@ -43,7 +43,13 @@
             SubmitWithFiles: async function (agentId, prompt, images, files) {
                 const input = [{ type: 'text', text: prompt }];
                 if (images) images.forEach(p => input.push({ type: 'localImage', path: p }));
-                if (files) files.forEach(p => input.push({ type: 'fileContent', path: p }));
+                if (files) files.forEach(p => {
+                    const value = (p || '').toString().trim();
+                    if (!value) return;
+                    const parts = value.split(/[\\/]/);
+                    const name = parts[parts.length - 1] || value;
+                    input.push({ type: 'mention', name, path: value });
+                });
                 await rpcCall('turn/start', { threadId: agentId, input: input });
             },
             SelectProjectDir: async function () {

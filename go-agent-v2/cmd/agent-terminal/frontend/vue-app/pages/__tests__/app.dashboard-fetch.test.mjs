@@ -15,3 +15,9 @@ test('app dashboard fetch uses ui/dashboard/get aggregate endpoint', async () =>
   assert.equal(src.includes("callAPI('dashboard/prompts'"), false);
   assert.equal(src.includes("callAPI('dashboard/sharedFiles'"), false);
 });
+
+test('app exposes refreshDashboardByPage for child refresh events', async () => {
+  const src = await fs.readFile(APP_JS_PATH, 'utf8');
+  assert.equal(src.includes('@refresh-skills="refreshDashboardByPage(\'skills\')"'), true);
+  assert.equal(src.includes('refreshDashboardByPage,'), true);
+});

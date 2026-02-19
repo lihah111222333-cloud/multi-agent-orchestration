@@ -195,8 +195,32 @@ export async function selectProjectDirs() {
 export async function selectFiles() {
   // Attachment file chooser must be handled by Go/Wails native dialog.
   logInfo('ui', 'selectFiles.start', {});
-  const values = await callByID(METHOD_IDS.SELECT_FILES);
-  const files = Array.isArray(values) ? values : [];
+  const normalize = (raw) => {
+    if (Array.isArray(raw)) return raw;
+    if (raw && typeof raw === 'object' && Array.isArray(raw.paths)) return raw.paths;
+    return null;
+  };
+
+  try {
+    const values = await callByID(METHOD_IDS.SELECT_FILES);
+    const files = normalize(values);
+    if (files != null) {
+      logInfo('ui', 'selectFiles.done', {
+        count: files.length,
+        first: files[0] || '',
+      });
+      return files;
+    }
+    logWarn('ui', 'selectFiles.unexpectedShape', {
+      type: typeof values,
+      is_array: Array.isArray(values),
+    });
+  } catch (error) {
+    logWarn('ui', 'selectFiles.byId.failed', { error });
+  }
+
+  const raw = await callAPI('ui/selectFiles', {});
+  const files = normalize(raw) || [];
   logInfo('ui', 'selectFiles.done', {
     count: files.length,
     first: files[0] || '',

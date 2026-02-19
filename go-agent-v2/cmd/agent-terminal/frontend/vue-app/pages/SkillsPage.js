@@ -309,15 +309,29 @@ export const SkillsPage = {
       }
     }
 
-    async function loadThreadSkills() {
-      const threadId = (selectedThreadId.value || '').trim();
+    async function loadThreadSkills(options = {}) {
+      const silent = Boolean(options?.silent);
+      let threadId = (selectedThreadId.value || '').trim();
+      if (!threadId) {
+        const active = (activeThreadId.value || '').trim();
+        if (active) {
+          selectedThreadId.value = active;
+          threadId = active;
+        }
+      }
       if (!threadId) {
         threadSkills.value = [];
+        if (!silent) {
+          setNotice('info', '请先选择会话，再刷新绑定');
+        }
         return;
       }
       try {
         const raw = await callAPI('skills/config/read', { agent_id: threadId });
         threadSkills.value = Array.isArray(raw?.skills) ? raw.skills : [];
+        if (!silent) {
+          setNotice('success', `会话绑定已刷新（${threadSkills.value.length} 个技能）`);
+        }
       } catch (error) {
         logWarn('skills', 'threadSkills.load.failed', { thread_id: threadId, error });
         setNotice('error', `读取会话技能失败：${error?.message || error}`);
@@ -382,7 +396,7 @@ export const SkillsPage = {
     }, { immediate: true });
 
     watch(selectedThreadId, () => {
-      loadThreadSkills().catch(() => { });
+      loadThreadSkills({ silent: true }).catch(() => { });
     }, { immediate: true });
 
     watch(skillCards, (nextCards) => {

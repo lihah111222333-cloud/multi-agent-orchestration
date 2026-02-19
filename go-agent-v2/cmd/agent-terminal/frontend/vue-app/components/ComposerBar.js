@@ -11,6 +11,8 @@ export const ComposerBar = {
     compacting: { type: Boolean, default: false },
     tokenInline: { type: String, default: '' },
     tokenTooltip: { type: String, default: '' },
+    skillMatches: { type: Array, default: () => [] },
+    skillMatchesLoading: { type: Boolean, default: false },
   },
   emits: ['send', 'interrupt', 'compact'],
   setup(props, { emit }) {
@@ -209,6 +211,31 @@ export const ComposerBar = {
       props.composer.removeAttachment(index);
     }
 
+    function normalizeSkillMatchType(match) {
+      const type = (match?.matchedBy || '').toString().trim().toLowerCase();
+      return type === 'force' ? 'force' : 'trigger';
+    }
+
+    function skillMatchClass(match) {
+      return normalizeSkillMatchType(match);
+    }
+
+    function skillMatchReason(match) {
+      const type = normalizeSkillMatchType(match);
+      const typeLabel = type === 'force' ? '强制词' : '触发词';
+      const terms = Array.isArray(match?.matchedTerms)
+        ? match.matchedTerms.map((item) => (item || '').toString().trim()).filter(Boolean)
+        : [];
+      if (terms.length === 0) return typeLabel;
+      return `${typeLabel}: ${terms.join(' / ')}`;
+    }
+
+    function skillMatchKey(match, index) {
+      const name = (match?.name || '').toString().trim();
+      const reason = skillMatchReason(match);
+      return `${name}|${reason}|${index}`;
+    }
+
     watch(
       () => props.threadId,
       (next, prev) => {
@@ -255,6 +282,9 @@ export const ComposerBar = {
       onCompact,
       onAttach,
       onRemoveAttachment,
+      skillMatchClass,
+      skillMatchReason,
+      skillMatchKey,
     };
   },
   template: `
@@ -333,6 +363,31 @@ export const ComposerBar = {
             </svg>
           </button>
         </div>
+      </div>
+
+      <div
+        v-if="skillMatchesLoading || skillMatches.length > 0"
+        class="composer-skill-hints"
+        role="status"
+        aria-live="polite"
+      >
+        <span class="composer-skill-hints-label">
+          {{ skillMatchesLoading ? '技能匹配中…' : '将自动触发技能' }}
+        </span>
+        <span
+          v-if="skillMatchesLoading && skillMatches.length === 0"
+          class="composer-skill-hints-pending"
+        >请稍候…</span>
+        <span
+          v-for="(match, index) in skillMatches"
+          :key="skillMatchKey(match, index)"
+          class="composer-skill-chip"
+          :class="skillMatchClass(match)"
+          :title="skillMatchReason(match)"
+        >
+          <span class="composer-skill-chip-name">{{ match.name }}</span>
+          <span class="composer-skill-chip-reason">{{ skillMatchReason(match) }}</span>
+        </span>
       </div>
     </div>
   `,

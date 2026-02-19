@@ -11,8 +11,8 @@ import { ChatTimeline } from '../components/ChatTimeline.js';
 import { DiffPanel } from '../components/DiffPanel.js';
 import { ComposerBar } from '../components/ComposerBar.js';
 import { normalizeStatus } from '../services/status.js';
-import { copyTextToClipboard, resolveThreadIdentity } from '../services/api.js';
-import { logInfo, logWarn } from '../services/log.js';
+import { callAPI, copyTextToClipboard, resolveThreadIdentity } from '../services/api.js';
+import { logDebug, logInfo, logWarn } from '../services/log.js';
 import { useComposerStore } from '../stores/composer.js';
 
 export async function requestHistoryLoad(threadStore, threadId, options = {}) {
@@ -52,6 +52,13 @@ export const UnifiedChatPage = {
   setup(props) {
     const composer = useComposerStore();
     const composerBarRef = ref(null);
+    const composerSkillMatches = ref([]);
+    const composerSkillPreviewLoading = ref(false);
+    let composerSkillPreviewTimer = 0;
+    let composerSkillPreviewSeq = 0;
+    let composerSkillPreviewQueued = null;
+    let composerSkillPreviewLastSignature = '';
+    let composerSkillPreviewLastWarnAt = 0;
     const workspaceRef = ref(null);
     const dragging = ref(false);
     const copyState = ref('idle');
@@ -283,13 +290,14 @@ export const UnifiedChatPage = {
 
     function onGlobalEscape(event) {
       if ((event?.key || '') !== 'Escape') return;
-      if (event?.defaultPrevented || event?.repeat) return;
+      if (event?.repeat) return;
       if (!selectedThreadId.value) return;
       if (!canInterrupt.value) return;
       if (isStatusTimerModalPaused.value) return;
       const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
       if (isEditableElement(event?.target) || isEditableElement(activeEl)) return;
-      composerBarRef.value?.onEscape?.(event);
+      if (typeof event?.preventDefault === 'function') event.preventDefault();
+      stopSelected();
     }
 
     function distanceFromBottom(el) {
@@ -311,6 +319,141 @@ export const UnifiedChatPage = {
         if (!force && !shouldAutoScroll.value) return;
         el.scrollTop = el.scrollHeight;
       });
+    }
+
+    function clearComposerSkillPreviewTimer() {
+      if (!composerSkillPreviewTimer) return;
+      window.clearTimeout(composerSkillPreviewTimer);
+      composerSkillPreviewTimer = 0;
+    }
+
+    function normalizeSkillPreviewMatches(rawMatches) {
+      if (!Array.isArray(rawMatches)) return [];
+      const deduped = [];
+      const seenNames = new Set();
+      rawMatches.forEach((raw) => {
+        const name = (raw?.name || raw?.skill || '').toString().trim();
+        if (!name) return;
+        const lowerName = name.toLowerCase();
+        if (seenNames.has(lowerName)) return;
+        seenNames.add(lowerName);
+        const matchedByRaw = (raw?.matched_by || raw?.matchedBy || '').toString().trim().toLowerCase();
+        const matchedBy = matchedByRaw === 'force' ? 'force' : 'trigger';
+        const sourceTerms = Array.isArray(raw?.matched_terms)
+          ? raw.matched_terms
+          : (Array.isArray(raw?.matchedTerms) ? raw.matchedTerms : []);
+        const terms = [];
+        const seenTerms = new Set();
+        sourceTerms.forEach((rawTerm) => {
+          const term = (rawTerm || '').toString().trim();
+          if (!term) return;
+          const lowerTerm = term.toLowerCase();
+          if (seenTerms.has(lowerTerm)) return;
+          seenTerms.add(lowerTerm);
+          terms.push(term);
+        });
+        deduped.push({
+          name,
+          matchedBy,
+          matchedTerms: terms,
+        });
+      });
+      return deduped;
+    }
+
+    function buildSkillPreviewSignature(matches) {
+      if (!Array.isArray(matches) || matches.length === 0) return '';
+      return matches
+        .map((item) => {
+          const name = (item?.name || '').toString().trim().toLowerCase();
+          const type = (item?.matchedBy || '').toString().trim().toLowerCase();
+          const terms = Array.isArray(item?.matchedTerms)
+            ? item.matchedTerms.map((term) => (term || '').toString().trim().toLowerCase()).filter(Boolean).join('|')
+            : '';
+          return `${name}:${type}:${terms}`;
+        })
+        .join(';');
+    }
+
+    function maybeWarnSkillPreviewFailure(meta) {
+      const now = Date.now();
+      if (now - composerSkillPreviewLastWarnAt < 2000) return;
+      composerSkillPreviewLastWarnAt = now;
+      logWarn('ui', 'chat.skillPreview.failed', meta);
+    }
+
+    function runQueuedComposerSkillPreviewIfNeeded() {
+      if (!composerSkillPreviewQueued || composerSkillPreviewLoading.value) return;
+      const queued = composerSkillPreviewQueued;
+      composerSkillPreviewQueued = null;
+      if (queued.requestSeq !== composerSkillPreviewSeq) return;
+      runComposerSkillPreview(queued.requestSeq, queued.threadId, queued.text).catch(() => { });
+    }
+
+    async function runComposerSkillPreview(requestSeq, threadId, text) {
+      const startedAt = Date.now();
+      composerSkillPreviewLoading.value = true;
+      try {
+        const raw = await callAPI('skills/match/preview', {
+          threadId,
+          text,
+        });
+        if (requestSeq !== composerSkillPreviewSeq) return;
+        const matches = normalizeSkillPreviewMatches(raw?.matches);
+        composerSkillMatches.value = matches;
+        const signature = buildSkillPreviewSignature(matches);
+        if (signature !== composerSkillPreviewLastSignature) {
+          composerSkillPreviewLastSignature = signature;
+          logDebug('ui', 'chat.skillPreview.done', {
+            thread_id: threadId,
+            text_len: text.length,
+            matches: matches.length,
+            duration_ms: Date.now() - startedAt,
+          });
+        }
+      } catch (error) {
+        if (requestSeq !== composerSkillPreviewSeq) return;
+        composerSkillMatches.value = [];
+        composerSkillPreviewLastSignature = '';
+        maybeWarnSkillPreviewFailure({
+          thread_id: threadId,
+          text_len: text.length,
+          error,
+          duration_ms: Date.now() - startedAt,
+        });
+      } finally {
+        if (requestSeq === composerSkillPreviewSeq) {
+          composerSkillPreviewLoading.value = false;
+        }
+        runQueuedComposerSkillPreviewIfNeeded();
+      }
+    }
+
+    function requestComposerSkillPreview(threadId, text) {
+      const requestSeq = ++composerSkillPreviewSeq;
+      if (composerSkillPreviewLoading.value) {
+        composerSkillPreviewQueued = { requestSeq, threadId, text };
+        return;
+      }
+      runComposerSkillPreview(requestSeq, threadId, text).catch(() => { });
+    }
+
+    function scheduleComposerSkillPreview() {
+      clearComposerSkillPreviewTimer();
+      const threadId = (selectedThreadId.value || '').toString().trim();
+      const text = (composer.state.text || '').toString().trim();
+      if (!threadId || !text) {
+        composerSkillPreviewSeq += 1;
+        composerSkillPreviewQueued = null;
+        composerSkillPreviewLastSignature = '';
+        composerSkillMatches.value = [];
+        composerSkillPreviewLoading.value = false;
+        return;
+      }
+      composerSkillPreviewTimer = window.setTimeout(() => {
+        composerSkillPreviewTimer = 0;
+        requestComposerSkillPreview(threadId, text);
+      }, 240);
     }
 
     let _lastStatsKey = '';
@@ -405,6 +548,14 @@ export const UnifiedChatPage = {
         if (!shouldAutoScroll.value) return;
         scheduleScrollToBottom(true);
       },
+    );
+
+    watch(
+      [() => selectedThreadId.value, () => composer.state.text],
+      () => {
+        scheduleComposerSkillPreview();
+      },
+      { immediate: true },
     );
 
     watch(
@@ -866,12 +1017,15 @@ export const UnifiedChatPage = {
     }
 
     onMounted(() => {
-      window.addEventListener('keydown', onGlobalEscape);
+      window.addEventListener('keydown', onGlobalEscape, true);
     });
 
     onBeforeUnmount(() => {
-      window.removeEventListener('keydown', onGlobalEscape);
+      window.removeEventListener('keydown', onGlobalEscape, true);
       dragging.value = false;
+      clearComposerSkillPreviewTimer();
+      composerSkillPreviewSeq += 1;
+      composerSkillPreviewQueued = null;
       if (scrollTimer) {
         cancelAnimationFrame(scrollTimer);
         scrollTimer = 0;
@@ -915,6 +1069,8 @@ export const UnifiedChatPage = {
       stats,
       recentThreads,
       cmdCards,
+      composerSkillMatches,
+      composerSkillPreviewLoading,
       dragging,
       composerBarRef,
       workspaceRef,
@@ -1206,6 +1362,8 @@ export const UnifiedChatPage = {
                 :token-inline="activeTokenInline"
                 :token-tooltip="activeTokenTooltip"
                 :disabled="noActiveThread"
+                :skill-matches="composerSkillMatches"
+                :skill-matches-loading="composerSkillPreviewLoading"
                 @send="send"
                 @interrupt="interruptCurrent"
                 @compact="compactCurrent"

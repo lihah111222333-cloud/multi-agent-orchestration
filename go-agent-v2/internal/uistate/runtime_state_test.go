@@ -238,6 +238,31 @@ func TestExtractUserAttachmentsFromPayload_LocalImagePrefersURL(t *testing.T) {
 	}
 }
 
+func TestExtractUserAttachmentsFromPayload_FileContentWithoutPath(t *testing.T) {
+	payload := map[string]any{
+		"input": []any{
+			map[string]any{
+				"type":    "fileContent",
+				"name":    "L1记忆系统.md",
+				"content": "# 标题\n正文",
+			},
+		},
+	}
+	attachments := extractUserAttachmentsFromPayload(payload)
+	if len(attachments) != 1 {
+		t.Fatalf("len(attachments) = %d, want 1", len(attachments))
+	}
+	if attachments[0].Kind != "file" {
+		t.Fatalf("kind = %q, want file", attachments[0].Kind)
+	}
+	if attachments[0].Name != "L1记忆系统.md" {
+		t.Fatalf("name = %q, want L1记忆系统.md", attachments[0].Name)
+	}
+	if attachments[0].Path != "" {
+		t.Fatalf("path = %q, want empty", attachments[0].Path)
+	}
+}
+
 func mustRawJSON(raw string) []byte {
 	return []byte(raw)
 }
@@ -520,6 +545,39 @@ func TestTokenUsageUpdatesFromThreadTokenUsageShape(t *testing.T) {
 	}
 	if usage.ContextWindowTokens != 200000 {
 		t.Fatalf("context window tokens = %d, want 200000", usage.ContextWindowTokens)
+	}
+}
+
+func TestTokenUsagePrefersThreadLastUsageOverThreadTotalUsage(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-token-last-preferred"
+
+	event := NormalizeEvent(
+		"token_count",
+		"thread/tokenUsage/updated",
+		mustRawJSON(`{"tokenUsage":{"total":{"totalTokens":40900000},"last":{"totalTokens":119000},"modelContextWindow":258000}}`),
+	)
+	mgr.ApplyAgentEvent(threadID, event, map[string]any{
+		"tokenUsage": map[string]any{
+			"total": map[string]any{
+				"totalTokens": 40900000,
+			},
+			"last": map[string]any{
+				"totalTokens": 119000,
+			},
+			"modelContextWindow": 258000,
+		},
+	})
+
+	usage := mgr.Snapshot().TokenUsageByThread[threadID]
+	if usage.UsedTokens != 119000 {
+		t.Fatalf("used tokens = %d, want 119000", usage.UsedTokens)
+	}
+	if usage.ContextWindowTokens != 258000 {
+		t.Fatalf("context window tokens = %d, want 258000", usage.ContextWindowTokens)
+	}
+	if math.Abs(usage.UsedPercent-46.124031) > 0.01 {
+		t.Fatalf("used percent = %f, want around 46.12", usage.UsedPercent)
 	}
 }
 

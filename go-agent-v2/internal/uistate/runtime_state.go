@@ -569,13 +569,28 @@ func extractUserAttachmentsFromPayload(payload map[string]any) []TimelineAttachm
 		case "mention", "filecontent":
 			path := extractFirstString(item, "path")
 			path = strings.TrimSpace(path)
-			if path == "" {
+			if path != "" {
+				attachments = append(attachments, TimelineAttachment{
+					Kind: "file",
+					Name: attachmentName(path),
+					Path: path,
+				})
 				continue
+			}
+			if kind != "filecontent" {
+				continue
+			}
+			content := strings.TrimSpace(extractFirstString(item, "content"))
+			if content == "" {
+				continue
+			}
+			name := strings.TrimSpace(extractFirstString(item, "name"))
+			if name == "" {
+				name = "inline-file"
 			}
 			attachments = append(attachments, TimelineAttachment{
 				Kind: "file",
-				Name: attachmentName(path),
-				Path: path,
+				Name: name,
 			})
 		}
 	}
@@ -2140,6 +2155,13 @@ func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[str
 	limit := next.ContextWindowTokens
 
 	if total, ok := extractFirstIntByPaths(payload,
+		[]string{"tokenUsage", "last", "totalTokens"},
+		[]string{"tokenUsage", "last", "total_tokens"},
+		[]string{"usage", "last", "totalTokens"},
+		[]string{"usage", "last", "total_tokens"},
+	); ok {
+		next.UsedTokens = max(0, total)
+	} else if total, ok := extractFirstIntByPaths(payload,
 		[]string{"tokenUsage", "total", "totalTokens"},
 		[]string{"tokenUsage", "total", "total_tokens"},
 		[]string{"usage", "total", "totalTokens"},
@@ -2177,6 +2199,10 @@ func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[str
 		next.UsedTokens = max(0, total)
 	} else {
 		input, hasInput := extractFirstIntByPaths(payload,
+			[]string{"tokenUsage", "last", "inputTokens"},
+			[]string{"tokenUsage", "last", "input_tokens"},
+			[]string{"usage", "last", "inputTokens"},
+			[]string{"usage", "last", "input_tokens"},
 			[]string{"tokenUsage", "total", "inputTokens"},
 			[]string{"tokenUsage", "total", "input_tokens"},
 			[]string{"usage", "total", "inputTokens"},
@@ -2201,6 +2227,10 @@ func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[str
 			input, hasInput = extractFirstIntDeep(payload, "input", "input_tokens", "inputTokens", "prompt_tokens")
 		}
 		output, hasOutput := extractFirstIntByPaths(payload,
+			[]string{"tokenUsage", "last", "outputTokens"},
+			[]string{"tokenUsage", "last", "output_tokens"},
+			[]string{"usage", "last", "outputTokens"},
+			[]string{"usage", "last", "output_tokens"},
 			[]string{"tokenUsage", "total", "outputTokens"},
 			[]string{"tokenUsage", "total", "output_tokens"},
 			[]string{"usage", "total", "outputTokens"},

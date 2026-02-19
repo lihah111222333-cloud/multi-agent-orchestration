@@ -9,8 +9,10 @@ test('ComposerBar exposes token chip props for bottom-right usage display', asyn
 
   assert.equal(src.includes("tokenInline: { type: String, default: '' }"), true);
   assert.equal(src.includes("tokenTooltip: { type: String, default: '' }"), true);
+  assert.equal(src.includes("compacting: { type: Boolean, default: false }"), true);
   assert.equal(src.includes("emits: ['send', 'interrupt', 'compact']"), true);
   assert.equal(src.includes('composer-compact-btn'), true);
   assert.equal(src.includes('composer-token-chip'), true);
-  assert.equal(src.includes('CTX {{ tokenInline }}'), true);
+  assert.equal(src.includes("tokenInline || compacting"), true);
+  assert.equal(src.includes("compacting ? 'CTX 更新中…' : ('CTX ' + tokenInline)"), true);
 });

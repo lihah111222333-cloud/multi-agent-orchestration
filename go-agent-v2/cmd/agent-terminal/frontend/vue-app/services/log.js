@@ -127,7 +127,9 @@ function getLogLevel() {
   return currentLevel;
 }
 
-
+export function readLogLevel() {
+  return getLogLevel();
+}
 
 function setLogLevel(level) {
   const normalized = normalizeLevel(level);
@@ -146,8 +148,16 @@ function getLogBuffer() {
   return ringBuffer.slice();
 }
 
+export function readLogBuffer() {
+  return getLogBuffer();
+}
+
 function clearLogBuffer() {
   ringBuffer.splice(0, ringBuffer.length);
+}
+
+export function clearLogHistory() {
+  clearLogBuffer();
 }
 
 if (typeof window !== 'undefined') {

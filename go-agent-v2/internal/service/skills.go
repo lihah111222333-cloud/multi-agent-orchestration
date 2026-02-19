@@ -10,9 +10,11 @@ import (
 
 // SkillInfo Skill 目录元数据。
 type SkillInfo struct {
-	Name        string `json:"name"`
-	Dir         string `json:"dir"`
-	Description string `json:"description"` // 从 SKILL.md frontmatter 提取
+	Name         string   `json:"name"`
+	Dir          string   `json:"dir"`
+	Description  string   `json:"description"` // 从 SKILL.md frontmatter 提取
+	TriggerWords []string `json:"trigger_words,omitempty"`
+	ForceWords   []string `json:"force_words,omitempty"`
 }
 
 // SkillService 扫描 .agent/skills/ 文件系统。
@@ -40,12 +42,16 @@ func (s *SkillService) ListSkills() ([]SkillInfo, error) {
 		if !entry.IsDir() {
 			continue
 		}
+		skillPath := filepath.Join(s.dir, entry.Name(), "SKILL.md")
+		meta := extractSkillMetadata(skillPath)
 		info := SkillInfo{
 			Name: entry.Name(),
 			Dir:  filepath.Join(s.dir, entry.Name()),
+			// 尝试读取 SKILL.md frontmatter 元数据
+			Description:  meta.Description,
+			TriggerWords: meta.TriggerWords,
+			ForceWords:   meta.ForceWords,
 		}
-		// 尝试读取 SKILL.md 的 description
-		info.Description = extractDescription(filepath.Join(info.Dir, "SKILL.md"))
 		skills = append(skills, info)
 	}
 	return skills, nil
@@ -66,34 +72,154 @@ func (s *SkillService) ReadSkillContent(name string) (string, error) {
 	return string(data), nil
 }
 
-// extractDescription 从 SKILL.md frontmatter 提取 description 字段。
-func extractDescription(path string) string {
+type skillMetadata struct {
+	Description  string
+	TriggerWords []string
+	ForceWords   []string
+}
+
+// extractSkillMetadata 从 SKILL.md frontmatter 提取描述与关键字元数据。
+func extractSkillMetadata(path string) skillMetadata {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return skillMetadata{}
 	}
-	content := string(data)
-	// 简单解析 YAML frontmatter: ---\ndescription: "xxx"\n---
-	if !strings.HasPrefix(content, "---") {
-		return ""
+	return parseSkillMetadata(string(data))
+}
+
+func parseSkillMetadata(content string) skillMetadata {
+	frontmatter, ok := extractFrontmatter(content)
+	if !ok {
+		return skillMetadata{}
 	}
-	end := strings.Index(content[3:], "---")
-	if end < 0 {
-		return ""
-	}
-	frontmatter := content[3 : 3+end]
-	for _, line := range strings.Split(frontmatter, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "description:") {
-			desc := strings.TrimPrefix(line, "description:")
-			desc = strings.TrimSpace(desc)
-			desc = strings.Trim(desc, "\"'")
-			// 截断过长的 description
-			if len(desc) > 120 {
-				desc = desc[:120] + "..."
-			}
-			return desc
+
+	lines := strings.Split(frontmatter, "\n")
+	meta := skillMetadata{}
+	for idx := 0; idx < len(lines); idx++ {
+		line := strings.TrimSpace(lines[idx])
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		colon := strings.Index(line, ":")
+		if colon <= 0 {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(line[:colon]))
+		value := strings.TrimSpace(line[colon+1:])
+		switch key {
+		case "description":
+			meta.Description = parseFrontmatterScalar(value)
+		case "trigger_words", "triggerwords", "trigger_words_list", "triggers":
+			words, consumed := parseFrontmatterWords(value, lines[idx+1:])
+			meta.TriggerWords = words
+			idx += consumed
+		case "force_words", "forcewords", "mandatory_words", "must_words":
+			words, consumed := parseFrontmatterWords(value, lines[idx+1:])
+			meta.ForceWords = words
+			idx += consumed
 		}
 	}
-	return ""
+
+	if len(meta.Description) > 120 {
+		meta.Description = meta.Description[:120] + "..."
+	}
+	meta.TriggerWords = uniqueWords(meta.TriggerWords)
+	meta.ForceWords = uniqueWords(meta.ForceWords)
+	return meta
+}
+
+func extractFrontmatter(content string) (string, bool) {
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	if !strings.HasPrefix(normalized, "---\n") {
+		return "", false
+	}
+	rest := normalized[len("---\n"):]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return "", false
+	}
+	return rest[:end], true
+}
+
+func parseFrontmatterWords(value string, tail []string) ([]string, int) {
+	if strings.TrimSpace(value) != "" {
+		return parseWordsFromValue(value), 0
+	}
+	words := make([]string, 0, len(tail))
+	consumed := 0
+	for _, raw := range tail {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			consumed++
+			continue
+		}
+		if !strings.HasPrefix(line, "-") {
+			break
+		}
+		item := strings.TrimSpace(strings.TrimPrefix(line, "-"))
+		if item != "" {
+			words = append(words, parseFrontmatterScalar(item))
+		}
+		consumed++
+	}
+	return words, consumed
+}
+
+func parseWordsFromValue(value string) []string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		inside := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
+		if inside == "" {
+			return nil
+		}
+		parts := strings.Split(inside, ",")
+		words := make([]string, 0, len(parts))
+		for _, part := range parts {
+			item := parseFrontmatterScalar(part)
+			if item != "" {
+				words = append(words, item)
+			}
+		}
+		return words
+	}
+	normalizedComma := strings.NewReplacer("，", ",", "、", ",", ";", ",", "；", ",", "\n", ",").Replace(trimmed)
+	parts := strings.Split(normalizedComma, ",")
+	words := make([]string, 0, len(parts))
+	for _, part := range parts {
+		item := parseFrontmatterScalar(part)
+		if item != "" {
+			words = append(words, item)
+		}
+	}
+	return words
+}
+
+func parseFrontmatterScalar(value string) string {
+	trimmed := strings.TrimSpace(value)
+	trimmed = strings.Trim(trimmed, "\"'")
+	return strings.TrimSpace(trimmed)
+}
+
+func uniqueWords(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, item := range raw {
+		word := strings.TrimSpace(item)
+		if word == "" {
+			continue
+		}
+		key := strings.ToLower(word)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, word)
+	}
+	return out
 }

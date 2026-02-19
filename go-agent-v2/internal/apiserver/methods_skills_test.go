@@ -1,0 +1,454 @@
+package apiserver
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/multi-agent/go-agent-v2/internal/service"
+)
+
+func TestSkillsListUsesConfiguredDirectory(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "backend"), 0o755); err != nil {
+		t.Fatalf("mkdir backend: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "tdd"), 0o755); err != nil {
+		t.Fatalf("mkdir tdd: %v", err)
+	}
+
+	srv := &Server{skillsDir: tmp}
+	raw, err := srv.skillsList(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("skillsList error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	skills := resp["skills"].([]map[string]string)
+	got := []string{skills[0]["name"], skills[1]["name"]}
+	want := []string{"backend", "tdd"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("skillsList names=%v, want=%v", got, want)
+	}
+}
+
+func TestSkillsConfigWriteAgentSkillsLifecycle(t *testing.T) {
+	srv := &Server{agentSkills: make(map[string][]string)}
+	ctx := context.Background()
+
+	raw, err := srv.skillsConfigWriteTyped(ctx, skillsConfigWriteParams{
+		AgentID: "thread-1",
+		Skills:  []string{" backend ", "TDD", "backend"},
+	})
+	if err != nil {
+		t.Fatalf("skillsConfigWriteTyped set error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	gotSkills := resp["skills"].([]string)
+	wantSkills := []string{"backend", "TDD"}
+	if !reflect.DeepEqual(gotSkills, wantSkills) {
+		t.Fatalf("configured skills=%v, want=%v", gotSkills, wantSkills)
+	}
+
+	readonly := srv.GetAgentSkills("thread-1")
+	readonly[0] = "mutated"
+	after := srv.GetAgentSkills("thread-1")
+	if !reflect.DeepEqual(after, wantSkills) {
+		t.Fatalf("GetAgentSkills should return copy, got=%v", after)
+	}
+
+	_, err = srv.skillsConfigWriteTyped(ctx, skillsConfigWriteParams{
+		AgentID: "thread-1",
+		Skills:  []string{},
+	})
+	if err != nil {
+		t.Fatalf("skillsConfigWriteTyped clear error: %v", err)
+	}
+	if got := srv.GetAgentSkills("thread-1"); len(got) != 0 {
+		t.Fatalf("skills should be cleared, got=%v", got)
+	}
+}
+
+func TestSkillsConfigWriteAndRemoteWriteUseConfiguredDirectory(t *testing.T) {
+	tmp := t.TempDir()
+	srv := &Server{
+		skillsDir:   tmp,
+		agentSkills: make(map[string][]string),
+	}
+	ctx := context.Background()
+
+	_, err := srv.skillsConfigWriteTyped(ctx, skillsConfigWriteParams{
+		Name:    "backend",
+		Content: "name: backend",
+	})
+	if err != nil {
+		t.Fatalf("skillsConfigWriteTyped file mode error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "backend", "SKILL.md")); err != nil {
+		t.Fatalf("expected skill file in configured dir: %v", err)
+	}
+
+	if _, err := srv.skillsRemoteWriteTyped(ctx, skillsRemoteWriteParams{
+		Name:    "../bad",
+		Content: "x",
+	}); err == nil {
+		t.Fatalf("skillsRemoteWriteTyped should reject invalid skill name")
+	}
+
+	_, err = srv.skillsRemoteWriteTyped(ctx, skillsRemoteWriteParams{
+		Name:    "tdd",
+		Content: "name: tdd",
+	})
+	if err != nil {
+		t.Fatalf("skillsRemoteWriteTyped valid name error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "tdd", "SKILL.md")); err != nil {
+		t.Fatalf("expected remote skill file in configured dir: %v", err)
+	}
+}
+
+func TestBuildConfiguredSkillPrompt(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("backend", "backend rules")
+	writeSkill("tdd", "tdd rules")
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+		agentSkills: map[string][]string{
+			"thread-1": {"backend", "tdd", "missing"},
+		},
+	}
+
+	input := []UserInput{
+		{Type: "skill", Name: "tdd", Content: "manual tdd"},
+	}
+	prompt, count := srv.buildConfiguredSkillPrompt("thread-1", input)
+	if count != 1 {
+		t.Fatalf("configured skill count=%d, want=1", count)
+	}
+	if !strings.Contains(prompt, "[skill:backend]") {
+		t.Fatalf("expected backend skill in prompt, got=%q", prompt)
+	}
+	if strings.Contains(prompt, "[skill:tdd]") {
+		t.Fatalf("input skill should skip configured duplicate, got=%q", prompt)
+	}
+	if strings.Contains(prompt, "[skill:missing]") {
+		t.Fatalf("missing skill should be skipped, got=%q", prompt)
+	}
+}
+
+func TestBuildAutoMatchedSkillPrompt(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("backend", `---
+description: backend helper
+trigger_words: [golang, api]
+---
+backend skill`)
+	writeSkill("tdd", `---
+description: test helper
+force_words:
+  - test
+---
+tdd skill`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+		agentSkills: map[string][]string{
+			"thread-1": {"backend"},
+		},
+	}
+
+	prompt, count := srv.buildAutoMatchedSkillPrompt("thread-1", "please write API test", nil)
+	if count != 1 {
+		t.Fatalf("auto matched skill count=%d, want=1", count)
+	}
+	if !strings.Contains(prompt, "[skill:tdd]") {
+		t.Fatalf("expected tdd skill in auto matched prompt, got=%q", prompt)
+	}
+	if strings.Contains(prompt, "[skill:backend]") {
+		t.Fatalf("configured skill should be skipped in auto match, got=%q", prompt)
+	}
+}
+
+func TestSkillsConfigReadAndLocalRead(t *testing.T) {
+	tmp := t.TempDir()
+	localFile := filepath.Join(tmp, "backend.md")
+	if err := os.WriteFile(localFile, []byte("name: backend"), 0o644); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+
+	srv := &Server{
+		skillsDir: tmp,
+		agentSkills: map[string][]string{
+			"thread-1": {"backend"},
+		},
+	}
+	ctx := context.Background()
+
+	raw, err := srv.skillsConfigReadTyped(ctx, skillsConfigReadParams{AgentID: "thread-1"})
+	if err != nil {
+		t.Fatalf("skillsConfigReadTyped error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	gotSkills := resp["skills"].([]string)
+	if !reflect.DeepEqual(gotSkills, []string{"backend"}) {
+		t.Fatalf("skillsConfigReadTyped skills=%v", gotSkills)
+	}
+
+	localRaw, err := srv.skillsLocalReadTyped(ctx, skillsLocalReadParams{Path: localFile})
+	if err != nil {
+		t.Fatalf("skillsLocalReadTyped error: %v", err)
+	}
+	localResp := localRaw.(map[string]any)
+	skill := localResp["skill"].(map[string]string)
+	if skill["path"] != localFile {
+		t.Fatalf("local read path=%q, want=%q", skill["path"], localFile)
+	}
+	if !strings.Contains(skill["content"], "backend") {
+		t.Fatalf("local read content=%q", skill["content"])
+	}
+}
+
+func TestSkillsLocalImportDirCopiesWholeDirectory(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceRoot, "SKILL.md"), []byte("# Skill"), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "resources"), 0o755); err != nil {
+		t.Fatalf("mkdir resources: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "resources", "guide.md"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write resource: %v", err)
+	}
+
+	destRoot := t.TempDir()
+	srv := &Server{
+		skillsDir:   destRoot,
+		agentSkills: make(map[string][]string),
+	}
+	raw, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
+		Path: sourceRoot,
+	})
+	if err != nil {
+		t.Fatalf("skillsLocalImportDirTyped error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	skill := resp["skill"].(map[string]any)
+	name, _ := skill["name"].(string)
+	if name == "" {
+		t.Fatalf("imported skill name should not be empty")
+	}
+	targetRoot := filepath.Join(destRoot, name)
+	if _, err := os.Stat(filepath.Join(targetRoot, "SKILL.md")); err != nil {
+		t.Fatalf("missing copied SKILL.md: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetRoot, "resources", "guide.md")); err != nil {
+		t.Fatalf("missing copied resource file: %v", err)
+	}
+}
+
+func TestSkillsLocalImportDirRequiresSkillFile(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceRoot, "README.md"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+	destRoot := t.TempDir()
+	srv := &Server{skillsDir: destRoot}
+	_, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
+		Path: sourceRoot,
+	})
+	if err == nil {
+		t.Fatal("skillsLocalImportDirTyped should fail when SKILL.md is missing")
+	}
+}
+
+func TestSkillsLocalImportDirSinglePathsRespectsName(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceRoot, "SKILL.md"), []byte("# Skill"), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	destRoot := t.TempDir()
+	srv := &Server{skillsDir: destRoot}
+	raw, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
+		Paths: []string{sourceRoot},
+		Name:  "backend-custom",
+	})
+	if err != nil {
+		t.Fatalf("skillsLocalImportDirTyped error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	skill := resp["skill"].(map[string]any)
+	if got, _ := skill["name"].(string); got != "backend-custom" {
+		t.Fatalf("imported skill name=%q, want=backend-custom", got)
+	}
+	if _, err := os.Stat(filepath.Join(destRoot, "backend-custom", "SKILL.md")); err != nil {
+		t.Fatalf("missing imported SKILL.md: %v", err)
+	}
+}
+
+func TestSkillsLocalImportDirKeepsExistingSkillWhenImportFails(t *testing.T) {
+	destRoot := t.TempDir()
+	existingDir := filepath.Join(destRoot, "backend")
+	if err := os.MkdirAll(existingDir, 0o755); err != nil {
+		t.Fatalf("mkdir existing skill dir: %v", err)
+	}
+	existingSkillPath := filepath.Join(existingDir, "SKILL.md")
+	if err := os.WriteFile(existingSkillPath, []byte("old-version"), 0o644); err != nil {
+		t.Fatalf("write existing SKILL.md: %v", err)
+	}
+
+	sourceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceRoot, "SKILL.md"), []byte("# Skill"), 0o644); err != nil {
+		t.Fatalf("write source SKILL.md: %v", err)
+	}
+	tooLarge := make([]byte, maxSkillImportSingleFileSize+1)
+	if err := os.WriteFile(filepath.Join(sourceRoot, "huge.bin"), tooLarge, 0o644); err != nil {
+		t.Fatalf("write huge file: %v", err)
+	}
+
+	srv := &Server{skillsDir: destRoot}
+	_, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
+		Path: sourceRoot,
+		Name: "backend",
+	})
+	if err == nil {
+		t.Fatal("skillsLocalImportDirTyped should fail when source file is too large")
+	}
+
+	content, readErr := os.ReadFile(existingSkillPath)
+	if readErr != nil {
+		t.Fatalf("existing skill should remain after failed import: %v", readErr)
+	}
+	if string(content) != "old-version" {
+		t.Fatalf("existing skill content changed after failed import: %q", string(content))
+	}
+}
+
+func TestSkillsLocalImportDirBatchImportsMultipleDirectories(t *testing.T) {
+	sourceA := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceA, "SKILL.md"), []byte("# A"), 0o644); err != nil {
+		t.Fatalf("write sourceA SKILL.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceA, "README.md"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("write sourceA README.md: %v", err)
+	}
+
+	sourceB := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceB, "SKILL.md"), []byte("# B"), 0o644); err != nil {
+		t.Fatalf("write sourceB SKILL.md: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(sourceB, "assets"), 0o755); err != nil {
+		t.Fatalf("mkdir sourceB assets: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceB, "assets", "guide.md"), []byte("b"), 0o644); err != nil {
+		t.Fatalf("write sourceB guide.md: %v", err)
+	}
+
+	destRoot := t.TempDir()
+	srv := &Server{skillsDir: destRoot}
+	raw, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
+		Paths: []string{sourceA, sourceB},
+	})
+	if err != nil {
+		t.Fatalf("skillsLocalImportDirTyped batch error: %v", err)
+	}
+	resp := raw.(map[string]any)
+
+	ok, _ := resp["ok"].(bool)
+	if !ok {
+		t.Fatalf("batch import should be ok=true, got=%v", resp["ok"])
+	}
+	summary := resp["summary"].(map[string]int)
+	if summary["requested"] != 2 || summary["imported"] != 2 || summary["failed"] != 0 {
+		t.Fatalf("unexpected summary: %v", summary)
+	}
+
+	skills := resp["skills"].([]map[string]any)
+	if len(skills) != 2 {
+		t.Fatalf("expected 2 imported skills, got=%d", len(skills))
+	}
+	for _, skill := range skills {
+		name, _ := skill["name"].(string)
+		if name == "" {
+			t.Fatalf("skill name should not be empty: %v", skill)
+		}
+		targetDir, _ := skill["dir"].(string)
+		if _, err := os.Stat(filepath.Join(targetDir, "SKILL.md")); err != nil {
+			t.Fatalf("imported skill missing SKILL.md: %v", err)
+		}
+	}
+
+	failures := resp["failures"].([]map[string]string)
+	if len(failures) != 0 {
+		t.Fatalf("expected no failures, got=%v", failures)
+	}
+}
+
+func TestSkillsLocalImportDirBatchCollectsFailures(t *testing.T) {
+	validSource := t.TempDir()
+	if err := os.WriteFile(filepath.Join(validSource, "SKILL.md"), []byte("# Valid"), 0o644); err != nil {
+		t.Fatalf("write valid SKILL.md: %v", err)
+	}
+	invalidSource := t.TempDir()
+	if err := os.WriteFile(filepath.Join(invalidSource, "README.md"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write invalid README.md: %v", err)
+	}
+
+	destRoot := t.TempDir()
+	srv := &Server{skillsDir: destRoot}
+	raw, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
+		Paths: []string{validSource, invalidSource},
+	})
+	if err != nil {
+		t.Fatalf("skillsLocalImportDirTyped batch should not hard fail: %v", err)
+	}
+	resp := raw.(map[string]any)
+
+	ok, _ := resp["ok"].(bool)
+	if ok {
+		t.Fatalf("batch import should be ok=false when there are failures")
+	}
+	summary := resp["summary"].(map[string]int)
+	if summary["requested"] != 2 || summary["imported"] != 1 || summary["failed"] != 1 {
+		t.Fatalf("unexpected summary: %v", summary)
+	}
+
+	skills := resp["skills"].([]map[string]any)
+	if len(skills) != 1 {
+		t.Fatalf("expected 1 imported skill, got=%d", len(skills))
+	}
+	failures := resp["failures"].([]map[string]string)
+	if len(failures) != 1 {
+		t.Fatalf("expected 1 failure, got=%d", len(failures))
+	}
+	if failures[0]["source"] != invalidSource {
+		t.Fatalf("failure source=%q, want=%q", failures[0]["source"], invalidSource)
+	}
+}

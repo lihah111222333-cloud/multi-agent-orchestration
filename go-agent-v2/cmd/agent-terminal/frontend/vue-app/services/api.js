@@ -26,16 +26,14 @@ function perfNow() {
   return Date.now();
 }
 
-function parseMaybeJSON(raw) {
-  if (raw == null || raw === '') return {};
-  if (typeof raw === 'object') return raw;
+function parseRuntimeEventJSON(rawText) {
   try {
-    return JSON.parse(raw);
+    return JSON.parse(rawText);
   } catch (error) {
     logWarn('api', 'json.parse.failed', {
       error,
-      raw_len: typeof raw === 'string' ? raw.length : 0,
-      raw_preview: typeof raw === 'string' ? raw.slice(0, 200) : '',
+      raw_len: rawText.length,
+      raw_preview: rawText.slice(0, 200),
     });
     return {};
   }
@@ -69,7 +67,7 @@ export function normalizeRuntimeEventEnvelope(evt) {
   const inner = evt.data;
   if (inner == null || inner === '') return {};
   if (typeof inner === 'object') return inner;
-  if (typeof inner === 'string') return parseMaybeJSON(inner);
+  if (typeof inner === 'string') return parseRuntimeEventJSON(inner);
   return { data: inner };
 }
 
@@ -136,15 +134,25 @@ async function callByID(methodID, ...args) {
 export async function callAPI(method, params = {}) {
   const reqId = ++rpcRequestSeq;
   const start = perfNow();
-  const payload = params || {};
+  const payload = params == null ? {} : params;
+  if (typeof payload !== 'object' || Array.isArray(payload)) {
+    const error = new TypeError('callAPI params must be an object');
+    logWarn('api', 'rpc.invalid_params', {
+      req_id: reqId,
+      method,
+      param_type: typeof payload,
+      is_array: Array.isArray(payload),
+      error,
+    });
+    throw error;
+  }
   logDebug('api', 'rpc.start', {
     req_id: reqId,
     method,
     param_keys: Object.keys(payload),
   });
   try {
-    const raw = await callByID(METHOD_IDS.CALL_API, method, payload);
-    const result = parseMaybeJSON(raw);
+    const result = await callByID(METHOD_IDS.CALL_API, method, payload);
     logDebug('api', 'rpc.done', {
       req_id: reqId,
       method,
@@ -170,6 +178,18 @@ export async function selectProjectDir() {
   const path = typeof value === 'string' ? value : '';
   logInfo('ui', 'selectProjectDir.done', { selected: Boolean(path), path });
   return path;
+}
+
+export async function selectProjectDirs() {
+  // Multi-project directory chooser must be handled by Go/Wails native dialog.
+  logInfo('ui', 'selectProjectDirs.start', {});
+  const raw = await callAPI('ui/selectProjectDirs', {});
+  const paths = Array.isArray(raw?.paths) ? raw.paths : [];
+  logInfo('ui', 'selectProjectDirs.done', {
+    count: paths.length,
+    first: paths[0] || '',
+  });
+  return paths;
 }
 
 export async function selectFiles() {
@@ -212,7 +232,7 @@ export async function resolveThreadIdentity(threadId) {
 
 export async function getBuildInfo() {
   const raw = await callByID(METHOD_IDS.GET_BUILD_INFO);
-  const info = parseMaybeJSON(raw);
+  const info = raw && typeof raw === 'object' ? raw : {};
   logDebug('api', 'buildInfo.read', {
     version: info?.version || '',
     commit: info?.commit || '',
@@ -292,6 +312,39 @@ export function onBridgeEvent(callback) {
       try {
         runtime.Events.Off('bridge-event');
         logInfo('event', 'bridge.unsubscribe.done', {});
+      } catch {
+        // ignore
+      }
+    };
+  });
+  return () => off();
+}
+
+export function onAppWillQuit(callback) {
+  let off = () => { };
+  const wrapped = (evt) => {
+    const normalized = normalizeRuntimeEventEnvelope(evt);
+    try {
+      callback(normalized);
+    } catch (error) {
+      logError('event', 'appWillQuit.callback.failed', { error });
+    }
+  };
+  waitRuntime().then((runtime) => {
+    if (!runtime?.Events?.On) {
+      logWarn('event', 'appWillQuit.subscribe.unavailable', {});
+      return;
+    }
+    const unbind = runtime.Events.On('app-will-quit', wrapped);
+    logInfo('event', 'appWillQuit.subscribe.ready', {});
+    if (typeof unbind === 'function') {
+      off = unbind;
+      return;
+    }
+    off = () => {
+      try {
+        runtime.Events.Off('app-will-quit');
+        logInfo('event', 'appWillQuit.unsubscribe.done', {});
       } catch {
         // ignore
       }

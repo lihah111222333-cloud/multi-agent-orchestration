@@ -9,6 +9,8 @@ export const ChatTimeline = {
     items: { type: Array, default: () => [] },
     activeStatus: { type: String, default: 'idle' },
     activeStatusText: { type: String, default: '' },
+    activeStatusMeta: { type: String, default: '' },
+    pinnedPlanVisible: { type: Boolean, default: false },
   },
   setup(props) {
     let updateSeq = 0;
@@ -152,6 +154,7 @@ export const ChatTimeline = {
     });
 
     const presenceLabel = computed(() => sharedStatusText.value);
+    const sharedStatusMeta = computed(() => (props.activeStatusMeta || '').toString().trim());
 
     return {
       visibleItems,
@@ -169,10 +172,11 @@ export const ChatTimeline = {
       showAgentPresence,
       presenceLabel,
       sharedStatusText,
+      sharedStatusMeta,
     };
   },
   template: `
-    <div class="chat-messages-vue">
+    <div class="chat-messages-vue" :class="{ 'has-plan-pin': pinnedPlanVisible }">
       <div v-if="items.length === 0" class="chat-empty">暂无消息，先发送一句话试试。</div>
 
       <div v-if="hasMore" class="chat-load-more">
@@ -256,9 +260,10 @@ export const ChatTimeline = {
       </article>
       <div v-if="showAgentPresence" class="chat-presence-row">
         <div class="chat-item-avatar chat-item-avatar-presence">AI</div>
-        <div class="chat-presence-pill">
-          <span class="chat-presence-dot"></span>
+        <div class="chat-status chat-status-presence">
+          <span class="status-dot" :class="activeStatus"></span>
           <span>{{ presenceLabel }}</span>
+          <span v-if="sharedStatusMeta" class="chat-status-meta">{{ sharedStatusMeta }}</span>
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@ const UI_LOCAL_STATE_KEYS = Object.freeze([
   'activeThreadId',
   'activeCmdThreadId',
   'mainAgentId',
+  'pinnedThreadAtById',
 ]);
 
 const RUNTIME_STATE_KEYS = Object.freeze([

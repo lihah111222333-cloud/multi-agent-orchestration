@@ -41,73 +41,23 @@ const callAPISlowThreshold = 1200 * time.Millisecond
 const bridgeNotifySampleEvery int64 = 120
 
 // extractThreadIDFromParams 从 params 中提取 threadId 用于日志关联。
-func extractThreadIDFromParams(params any) string {
-	switch p := params.(type) {
-	case nil:
-		return ""
-	case string:
-		return extractThreadIDFromJSON(p)
-	case []byte:
-		return extractThreadIDFromJSON(string(p))
-	case json.RawMessage:
-		return extractThreadIDFromJSON(string(p))
-	case map[string]any:
-		threadID, _ := p["threadId"].(string)
-		return strings.TrimSpace(threadID)
-	default:
-		data, err := json.Marshal(p)
-		if err != nil {
-			return ""
-		}
-		return extractThreadIDFromJSON(string(data))
-	}
-}
-
-func extractThreadIDFromJSON(paramsJSON string) string {
-	if paramsJSON == "" || paramsJSON == "{}" {
+func extractThreadIDFromParams(params map[string]any) string {
+	if len(params) == 0 {
 		return ""
 	}
-	var p struct {
-		ThreadID string `json:"threadId"`
-	}
-	if json.Unmarshal([]byte(paramsJSON), &p) == nil {
-		return p.ThreadID
-	}
-	return ""
+	threadID, _ := params["threadId"].(string)
+	return strings.TrimSpace(threadID)
 }
 
-func normalizeCallAPIParams(params any) (string, error) {
-	switch p := params.(type) {
-	case nil:
-		return "{}", nil
-	case string:
-		trimmed := strings.TrimSpace(p)
-		if trimmed == "" {
-			return "{}", nil
-		}
-		return p, nil
-	case []byte:
-		trimmed := strings.TrimSpace(string(p))
-		if trimmed == "" {
-			return "{}", nil
-		}
-		return string(p), nil
-	case json.RawMessage:
-		trimmed := strings.TrimSpace(string(p))
-		if trimmed == "" {
-			return "{}", nil
-		}
-		return string(p), nil
-	default:
-		data, err := json.Marshal(p)
-		if err != nil {
-			return "", err
-		}
-		if len(data) == 0 {
-			return "{}", nil
-		}
-		return string(data), nil
+func normalizeCallAPIParams(params any) (map[string]any, error) {
+	if params == nil {
+		return map[string]any{}, nil
 	}
+	normalized, ok := params.(map[string]any)
+	if !ok {
+		return nil, apperrors.Newf("App.CallAPI", "params must be an object")
+	}
+	return normalized, nil
 }
 
 var callAPIRequestSeq atomic.Int64
@@ -201,12 +151,12 @@ func (a *App) shutdown() {
 func (a *App) CallAPI(method string, params any) (result any, callErr error) {
 	start := time.Now()
 	reqID := callAPIRequestSeq.Add(1)
-	threadID := extractThreadIDFromParams(params)
-	paramsJSON, err := normalizeCallAPIParams(params)
+	normalizedParams, err := normalizeCallAPIParams(params)
 	if err != nil {
-		callErr = apperrors.Wrap(err, "App.CallAPI", "normalize params")
+		callErr = err
 		return nil, callErr
 	}
+	threadID := extractThreadIDFromParams(normalizedParams)
 	if shouldLogCallAPIBegin(method, reqID) {
 		logger.Info("CallAPI begin", logger.FieldReqID, reqID, logger.FieldMethod, method, logger.FieldAgentID, threadID)
 	}
@@ -242,29 +192,30 @@ func (a *App) CallAPI(method string, params any) (result any, callErr error) {
 	switch method {
 	case "ui/selectProjectDir":
 		result, callErr = a.handleUISelectProjectDir()
+	case "ui/selectProjectDirs":
+		result, callErr = a.handleUISelectProjectDirs()
 	case "ui/selectFiles":
 		result, callErr = a.handleUISelectFiles()
 	case "ui/buildInfo":
 		result, callErr = a.handleUIBuildInfo()
 	case "ui/copyText":
-		result, callErr = a.handleUICopyText(paramsJSON)
+		result, callErr = a.handleUICopyText(normalizedParams)
 	default:
 		// 通用 JSON-RPC 调用
 		if a.srv == nil {
 			callErr = apperrors.Newf("App.CallAPI", "server not ready")
 			return nil, callErr
 		}
-		var params json.RawMessage
-		if paramsJSON != "" {
-			params = json.RawMessage(paramsJSON)
-		} else {
-			params = json.RawMessage("{}")
+		paramsJSON, marshalErr := json.Marshal(normalizedParams)
+		if marshalErr != nil {
+			callErr = apperrors.Wrap(marshalErr, "App.CallAPI", "marshal params")
+			return nil, callErr
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 
-		result, callErr = a.srv.InvokeMethod(ctx, method, params)
+		result, callErr = a.srv.InvokeMethod(ctx, method, json.RawMessage(paramsJSON))
 	}
 
 	return result, callErr
@@ -273,6 +224,11 @@ func (a *App) CallAPI(method string, params any) (result any, callErr error) {
 func (a *App) handleUISelectProjectDir() (any, error) {
 	path := a.SelectProjectDir()
 	return map[string]string{"path": path}, nil
+}
+
+func (a *App) handleUISelectProjectDirs() (any, error) {
+	paths := a.SelectProjectDirs()
+	return map[string]any{"paths": paths}, nil
 }
 
 func (a *App) handleUISelectFiles() (any, error) {
@@ -284,17 +240,9 @@ func (a *App) handleUIBuildInfo() (any, error) {
 	return currentBuildInfo(), nil
 }
 
-func (a *App) handleUICopyText(paramsJSON string) (any, error) {
-	var request struct {
-		Text string `json:"text"`
-	}
-	if strings.TrimSpace(paramsJSON) != "" {
-		if err := json.Unmarshal([]byte(paramsJSON), &request); err != nil {
-			return nil, apperrors.Wrap(err, "App.handleUICopyText", "unmarshal params")
-		}
-	}
-
-	text := strings.TrimSpace(request.Text)
+func (a *App) handleUICopyText(params map[string]any) (any, error) {
+	text, _ := params["text"].(string)
+	text = strings.TrimSpace(text)
 	if text == "" {
 		return map[string]any{"ok": false}, nil
 	}
@@ -358,6 +306,50 @@ func (a *App) SelectProjectDir() string {
 	return path
 }
 
+// SelectProjectDirs 弹出原生目录选择对话框(支持多选)，返回绝对路径数组。
+// 用户取消返回空数组。
+// 约束: 前端仅做 UI，不应自行实现浏览器/系统文件选择能力。
+// 目录选择必须统一走此 Wails/Go 原生桥接入口。
+func (a *App) SelectProjectDirs() []string {
+	logger.Info("SelectProjectDirs: invoked")
+
+	if a.wailsApp == nil {
+		logger.Warn("SelectProjectDirs: wails app not ready")
+		return []string{}
+	}
+
+	cwd, _ := os.Getwd()
+	dialog := a.wailsApp.Dialog.OpenFile().
+		SetTitle("选择技能目录（可多选）").
+		SetMessage("可一次选择多个技能目录").
+		SetButtonText("选择").
+		SetDirectory(cwd).
+		CanChooseDirectories(true).
+		CanChooseFiles(false).
+		CanCreateDirectories(true).
+		ShowHiddenFiles(true)
+	if current := a.wailsApp.Window.Current(); current != nil {
+		dialog.AttachToWindow(current)
+	}
+
+	logger.Info("SelectProjectDirs: opening Wails folder dialog")
+	paths, err := dialog.PromptForMultipleSelection()
+	if err != nil {
+		if isDialogCancelError(err) {
+			logger.Info("SelectProjectDirs: dialog cancelled by user")
+			return []string{}
+		}
+		logger.Warn("SelectProjectDirs: Wails dialog failed", logger.FieldError, err)
+		return []string{}
+	}
+	if len(paths) == 0 {
+		logger.Info("SelectProjectDirs: dialog cancelled by user")
+		return []string{}
+	}
+	logger.Info("SelectProjectDirs: selected", logger.FieldCount, len(paths))
+	return paths
+}
+
 // SelectFiles 弹出原生文件选择对话框(支持多选)，返回绝对路径数组。
 // 用户取消返回空数组。
 // 约束: 前端仅做 UI，不应实现任何浏览器侧文件系统选择兜底。
@@ -414,7 +406,8 @@ func isDialogCancelError(err error) bool {
 // ========================================
 
 // LaunchAgent 启动一个 Agent (通过 apiserver, 注入完整工具链)。
-func (a *App) LaunchAgent(name, prompt, cwd string) (string, error) {
+// Wails v3 自动将 Go map 序列化为 JS object。
+func (a *App) LaunchAgent(name, prompt, cwd string) (any, error) {
 	logger.Info("ui: launch agent", logger.FieldSource, "ui",
 		logger.FieldComponent, "agent", "name", name)
 
@@ -423,11 +416,11 @@ func (a *App) LaunchAgent(name, prompt, cwd string) (string, error) {
 		"cwd":   cwd,
 	})
 	if err != nil {
-		return "", apperrors.Wrap(err, "App.LaunchAgent", "marshal params")
+		return nil, apperrors.Wrap(err, "App.LaunchAgent", "marshal params")
 	}
 	result, err := a.srv.InvokeMethod(context.Background(), "thread/start", params)
 	if err != nil {
-		return "", apperrors.Wrap(err, "App.LaunchAgent", "invoke thread/start")
+		return nil, apperrors.Wrap(err, "App.LaunchAgent", "invoke thread/start")
 	}
 
 	resultMap := util.ToMapAny(result)
@@ -448,11 +441,7 @@ func (a *App) LaunchAgent(name, prompt, cwd string) (string, error) {
 		}
 	}
 
-	data, err := json.Marshal(resultMap)
-	if err != nil {
-		return "", apperrors.Wrap(err, "App.LaunchAgent", "marshal result")
-	}
-	return string(data), nil
+	return resultMap, nil
 }
 
 // extractThreadID 从 thread/start 结果中提取 thread.id (直接类型断言, 零序列化)。
@@ -630,6 +619,25 @@ func (a *App) OpenNewWindow(group string, n int) error {
 	return cmd.Start()
 }
 
+// buildBridgeEventPayload 构造 bridge-event 事件负载。
+// 仅包含 type + payload (object), 不再包含冗余的 data (string)。
+func buildBridgeEventPayload(method string, payloadMap map[string]any) map[string]any {
+	return map[string]any{
+		"type":    method,
+		"payload": payloadMap,
+	}
+}
+
+// buildAgentEventPayload 构造 agent-event 事件负载。
+// 仅包含 agent_id + type + payload (object), 不再包含冗余的 data (string)。
+func buildAgentEventPayload(method, threadID string, payloadMap map[string]any) map[string]any {
+	return map[string]any{
+		"agent_id": threadID,
+		"type":     method,
+		"payload":  payloadMap,
+	}
+}
+
 // handleBridgeNotification 将 apiserver 标准化通知转发到 Wails 前端。
 //
 // 事件链路:
@@ -651,17 +659,8 @@ func (a *App) handleBridgeNotification(method string, params any) {
 
 	payloadMap := util.ToMapAny(params)
 
-	rawPayload, marshalErr := json.Marshal(payloadMap)
-	if marshalErr != nil {
-		logger.Debug("wails: notify bridge rawPayload marshal", logger.FieldError, marshalErr)
-		rawPayload = []byte("{}")
-	}
 	// 通用桥接事件: 前端可统一订阅 bridge-event 自行按 type 渲染。
-	a.wailsApp.Event.Emit("bridge-event", map[string]any{
-		"type":    method,
-		"payload": payloadMap,
-		"data":    string(rawPayload),
-	})
+	a.wailsApp.Event.Emit("bridge-event", buildBridgeEventPayload(method, payloadMap))
 
 	threadID, _ := payloadMap["threadId"].(string)
 	if strings.TrimSpace(threadID) == "" {
@@ -677,11 +676,7 @@ func (a *App) handleBridgeNotification(method string, params any) {
 	}
 
 	// 兼容历史 agent-event 通道 (按 threadId 路由)。
-	a.wailsApp.Event.Emit("agent-event", map[string]any{
-		"agent_id": threadID,
-		"type":     method,
-		"data":     string(rawPayload),
-	})
+	a.wailsApp.Event.Emit("agent-event", buildAgentEventPayload(method, threadID, payloadMap))
 	if shouldLogBridgeNotify(method, notifyID) {
 		logger.Info("bridge notify emitted",
 			"notify_id", notifyID,

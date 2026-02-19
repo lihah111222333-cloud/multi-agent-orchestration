@@ -9,10 +9,12 @@ test('ChatTimeline presence only reuses shared top-right status text', async () 
 
   assert.equal(src.includes("activeStatus: { type: String, default: 'idle' }"), true);
   assert.equal(src.includes("activeStatusText: { type: String, default: '' }"), true);
+  assert.equal(src.includes("activeStatusMeta: { type: String, default: '' }"), true);
   assert.equal(src.includes("if (!text || text === '未选择会话') return false;"), true);
   assert.equal(src.includes("(props.activeStatus || '').toString() !== 'idle'"), false);
   assert.equal(src.includes('return true;'), true);
   // After refactor: presenceLabel is a computed, rendered without ()
   assert.equal(src.includes('<span>{{ presenceLabel }}</span>'), true);
+  assert.equal(src.includes('<span v-if="sharedStatusMeta" class="chat-status-meta">{{ sharedStatusMeta }}</span>'), true);
   assert.equal(src.includes('latestPendingLabel('), false);
 });

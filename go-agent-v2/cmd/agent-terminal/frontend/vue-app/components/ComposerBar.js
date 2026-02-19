@@ -8,6 +8,7 @@ export const ComposerBar = {
     disabled: { type: Boolean, default: false },
     threadId: { type: String, default: '' },
     interruptible: { type: Boolean, default: false },
+    compacting: { type: Boolean, default: false },
     tokenInline: { type: String, default: '' },
     tokenTooltip: { type: String, default: '' },
   },
@@ -191,6 +192,7 @@ export const ComposerBar = {
 
     function onCompact() {
       if (props.disabled) return;
+      if (props.compacting) return;
       if (!(props.threadId || '').toString().trim()) return;
       emit('compact');
     }
@@ -285,10 +287,11 @@ export const ComposerBar = {
           <div class="composer-top-actions">
             <button
               class="composer-compact-btn"
+              :class="{ loading: compacting }"
               type="button"
-              title="压缩上下文"
-              aria-label="压缩上下文"
-              :disabled="disabled || !threadId"
+              :title="compacting ? '压缩中…' : '压缩上下文'"
+              :aria-label="compacting ? '压缩中…' : '压缩上下文'"
+              :disabled="disabled || !threadId || compacting"
               @click="onCompact"
             >
               <svg class="composer-compact-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -303,10 +306,11 @@ export const ComposerBar = {
               </svg>
             </button>
             <span
-              v-if="tokenInline"
+              v-if="tokenInline || compacting"
               class="composer-token-chip"
-              :title="tokenTooltip"
-            >CTX {{ tokenInline }}</span>
+              :class="{ loading: compacting }"
+              :title="compacting ? '正在压缩上下文，等待 token 使用量刷新' : tokenTooltip"
+            >{{ compacting ? 'CTX 更新中…' : ('CTX ' + tokenInline) }}</span>
           </div>
           <button
             id="btnSend"

@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -423,6 +425,19 @@ func (m *AgentManager) List() []AgentInfo {
 		proc.mu.Unlock()
 		infos = append(infos, info)
 	}
+	sort.SliceStable(infos, func(i, j int) bool {
+		leftID := strings.TrimSpace(infos[i].ID)
+		rightID := strings.TrimSpace(infos[j].ID)
+		if leftID != rightID {
+			return leftID > rightID
+		}
+		leftName := strings.TrimSpace(infos[i].Name)
+		rightName := strings.TrimSpace(infos[j].Name)
+		if leftName != rightName {
+			return leftName > rightName
+		}
+		return infos[i].Port > infos[j].Port
+	})
 	return infos
 }
 

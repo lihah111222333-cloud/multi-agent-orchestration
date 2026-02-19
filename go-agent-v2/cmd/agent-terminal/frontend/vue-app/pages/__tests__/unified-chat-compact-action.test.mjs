@@ -12,7 +12,10 @@ test('UnifiedChatPage wires compact action to thread store', async () => {
   assert.equal(pageSrc.includes('async function compactCurrent()'), true);
   assert.equal(pageSrc.includes('props.threadStore.compactThread(threadId)'), true);
   assert.equal(pageSrc.includes('@compact="compactCurrent"'), true);
+  assert.equal(pageSrc.includes(':compacting="compacting"'), true);
 
   assert.equal(storeSrc.includes('async function compactThread(threadId)'), true);
   assert.equal(storeSrc.includes("callAPI('thread/compact/start'"), true);
+  assert.equal(storeSrc.includes('waitCompactTokenUsageRefresh'), true);
+  assert.equal(storeSrc.includes('getThreadCompacting'), true);
 });

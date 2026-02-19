@@ -57,6 +57,10 @@ export const UnifiedChatPage = {
     const copyState = ref('idle');
     let scrollTimer = 0;
     let copyStateTimer = 0;
+    const editingThreadId = ref('');
+    const editingAlias = ref('');
+    const renamingThreadId = ref('');
+    const renameInputRefByThread = new Map();
 
     const isCmd = computed(() => props.mode === 'cmd');
     const modeKey = computed(() => (isCmd.value ? 'cmd' : 'chat'));
@@ -97,10 +101,32 @@ export const UnifiedChatPage = {
       if (isCmd.value) return [];
       return threads.value;
     });
+    const chatThreadCards = computed(() => {
+      if (isCmd.value) return [];
+      return chatThreadOptions.value.map((thread) => {
+        const threadID = thread.id;
+        const displayName = (props.threadStore.displayName(thread) || '').toString().trim() || threadID;
+        const pinnedAt = (typeof props.threadStore.getThreadPinnedAt === 'function')
+          ? Number(props.threadStore.getThreadPinnedAt(threadID))
+          : 0;
+        return {
+          id: threadID,
+          name: displayName,
+          showId: displayName === threadID,
+          status: normalizeStatus(props.threadStore.getThreadStatus(threadID)),
+          statusHeader: getThreadStatusHeader(threadID) || '等待指示',
+          pinnedAt,
+          isPinned: Number.isFinite(pinnedAt) && pinnedAt > 0,
+          selected: threadID === selectedThreadId.value,
+          isMain: threadID === mainAgentId.value,
+        };
+      });
+    });
 
     const activeTimeline = computed(() => props.threadStore.getThreadTimeline(selectedThreadId.value));
     const activeDiffText = computed(() => props.threadStore.getThreadDiff(selectedThreadId.value));
     const activeStatus = computed(() => normalizeStatus(props.threadStore.getThreadStatus(selectedThreadId.value)));
+    const dismissedPlanKeyByThread = ref({});
     function getThreadStatusHeader(threadId) {
       if (!threadId) return '';
       if (typeof props.threadStore.getThreadStatusHeader !== 'function') return '';
@@ -120,6 +146,10 @@ export const UnifiedChatPage = {
     const canInterrupt = computed(() => {
       if (typeof props.threadStore.getThreadInterruptible !== 'function') return false;
       return props.threadStore.getThreadInterruptible(selectedThreadId.value);
+    });
+    const compacting = computed(() => {
+      if (typeof props.threadStore.getThreadCompacting !== 'function') return false;
+      return props.threadStore.getThreadCompacting(selectedThreadId.value);
     });
     const displayStatusText = computed(() => {
       if (!selectedThreadId.value) return '未选择会话';
@@ -172,6 +202,63 @@ export const UnifiedChatPage = {
     });
 
     const showWorkspace = computed(() => true);
+    const chatComposerShellStyle = computed(() => {
+      if (isCmd.value) return {};
+      const ratio = Math.max(30, Math.min(75, Math.round(Number(splitRatio.value) || 60)));
+      return {
+        width: `calc(${ratio}% - 6px)`,
+      };
+    });
+    const latestPlanItem = computed(() => {
+      if (isCmd.value) return null;
+      const list = activeTimeline.value || [];
+      for (let index = list.length - 1; index >= 0; index -= 1) {
+        const item = list[index];
+        if (item?.kind !== 'plan') continue;
+        const text = (item.text || '').toString().trim();
+        if (!text) continue;
+        return item;
+      }
+      return null;
+    });
+    function resolvePlanItemKey(item) {
+      if (!item || typeof item !== 'object') return '';
+      const id = (item.id || '').toString().trim();
+      if (id) return `id:${id}`;
+      const timestamp = (item.ts || '').toString().trim();
+      const done = item.done ? '1' : '0';
+      const text = (item.text || '').toString().trim();
+      if (!text) return '';
+      if (timestamp) return `ts:${timestamp}|done:${done}|${text}`;
+      return `done:${done}|${text}`;
+    }
+    const activePinnedPlan = computed(() => {
+      const threadId = (selectedThreadId.value || '').toString().trim();
+      if (!threadId) return null;
+      const item = latestPlanItem.value;
+      if (!item) return null;
+      const key = resolvePlanItemKey(item);
+      if (!key) return null;
+      const dismissedKey = (dismissedPlanKeyByThread.value?.[threadId] || '').toString();
+      if (dismissedKey && dismissedKey === key) return null;
+      const text = (item.text || '').toString().trim();
+      if (!text) return null;
+      return {
+        key,
+        threadId,
+        done: Boolean(item.done),
+        statusText: item.done ? '完成' : '进行中',
+        text,
+      };
+    });
+    function dismissPinnedPlan() {
+      const plan = activePinnedPlan.value;
+      if (!plan) return;
+      dismissedPlanKeyByThread.value = {
+        ...dismissedPlanKeyByThread.value,
+        [plan.threadId]: plan.key,
+      };
+    }
 
     function resolveChatScroller() {
       const root = workspaceRef.value;
@@ -432,6 +519,7 @@ export const UnifiedChatPage = {
     async function compactCurrent() {
       const threadId = (selectedThreadId.value || '').toString().trim();
       if (!threadId) return;
+      if (compacting.value) return;
       try {
         await props.threadStore.compactThread(threadId);
       } catch (error) {
@@ -475,7 +563,7 @@ export const UnifiedChatPage = {
     }
 
     function renameSelected() {
-      props.threadStore.promptRenameThread(selectedThreadId.value);
+      beginInlineRename(selectedThreadId.value);
     }
 
     function setMainSelected() {
@@ -487,11 +575,96 @@ export const UnifiedChatPage = {
     }
 
     function renameCard(cardId) {
-      props.threadStore.promptRenameThread(cardId);
+      if (isCmd.value && typeof props.threadStore.promptRenameThread === 'function') {
+        props.threadStore.promptRenameThread(cardId);
+        return;
+      }
+      beginInlineRename(cardId);
     }
 
     function stopCard(cardId) {
       props.threadStore.stopThread(cardId);
+    }
+
+    function toggleThreadPin(threadId) {
+      if (typeof props.threadStore.toggleThreadPin !== 'function') return;
+      props.threadStore.toggleThreadPin(threadId);
+    }
+
+    function setRenameInputRef(threadId, el) {
+      const id = (threadId || '').toString().trim();
+      if (!id) return;
+      if (!el) {
+        renameInputRefByThread.delete(id);
+        return;
+      }
+      renameInputRefByThread.set(id, el);
+    }
+
+    function beginInlineRename(threadId) {
+      const id = (threadId || '').toString().trim();
+      if (!id) return;
+      const target = chatThreadCards.value.find((item) => item.id === id);
+      const current = (target?.name || id).toString().trim() || id;
+      editingThreadId.value = id;
+      editingAlias.value = current;
+      renamingThreadId.value = '';
+      selectThread(id);
+      nextTick(() => {
+        const input = renameInputRefByThread.get(id);
+        if (!input) return;
+        input.focus();
+        input.select();
+      });
+    }
+
+    function cancelInlineRename(threadId = '') {
+      const id = (threadId || editingThreadId.value || '').toString().trim();
+      if (!id || editingThreadId.value !== id) return;
+      editingThreadId.value = '';
+      editingAlias.value = '';
+      renamingThreadId.value = '';
+    }
+
+    async function submitInlineRename(threadId) {
+      const id = (threadId || editingThreadId.value || '').toString().trim();
+      if (!id || editingThreadId.value !== id || renamingThreadId.value === id) return;
+
+      const target = chatThreadCards.value.find((item) => item.id === id);
+      const current = (target?.name || id).toString().trim() || id;
+      const nextName = (editingAlias.value || '').toString().trim();
+      if (!nextName || nextName === current) {
+        cancelInlineRename(id);
+        return;
+      }
+
+      renamingThreadId.value = id;
+      try {
+        if (typeof props.threadStore.renameThread === 'function') {
+          await props.threadStore.renameThread(id, nextName);
+        } else if (typeof props.threadStore.promptRenameThread === 'function') {
+          props.threadStore.promptRenameThread(id);
+        }
+        cancelInlineRename(id);
+      } catch (error) {
+        logWarn('ui', 'thread.rename.inline.failed', {
+          thread_id: id,
+          error,
+        });
+        renamingThreadId.value = '';
+        nextTick(() => {
+          const input = renameInputRefByThread.get(id);
+          if (!input) return;
+          input.focus();
+          input.select();
+        });
+      }
+    }
+
+    function handleInlineRenameBlur(threadId) {
+      const id = (threadId || '').toString().trim();
+      if (!id || editingThreadId.value !== id) return;
+      submitInlineRename(id);
     }
 
     function getDisplayName(thread) {
@@ -718,6 +891,7 @@ export const UnifiedChatPage = {
       selectedThreadId,
       activeThread,
       chatThreadOptions,
+      chatThreadCards,
       activeTimeline,
       activeDiffText,
       activeStatus,
@@ -726,6 +900,7 @@ export const UnifiedChatPage = {
       activeStatusMeta,
       activeTokenInline,
       activeTokenTooltip,
+      compacting,
       canInterrupt,
       displayStatusText,
       noActiveThread,
@@ -735,6 +910,8 @@ export const UnifiedChatPage = {
       splitRatio,
       showOverview,
       showWorkspace,
+      chatComposerShellStyle,
+      activePinnedPlan,
       stats,
       recentThreads,
       cmdCards,
@@ -763,7 +940,17 @@ export const UnifiedChatPage = {
       loadCardHistory,
       renameCard,
       stopCard,
+      toggleThreadPin,
+      editingThreadId,
+      editingAlias,
+      renamingThreadId,
+      setRenameInputRef,
+      beginInlineRename,
+      submitInlineRename,
+      cancelInlineRename,
+      handleInlineRenameBlur,
       getDisplayName,
+      dismissPinnedPlan,
     };
   },
   template: `
@@ -797,17 +984,11 @@ export const UnifiedChatPage = {
         <button class="btn btn-secondary btn-toolbar-sm" @click="launchOne">+ 启动 Agent</button>
         <button class="btn btn-ghost btn-toolbar-sm" @click="loadCurrentHistory">加载历史</button>
         <button class="btn btn-ghost btn-toolbar-sm" @click="refreshAll">刷新</button>
-
-        <div v-if="!isCmd" class="thread-selector-group">
-          <select class="agent-selector" v-model="selectedThreadId">
-            <option v-for="thread in chatThreadOptions" :key="thread.id" :value="thread.id">{{ getDisplayName(thread) }}</option>
-          </select>
-          <button
-            v-if="selectedThreadId"
-            class="btn btn-ghost btn-xs"
-            @click="copySelectedThreadId"
-          >{{ copyButtonLabel }}</button>
-        </div>
+        <button
+          v-if="!isCmd && selectedThreadId"
+          class="btn btn-ghost btn-xs"
+          @click="copySelectedThreadId"
+        >{{ copyButtonLabel }}</button>
         <button
           v-if="!isCmd && selectedThreadId"
           class="btn btn-ghost btn-xs"
@@ -843,6 +1024,69 @@ export const UnifiedChatPage = {
       </div>
 
       <div class="unified-main">
+        <aside v-if="!isCmd" class="thread-rail" aria-label="会话列表">
+          <header class="thread-rail-header">
+            <strong>会话列表</strong>
+            <span>{{ chatThreadCards.length }} 个 Agent</span>
+          </header>
+          <div v-if="chatThreadCards.length === 0" class="thread-rail-empty">暂无会话，点击顶部「启动 Agent」开始对话</div>
+          <div v-else class="thread-rail-list">
+            <button
+              v-for="thread in chatThreadCards"
+              :key="thread.id"
+              class="thread-rail-item"
+              :class="{ active: thread.selected }"
+              @click="selectThread(thread.id)"
+              :title="thread.name"
+            >
+              <div class="thread-rail-item-head">
+                <input
+                  v-if="editingThreadId === thread.id"
+                  :ref="(el) => setRenameInputRef(thread.id, el)"
+                  v-model="editingAlias"
+                  class="thread-rail-alias-input"
+                  type="text"
+                  maxlength="64"
+                  :disabled="renamingThreadId === thread.id"
+                  @click.stop
+                  @keydown.enter.prevent="submitInlineRename(thread.id)"
+                  @keydown.esc.prevent="cancelInlineRename(thread.id)"
+                  @blur="handleInlineRenameBlur(thread.id)"
+                >
+                <strong
+                  v-else
+                  class="thread-rail-name"
+                  @click.stop="beginInlineRename(thread.id)"
+                >{{ thread.name }}</strong>
+                <button
+                  type="button"
+                  class="thread-rail-pin-btn"
+                  :class="{ active: thread.isPinned }"
+                  :aria-label="thread.isPinned ? '取消置顶会话' : '置顶会话'"
+                  :title="thread.isPinned ? '取消置顶' : '置顶'"
+                  @click.stop="toggleThreadPin(thread.id)"
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M10.8 2.2c.4 0 .8.2 1.1.5l1.4 1.4a1.6 1.6 0 0 1 0 2.2l-1 1V10l1.2 1.2a.8.8 0 0 1-.6 1.3H8.7v2.7a.7.7 0 0 1-1.2.5L6 14.2V12.5H2.1a.8.8 0 0 1-.6-1.3L2.7 10V7.3l-1-1a1.6 1.6 0 0 1 0-2.2L3.1 2.7c.3-.3.7-.5 1.1-.5h6.6Z" fill="currentColor"></path>
+                  </svg>
+                </button>
+                <button
+                  v-if="editingThreadId !== thread.id"
+                  type="button"
+                  class="thread-rail-rename-btn"
+                  aria-label="重命名 Agent"
+                  @click.stop="beginInlineRename(thread.id)"
+                >改名</button>
+                <span v-if="thread.isMain" class="thread-main-badge">主</span>
+              </div>
+              <div v-if="thread.showId" class="thread-rail-item-id">{{ thread.id }}</div>
+              <div class="thread-rail-item-meta">
+                <span class="status-dot" :class="thread.status"></span>
+                <span>{{ thread.statusHeader }}</span>
+              </div>
+            </button>
+          </div>
+        </aside>
         <div class="unified-center">
           <section v-if="isCmd" class="cmd-card-panel">
             <div class="overview-metrics">
@@ -916,6 +1160,24 @@ export const UnifiedChatPage = {
           <div v-if="showWorkspace" class="workspace-area">
             <div ref="workspaceRef" id="agent-workspace" class="chat-workspace with-diff">
               <div id="chat-panel" class="chat-panel-only" :style="{ flex: '0 0 ' + splitRatio + '%' }">
+                <aside
+                  v-if="activePinnedPlan"
+                  class="chat-plan-pin"
+                  :class="{ done: activePinnedPlan.done }"
+                  :title="activePinnedPlan.statusText"
+                >
+                  <header class="chat-plan-pin-head">
+                    <span class="chat-plan-pin-role">计划</span>
+                    <span class="chat-plan-pin-status">{{ activePinnedPlan.statusText }}</span>
+                    <button
+                      type="button"
+                      class="chat-plan-pin-close"
+                      aria-label="关闭计划标签"
+                      @click="dismissPinnedPlan"
+                    >×</button>
+                  </header>
+                  <pre class="chat-plan-pin-body">{{ activePinnedPlan.text }}</pre>
+                </aside>
                 <div v-if="noActiveThread" class="chat-messages-vue">
                   <div class="diff-empty">选择或启动一个 Agent 开始对话</div>
                 </div>
@@ -924,6 +1186,8 @@ export const UnifiedChatPage = {
                   :items="activeTimeline"
                   :active-status="activeStatus"
                   :active-status-text="displayStatusText"
+                  :active-status-meta="activeStatusMeta"
+                  :pinned-plan-visible="Boolean(activePinnedPlan)"
                 />
               </div>
 
@@ -932,18 +1196,21 @@ export const UnifiedChatPage = {
               <DiffPanel :diff-text="activeDiffText" :style="{ flex: '0 0 ' + (100 - splitRatio) + '%' }" />
             </div>
 
-            <ComposerBar
-              ref="composerBarRef"
-              :composer="composer"
-              :thread-id="selectedThreadId"
-              :interruptible="canInterrupt"
-              :token-inline="activeTokenInline"
-              :token-tooltip="activeTokenTooltip"
-              :disabled="noActiveThread"
-              @send="send"
-              @interrupt="interruptCurrent"
-              @compact="compactCurrent"
-            />
+            <div class="chat-composer-shell" :class="{ 'for-chat': !isCmd }" :style="chatComposerShellStyle">
+              <ComposerBar
+                ref="composerBarRef"
+                :composer="composer"
+                :thread-id="selectedThreadId"
+                :interruptible="canInterrupt"
+                :compacting="compacting"
+                :token-inline="activeTokenInline"
+                :token-tooltip="activeTokenTooltip"
+                :disabled="noActiveThread"
+                @send="send"
+                @interrupt="interruptCurrent"
+                @compact="compactCurrent"
+              />
+            </div>
           </div>
         </div>
       </div>

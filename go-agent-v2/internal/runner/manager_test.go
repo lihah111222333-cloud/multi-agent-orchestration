@@ -243,6 +243,47 @@ func TestList_ConcurrentWithHandleEvent(t *testing.T) {
 	}
 }
 
+func TestList_DeterministicOrderByIDDesc(t *testing.T) {
+	mgr := NewAgentManager()
+
+	mgr.mu.Lock()
+	mgr.agents["agent-2"] = &AgentProcess{
+		ID:     "agent-2",
+		Name:   "Agent 2",
+		State:  StateIdle,
+		Client: &stubClient{port: 19902},
+	}
+	mgr.agents["agent-10"] = &AgentProcess{
+		ID:     "agent-10",
+		Name:   "Agent 10",
+		State:  StateIdle,
+		Client: &stubClient{port: 19910},
+	}
+	mgr.agents["agent-1"] = &AgentProcess{
+		ID:     "agent-1",
+		Name:   "Agent 1",
+		State:  StateIdle,
+		Client: &stubClient{port: 19901},
+	}
+	mgr.mu.Unlock()
+
+	first := mgr.List()
+	second := mgr.List()
+	if len(first) != 3 || len(second) != 3 {
+		t.Fatalf("unexpected list size: first=%d second=%d", len(first), len(second))
+	}
+
+	want := []string{"agent-2", "agent-10", "agent-1"}
+	for index := range want {
+		if first[index].ID != want[index] {
+			t.Fatalf("first[%d].ID = %q, want %q", index, first[index].ID, want[index])
+		}
+		if second[index].ID != want[index] {
+			t.Fatalf("second[%d].ID = %q, want %q", index, second[index].ID, want[index])
+		}
+	}
+}
+
 func TestLaunch_FallbackToRESTWhenAppServerFails(t *testing.T) {
 	mgr := NewAgentManager()
 	appClient := &fakeLaunchClient{

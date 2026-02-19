@@ -1,9 +1,10 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from '../lib/vue.esm-browser.prod.js';
-import { callAPI, getBuildInfo, onAgentEvent, onBridgeEvent } from './services/api.js';
+import { callAPI, getBuildInfo, onAgentEvent, onBridgeEvent, onAppWillQuit } from './services/api.js';
 import { SidebarNav } from './components/SidebarNav.js';
 import { ProjectModal } from './components/ProjectModal.js';
 import { UnifiedChatPage } from './pages/UnifiedChatPage.js';
 import { DataPage } from './pages/DataPage.js';
+import { SkillsPage } from './pages/SkillsPage.js';
 import { TasksPage } from './pages/TasksPage.js';
 import { CommandsPage } from './pages/CommandsPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
@@ -30,6 +31,7 @@ export const AppRoot = {
     ProjectModal,
     UnifiedChatPage,
     DataPage,
+    SkillsPage,
     TasksPage,
     CommandsPage,
     SettingsPage,
@@ -39,6 +41,7 @@ export const AppRoot = {
     const threadStore = useThreadStore();
 
     const page = ref('chat');
+    const isExiting = ref(false);
     const tasksSubTab = ref('acks');
     const buildInfo = reactive({});
 
@@ -56,6 +59,9 @@ export const AppRoot = {
     let refreshTimer = null;
     let unsubscribeAgentEvent = () => { };
     let unsubscribeBridgeEvent = () => { };
+    let unsubscribeAppWillQuit = () => { };
+    let removeBeforeUnload = () => { };
+    let removePageHide = () => { };
 
     const agentsFields = Object.freeze([
       { key: 'agent_id', label: 'Agent' },
@@ -81,11 +87,6 @@ export const AppRoot = {
       { key: 'span_name', label: 'Span' },
       { key: 'status', label: '状态' },
       { key: 'started_at', label: '开始' },
-    ]);
-
-    const skillsFields = Object.freeze([
-      { key: 'name', label: '技能' },
-      { key: 'path', label: '路径' },
     ]);
 
     const commandFields = Object.freeze([
@@ -174,6 +175,9 @@ export const AppRoot = {
       unsubscribeBridgeEvent = onBridgeEvent((evt) => {
         threadStore.handleBridgeEvent(evt);
       });
+      unsubscribeAppWillQuit = onAppWillQuit(() => {
+        isExiting.value = true;
+      });
 
       refreshTimer = setInterval(() => {
         threadStore.refreshThreads();
@@ -194,17 +198,31 @@ export const AppRoot = {
       bootstrap().catch((error) => {
         console.error('bootstrap failed:', error);
       });
+      const handleBeforeUnload = () => {
+        isExiting.value = true;
+      };
+      const handlePageHide = () => {
+        isExiting.value = true;
+      };
+      window.addEventListener('beforeunload', handleBeforeUnload);
+      window.addEventListener('pagehide', handlePageHide);
+      removeBeforeUnload = () => window.removeEventListener('beforeunload', handleBeforeUnload);
+      removePageHide = () => window.removeEventListener('pagehide', handlePageHide);
     });
 
     onBeforeUnmount(() => {
+      removeBeforeUnload();
+      removePageHide();
       unsubscribeAgentEvent();
       unsubscribeBridgeEvent();
+      unsubscribeAppWillQuit();
       if (refreshTimer) clearInterval(refreshTimer);
     });
 
     return {
       NAV_ITEMS,
       page,
+      isExiting,
       tasksSubTab,
       projectStore,
       threadStore,
@@ -214,7 +232,6 @@ export const AppRoot = {
       dagsFields,
       taskAckFields,
       taskTraceFields,
-      skillsFields,
       commandFields,
       promptFields,
       memoryFields,
@@ -265,14 +282,11 @@ export const AppRoot = {
           @update:tasks-sub-tab="tasksSubTab = $event"
         />
 
-        <DataPage
+        <SkillsPage
           v-else-if="page === 'skills'"
-          page-id="skills"
-          title="技能管理"
-          icon="S"
-          :items="dashboard.skills"
-          :fields="skillsFields"
-          empty-text="暂无 Skill"
+          :skills="dashboard.skills"
+          :thread-store="threadStore"
+          @refresh-skills="refreshDashboardByPage('skills')"
         />
 
         <CommandsPage
@@ -303,6 +317,12 @@ export const AppRoot = {
       </main>
 
       <ProjectModal :store="projectStore" />
+      <div class="app-exit-overlay" :class="{ active: isExiting }" aria-hidden="true">
+        <div class="app-exit-overlay-inner">
+          <img src="/vue-app/assets/exit-splash.png" alt="" class="app-exit-overlay-icon" />
+          <div class="app-exit-overlay-text">正在退出…</div>
+        </div>
+      </div>
     </div>
   `,
 };

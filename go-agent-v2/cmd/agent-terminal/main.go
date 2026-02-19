@@ -19,7 +19,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver"
@@ -35,6 +37,9 @@ import (
 
 //go:embed frontend/*
 var assets embed.FS
+
+//go:embed assets/appicon.png
+var appIcon []byte
 
 // loadEnvFile 从当前目录向上搜索 .env 文件并加载到环境变量。
 // 不覆盖已有的环境变量 — 只填充未设置的。
@@ -169,9 +174,12 @@ func main() {
 	appSvc := NewApp(*group, *n, appSrv, mgr)
 	// 统一通过 App 桥接转发，避免 debug 模式重复 publish 同一事件。
 	appSrv.SetNotifyHook(appSvc.handleBridgeNotification)
+	var quitOverlayShown atomic.Bool
+	var quitForceAllowed atomic.Bool
 
 	app := application.New(application.Options{
 		Name: "Agent Orchestrator",
+		Icon: appIcon,
 		Assets: application.AssetOptions{
 			Handler: application.BundledAssetFileServer(assets),
 		},
@@ -180,6 +188,30 @@ func main() {
 		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
+		},
+		ShouldQuit: func() bool {
+			if quitForceAllowed.Load() {
+				logger.Info("quit: allowing shutdown")
+				return true
+			}
+			if !quitOverlayShown.CompareAndSwap(false, true) {
+				return false
+			}
+			logger.Info("quit: showing exit overlay before shutdown", "delay_ms", 320)
+			if appSvc.wailsApp != nil && appSvc.wailsApp.Event != nil {
+				appSvc.wailsApp.Event.Emit("app-will-quit", map[string]any{
+					"delay_ms": 320,
+					"at":       time.Now().UTC().Format(time.RFC3339Nano),
+				})
+			}
+			util.SafeGo(func() {
+				time.Sleep(320 * time.Millisecond)
+				quitForceAllowed.Store(true)
+				if appSvc.wailsApp != nil {
+					appSvc.wailsApp.Quit()
+				}
+			})
+			return false
 		},
 		OnShutdown: func() {
 			cancel() // 停止 apiserver

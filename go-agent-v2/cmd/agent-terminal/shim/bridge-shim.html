@@ -22,18 +22,11 @@
         // Wails App bindings shim
         const AppShim = {
             CallAPI: async function (method, params) {
-                let payload = {};
-                if (params && typeof params === 'object') {
-                    payload = params;
-                } else if (typeof params === 'string' && params.trim()) {
-                    try {
-                        payload = JSON.parse(params);
-                    } catch {
-                        payload = {};
-                    }
+                const payload = params == null ? {} : params;
+                if (typeof payload !== 'object' || Array.isArray(payload)) {
+                    throw new TypeError('CallAPI params must be an object');
                 }
-                const result = await rpcCall(method, payload);
-                return result == null ? {} : result;
+                return rpcCall(method, payload);
             },
             LaunchAgent: async function (name, prompt, cwd) {
                 const result = await rpcCall('thread/start', { model: '', cwd: cwd || '.' });
@@ -41,7 +34,7 @@
                     const input = [{ type: 'text', text: prompt }];
                     await rpcCall('turn/start', { threadId: result.thread.id, input: input });
                 }
-                return result == null ? {} : result;
+                return result;
             },
             SubmitInput: async function (agentId, prompt) {
                 const input = [{ type: 'text', text: prompt }];
@@ -136,17 +129,15 @@
                     if (eventID > bridgeCursor) bridgeCursor = eventID;
                     const eventType = (evt?.type || '').toString();
                     const payload = (evt?.payload && typeof evt.payload === 'object') ? evt.payload : {};
-                    const raw = (evt?.data || JSON.stringify(payload)).toString();
                     const agentID = (evt?.agent_id || '').toString();
                     RuntimeShim.EventsEmit('bridge-event', {
                         type: eventType,
                         payload: payload,
-                        data: raw,
                     });
                     RuntimeShim.EventsEmit('agent-event', {
                         agent_id: agentID,
                         type: eventType,
-                        data: raw,
+                        payload: payload,
                     });
                 }
             } catch (err) {

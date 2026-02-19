@@ -11,7 +11,7 @@ import (
 func TestCallAPIReturnsObject(t *testing.T) {
 	app := &App{} // 无需 srv — ui/buildInfo 不经 apiserver
 
-	result, err := app.CallAPI("ui/buildInfo", "{}")
+	result, err := app.CallAPI("ui/buildInfo", map[string]any{})
 	if err != nil {
 		t.Fatalf("CallAPI(ui/buildInfo) returned error: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestCallAPIErrorReturnsNil(t *testing.T) {
 	app := &App{} // srv 为 nil, default 分支会 panic/err
 
 	// 调用一个需要 srv 的方法, 会因 nil srv 而失败
-	result, err := app.CallAPI("nonexistent/method", "{}")
+	result, err := app.CallAPI("nonexistent/method", map[string]any{})
 	if err == nil {
 		// 如果没出错, 至少验证返回值类型
 		_ = result
@@ -99,5 +99,38 @@ func TestExtractThreadIDFromParamsMap(t *testing.T) {
 	})
 	if threadID != "thread-map-1" {
 		t.Fatalf("expected threadID thread-map-1, got %q", threadID)
+	}
+}
+
+func TestCallAPIRejectsNonObjectParams(t *testing.T) {
+	app := &App{}
+
+	_, err := app.CallAPI("ui/buildInfo", "{}")
+	if err == nil {
+		t.Fatal("expected non-object params to be rejected")
+	}
+}
+
+func TestCallAPISelectProjectDirsReturnsPathsObject(t *testing.T) {
+	app := &App{}
+
+	result, err := app.CallAPI("ui/selectProjectDirs", map[string]any{})
+	if err != nil {
+		t.Fatalf("CallAPI(ui/selectProjectDirs) returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("CallAPI(ui/selectProjectDirs) returned nil")
+	}
+
+	payload, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("CallAPI(ui/selectProjectDirs) returned %T, expected map[string]any", result)
+	}
+	paths, ok := payload["paths"].([]string)
+	if !ok {
+		t.Fatalf("paths field type=%T, expected []string", payload["paths"])
+	}
+	if len(paths) != 0 {
+		t.Fatalf("expected empty paths when wails bridge unavailable, got=%v", paths)
 	}
 }

@@ -18,6 +18,7 @@ test('UnifiedChatPage reuses one status text source for top bar and timeline pre
   assert.equal(src.includes('statusLabel(card.status)'), false);
   assert.equal(src.includes('<span>{{ displayStatusText }}</span>'), true);
   assert.equal(src.includes(':active-status-text="displayStatusText"'), true);
+  assert.equal(src.includes(':active-status-meta="activeStatusMeta"'), true);
 });
 
 test('status service keeps only backend status normalization', async () => {

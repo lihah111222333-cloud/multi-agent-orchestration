@@ -683,11 +683,19 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 			return apperrors.New("AppServerClient.SendCommand", "interrupt requires active thread id")
 		}
 		turnID := strings.TrimSpace(c.getActiveTurnID())
-		if turnID != "" {
-			_, err := c.call("turn/interrupt", map[string]any{
+		tryTurnInterrupt := func(turnScope string) error {
+			params := map[string]any{
 				"threadId": threadID,
-				"turnId":   turnID,
-			}, appServerInterruptTimeout)
+			}
+			if turnScope == "with_turn_id" {
+				params["turnId"] = turnID
+			}
+			_, err := c.call("turn/interrupt", params, appServerInterruptTimeout)
+			return err
+		}
+
+		if turnID != "" {
+			err := tryTurnInterrupt("with_turn_id")
 			if err == nil {
 				logger.Info("codex: turn/interrupt OK",
 					logger.FieldAgentID, c.AgentID,
@@ -696,26 +704,65 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 				)
 				return nil
 			}
-			if !isMethodNotFoundRPCError(err) && !isInvalidParamsRPCError(err) {
-				logger.Warn("codex: turn/interrupt FAILED",
+			if isInterruptTurnIDMismatchError(err) {
+				logger.Warn("codex: turn/interrupt turn_id mismatch, retry thread-scoped interrupt",
 					logger.FieldAgentID, c.AgentID,
 					logger.FieldThreadID, threadID,
 					"turn_id", turnID,
 					logger.FieldError, err,
 				)
-				return err
+				if retryErr := tryTurnInterrupt("thread_scoped"); retryErr == nil {
+					logger.Info("codex: turn/interrupt thread-scoped retry OK",
+						logger.FieldAgentID, c.AgentID,
+						logger.FieldThreadID, threadID,
+						"turn_id", turnID,
+					)
+					return nil
+				} else {
+					err = retryErr
+				}
 			}
-			logger.Warn("codex: turn/interrupt unsupported, fallback to interruptConversation",
-				logger.FieldAgentID, c.AgentID,
-				logger.FieldThreadID, threadID,
-				"turn_id", turnID,
-				logger.FieldError, err,
-			)
+			if !isMethodNotFoundRPCError(err) && !isInvalidParamsRPCError(err) {
+				logger.Warn("codex: turn/interrupt FAILED, fallback to interruptConversation",
+					logger.FieldAgentID, c.AgentID,
+					logger.FieldThreadID, threadID,
+					"turn_id", turnID,
+					logger.FieldError, err,
+				)
+			} else {
+				logger.Warn("codex: turn/interrupt unsupported, fallback to interruptConversation",
+					logger.FieldAgentID, c.AgentID,
+					logger.FieldThreadID, threadID,
+					"turn_id", turnID,
+					logger.FieldError, err,
+				)
+			}
 		} else {
-			logger.Warn("codex: missing active turn id for turn/interrupt, fallback to interruptConversation",
+			logger.Warn("codex: missing active turn id, trying thread-scoped turn/interrupt",
 				logger.FieldAgentID, c.AgentID,
 				logger.FieldThreadID, threadID,
 			)
+			err := tryTurnInterrupt("thread_scoped")
+			if err == nil {
+				logger.Info("codex: turn/interrupt thread-scoped OK",
+					logger.FieldAgentID, c.AgentID,
+					logger.FieldThreadID, threadID,
+				)
+				return nil
+			}
+			if !isMethodNotFoundRPCError(err) && !isInvalidParamsRPCError(err) {
+				logger.Warn("codex: turn/interrupt thread-scoped FAILED, fallback to interruptConversation",
+					logger.FieldAgentID, c.AgentID,
+					logger.FieldThreadID, threadID,
+					logger.FieldError, err,
+				)
+			} else {
+				logger.Warn("codex: turn/interrupt thread-scoped unsupported, fallback to interruptConversation",
+					logger.FieldAgentID, c.AgentID,
+					logger.FieldThreadID, threadID,
+					logger.FieldError, err,
+				)
+			}
 		}
 
 		_, err := c.call("interruptConversation", map[string]any{
@@ -763,6 +810,18 @@ func isInvalidParamsRPCError(err error) bool {
 	}
 	text := strings.ToLower(err.Error())
 	return strings.Contains(text, "invalid params") || strings.Contains(text, "code -32602")
+}
+
+func isInterruptTurnIDMismatchError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "turn not found") ||
+		strings.Contains(text, "unknown turn") ||
+		strings.Contains(text, "invalid turn") ||
+		(strings.Contains(text, "turn id") && strings.Contains(text, "mismatch")) ||
+		(strings.Contains(text, "turn_id") && strings.Contains(text, "mismatch"))
 }
 
 // SendDynamicToolResult 回传动态工具执行结果。

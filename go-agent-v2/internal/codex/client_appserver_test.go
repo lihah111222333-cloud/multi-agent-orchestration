@@ -204,6 +204,18 @@ func TestIsInvalidParamsRPCError(t *testing.T) {
 	}
 }
 
+func TestIsInterruptTurnIDMismatchError(t *testing.T) {
+	if !isInterruptTurnIDMismatchError(assertErr("rpc error: turn not found")) {
+		t.Fatalf("expected turn-not-found to match turn-id mismatch")
+	}
+	if !isInterruptTurnIDMismatchError(assertErr("rpc error: turn_id mismatch")) {
+		t.Fatalf("expected turn_id mismatch to match turn-id mismatch")
+	}
+	if isInterruptTurnIDMismatchError(assertErr("rpc error: permission denied")) {
+		t.Fatalf("did not expect unrelated error to match turn-id mismatch")
+	}
+}
+
 func assertErr(msg string) error { return &testErr{msg: msg} }
 
 type testErr struct{ msg string }

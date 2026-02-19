@@ -1,4 +1,5 @@
-import { computed, onBeforeUnmount, onMounted, ref } from '../../lib/vue.esm-browser.prod.js';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from '../../lib/vue.esm-browser.prod.js';
+import { callAPI } from '../services/api.js';
 import { logInfo, readLogBuffer, readLogLevel } from '../services/log.js';
 
 export const SettingsPage = {
@@ -17,7 +18,18 @@ export const SettingsPage = {
     const commitText = computed(() => props.buildInfo.commit || '-');
     const logLevel = ref('info');
     const logEntries = ref([]);
+    const lspPromptHint = ref('');
+    const lspPromptDefaultHint = ref('');
+    const lspPromptLoading = ref(false);
+    const lspPromptSaving = ref(false);
+    const lspPromptNotice = reactive({ level: 'info', message: '' });
     let logRefreshTimer = 0;
+
+    // Turn Tracker 设置
+    const stallThreshold = ref(480);
+    const stallHeartbeat = ref(300);
+    const stallLoading = ref(false);
+    const stallNotice = reactive({ level: 'info', message: '' });
 
     function formatLogTime(value) {
       if (!value) return '--:--:--';
@@ -32,6 +44,98 @@ export const SettingsPage = {
       logEntries.value = buffer.slice(-LOG_LIST_LIMIT).reverse();
     }
 
+    function setLSPPromptNotice(level, message) {
+      lspPromptNotice.level = level || 'info';
+      lspPromptNotice.message = (message || '').toString().trim();
+    }
+
+    function setStallNotice(level, message) {
+      stallNotice.level = level || 'info';
+      stallNotice.message = (message || '').toString().trim();
+    }
+
+    async function loadLSPPromptHint() {
+      lspPromptLoading.value = true;
+      try {
+        const res = await callAPI('config/lspPromptHint/read', {});
+        const hint = (res?.hint || '').toString();
+        const defaultHint = (res?.defaultHint || '').toString();
+        lspPromptHint.value = hint;
+        lspPromptDefaultHint.value = defaultHint;
+        setLSPPromptNotice('info', '');
+      } catch (error) {
+        setLSPPromptNotice('error', `加载失败：${error?.message || error}`);
+      } finally {
+        lspPromptLoading.value = false;
+      }
+    }
+
+    async function saveLSPPromptHint() {
+      if (lspPromptSaving.value) return;
+      lspPromptSaving.value = true;
+      try {
+        const res = await callAPI('config/lspPromptHint/write', {
+          hint: lspPromptHint.value,
+        });
+        lspPromptHint.value = (res?.hint || '').toString();
+        if (res?.usingDefault) {
+          setLSPPromptNotice('info', '已恢复默认提示词');
+        } else {
+          setLSPPromptNotice('info', '提示词已保存');
+        }
+      } catch (error) {
+        setLSPPromptNotice('error', `保存失败：${error?.message || error}`);
+      } finally {
+        lspPromptSaving.value = false;
+      }
+    }
+
+    async function resetLSPPromptHint() {
+      if (lspPromptSaving.value) return;
+      lspPromptHint.value = '';
+      await saveLSPPromptHint();
+    }
+
+    // Turn Tracker: 加载
+    async function loadStallSettings() {
+      stallLoading.value = true;
+      try {
+        const [thresholdRes, heartbeatRes] = await Promise.all([
+          callAPI('ui/preferences/get', { key: 'stallThresholdSec' }).catch(() => null),
+          callAPI('ui/preferences/get', { key: 'stallHeartbeatSec' }).catch(() => null),
+        ]);
+        if (thresholdRes != null && typeof thresholdRes === 'number') stallThreshold.value = thresholdRes;
+        if (heartbeatRes != null && typeof heartbeatRes === 'number') stallHeartbeat.value = heartbeatRes;
+        setStallNotice('info', '');
+      } catch (error) {
+        setStallNotice('error', `加载失败：${error?.message || error}`);
+      } finally {
+        stallLoading.value = false;
+      }
+    }
+
+    // Turn Tracker: 保存单个
+    async function saveStallSetting(key, value, label) {
+      const num = parseInt(value, 10);
+      if (Number.isNaN(num) || num < 10) {
+        setStallNotice('error', `${label}不能小于 10 秒`);
+        return;
+      }
+      try {
+        await callAPI('ui/preferences/set', { key, value: num });
+        setStallNotice('info', `${label}已保存: ${num}s (${Math.round(num / 60)}分钟)`);
+      } catch (error) {
+        setStallNotice('error', `保存失败：${error?.message || error}`);
+      }
+    }
+
+    async function saveStallThreshold() {
+      await saveStallSetting('stallThresholdSec', stallThreshold.value, 'Stall 阈值');
+    }
+    async function saveStallHeartbeat() {
+      await saveStallSetting('stallHeartbeatSec', stallHeartbeat.value, '心跳间隔');
+    }
+
     const refresh = () => {
       logInfo('page', 'settings.refreshBuildInfo.click', {});
       emit('refresh');
@@ -40,6 +144,8 @@ export const SettingsPage = {
     onMounted(() => {
       logInfo('page', 'settings.mounted', {});
       refreshLogPanel();
+      loadLSPPromptHint();
+      loadStallSettings();
       logRefreshTimer = window.setInterval(refreshLogPanel, 1000);
     });
     onBeforeUnmount(() => {
@@ -56,9 +162,24 @@ export const SettingsPage = {
       commitText,
       logLevel,
       logEntries,
+      lspPromptHint,
+      lspPromptDefaultHint,
+      lspPromptLoading,
+      lspPromptSaving,
+      lspPromptNotice,
       refresh,
       refreshLogPanel,
+      loadLSPPromptHint,
+      saveLSPPromptHint,
+      resetLSPPromptHint,
       formatLogTime,
+      stallThreshold,
+      stallHeartbeat,
+      stallLoading,
+      stallNotice,
+      loadStallSettings,
+      saveStallThreshold,
+      saveStallHeartbeat,
     };
   },
   template: `
@@ -80,6 +201,71 @@ export const SettingsPage = {
         </div>
         <div class="settings-action-row">
           <button class="btn btn-secondary" @click="refresh">刷新构建信息</button>
+        </div>
+
+        <div class="section-header">TURN TRACKER</div>
+        <div class="data-card-vue settings-stall-card">
+          <div class="data-row-vue">
+            <strong>Stall 检测阈值</strong>
+            <span>无事件超过此时间自动中断 turn</span>
+          </div>
+          <div class="settings-stall-row">
+            <input
+              type="number"
+              class="settings-stall-input"
+              v-model.number="stallThreshold"
+              min="30"
+              step="30"
+              :disabled="stallLoading"
+            />
+            <span class="settings-stall-unit">秒 ({{ Math.round(stallThreshold / 60) }} 分钟)</span>
+            <button class="btn btn-primary btn-toolbar-sm" @click="saveStallThreshold" :disabled="stallLoading">保存</button>
+          </div>
+          <div class="data-row-vue" style="margin-top:12px">
+            <strong>心跳保活间隔</strong>
+            <span>等待工具 / 审批期间的续命频率</span>
+          </div>
+          <div class="settings-stall-row">
+            <input
+              type="number"
+              class="settings-stall-input"
+              v-model.number="stallHeartbeat"
+              min="10"
+              step="30"
+              :disabled="stallLoading"
+            />
+            <span class="settings-stall-unit">秒 ({{ Math.round(stallHeartbeat / 60) }} 分钟)</span>
+            <button class="btn btn-primary btn-toolbar-sm" @click="saveStallHeartbeat" :disabled="stallLoading">保存</button>
+          </div>
+          <div v-if="stallNotice.message" class="settings-prompt-notice" :class="'is-' + stallNotice.level">
+            {{ stallNotice.message }}
+          </div>
+        </div>
+
+        <div class="section-header">PROMPT</div>
+        <div class="data-card-vue settings-prompt-card">
+          <div class="data-row-vue">
+            <strong>LSP 提示词注入</strong>
+            <span>{{ lspPromptLoading ? '加载中...' : '已启用' }}</span>
+          </div>
+          <div class="settings-prompt-desc">留空并保存可恢复默认值</div>
+          <textarea
+            class="settings-prompt-textarea"
+            rows="6"
+            v-model="lspPromptHint"
+            :placeholder="lspPromptDefaultHint || '请输入提示词'"
+            :disabled="lspPromptLoading || lspPromptSaving"
+          ></textarea>
+          <div v-if="lspPromptNotice.message" class="settings-prompt-notice" :class="'is-' + lspPromptNotice.level">
+            {{ lspPromptNotice.message }}
+          </div>
+          <div class="settings-action-row settings-action-inline">
+            <button class="btn btn-secondary btn-toolbar-sm" @click="loadLSPPromptHint" :disabled="lspPromptSaving">刷新</button>
+            <button class="btn btn-secondary btn-toolbar-sm" @click="resetLSPPromptHint" :disabled="lspPromptLoading || lspPromptSaving">恢复默认</button>
+            <button class="btn btn-primary btn-toolbar-sm" @click="saveLSPPromptHint" :disabled="lspPromptLoading || lspPromptSaving">
+              {{ lspPromptSaving ? '保存中...' : '保存提示词' }}
+            </button>
+          </div>
         </div>
 
         <div class="section-header">UI LOG</div>

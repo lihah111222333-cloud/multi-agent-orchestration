@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -236,6 +237,7 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 	// 子进程不应随 HTTP 请求或 WebSocket 连接断开而被终止。
 	// 生命周期由 AppServerClient.Shutdown()/Kill() 显式管理。
 	c.Cmd = exec.Command("codex", "app-server", "--listen", listenURL)
+	c.Cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	c.Cmd.Env = os.Environ()
 	c.Cmd.Stdout = io.Discard
 	c.stderrCollector = logger.NewStderrCollector(fmt.Sprintf("codex-appserver-%d", c.Port))
@@ -2033,7 +2035,13 @@ func (c *AppServerClient) Kill() error {
 	if c.Cmd == nil || c.Cmd.Process == nil {
 		return nil
 	}
-	killErr := c.Cmd.Process.Kill()
+	// 尝试杀掉整个进程组 (Setpgid=true 时 pgid == pid)。
+	// 回退: 如果进程组 kill 失败, 直接 kill 进程本身。
+	pid := c.Cmd.Process.Pid
+	killErr := syscall.Kill(-pid, syscall.SIGKILL)
+	if killErr != nil {
+		killErr = c.Cmd.Process.Kill()
+	}
 	if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
 		return killErr
 	}

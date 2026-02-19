@@ -132,7 +132,10 @@ func (a *App) shutdown() {
 	})
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+		logger.Info("shutdown: all agents stopped gracefully")
+	case <-time.After(5 * time.Second):
+		logger.Warn("shutdown: StopAll timed out, forcing KillAll")
+		a.mgr.KillAll()
 	}
 }
 

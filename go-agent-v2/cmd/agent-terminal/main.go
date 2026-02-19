@@ -137,6 +137,7 @@ func main() {
 
 	// ─── 内嵌 apiserver (统一工具注入 + JSON-RPC) ───
 	mgr := runner.NewAgentManager()
+	runner.CleanOrphanedProcesses()
 	lspMgr := lsp.NewManager(nil)
 
 	deps := apiserver.Deps{

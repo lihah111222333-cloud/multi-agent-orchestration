@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
@@ -105,6 +106,7 @@ func (c *Client) Spawn(ctx context.Context) error {
 
 	portArg := strconv.Itoa(c.Port)
 	c.Cmd = exec.CommandContext(ctx, "codex", "http-api", "--p1", portArg)
+	c.Cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	c.Cmd.Env = os.Environ()
 
 	// port 0: 捕获 stdout 以发现实际端口
@@ -488,8 +490,12 @@ func (c *Client) Shutdown() error {
 // Kill 强制终止子进程。
 func (c *Client) Kill() error {
 	if c.Cmd != nil && c.Cmd.Process != nil {
-		logger.Warn("codex: force killing process", logger.FieldAgentID, c.AgentID, logger.FieldPID, c.Cmd.Process.Pid)
-		_ = c.Cmd.Process.Kill()
+		pid := c.Cmd.Process.Pid
+		logger.Warn("codex: force killing process", logger.FieldAgentID, c.AgentID, logger.FieldPID, pid)
+		// 尝试杀整个进程组, 回退到单进程 kill。
+		if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
+			_ = c.Cmd.Process.Kill()
+		}
 		_ = c.Cmd.Wait()
 	}
 	return nil

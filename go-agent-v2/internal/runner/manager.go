@@ -8,14 +8,18 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net"
+	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
@@ -383,7 +387,7 @@ func (m *AgentManager) Stop(id string) error {
 	return nil
 }
 
-// StopAll 停止所有 Agent。
+// StopAll 并行停止所有 Agent (优雅关停)。
 func (m *AgentManager) StopAll() {
 	m.mu.RLock()
 	ids := make([]string, 0, len(m.agents))
@@ -392,11 +396,76 @@ func (m *AgentManager) StopAll() {
 	}
 	m.mu.RUnlock()
 
-	logger.Infow("runner: stopping all agents", logger.FieldCount, len(ids))
+	if len(ids) == 0 {
+		return
+	}
+	logger.Infow("runner: stopping all agents (parallel)", logger.FieldCount, len(ids))
+	var wg sync.WaitGroup
 	for _, id := range ids {
-		if err := m.Stop(id); err != nil {
-			logger.Warn("runner: stop agent failed during StopAll", logger.FieldAgentID, id, logger.FieldError, err)
+		wg.Add(1)
+		go func(agentID string) {
+			defer wg.Done()
+			if err := m.Stop(agentID); err != nil {
+				logger.Warn("runner: stop agent failed during StopAll", logger.FieldAgentID, agentID, logger.FieldError, err)
+			}
+		}(id)
+	}
+	wg.Wait()
+}
+
+// KillAll 强制终止所有 Agent (不走优雅关停, 直接 Kill)。
+//
+// 用于 StopAll 超时后的兜底, 确保子进程不泄漏。
+func (m *AgentManager) KillAll() {
+	m.mu.Lock()
+	procs := make([]*AgentProcess, 0, len(m.agents))
+	for _, proc := range m.agents {
+		procs = append(procs, proc)
+	}
+	// 清空 map, 避免重复操作
+	for id := range m.agents {
+		delete(m.agents, id)
+	}
+	m.mu.Unlock()
+
+	if len(procs) == 0 {
+		return
+	}
+	logger.Infow("runner: force killing all agents", logger.FieldCount, len(procs))
+	for _, proc := range procs {
+		if err := proc.Client.Kill(); err != nil {
+			logger.Warn("runner: KillAll: kill failed", logger.FieldAgentID, proc.ID, logger.FieldError, err)
 		}
+	}
+}
+
+// CleanOrphanedProcesses 清理上次异常退出残留的 codex app-server 子进程。
+//
+// 通过 pgrep 查找 "codex.*app-server.*--listen" 进程, 逐个 SIGKILL。
+// 仅在应用启动时调用一次。
+func CleanOrphanedProcesses() {
+	out, err := exec.Command("pgrep", "-f", "codex app-server --listen").Output()
+	if err != nil {
+		// pgrep exit 1 = 没找到匹配进程 (正常)
+		return
+	}
+	lines := bytes.Split(bytes.TrimSpace(out), []byte("\n"))
+	killed := 0
+	for _, line := range lines {
+		pidStr := strings.TrimSpace(string(line))
+		pid, parseErr := strconv.Atoi(pidStr)
+		if parseErr != nil || pid <= 0 {
+			continue
+		}
+		if killErr := syscall.Kill(pid, syscall.SIGKILL); killErr == nil {
+			killed++
+		}
+	}
+	if killed > 0 {
+		logger.Warn("runner: cleaned orphaned codex app-server processes",
+			logger.FieldCount, killed,
+			"total_found", len(lines),
+		)
 	}
 }
 

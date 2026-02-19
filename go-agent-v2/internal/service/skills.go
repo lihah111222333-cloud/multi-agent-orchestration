@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
@@ -117,12 +118,14 @@ func parseSkillMetadata(content string) skillMetadata {
 			words, consumed := parseFrontmatterWords(value, lines[idx+1:])
 			meta.ForceWords = words
 			idx += consumed
+		case "aliases", "alias", "tags", "tag", "keywords", "keyword":
+			words, consumed := parseFrontmatterWords(value, lines[idx+1:])
+			meta.TriggerWords = append(meta.TriggerWords, words...)
+			idx += consumed
 		}
 	}
 
-	if len(meta.Description) > 120 {
-		meta.Description = meta.Description[:120] + "..."
-	}
+	meta.Description = truncateRunes(meta.Description, 120)
 	meta.TriggerWords = uniqueWords(meta.TriggerWords)
 	meta.ForceWords = uniqueWords(meta.ForceWords)
 	return meta
@@ -222,4 +225,43 @@ func uniqueWords(raw []string) []string {
 		out = append(out, word)
 	}
 	return out
+}
+
+func truncateRunes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if value == "" {
+		return ""
+	}
+	if utf8.RuneCountInString(value) <= limit {
+		return value
+	}
+
+	const ellipsis = "..."
+	ellipsisRunes := utf8.RuneCountInString(ellipsis)
+	if limit <= ellipsisRunes {
+		return ellipsis
+	}
+	maxContentRunes := limit - ellipsisRunes
+	if maxContentRunes <= 0 {
+		return ellipsis
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(value))
+	usedRunes := 0
+	for _, r := range value {
+		if usedRunes >= maxContentRunes {
+			break
+		}
+		builder.WriteRune(r)
+		usedRunes += 1
+	}
+
+	result := builder.String() + ellipsis
+	if !utf8.ValidString(result) {
+		return value
+	}
+	return result
 }

@@ -77,6 +77,7 @@ func (s *Server) registerMethods() {
 	s.methods["skills/remote/write"] = typedHandler(s.skillsRemoteWriteTyped)
 	s.methods["skills/config/read"] = typedHandler(s.skillsConfigReadTyped)
 	s.methods["skills/config/write"] = typedHandler(s.skillsConfigWriteTyped)
+	s.methods["skills/match/preview"] = typedHandler(s.skillsMatchPreviewTyped)
 	s.methods["app/list"] = s.appList
 
 	// § 6. 模型 / 配置 (7 methods)
@@ -933,46 +934,75 @@ func (s *Server) buildConfiguredSkillPrompt(agentID string, input []UserInput) (
 	return strings.Join(texts, "\n"), len(texts)
 }
 
-func lowerContainsAny(text string, candidates []string) bool {
+func lowerMatchedTerms(text string, candidates []string) []string {
 	if text == "" || len(candidates) == 0 {
-		return false
+		return nil
 	}
+	terms := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
 	for _, raw := range candidates {
-		candidate := strings.ToLower(strings.TrimSpace(raw))
+		candidate := strings.TrimSpace(raw)
 		if candidate == "" {
 			continue
 		}
-		if strings.Contains(text, candidate) {
-			return true
+		lowerCandidate := strings.ToLower(candidate)
+		if _, ok := seen[lowerCandidate]; ok {
+			continue
 		}
+		if !strings.Contains(text, lowerCandidate) {
+			continue
+		}
+		seen[lowerCandidate] = struct{}{}
+		terms = append(terms, candidate)
 	}
-	return false
+	if len(terms) == 0 {
+		return nil
+	}
+	return terms
 }
 
-func (s *Server) buildAutoMatchedSkillPrompt(agentID, prompt string, input []UserInput) (string, int) {
+func classifyAutoSkillMatch(normalizedPrompt string, forceWords, triggerWords []string) (string, []string) {
+	forceTerms := lowerMatchedTerms(normalizedPrompt, forceWords)
+	if len(forceTerms) > 0 {
+		return "force", forceTerms
+	}
+	triggerTerms := lowerMatchedTerms(normalizedPrompt, triggerWords)
+	if len(triggerTerms) > 0 {
+		return "trigger", triggerTerms
+	}
+	return "", nil
+}
+
+type autoMatchedSkillMatch struct {
+	Name         string
+	MatchedBy    string
+	MatchedTerms []string
+}
+
+func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []UserInput) []autoMatchedSkillMatch {
 	if s.skillSvc == nil {
-		return "", 0
+		return nil
 	}
 	normalizedPrompt := strings.ToLower(strings.TrimSpace(prompt))
 	if normalizedPrompt == "" {
-		return "", 0
+		return nil
 	}
 	allSkills, err := s.skillSvc.ListSkills()
 	if err != nil {
-		logger.Warn("turn/start: list skills for auto-match failed",
+		logger.Warn("skills/auto-match: list skills failed",
 			logger.FieldAgentID, agentID, logger.FieldThreadID, agentID,
 			logger.FieldError, err,
 		)
-		return "", 0
+		return nil
 	}
 	if len(allSkills) == 0 {
-		return "", 0
+		return nil
 	}
 
 	skipSet := collectInputSkillNames(input)
 	skipSet = mergeSkillNameSets(skipSet, collectSkillNameSet(s.GetAgentSkills(agentID)))
 
-	texts := make([]string, 0, len(allSkills))
+	matches := make([]autoMatchedSkillMatch, 0, len(allSkills))
 	for _, skill := range allSkills {
 		skillName := strings.TrimSpace(skill.Name)
 		if skillName == "" {
@@ -981,13 +1011,31 @@ func (s *Server) buildAutoMatchedSkillPrompt(agentID, prompt string, input []Use
 		if _, exists := skipSet[strings.ToLower(skillName)]; exists {
 			continue
 		}
-
-		triggered := lowerContainsAny(normalizedPrompt, skill.ForceWords) ||
-			lowerContainsAny(normalizedPrompt, skill.TriggerWords)
-		if !triggered {
+		matchedBy, matchedTerms := classifyAutoSkillMatch(normalizedPrompt, skill.ForceWords, skill.TriggerWords)
+		if matchedBy == "" {
 			continue
 		}
+		matches = append(matches, autoMatchedSkillMatch{
+			Name:         skillName,
+			MatchedBy:    matchedBy,
+			MatchedTerms: matchedTerms,
+		})
+	}
+	return matches
+}
 
+func (s *Server) buildAutoMatchedSkillPrompt(agentID, prompt string, input []UserInput) (string, int) {
+	matches := s.collectAutoMatchedSkillMatches(agentID, prompt, input)
+	if len(matches) == 0 {
+		return "", 0
+	}
+
+	texts := make([]string, 0, len(matches))
+	for _, match := range matches {
+		skillName := strings.TrimSpace(match.Name)
+		if skillName == "" {
+			continue
+		}
 		content, readErr := s.skillSvc.ReadSkillContent(skillName)
 		if readErr != nil {
 			logger.Warn("turn/start: auto-matched skill unavailable, skip",
@@ -1970,8 +2018,53 @@ type skillsConfigWriteParams struct {
 	Skills  []string `json:"skills"`
 }
 
+type skillsMatchPreviewParams struct {
+	ThreadID string      `json:"threadId"`
+	AgentID  string      `json:"agent_id,omitempty"`
+	Text     string      `json:"text"`
+	Input    []UserInput `json:"input,omitempty"`
+}
+
+type skillsMatchPreviewItem struct {
+	Name         string   `json:"name"`
+	MatchedBy    string   `json:"matched_by"`
+	MatchedTerms []string `json:"matched_terms,omitempty"`
+}
+
+func resolveSkillMatchPreviewThreadID(p skillsMatchPreviewParams) string {
+	threadID := strings.TrimSpace(p.ThreadID)
+	if threadID != "" {
+		return threadID
+	}
+	return strings.TrimSpace(p.AgentID)
+}
+
 type skillsConfigReadParams struct {
 	AgentID string `json:"agent_id"`
+}
+
+func (s *Server) skillsMatchPreviewTyped(_ context.Context, p skillsMatchPreviewParams) (any, error) {
+	threadID := resolveSkillMatchPreviewThreadID(p)
+	matches := s.collectAutoMatchedSkillMatches(threadID, p.Text, p.Input)
+	items := make([]skillsMatchPreviewItem, 0, len(matches))
+	for _, match := range matches {
+		name := strings.TrimSpace(match.Name)
+		if name == "" {
+			continue
+		}
+		item := skillsMatchPreviewItem{
+			Name:      name,
+			MatchedBy: match.MatchedBy,
+		}
+		if len(match.MatchedTerms) > 0 {
+			item.MatchedTerms = append([]string(nil), match.MatchedTerms...)
+		}
+		items = append(items, item)
+	}
+	return map[string]any{
+		"thread_id": threadID,
+		"matches":   items,
+	}, nil
 }
 
 func (s *Server) skillsConfigReadTyped(_ context.Context, p skillsConfigReadParams) (any, error) {

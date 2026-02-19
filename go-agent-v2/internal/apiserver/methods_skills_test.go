@@ -196,6 +196,152 @@ tdd skill`)
 	}
 }
 
+func TestBuildAutoMatchedSkillPromptUsesTagsAndAliases(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("brand-guide", `---
+description: 品牌设计规范
+tags: [品牌, 设计, 视觉]
+aliases:
+  - "@品牌"
+---
+brand guide`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+	}
+
+	prompt, count := srv.buildAutoMatchedSkillPrompt("thread-1", "请输出品牌视觉规范", nil)
+	if count != 1 {
+		t.Fatalf("auto matched skill count=%d, want=1", count)
+	}
+	if !strings.Contains(prompt, "[skill:brand-guide]") {
+		t.Fatalf("expected brand-guide skill in auto matched prompt, got=%q", prompt)
+	}
+}
+
+func TestSkillsMatchPreviewTypedReturnsReasonAndTerms(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("backend", `---
+description: backend helper
+trigger_words: [api]
+---
+backend skill`)
+	writeSkill("brand-guide", `---
+description: 品牌设计规范
+tags: [品牌, 设计]
+force_words: ["@品牌", "@brand"]
+---
+brand guide`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+		agentSkills: map[string][]string{
+			"thread-1": {"backend"},
+		},
+	}
+
+	raw, err := srv.skillsMatchPreviewTyped(context.Background(), skillsMatchPreviewParams{
+		ThreadID: "thread-1",
+		Text:     "请按@品牌输出 api 相关规范",
+	})
+	if err != nil {
+		t.Fatalf("skillsMatchPreviewTyped error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	threadID, _ := resp["thread_id"].(string)
+	if threadID != "thread-1" {
+		t.Fatalf("thread_id=%q, want=thread-1", threadID)
+	}
+	matches, ok := resp["matches"].([]skillsMatchPreviewItem)
+	if !ok {
+		t.Fatalf("matches type=%T, want=[]skillsMatchPreviewItem", resp["matches"])
+	}
+	if len(matches) != 1 {
+		t.Fatalf("len(matches)=%d, want=1", len(matches))
+	}
+	if matches[0].Name != "brand-guide" {
+		t.Fatalf("match[0].Name=%q, want=brand-guide", matches[0].Name)
+	}
+	if matches[0].MatchedBy != "force" {
+		t.Fatalf("match[0].MatchedBy=%q, want=force", matches[0].MatchedBy)
+	}
+	if !reflect.DeepEqual(matches[0].MatchedTerms, []string{"@品牌"}) {
+		t.Fatalf("match[0].MatchedTerms=%v, want=[@品牌]", matches[0].MatchedTerms)
+	}
+}
+
+func TestSkillsMatchPreviewTypedSkipsInputSkillAndSupportsAgentID(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("brand-guide", `---
+description: 品牌设计规范
+force_words: ["@brand"]
+---
+brand guide`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+	}
+
+	raw, err := srv.skillsMatchPreviewTyped(context.Background(), skillsMatchPreviewParams{
+		AgentID: "thread-2",
+		Text:    "请按@brand输出",
+		Input: []UserInput{
+			{Type: "skill", Name: "brand-guide", Content: "manual"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("skillsMatchPreviewTyped error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	threadID, _ := resp["thread_id"].(string)
+	if threadID != "thread-2" {
+		t.Fatalf("thread_id=%q, want=thread-2", threadID)
+	}
+	matches, ok := resp["matches"].([]skillsMatchPreviewItem)
+	if !ok {
+		t.Fatalf("matches type=%T, want=[]skillsMatchPreviewItem", resp["matches"])
+	}
+	if len(matches) != 0 {
+		t.Fatalf("len(matches)=%d, want=0", len(matches))
+	}
+}
+
 func TestSkillsConfigReadAndLocalRead(t *testing.T) {
 	tmp := t.TempDir()
 	localFile := filepath.Join(tmp, "backend.md")

@@ -1,6 +1,9 @@
 package apiserver
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestBuildUserTimelineAttachments(t *testing.T) {
 	attachments := buildUserTimelineAttachments(
@@ -74,5 +77,39 @@ func TestBuildUserTimelineAttachmentsFromInputs_PreferLocalImageURL(t *testing.T
 	}
 	if attachments[1].Kind != "file" || attachments[1].Path != "/tmp/spec.md" {
 		t.Fatalf("attachments[1] = %+v", attachments[1])
+	}
+}
+
+func TestExtractInputs_FileContentWithoutPathUsesPrompt(t *testing.T) {
+	prompt, images, files := extractInputs([]UserInput{
+		{Type: "text", Text: "请看附件"},
+		{Type: "fileContent", Name: "L1记忆系统.md", Content: "# 设计\nA"},
+	})
+	if !strings.Contains(prompt, "[file:L1记忆系统.md]") {
+		t.Fatalf("prompt = %q, want inline file marker", prompt)
+	}
+	if !strings.Contains(prompt, "# 设计") {
+		t.Fatalf("prompt = %q, want inline file content", prompt)
+	}
+	if len(images) != 0 {
+		t.Fatalf("images = %#v, want empty", images)
+	}
+	if len(files) != 0 {
+		t.Fatalf("files = %#v, want empty", files)
+	}
+}
+
+func TestBuildUserTimelineAttachmentsFromInputs_FileContentWithoutPath(t *testing.T) {
+	attachments := buildUserTimelineAttachmentsFromInputs([]UserInput{
+		{Type: "fileContent", Name: "L1记忆系统.md", Content: "hello"},
+	})
+	if len(attachments) != 1 {
+		t.Fatalf("len(attachments) = %d, want 1", len(attachments))
+	}
+	if attachments[0].Kind != "file" || attachments[0].Name != "L1记忆系统.md" {
+		t.Fatalf("attachments[0] = %+v", attachments[0])
+	}
+	if attachments[0].Path != "" {
+		t.Fatalf("attachments[0].Path = %q, want empty", attachments[0].Path)
 	}
 }

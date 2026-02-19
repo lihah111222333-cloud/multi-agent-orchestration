@@ -475,6 +475,9 @@ func (s *Server) throttledUIStateChanged(payload map[string]any) {
 	interval := time.Duration(uiStateThrottleMs) * time.Millisecond
 
 	s.uiThrottleMu.Lock()
+	if s.uiThrottleEntries == nil {
+		s.uiThrottleEntries = make(map[string]*uiStateThrottleEntry)
+	}
 	entry, ok := s.uiThrottleEntries[key]
 	if !ok {
 		entry = &uiStateThrottleEntry{}

@@ -63,3 +63,36 @@ func TestScoreLineDim(t *testing.T) {
 		t.Fatalf("lines len = %d, want 2", len(lines))
 	}
 }
+
+// ========================================
+// Fix 2: bare type assertion 安全检查
+// ========================================
+
+func TestSanitizeTopology_MissingKeys_NoPanic(t *testing.T) {
+	// sanitizeGateway 当前实现保证返回 ok=true 时 agents_raw 和 id 存在。
+	// 但这些 bare type assertions 属于脆弱编码: 如果 sanitizeGateway 行为变更,
+	// 第 148-149 行的直接断言会 panic。此测试验证 sanitizeTopology 在
+	// sanitizeGateway 返回 false (因 agents 缺失) 时不会 panic。
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("sanitizeTopology panicked: %v", r)
+		}
+	}()
+
+	// 构造一个 gateway 列表，其中 gateway 缺少 agents 字段 →
+	// sanitizeGateway 返回 false → 外层 continue, 不应 panic。
+	raw := map[string]any{
+		"gateways": []any{
+			map[string]any{
+				"id":   "gw-1",
+				"name": "Gateway",
+				// 缺少 "agents" → sanitizeGateway 返回 false
+			},
+		},
+	}
+
+	result := sanitizeTopology(raw)
+	if result != nil {
+		t.Fatal("expected nil result when no agents present")
+	}
+}

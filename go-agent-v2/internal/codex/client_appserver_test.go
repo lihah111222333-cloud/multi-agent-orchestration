@@ -186,6 +186,44 @@ func TestTrackTurnLifecycle_WithTurnAbortedClearsActiveTurn(t *testing.T) {
 	}
 }
 
+func TestTrackTurnLifecycle_RetryableStreamErrorKeepsActiveTurn(t *testing.T) {
+	client := NewAppServerClient(0, "")
+	client.trackTurnLifecycle(Event{
+		Type: EventTurnStarted,
+		Data: json.RawMessage(`{"threadId":"thr-stream","turn":{"id":"turn-stream","status":"inProgress"}}`),
+	}, "turn/started")
+	if got := client.getActiveTurnID(); got != "turn-stream" {
+		t.Fatalf("active turn id = %q, want %q", got, "turn-stream")
+	}
+
+	client.trackTurnLifecycle(Event{
+		Type: EventStreamError,
+		Data: json.RawMessage(`{"message":"Reconnecting... 1/5","willRetry":true}`),
+	}, "error")
+	if got := client.getActiveTurnID(); got != "turn-stream" {
+		t.Fatalf("retryable stream error should keep active turn, got %q", got)
+	}
+}
+
+func TestTrackTurnLifecycle_NonRetryableStreamErrorClearsActiveTurn(t *testing.T) {
+	client := NewAppServerClient(0, "")
+	client.trackTurnLifecycle(Event{
+		Type: EventTurnStarted,
+		Data: json.RawMessage(`{"threadId":"thr-stream-fail","turn":{"id":"turn-stream-fail","status":"inProgress"}}`),
+	}, "turn/started")
+	if got := client.getActiveTurnID(); got != "turn-stream-fail" {
+		t.Fatalf("active turn id = %q, want %q", got, "turn-stream-fail")
+	}
+
+	client.trackTurnLifecycle(Event{
+		Type: EventStreamError,
+		Data: json.RawMessage(`{"message":"Reconnect failed","willRetry":false}`),
+	}, "error")
+	if got := client.getActiveTurnID(); got != "" {
+		t.Fatalf("non-retryable stream error should clear active turn, got %q", got)
+	}
+}
+
 func TestMapMethodToEventType_TurnAborted(t *testing.T) {
 	eventType, ok := mapMethodToEventType("agent/event/turn_aborted")
 	if !ok {

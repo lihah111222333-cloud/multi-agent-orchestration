@@ -1327,8 +1327,11 @@ func (s *Server) turnForceComplete(_ context.Context, params json.RawMessage) (a
 		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 	)
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		// 尝试发送中断; 忽略 "no active turn" 错误。
-		_ = proc.Client.SendCommand("/interrupt", "")
+		// 尝试发送中断; 忽略 "no active turn" 错误, 但记录其他错误。
+		if err := proc.Client.SendCommand("/interrupt", ""); err != nil {
+			logger.Warn("turn/forceComplete: interrupt failed (best-effort)",
+				logger.FieldAgentID, p.ThreadID, logger.FieldError, err)
+		}
 
 		// 无论中断是否成功, 都强制清理 tracked turn 状态。
 		if completion, ok := s.completeTrackedTurn(p.ThreadID, "completed", "force_complete"); ok {

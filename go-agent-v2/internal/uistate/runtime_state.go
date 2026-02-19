@@ -112,12 +112,13 @@ type threadRuntime struct {
 	planIndex      int
 	editingFiles   map[string]struct{}
 
-	turnDepth     int
-	approvalDepth int
-	commandDepth  int
-	fileEditDepth int
-	toolCallDepth int
-	collabDepth   int
+	turnDepth      int
+	approvalDepth  int
+	userInputDepth int
+	commandDepth   int
+	fileEditDepth  int
+	toolCallDepth  int
+	collabDepth    int
 
 	terminalWaitOverlay bool
 	terminalWaitLabel   string
@@ -842,15 +843,34 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 	eventType := strings.ToLower(strings.TrimSpace(normalized.RawType))
 	method := strings.TrimSpace(normalized.Method)
 
-	if normalized.UIType == UITypeError {
-		text := strings.TrimSpace(fields.text)
-		if text == "" {
-			text = "发生错误"
+	m.applyErrorOverlayLocked(rt, threadID, normalized.UIType, eventType, fields.text, payload)
+	applyOverlays(rt, eventType, method, payload)
+	applyCollabDepth(rt, eventType)
+
+	if eventType == "token_count" || eventType == "context_compacted" || method == "thread/tokenUsage/updated" || method == "thread/compacted" {
+		m.updateTokenUsageLocked(threadID, payload, eventType, method, ts)
+	}
+	if isThreadStatusChangedEvent(eventType, method) {
+		m.applyThreadStatusChangedLocked(threadID, payload)
+	}
+
+	m.applyUITypeDepthsLocked(threadID, rt, normalized.UIType, eventType, method, fields.text)
+}
+
+// applyErrorOverlayLocked handles the 3-way error overlay branch:
+//   - UITypeError → set error text (and details + alert for stream_error)
+//   - non-Error AND non-stream_error → clear error state
+//   - non-Error BUT stream_error → keep existing error state
+func (m *RuntimeManager) applyErrorOverlayLocked(rt *threadRuntime, threadID string, uiType UIType, eventType, text string, payload map[string]any) {
+	if uiType == UITypeError {
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" {
+			trimmed = "发生错误"
 		}
-		rt.streamErrorText = text
+		rt.streamErrorText = trimmed
 		if eventType == "stream_error" {
 			rt.streamErrorDetails = deriveStreamErrorDetails(payload)
-			m.pushAlertLocked(threadID, "error", text)
+			m.pushAlertLocked(threadID, "error", trimmed)
 		} else {
 			rt.streamErrorDetails = ""
 		}
@@ -858,7 +878,10 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 		rt.streamErrorText = ""
 		rt.streamErrorDetails = ""
 	}
+}
 
+// applyOverlays updates terminal-wait, MCP-startup, and background overlays.
+func applyOverlays(rt *threadRuntime, eventType, method string, payload map[string]any) {
 	if isTerminalInteractionEvent(eventType, method) {
 		if isTerminalWaitPayload(payload) {
 			rt.terminalWaitOverlay = true
@@ -887,29 +910,33 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 			rt.backgroundDetails = deriveBackgroundDetails(payload)
 		}
 	}
+}
 
+// applyCollabDepth adjusts the collaboration depth counter.
+func applyCollabDepth(rt *threadRuntime, eventType string) {
 	if eventType == "collab_agent_spawn_begin" || eventType == "collab_agent_interaction_begin" || eventType == "collab_waiting_begin" {
 		rt.collabDepth += 1
 	} else if eventType == "collab_agent_spawn_end" || eventType == "collab_agent_interaction_end" || eventType == "collab_waiting_end" {
 		rt.collabDepth = max(0, rt.collabDepth-1)
 	}
+}
 
-	if eventType == "token_count" || eventType == "context_compacted" || method == "thread/tokenUsage/updated" || method == "thread/compacted" {
-		m.updateTokenUsageLocked(threadID, payload, eventType, method, ts)
-	}
-
-	switch normalized.UIType {
+// applyUITypeDepthsLocked updates turn/command/edit/approval/tool-call depth
+// counters based on the UIType. Must be called with m.mu held.
+func (m *RuntimeManager) applyUITypeDepthsLocked(threadID string, rt *threadRuntime, uiType UIType, eventType, method, text string) {
+	switch uiType {
 	case UITypeTurnStarted:
 		m.clearTurnLifecycleLocked(threadID)
 		rt.turnDepth = 1
 		rt.approvalDepth = 0
+		rt.userInputDepth = 0
 		rt.terminalWaitOverlay = false
 		rt.terminalWaitLabel = ""
 		rt.statusHeader = "工作中"
 	case UITypeTurnComplete:
 		m.clearTurnLifecycleLocked(threadID)
 		// mcp_startup_complete 为主清理信号，但历史/重连链路可能丢失 complete，
-		// turn 收敛时兜底清理，避免 “MCP 启动中” 状态残留。
+		// turn 收敛时兜底清理，避免 "MCP 启动中" 状态残留。
 		rt.mcpStartupOverlay = false
 		rt.mcpStartupLabel = ""
 	case UITypeReasoningDelta:
@@ -919,7 +946,7 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 		if isReasoningSectionBreakEvent(eventType, method) {
 			rt.reasoningHeaderBuf = ""
 		}
-		m.captureReasoningHeaderLocked(threadID, fields.text)
+		m.captureReasoningHeaderLocked(threadID, text)
 	case UITypeCommandStart:
 		rt.commandDepth += 1
 		rt.approvalDepth = 0
@@ -948,8 +975,8 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 		if eventType == "mcp_tool_call_begin" {
 			rt.toolCallDepth += 1
 			toolName := ""
-			if fields.text != "" {
-				toolName = fields.text
+			if text != "" {
+				toolName = text
 			}
 			m.incrActivityStatLocked(threadID, "toolCall", toolName)
 		}
@@ -963,6 +990,7 @@ func (m *RuntimeManager) clearTurnLifecycleLocked(threadID string) {
 	rt := m.runtime[threadID]
 	rt.turnDepth = 0
 	rt.approvalDepth = 0
+	rt.userInputDepth = 0
 	rt.commandDepth = 0
 	rt.fileEditDepth = 0
 	rt.toolCallDepth = 0
@@ -1047,6 +1075,8 @@ func (m *RuntimeManager) deriveThreadStateLocked(threadID string) string {
 		return "error"
 	case rt.terminalWaitOverlay:
 		return "waiting"
+	case rt.userInputDepth > 0:
+		return "waiting"
 	case rt.approvalDepth > 0:
 		return "waiting"
 	case rt.fileEditDepth > 0:
@@ -1082,6 +1112,8 @@ func (m *RuntimeManager) deriveThreadStatusHeaderLocked(threadID, state string) 
 			return rt.backgroundLabel
 		}
 		return "后台处理中"
+	case rt.userInputDepth > 0:
+		return "等待输入"
 	case rt.approvalDepth > 0:
 		return "等待确认"
 	case shouldUseReasoningHeader(rt):
@@ -1140,6 +1172,8 @@ func (m *RuntimeManager) deriveThreadStatusDetailsLocked(threadID, state string)
 			return rt.backgroundDetails
 		}
 		return "后台事件处理中"
+	case rt.userInputDepth > 0:
+		return "等待用户输入后继续"
 	case rt.approvalDepth > 0:
 		return "等待用户审批后继续"
 	case shouldUseReasoningHeader(rt):
@@ -1167,10 +1201,90 @@ func shouldShowMCPStartupOverlay(rt *threadRuntime) bool {
 	}
 	return rt.turnDepth == 0 &&
 		rt.approvalDepth == 0 &&
+		rt.userInputDepth == 0 &&
 		rt.commandDepth == 0 &&
 		rt.fileEditDepth == 0 &&
 		rt.toolCallDepth == 0 &&
 		rt.collabDepth == 0
+}
+
+func isThreadStatusChangedEvent(eventType, method string) bool {
+	return eventType == "thread/status/changed" || strings.EqualFold(method, "thread/status/changed")
+}
+
+func (m *RuntimeManager) applyThreadStatusChangedLocked(threadID string, payload map[string]any) {
+	rt := m.runtime[threadID]
+	if rt == nil {
+		return
+	}
+
+	statusType := ""
+	activeFlags := []string{}
+	switch status := payload["status"].(type) {
+	case string:
+		statusType = strings.ToLower(strings.TrimSpace(status))
+	case map[string]any:
+		statusType = strings.ToLower(strings.TrimSpace(extractFirstString(status, "type")))
+		activeFlags = extractStringList(status["activeFlags"])
+		if len(activeFlags) == 0 {
+			activeFlags = extractStringList(status["active_flags"])
+		}
+	}
+	if statusType == "" {
+		return
+	}
+
+	switch statusType {
+	case "active":
+		if rt.turnDepth == 0 {
+			rt.turnDepth = 1
+		}
+		rt.approvalDepth = 0
+		rt.userInputDepth = 0
+		for _, flag := range activeFlags {
+			switch strings.ToLower(strings.TrimSpace(flag)) {
+			case "waitingonapproval":
+				rt.approvalDepth = 1
+			case "waitingonuserinput":
+				rt.userInputDepth = 1
+			}
+		}
+	case "idle":
+		m.clearTurnLifecycleLocked(threadID)
+	case "systemerror", "system_error", "error":
+		m.clearTurnLifecycleLocked(threadID)
+		rt.streamErrorText = "系统异常"
+		rt.streamErrorDetails = "线程状态变为 systemError"
+	case "notloaded", "not_loaded":
+		m.clearTurnLifecycleLocked(threadID)
+	}
+}
+
+func extractStringList(raw any) []string {
+	switch value := raw.(type) {
+	case []string:
+		items := make([]string, 0, len(value))
+		for _, item := range value {
+			text := strings.TrimSpace(item)
+			if text != "" {
+				items = append(items, text)
+			}
+		}
+		return items
+	case []any:
+		items := make([]string, 0, len(value))
+		for _, item := range value {
+			if text, ok := item.(string); ok {
+				trimmed := strings.TrimSpace(text)
+				if trimmed != "" {
+					items = append(items, trimmed)
+				}
+			}
+		}
+		return items
+	default:
+		return nil
+	}
 }
 
 func isTerminalInteractionEvent(eventType, method string) bool {
@@ -1332,7 +1446,7 @@ func shouldUseReasoningHeader(rt *threadRuntime) bool {
 	if rt.turnDepth <= 0 {
 		return false
 	}
-	if rt.approvalDepth > 0 || rt.commandDepth > 0 || rt.fileEditDepth > 0 || rt.toolCallDepth > 0 || rt.collabDepth > 0 {
+	if rt.userInputDepth > 0 || rt.approvalDepth > 0 || rt.commandDepth > 0 || rt.fileEditDepth > 0 || rt.toolCallDepth > 0 || rt.collabDepth > 0 {
 		return false
 	}
 	if rt.terminalWaitOverlay || rt.mcpStartupOverlay || rt.backgroundOverlay {
@@ -2229,124 +2343,163 @@ func extractFirstIntDeep(payload map[string]any, keys ...string) (int, bool) {
 
 func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[string]any, eventType, method string, ts time.Time) {
 	next := m.snapshot.TokenUsageByThread[threadID]
-	allowInfoTotalFallback := strings.EqualFold(strings.TrimSpace(eventType), "context_compacted") || strings.EqualFold(strings.TrimSpace(method), "thread/compacted")
+	allowInfoTotal := strings.EqualFold(strings.TrimSpace(eventType), "context_compacted") || strings.EqualFold(strings.TrimSpace(method), "thread/compacted")
 
-	if limit, ok := extractFirstIntByPaths(payload,
-		[]string{"tokenUsage", "modelContextWindow"},
-		[]string{"usage", "modelContextWindow"},
-		[]string{"info", "model_context_window"},
-		[]string{"info", "modelContextWindow"},
-	); ok && limit > 0 {
-		next.ContextWindowTokens = limit
-	} else if limit, ok := extractFirstIntDeep(payload, "context_window_tokens", "contextWindowTokens", "context_window", "model_context_window", "modelContextWindow", "max_input_tokens", "maxTokens", "limit_tokens", "token_limit"); ok && limit > 0 {
+	if limit, ok := extractContextWindow(payload); ok {
 		next.ContextWindowTokens = limit
 	}
 
-	if total, ok := extractFirstIntByPaths(payload,
-		[]string{"tokenUsage", "last", "totalTokens"},
-		[]string{"tokenUsage", "last", "total_tokens"},
-		[]string{"usage", "last", "totalTokens"},
-		[]string{"usage", "last", "total_tokens"},
-	); ok {
-		next.UsedTokens = max(0, total)
-	} else if total, ok := extractFirstIntByPaths(payload,
-		[]string{"tokenUsage", "total", "totalTokens"},
-		[]string{"tokenUsage", "total", "total_tokens"},
-		[]string{"usage", "total", "totalTokens"},
-		[]string{"usage", "total", "total_tokens"},
-	); ok {
-		next.UsedTokens = max(0, total)
-	} else if total, ok := extractFirstIntByPaths(payload,
-		[]string{"info", "last_token_usage", "total_tokens"},
-		[]string{"info", "lastTokenUsage", "totalTokens"},
-	); ok {
-		next.UsedTokens = max(0, total)
-	} else if allowInfoTotalFallback {
-		if total, ok := extractFirstIntByPaths(payload,
-			[]string{"info", "total_token_usage", "total_tokens"},
-			[]string{"info", "totalTokenUsage", "totalTokens"},
-		); ok {
-			next.UsedTokens = max(0, total)
-		}
-	} else if total, ok := extractFirstIntDeep(payload, "total_tokens", "totalTokens", "used_tokens", "usedTokens"); ok {
-		next.UsedTokens = max(0, total)
-	} else {
-		input, hasInput := extractFirstIntByPaths(payload,
-			[]string{"tokenUsage", "last", "inputTokens"},
-			[]string{"tokenUsage", "last", "input_tokens"},
-			[]string{"usage", "last", "inputTokens"},
-			[]string{"usage", "last", "input_tokens"},
-			[]string{"tokenUsage", "total", "inputTokens"},
-			[]string{"tokenUsage", "total", "input_tokens"},
-			[]string{"usage", "total", "inputTokens"},
-			[]string{"usage", "total", "input_tokens"},
-		)
-		if !hasInput {
-			input, hasInput = extractFirstIntByPaths(payload,
-				[]string{"info", "last_token_usage", "input_tokens"},
-				[]string{"info", "lastTokenUsage", "inputTokens"},
-			)
-		}
-		if !hasInput {
-			input, hasInput = extractFirstIntDeep(payload, "input", "input_tokens", "inputTokens", "prompt_tokens")
-		}
-		output, hasOutput := extractFirstIntByPaths(payload,
-			[]string{"tokenUsage", "last", "outputTokens"},
-			[]string{"tokenUsage", "last", "output_tokens"},
-			[]string{"usage", "last", "outputTokens"},
-			[]string{"usage", "last", "output_tokens"},
-			[]string{"tokenUsage", "total", "outputTokens"},
-			[]string{"tokenUsage", "total", "output_tokens"},
-			[]string{"usage", "total", "outputTokens"},
-			[]string{"usage", "total", "output_tokens"},
-		)
-		if !hasOutput {
-			output, hasOutput = extractFirstIntByPaths(payload,
-				[]string{"info", "last_token_usage", "output_tokens"},
-				[]string{"info", "lastTokenUsage", "outputTokens"},
-			)
-		}
-		if (!hasInput || !hasOutput) && allowInfoTotalFallback {
-			if !hasInput {
-				input, hasInput = extractFirstIntByPaths(payload,
-					[]string{"info", "total_token_usage", "input_tokens"},
-					[]string{"info", "totalTokenUsage", "inputTokens"},
-				)
-			}
-			if !hasOutput {
-				output, hasOutput = extractFirstIntByPaths(payload,
-					[]string{"info", "total_token_usage", "output_tokens"},
-					[]string{"info", "totalTokenUsage", "outputTokens"},
-				)
-			}
-		}
-		if !hasOutput {
-			output, hasOutput = extractFirstIntDeep(payload, "output", "output_tokens", "outputTokens", "completion_tokens")
-		}
-		if hasInput || hasOutput {
-			next.UsedTokens = max(0, input+output)
-		}
+	if used, ok := extractTotalUsedTokens(payload, allowInfoTotal); ok {
+		next.UsedTokens = used
 	}
 
-	if next.ContextWindowTokens > 0 {
-		next.UsedPercent = (float64(next.UsedTokens) / float64(next.ContextWindowTokens)) * 100
-		if next.UsedPercent < 0 {
-			next.UsedPercent = 0
-		}
-		if next.UsedPercent > 100 {
-			next.UsedPercent = 100
-		}
-		next.LeftPercent = 100 - next.UsedPercent
-	} else {
-		next.UsedPercent = 0
-		next.LeftPercent = 0
-	}
+	next.UsedPercent, next.LeftPercent = computeTokenPercent(next.UsedTokens, next.ContextWindowTokens)
 
 	if ts.IsZero() {
 		ts = time.Now()
 	}
 	next.UpdatedAt = ts.UTC().Format(time.RFC3339)
 	m.snapshot.TokenUsageByThread[threadID] = next
+}
+
+// extractContextWindow looks up the context window size from structured or flat payload keys.
+func extractContextWindow(payload map[string]any) (int, bool) {
+	if limit, ok := extractFirstIntByPaths(payload,
+		[]string{"tokenUsage", "modelContextWindow"},
+		[]string{"usage", "modelContextWindow"},
+		[]string{"info", "model_context_window"},
+		[]string{"info", "modelContextWindow"},
+	); ok && limit > 0 {
+		return limit, true
+	}
+	if limit, ok := extractFirstIntDeep(payload, "context_window_tokens", "contextWindowTokens", "context_window", "model_context_window", "modelContextWindow", "max_input_tokens", "maxTokens", "limit_tokens", "token_limit"); ok && limit > 0 {
+		return limit, true
+	}
+	return 0, false
+}
+
+// extractTotalUsedTokens resolves used-token count with a 6-level priority chain:
+//  1. tokenUsage.last / usage.last → totalTokens
+//  2. tokenUsage.total / usage.total → totalTokens
+//  3. info.last_token_usage → total_tokens
+//  4. [only if allowInfoTotal] info.total_token_usage → total_tokens
+//  5. [only if !allowInfoTotal] flat deep search for total_tokens/usedTokens
+//  6. [fallback] input + output tokens summed
+func extractTotalUsedTokens(payload map[string]any, allowInfoTotal bool) (int, bool) {
+	// Priority 1: structured last usage
+	if total, ok := extractFirstIntByPaths(payload,
+		[]string{"tokenUsage", "last", "totalTokens"},
+		[]string{"tokenUsage", "last", "total_tokens"},
+		[]string{"usage", "last", "totalTokens"},
+		[]string{"usage", "last", "total_tokens"},
+	); ok {
+		return max(0, total), true
+	}
+	// Priority 2: structured total usage
+	if total, ok := extractFirstIntByPaths(payload,
+		[]string{"tokenUsage", "total", "totalTokens"},
+		[]string{"tokenUsage", "total", "total_tokens"},
+		[]string{"usage", "total", "totalTokens"},
+		[]string{"usage", "total", "total_tokens"},
+	); ok {
+		return max(0, total), true
+	}
+	// Priority 3: info.last_token_usage
+	if total, ok := extractFirstIntByPaths(payload,
+		[]string{"info", "last_token_usage", "total_tokens"},
+		[]string{"info", "lastTokenUsage", "totalTokens"},
+	); ok {
+		return max(0, total), true
+	}
+	// Priority 4/5: conditional gate
+	if allowInfoTotal {
+		if total, ok := extractFirstIntByPaths(payload,
+			[]string{"info", "total_token_usage", "total_tokens"},
+			[]string{"info", "totalTokenUsage", "totalTokens"},
+		); ok {
+			return max(0, total), true
+		}
+	} else if total, ok := extractFirstIntDeep(payload, "total_tokens", "totalTokens", "used_tokens", "usedTokens"); ok {
+		return max(0, total), true
+	}
+	// Priority 6: input + output fallback
+	return extractInputOutputTokens(payload, allowInfoTotal)
+}
+
+// extractInputOutputTokens sums input and output tokens as a last-resort fallback.
+func extractInputOutputTokens(payload map[string]any, allowInfoTotal bool) (int, bool) {
+	input, hasInput := extractFirstIntByPaths(payload,
+		[]string{"tokenUsage", "last", "inputTokens"},
+		[]string{"tokenUsage", "last", "input_tokens"},
+		[]string{"usage", "last", "inputTokens"},
+		[]string{"usage", "last", "input_tokens"},
+		[]string{"tokenUsage", "total", "inputTokens"},
+		[]string{"tokenUsage", "total", "input_tokens"},
+		[]string{"usage", "total", "inputTokens"},
+		[]string{"usage", "total", "input_tokens"},
+	)
+	if !hasInput {
+		input, hasInput = extractFirstIntByPaths(payload,
+			[]string{"info", "last_token_usage", "input_tokens"},
+			[]string{"info", "lastTokenUsage", "inputTokens"},
+		)
+	}
+	if !hasInput {
+		input, hasInput = extractFirstIntDeep(payload, "input", "input_tokens", "inputTokens", "prompt_tokens")
+	}
+	output, hasOutput := extractFirstIntByPaths(payload,
+		[]string{"tokenUsage", "last", "outputTokens"},
+		[]string{"tokenUsage", "last", "output_tokens"},
+		[]string{"usage", "last", "outputTokens"},
+		[]string{"usage", "last", "output_tokens"},
+		[]string{"tokenUsage", "total", "outputTokens"},
+		[]string{"tokenUsage", "total", "output_tokens"},
+		[]string{"usage", "total", "outputTokens"},
+		[]string{"usage", "total", "output_tokens"},
+	)
+	if !hasOutput {
+		output, hasOutput = extractFirstIntByPaths(payload,
+			[]string{"info", "last_token_usage", "output_tokens"},
+			[]string{"info", "lastTokenUsage", "outputTokens"},
+		)
+	}
+	if (!hasInput || !hasOutput) && allowInfoTotal {
+		if !hasInput {
+			input, hasInput = extractFirstIntByPaths(payload,
+				[]string{"info", "total_token_usage", "input_tokens"},
+				[]string{"info", "totalTokenUsage", "inputTokens"},
+			)
+		}
+		if !hasOutput {
+			output, hasOutput = extractFirstIntByPaths(payload,
+				[]string{"info", "total_token_usage", "output_tokens"},
+				[]string{"info", "totalTokenUsage", "outputTokens"},
+			)
+		}
+	}
+	if !hasOutput {
+		output, hasOutput = extractFirstIntDeep(payload, "output", "output_tokens", "outputTokens", "completion_tokens")
+	}
+	if hasInput || hasOutput {
+		return max(0, input+output), true
+	}
+	return 0, false
+}
+
+// computeTokenPercent calculates used/left percentages, clamped to [0, 100].
+func computeTokenPercent(usedTokens, contextWindowTokens int) (usedPct, leftPct float64) {
+	if contextWindowTokens <= 0 {
+		return 0, 0
+	}
+	usedPct = (float64(usedTokens) / float64(contextWindowTokens)) * 100
+	if usedPct < 0 {
+		usedPct = 0
+	}
+	if usedPct > 100 {
+		usedPct = 100
+	}
+	leftPct = 100 - usedPct
+	return usedPct, leftPct
 }
 
 func normalizeFilesAny(value any) []string {
@@ -2433,19 +2586,35 @@ func extractRunKey(raw map[string]any) string {
 }
 
 func cloneSnapshot(src RuntimeSnapshot) RuntimeSnapshot {
+	return cloneBaseSnapshot(src, true)
+}
+
+// cloneSnapshotLight is like cloneSnapshot but skips timelines and diffs (the heaviest fields).
+func cloneSnapshotLight(src RuntimeSnapshot) RuntimeSnapshot {
+	return cloneBaseSnapshot(src, false)
+}
+
+// cloneBaseSnapshot creates a deep copy of RuntimeSnapshot. When includeTimeline is false,
+// Timeline and DiffText maps are left empty (the caller uses separate accessors).
+func cloneBaseSnapshot(src RuntimeSnapshot, includeTimeline bool) RuntimeSnapshot {
 	out := RuntimeSnapshot{
-		Threads:                 make([]ThreadSnapshot, 0, len(src.Threads)),
-		Statuses:                make(map[string]string, len(src.Statuses)),
-		InterruptibleByThread:   make(map[string]bool, len(src.Statuses)),
-		StatusHeadersByThread:   make(map[string]string, len(src.StatusHeadersByThread)),
-		StatusDetailsByThread:   make(map[string]string, len(src.StatusDetailsByThread)),
-		TimelinesByThread:       make(map[string][]TimelineItem, len(src.TimelinesByThread)),
-		DiffTextByThread:        make(map[string]string, len(src.DiffTextByThread)),
-		TokenUsageByThread:      make(map[string]TokenUsageSnapshot, len(src.TokenUsageByThread)),
-		WorkspaceRunsByKey:      make(map[string]map[string]any, len(src.WorkspaceRunsByKey)),
-		WorkspaceFeatureEnabled: nil,
-		WorkspaceLastError:      src.WorkspaceLastError,
-		AgentMetaByID:           make(map[string]AgentMeta, len(src.AgentMetaByID)),
+		Threads:               make([]ThreadSnapshot, 0, len(src.Threads)),
+		Statuses:              make(map[string]string, len(src.Statuses)),
+		InterruptibleByThread: make(map[string]bool, len(src.Statuses)),
+		StatusHeadersByThread: make(map[string]string, len(src.StatusHeadersByThread)),
+		StatusDetailsByThread: make(map[string]string, len(src.StatusDetailsByThread)),
+		TokenUsageByThread:    make(map[string]TokenUsageSnapshot, len(src.TokenUsageByThread)),
+		WorkspaceRunsByKey:    make(map[string]map[string]any, len(src.WorkspaceRunsByKey)),
+		WorkspaceLastError:    src.WorkspaceLastError,
+		AgentMetaByID:         make(map[string]AgentMeta, len(src.AgentMetaByID)),
+	}
+
+	if includeTimeline {
+		out.TimelinesByThread = make(map[string][]TimelineItem, len(src.TimelinesByThread))
+		out.DiffTextByThread = make(map[string]string, len(src.DiffTextByThread))
+	} else {
+		out.TimelinesByThread = map[string][]TimelineItem{}
+		out.DiffTextByThread = map[string]string{}
 	}
 
 	out.Threads = append(out.Threads, src.Threads...)
@@ -2470,7 +2639,37 @@ func cloneSnapshot(src RuntimeSnapshot) RuntimeSnapshot {
 	for key, value := range src.StatusDetailsByThread {
 		out.StatusDetailsByThread[key] = value
 	}
-	for key, list := range src.TimelinesByThread {
+
+	if includeTimeline {
+		cloneTimelineItems(src.TimelinesByThread, out.TimelinesByThread)
+		for key, value := range src.DiffTextByThread {
+			out.DiffTextByThread[key] = value
+		}
+	}
+
+	for key, value := range src.TokenUsageByThread {
+		out.TokenUsageByThread[key] = value
+	}
+	for key, value := range src.WorkspaceRunsByKey {
+		out.WorkspaceRunsByKey[key] = copyMap(value)
+	}
+	if src.WorkspaceFeatureEnabled != nil {
+		v := *src.WorkspaceFeatureEnabled
+		out.WorkspaceFeatureEnabled = &v
+	}
+	for key, value := range src.AgentMetaByID {
+		out.AgentMetaByID[key] = value
+	}
+
+	out.ActivityStatsByThread = cloneActivityStatsMap(src.ActivityStatsByThread)
+	out.AlertsByThread = cloneAlerts(src.AlertsByThread)
+
+	return out
+}
+
+// cloneTimelineItems deep-copies timeline items including pointer fields.
+func cloneTimelineItems(src, dst map[string][]TimelineItem) {
+	for key, list := range src {
 		copied := make([]TimelineItem, len(list))
 		copy(copied, list)
 		for i := range copied {
@@ -2488,27 +2687,14 @@ func cloneSnapshot(src RuntimeSnapshot) RuntimeSnapshot {
 				copied[i].ElapsedMS = &v
 			}
 		}
-		out.TimelinesByThread[key] = copied
+		dst[key] = copied
 	}
-	for key, value := range src.DiffTextByThread {
-		out.DiffTextByThread[key] = value
-	}
-	for key, value := range src.TokenUsageByThread {
-		out.TokenUsageByThread[key] = value
-	}
-	for key, value := range src.WorkspaceRunsByKey {
-		out.WorkspaceRunsByKey[key] = copyMap(value)
-	}
-	if src.WorkspaceFeatureEnabled != nil {
-		v := *src.WorkspaceFeatureEnabled
-		out.WorkspaceFeatureEnabled = &v
-	}
-	for key, value := range src.AgentMetaByID {
-		out.AgentMetaByID[key] = value
-	}
+}
 
-	out.ActivityStatsByThread = make(map[string]ActivityStats, len(src.ActivityStatsByThread))
-	for key, value := range src.ActivityStatsByThread {
+// cloneActivityStatsMap deep-copies activity stats including ToolCalls map.
+func cloneActivityStatsMap(src map[string]ActivityStats) map[string]ActivityStats {
+	out := make(map[string]ActivityStats, len(src))
+	for key, value := range src {
 		cloned := ActivityStats{
 			LSPCalls:  value.LSPCalls,
 			Commands:  value.Commands,
@@ -2518,99 +2704,22 @@ func cloneSnapshot(src RuntimeSnapshot) RuntimeSnapshot {
 		for k, v := range value.ToolCalls {
 			cloned.ToolCalls[k] = v
 		}
-		out.ActivityStatsByThread[key] = cloned
+		out[key] = cloned
 	}
-
-	out.AlertsByThread = make(map[string][]AlertEntry, len(src.AlertsByThread))
-	for key, value := range src.AlertsByThread {
-		if len(value) == 0 {
-			continue
-		}
-		entries := make([]AlertEntry, len(value))
-		copy(entries, value)
-		out.AlertsByThread[key] = entries
-	}
-
 	return out
 }
 
-// cloneSnapshotLight is like cloneSnapshot but skips timelines and diffs (the heaviest fields).
-func cloneSnapshotLight(src RuntimeSnapshot) RuntimeSnapshot {
-	out := RuntimeSnapshot{
-		Threads:                 make([]ThreadSnapshot, 0, len(src.Threads)),
-		Statuses:                make(map[string]string, len(src.Statuses)),
-		InterruptibleByThread:   make(map[string]bool, len(src.Statuses)),
-		StatusHeadersByThread:   make(map[string]string, len(src.StatusHeadersByThread)),
-		StatusDetailsByThread:   make(map[string]string, len(src.StatusDetailsByThread)),
-		TimelinesByThread:       map[string][]TimelineItem{}, // 跳过: 由调用者按需获取
-		DiffTextByThread:        map[string]string{},         // 跳过: 由调用者按需获取
-		TokenUsageByThread:      make(map[string]TokenUsageSnapshot, len(src.TokenUsageByThread)),
-		WorkspaceRunsByKey:      make(map[string]map[string]any, len(src.WorkspaceRunsByKey)),
-		WorkspaceFeatureEnabled: nil,
-		WorkspaceLastError:      src.WorkspaceLastError,
-		AgentMetaByID:           make(map[string]AgentMeta, len(src.AgentMetaByID)),
-	}
-
-	out.Threads = append(out.Threads, src.Threads...)
-	for key, value := range src.Statuses {
-		out.Statuses[key] = value
-		out.InterruptibleByThread[key] = isInterruptibleThreadState(value)
-	}
-	for _, thread := range out.Threads {
-		threadID := strings.TrimSpace(thread.ID)
-		if threadID == "" {
-			continue
-		}
-		if _, ok := out.InterruptibleByThread[threadID]; ok {
-			continue
-		}
-		status := normalizeThreadState(out.Statuses[threadID])
-		out.InterruptibleByThread[threadID] = isInterruptibleThreadState(status)
-	}
-	for key, value := range src.StatusHeadersByThread {
-		out.StatusHeadersByThread[key] = value
-	}
-	for key, value := range src.StatusDetailsByThread {
-		out.StatusDetailsByThread[key] = value
-	}
-	for key, value := range src.TokenUsageByThread {
-		out.TokenUsageByThread[key] = value
-	}
-	for key, value := range src.WorkspaceRunsByKey {
-		out.WorkspaceRunsByKey[key] = copyMap(value)
-	}
-	if src.WorkspaceFeatureEnabled != nil {
-		v := *src.WorkspaceFeatureEnabled
-		out.WorkspaceFeatureEnabled = &v
-	}
-	for key, value := range src.AgentMetaByID {
-		out.AgentMetaByID[key] = value
-	}
-
-	out.ActivityStatsByThread = make(map[string]ActivityStats, len(src.ActivityStatsByThread))
-	for key, value := range src.ActivityStatsByThread {
-		cloned := ActivityStats{
-			LSPCalls:  value.LSPCalls,
-			Commands:  value.Commands,
-			FileEdits: value.FileEdits,
-			ToolCalls: make(map[string]int64, len(value.ToolCalls)),
-		}
-		for k, v := range value.ToolCalls {
-			cloned.ToolCalls[k] = v
-		}
-		out.ActivityStatsByThread[key] = cloned
-	}
-
-	out.AlertsByThread = make(map[string][]AlertEntry, len(src.AlertsByThread))
-	for key, value := range src.AlertsByThread {
+// cloneAlerts deep-copies alert entries per thread.
+func cloneAlerts(src map[string][]AlertEntry) map[string][]AlertEntry {
+	out := make(map[string][]AlertEntry, len(src))
+	for key, value := range src {
 		if len(value) == 0 {
 			continue
 		}
 		entries := make([]AlertEntry, len(value))
 		copy(entries, value)
-		out.AlertsByThread[key] = entries
+		out[key] = entries
 	}
-
 	return out
 }
 

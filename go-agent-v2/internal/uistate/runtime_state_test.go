@@ -1258,3 +1258,50 @@ func TestHydrateHistory_SkipsWhenThinkingActive(t *testing.T) {
 		t.Fatal("HydrateHistory should return false when thinking is active")
 	}
 }
+
+func TestThreadStatusChanged_WaitingOnApproval(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-status-approval"
+	payload := map[string]any{
+		"threadId": threadID,
+		"status": map[string]any{
+			"type":        "active",
+			"activeFlags": []any{"waitingOnApproval"},
+		},
+	}
+	event := NormalizeEventFromPayload("thread/status/changed", "thread/status/changed", payload)
+	mgr.ApplyAgentEvent(threadID, event, payload)
+
+	snapshot := mgr.Snapshot()
+	if got := snapshot.Statuses[threadID]; got != "waiting" {
+		t.Fatalf("status = %q, want waiting", got)
+	}
+	if got := snapshot.StatusHeadersByThread[threadID]; got != "等待确认" {
+		t.Fatalf("header = %q, want 等待确认", got)
+	}
+}
+
+func TestThreadStatusChanged_WaitingOnUserInput(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-status-user-input"
+	payload := map[string]any{
+		"threadId": threadID,
+		"status": map[string]any{
+			"type":        "active",
+			"activeFlags": []any{"waitingOnUserInput"},
+		},
+	}
+	event := NormalizeEventFromPayload("thread/status/changed", "thread/status/changed", payload)
+	mgr.ApplyAgentEvent(threadID, event, payload)
+
+	snapshot := mgr.Snapshot()
+	if got := snapshot.Statuses[threadID]; got != "waiting" {
+		t.Fatalf("status = %q, want waiting", got)
+	}
+	if got := snapshot.StatusHeadersByThread[threadID]; got != "等待输入" {
+		t.Fatalf("header = %q, want 等待输入", got)
+	}
+	if got := snapshot.StatusDetailsByThread[threadID]; got != "等待用户输入后继续" {
+		t.Fatalf("details = %q, want 等待用户输入后继续", got)
+	}
+}

@@ -1530,7 +1530,6 @@ export const UnifiedChatPage = {
                 :skill-matches="composerSkillMatches"
                 :skill-matches-loading="composerSkillPreviewLoading"
                 :selected-skill-names="composerSelectedSkillNames"
-                :style="{ flex: '0 0 ' + splitRatio + '%' }"
                 @toggle-skill="toggleComposerSelectedSkill"
                 @select-all-skills="selectAllComposerSuggestedSkills"
                 @clear-skills="clearComposerSelectedSkills"

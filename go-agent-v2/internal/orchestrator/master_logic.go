@@ -145,8 +145,14 @@ func sanitizeTopology(raw map[string]any) map[string]any {
 		if !ok {
 			continue
 		}
-		agentsRaw := normalizedGateway["agents_raw"].([]any)
-		gwID := normalizedGateway["id"].(string)
+		agentsRaw, ok := normalizedGateway["agents_raw"].([]any)
+		if !ok {
+			continue
+		}
+		gwID, ok := normalizedGateway["id"].(string)
+		if !ok {
+			continue
+		}
 
 		var normalizedAgents []map[string]any
 		agentIDs := map[string]bool{}

@@ -369,7 +369,12 @@ func (c *AppServerClient) emitBackgroundEvent(message string, status string, act
 	for key, value := range details {
 		payload[key] = value
 	}
-	data, _ := json.Marshal(payload)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		logger.Warn("codex: emitBackgroundEvent marshal failed",
+			logger.FieldAgentID, c.AgentID, logger.FieldError, err)
+		return
+	}
 	handler(Event{Type: EventBackgroundEvent, Data: data})
 }
 
@@ -1992,7 +1997,10 @@ func (c *AppServerClient) Shutdown() error {
 	c.cancel()
 
 	// 尝试发送 shutdown 通知 (best-effort)
-	_ = c.notify("shutdown", nil)
+	if err := c.notify("shutdown", nil); err != nil {
+		logger.Debug("codex: shutdown notify failed (best-effort)",
+			logger.FieldAgentID, c.AgentID, logger.FieldError, err)
+	}
 
 	// 主动关闭 ws 以立即中断 readLoop 的 ReadMessage 阻塞,
 	// 避免等待 75s 的 read idle deadline。

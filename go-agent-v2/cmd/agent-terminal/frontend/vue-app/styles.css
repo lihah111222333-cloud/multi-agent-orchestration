@@ -960,22 +960,17 @@ a,
   min-width: 0;
   display: flex;
   align-self: flex-start;
+  flex-shrink: 0;
 }
 
 .unified-chat-page .chat-composer-shell.for-chat {
   margin-right: auto;
-  position: absolute;
-  left: 0;
-  bottom: 0;
+  position: relative;
   z-index: 12;
 }
 
 .unified-chat-page .chat-composer-shell .chat-input-vue {
   width: 100%;
-}
-
-.unified-chat-page.mode-chat .chat-panel-only {
-  padding-bottom: 104px;
 }
 
 .cmd-card-panel {

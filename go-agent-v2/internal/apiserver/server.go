@@ -1731,8 +1731,9 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 		logger.Error("app-server: dynamic_tool_call dropped — agent gone",
 			logger.FieldAgentID, agentID)
 		if event.RespondFunc != nil {
-			if respErr := event.RespondFunc(-32603, "agent not found: "+agentID); respErr != nil {
-				logger.Warn("app-server: respond callback failed", logger.FieldAgentID, agentID, logger.FieldError, respErr)
+			if respondErr := event.RespondFunc(-32603, "agent not found: "+agentID); respondErr != nil {
+				logger.Warn("app-server: RespondFunc failed on agent-gone",
+					logger.FieldAgentID, agentID, logger.FieldError, respondErr)
 			}
 		}
 		return

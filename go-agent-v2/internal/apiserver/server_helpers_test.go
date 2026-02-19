@@ -425,3 +425,60 @@ func TestAgentEventHandlerDoesNotLeakSummaryAcrossDifferentTurnID(t *testing.T) 
 		t.Fatalf("did not expect stale payload summary for different turn id")
 	}
 }
+
+func TestAgentEventHandler_StreamErrorRetryLifecycle(t *testing.T) {
+	srv := &Server{
+		mgr:                 runner.NewAgentManager(),
+		activeTurns:         make(map[string]*trackedTurn),
+		turnWatchdogTimeout: time.Second,
+	}
+	threadID := "thread-stream-retry-lifecycle"
+	_ = srv.beginTrackedTurn(threadID, "turn-stream-1")
+
+	completedCount := 0
+	lastErrorPayload := map[string]any{}
+	srv.SetNotifyHook(func(method string, params any) {
+		switch method {
+		case "turn/completed":
+			completedCount++
+		case "error":
+			lastErrorPayload = util.ToMapAny(params)
+		}
+	})
+
+	handler := srv.AgentEventHandler(threadID)
+	handler(codex.Event{
+		Type: codex.EventStreamError,
+		Data: json.RawMessage(`{
+			"message":"Reconnecting... 1/5",
+			"phase":"reconnect",
+			"willRetry": true
+		}`),
+	})
+
+	if completedCount != 0 {
+		t.Fatalf("retryable stream error should not complete turn, completedCount=%d", completedCount)
+	}
+	if !srv.hasActiveTrackedTurn(threadID) {
+		t.Fatal("retryable stream error should keep tracked turn active")
+	}
+	if got, _ := lastErrorPayload["willRetry"].(bool); !got {
+		t.Fatalf("error payload willRetry = %v, want true", lastErrorPayload["willRetry"])
+	}
+
+	handler(codex.Event{
+		Type: codex.EventStreamError,
+		Data: json.RawMessage(`{
+			"message":"Reconnect failed 5/5",
+			"phase":"reconnect",
+			"willRetry": false
+		}`),
+	})
+
+	if completedCount != 1 {
+		t.Fatalf("non-retryable stream error should complete turn once, completedCount=%d", completedCount)
+	}
+	if srv.hasActiveTrackedTurn(threadID) {
+		t.Fatal("non-retryable stream error should clear tracked turn")
+	}
+}

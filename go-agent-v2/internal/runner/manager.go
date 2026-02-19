@@ -222,13 +222,16 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 				m.handleEvent(proc, event)
 			})
 			if fallbackErr := fallback.SpawnAndConnect(ctx, prompt, cwd, "", dynamicTools); fallbackErr == nil {
-				payload, _ := json.Marshal(map[string]any{
+				payload, err := json.Marshal(map[string]any{
 					"message": "App-server unavailable; using HTTP fallback",
 					"status":  "degraded",
 					"active":  false,
 					"done":    true,
 					"phase":   "transport_fallback",
 				})
+				if err != nil {
+					logger.Warn("runner: fallback event marshal failed", logger.FieldAgentID, id, logger.FieldError, err)
+				}
 				m.handleEvent(proc, codex.Event{
 					Type: codex.EventBackgroundEvent,
 					Data: payload,

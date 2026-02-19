@@ -168,6 +168,9 @@ func With(args ...any) *slog.Logger { return getLogger().With(args...) }
 // Get 返回底层 slog.Logger。
 func Get() *slog.Logger { return getLogger() }
 
+// SetForTest 替换默认日志器 (仅供测试使用, 不同步 slog.SetDefault)。
+func SetForTest(l *slog.Logger) { defaultLogger.Store(l) }
+
 // Attr 类型别名 (避免调用方直接 import slog)。
 type Attr = slog.Attr
 

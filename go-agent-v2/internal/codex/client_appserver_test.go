@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 type timeoutErr struct{}
@@ -195,6 +196,49 @@ func TestMapMethodToEventType_TurnAborted(t *testing.T) {
 	}
 }
 
+func TestJSONRPCToEvent_RetryableErrorBecomesStreamError(t *testing.T) {
+	client := NewAppServerClient(0, "")
+	event := client.jsonRPCToEvent(jsonRPCMessage{
+		Method: "error",
+		Params: json.RawMessage(`{
+			"error":{"message":"stream disconnected","additionalDetails":"socket reset"},
+			"willRetry": true,
+			"threadId":"thr-1",
+			"turnId":"turn-1"
+		}`),
+	})
+	if event.Type != EventStreamError {
+		t.Fatalf("event.Type = %q, want %q", event.Type, EventStreamError)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(event.Data, &payload); err != nil {
+		t.Fatalf("unmarshal normalized payload failed: %v", err)
+	}
+	if payload["message"] != "stream disconnected" {
+		t.Fatalf("payload.message = %v, want stream disconnected", payload["message"])
+	}
+	if payload["additional_details"] != "socket reset" {
+		t.Fatalf("payload.additional_details = %v, want socket reset", payload["additional_details"])
+	}
+	if payload["willRetry"] != true {
+		t.Fatalf("payload.willRetry = %v, want true", payload["willRetry"])
+	}
+}
+
+func TestJSONRPCToEvent_NonRetryableErrorStaysError(t *testing.T) {
+	client := NewAppServerClient(0, "")
+	event := client.jsonRPCToEvent(jsonRPCMessage{
+		Method: "error",
+		Params: json.RawMessage(`{
+			"error":{"message":"request failed"},
+			"willRetry": false
+		}`),
+	})
+	if event.Type != EventError {
+		t.Fatalf("event.Type = %q, want %q", event.Type, EventError)
+	}
+}
+
 func TestIsInvalidParamsRPCError(t *testing.T) {
 	if !isInvalidParamsRPCError(assertErr("rpc error: invalid params (code -32602)")) {
 		t.Fatalf("expected invalid params error to match")
@@ -276,7 +320,7 @@ func TestEmitStreamErrorPayload(t *testing.T) {
 		got = event
 	})
 
-	client.emitStreamError(errors.New("socket idle timeout"), "read", true)
+	client.emitStreamError(errors.New("socket idle timeout"), "read", true, true, nil)
 	if got.Type != EventStreamError {
 		t.Fatalf("event type = %q, want %q", got.Type, EventStreamError)
 	}
@@ -289,6 +333,12 @@ func TestEmitStreamErrorPayload(t *testing.T) {
 	}
 	if payload["reason"] != "idle_timeout" {
 		t.Fatalf("reason = %v, want idle_timeout", payload["reason"])
+	}
+	if payload["willRetry"] != true {
+		t.Fatalf("willRetry = %v, want true", payload["willRetry"])
+	}
+	if payload["recoverable"] != true {
+		t.Fatalf("recoverable = %v, want true", payload["recoverable"])
 	}
 	if payload["agentId"] != "agent-a" {
 		t.Fatalf("agentId = %v, want agent-a", payload["agentId"])
@@ -355,5 +405,136 @@ func TestReconnectWS_StoppedShortCircuit(t *testing.T) {
 	client.stopped.Store(true)
 	if ok := client.reconnectWS("read_error", errors.New("boom")); ok {
 		t.Fatal("reconnectWS should return false when client already stopped")
+	}
+}
+
+func TestEnsureListenerViaThreadResume_Success(t *testing.T) {
+	var (
+		gotMethod  string
+		gotParams  asThreadResumeParams
+		gotTimeout time.Duration
+	)
+
+	resolved, err := ensureListenerViaThreadResume("  thread-old  ", func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+		gotMethod = method
+		gotTimeout = timeout
+		typed, ok := params.(asThreadResumeParams)
+		if !ok {
+			t.Fatalf("params type = %T, want asThreadResumeParams", params)
+		}
+		gotParams = typed
+		return json.RawMessage(`{"thread":{"id":"thread-new"}}`), nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved != "thread-new" {
+		t.Fatalf("resolved = %q, want thread-new", resolved)
+	}
+	if gotMethod != "thread/resume" {
+		t.Fatalf("method = %q, want thread/resume", gotMethod)
+	}
+	if gotParams.ThreadID != "thread-old" {
+		t.Fatalf("threadId = %q, want thread-old", gotParams.ThreadID)
+	}
+	if gotTimeout != appServerListenerEnsureTimeout {
+		t.Fatalf("timeout = %v, want %v", gotTimeout, appServerListenerEnsureTimeout)
+	}
+}
+
+func TestEnsureListenerViaThreadResume_UsesFallbackIDOnEmptyResponse(t *testing.T) {
+	resolved, err := ensureListenerViaThreadResume("thread-fallback", func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+		return json.RawMessage(`null`), nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved != "thread-fallback" {
+		t.Fatalf("resolved = %q, want thread-fallback", resolved)
+	}
+}
+
+func TestEnsureListenerViaThreadResume_Errors(t *testing.T) {
+	_, err := ensureListenerViaThreadResume("thread-err", func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+		return nil, errors.New("rpc down")
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "thread/resume") {
+		t.Fatalf("err = %v, want contains thread/resume", err)
+	}
+}
+
+func TestEnsureListenerViaThreadResume_RejectsEmptyThreadID(t *testing.T) {
+	_, err := ensureListenerViaThreadResume("   ", func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+		return nil, nil
+	})
+	if err == nil {
+		t.Fatal("expected error for empty thread id")
+	}
+}
+
+func TestEnsureListenerIfNeeded_UsesResumeAndClearsFlag(t *testing.T) {
+	client := NewAppServerClient(0, "agent-ensure")
+	client.ThreadID = "thread-old"
+	client.listenerEnsureNeeded.Store(true)
+
+	called := 0
+	client.ensureListenerIfNeeded("turn/start", func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+		called++
+		if method != "thread/resume" {
+			t.Fatalf("method = %q, want thread/resume", method)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-new"}}`), nil
+	})
+
+	if called != 1 {
+		t.Fatalf("called = %d, want 1", called)
+	}
+	if client.ThreadID != "thread-new" {
+		t.Fatalf("threadID = %q, want thread-new", client.ThreadID)
+	}
+	if client.listenerEnsureNeeded.Load() {
+		t.Fatal("listenerEnsureNeeded should be false after ensure success")
+	}
+}
+
+func TestEnsureListenerIfNeeded_UnsupportedClearsFlag(t *testing.T) {
+	client := NewAppServerClient(0, "agent-ensure-unsupported")
+	client.ThreadID = "thread-x"
+	client.listenerEnsureNeeded.Store(true)
+
+	client.ensureListenerIfNeeded("turn/start", func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+		return nil, errors.New("rpc error: method not found (code -32601)")
+	})
+
+	if client.listenerEnsureNeeded.Load() {
+		t.Fatal("listenerEnsureNeeded should be false when ensure is unsupported")
+	}
+}
+
+func TestEnsureListenerIfNeededAsync_ReconnectPathDoesNotWaitSubmit(t *testing.T) {
+	client := NewAppServerClient(0, "agent-ensure-async")
+	client.ThreadID = "thread-async"
+	client.listenerEnsureNeeded.Store(true)
+
+	called := make(chan struct{}, 1)
+	client.ensureListenerIfNeededAsync("reconnect", func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+		called <- struct{}{}
+		return json.RawMessage(`{"thread":{"id":"thread-async"}}`), nil
+	})
+
+	select {
+	case <-called:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected async listener ensure to run without submit")
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for client.listenerEnsureNeeded.Load() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if client.listenerEnsureNeeded.Load() {
+		t.Fatal("listenerEnsureNeeded should be false after async ensure success")
 	}
 }

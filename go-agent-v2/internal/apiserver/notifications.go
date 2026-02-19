@@ -106,7 +106,7 @@ var eventMethodMap = map[string]string{
 	"warning":            "configWarning",
 	"deprecation_notice": "deprecationNotice",
 	"shutdown_complete":  "codex/event/shutdown_complete",
-	"stream_error":       "codex/event/stream_error",
+	"stream_error":       "error",
 	"background_event":   "codex/event/background_event",
 
 	// ── Skills ──

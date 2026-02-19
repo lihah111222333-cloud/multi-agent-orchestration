@@ -153,6 +153,7 @@ func (rp *ResilientPublisher) recoveryLoop(ctx context.Context) {
 func (rp *ResilientPublisher) recoverPending(ctx context.Context) {
 	msgs, err := rp.fallback.LoadPending(ctx, 100)
 	if err != nil {
+		logger.Warn("bus: load pending failed", logger.FieldError, err)
 		return
 	}
 	if len(msgs) == 0 {

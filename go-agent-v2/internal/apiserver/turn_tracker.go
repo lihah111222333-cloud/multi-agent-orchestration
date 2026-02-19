@@ -769,6 +769,9 @@ func trackedTurnTerminalFromEvent(eventType, method string, payload map[string]a
 		eventKey == "error",
 		methodKey == "error",
 		methodKey == "codex/event/stream_error":
+		if retryable, known := extractTrackedRetryable(payload); known && retryable {
+			return "", "", "", false, false
+		}
 		reason := extractTrackedTurnReason(payload)
 		if reason == "" {
 			reason = util.FirstNonEmpty(
@@ -789,6 +792,30 @@ func trackedTurnTerminalFromEvent(eventType, method string, payload map[string]a
 	default:
 		return "", "", "", false, false
 	}
+}
+
+func extractTrackedRetryable(payload map[string]any) (bool, bool) {
+	if payload == nil {
+		return false, false
+	}
+	for _, key := range []string{"willRetry", "will_retry", "recoverable"} {
+		value, exists := payload[key]
+		if !exists {
+			continue
+		}
+		switch typed := value.(type) {
+		case bool:
+			return typed, true
+		case string:
+			switch strings.ToLower(strings.TrimSpace(typed)) {
+			case "true", "1", "yes", "y":
+				return true, true
+			case "false", "0", "no", "n":
+				return false, true
+			}
+		}
+	}
+	return false, false
 }
 
 func extractTrackedTurnID(payload map[string]any) string {

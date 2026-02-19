@@ -2745,19 +2745,6 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	}
 
 	if proc := s.mgr.Get(id); proc != nil {
-		codexThreadID := strings.TrimSpace(proc.Client.GetThreadID())
-		if codexThreadID != "" {
-			if err := proc.Client.ResumeThread(codex.ResumeThreadRequest{
-				ThreadID: codexThreadID,
-				Cwd:      launchCwd,
-			}); err != nil {
-				logger.Warn("turn/start: running thread listener refresh failed, continue with existing session",
-					logger.FieldAgentID, id, logger.FieldThreadID, id,
-					"resume_thread_id", codexThreadID,
-					logger.FieldError, err,
-				)
-			}
-		}
 		return proc, nil
 	}
 	if !s.threadExistsInHistory(ctx, id) {
@@ -2902,7 +2889,9 @@ func (s *Server) sendSlashCommandWithArgs(params json.RawMessage, command string
 
 	var threadID string
 	if v, ok := raw["threadId"]; ok {
-		_ = json.Unmarshal(v, &threadID)
+		if err := json.Unmarshal(v, &threadID); err != nil {
+			return nil, apperrors.Wrap(err, "Server.sendSlashCommandWithArgs", "unmarshal threadId")
+		}
 	}
 	if threadID == "" {
 		return nil, apperrors.New("Server.sendSlashCommandWithArgs", "threadId is required")

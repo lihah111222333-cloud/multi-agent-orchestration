@@ -547,6 +547,7 @@ func (s *Server) broadcastNotification(method string, params any) {
 	notif := newNotification(method, params)
 	data, err := json.Marshal(notif)
 	if err != nil {
+		logger.Error("app-server: marshal notification failed", logger.FieldMethod, method, logger.FieldError, err)
 		return
 	}
 
@@ -1022,6 +1023,11 @@ var payloadExtractKeys = []string{
 	"id", "type", "item_id", "callId", "call_id",
 	"file_path", "path", "chunk", "stream",
 	"plan", "explanation",
+	"phase", "recoverable", "willRetry", "will_retry",
+	"additional_details", "additionalDetails",
+	"threadId", "thread_id", "turnId", "turn_id",
+	"activeTurnId", "active_turn_id", "attempt", "max_retries",
+	"error",
 	// token usage fields (keep nested shapes for runtime parser)
 	"tokenUsage", "token_usage", "usage", "info",
 	"total_tokens", "totalTokens", "used_tokens", "usedTokens",
@@ -1061,6 +1067,20 @@ func mergePayloadFromMap(payload map[string]any, data map[string]any) {
 	if v, ok := data["path"]; ok {
 		if _, exists := payload["file"]; !exists {
 			payload["file"] = v
+		}
+	}
+	if errObj, ok := data["error"].(map[string]any); ok && errObj != nil {
+		if _, exists := payload["message"]; !exists {
+			if msg, ok := errObj["message"]; ok {
+				payload["message"] = msg
+			}
+		}
+		if _, exists := payload["additional_details"]; !exists {
+			if details, ok := errObj["additional_details"]; ok {
+				payload["additional_details"] = details
+			} else if details, ok := errObj["additionalDetails"]; ok {
+				payload["additional_details"] = details
+			}
 		}
 	}
 }
@@ -1314,6 +1334,20 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 		mergePayloadFields(payload, event.Data)
 		s.enrichFileChangePayload(agentID, event.Type, method, payload)
 		s.captureAndInjectTurnSummary(agentID, event.Type, method, payload)
+		if method == "error" {
+			willRetry, hasWillRetry := extractBoolFromPayload(payload, "willRetry", "will_retry", "recoverable")
+			if !hasWillRetry {
+				willRetry = strings.EqualFold(strings.TrimSpace(event.Type), codex.EventStreamError)
+			}
+			payload["willRetry"] = willRetry
+			payload["will_retry"] = willRetry
+			if _, exists := payload["error"]; !exists {
+				payload["error"] = map[string]any{
+					"message":           extractFirstString(payload, "message", "reason"),
+					"additionalDetails": extractFirstString(payload, "additional_details", "additionalDetails"),
+				}
+			}
+		}
 
 		// Normalize event for UI
 		normalized := uistate.NormalizeEventFromPayload(event.Type, method, payload)
@@ -1353,6 +1387,42 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 		// 普通事件: 广播通知
 		s.Notify(method, payload)
 	}
+}
+
+func extractBoolFromPayload(payload map[string]any, keys ...string) (bool, bool) {
+	if payload == nil {
+		return false, false
+	}
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case bool:
+			return typed, true
+		case string:
+			switch strings.ToLower(strings.TrimSpace(typed)) {
+			case "true", "1", "yes", "y":
+				return true, true
+			case "false", "0", "no", "n":
+				return false, true
+			}
+		}
+	}
+	return false, false
+}
+
+// extractFirstString 从 payload 中按优先级提取第一个非空字符串字段。
+func extractFirstString(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if v, ok := payload[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 // persistMessage 异步写入消息到 agent_messages 表。
@@ -1534,7 +1604,9 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 		logger.Error("app-server: approval auto-denied — mgr is nil",
 			logger.FieldAgentID, agentID, logger.FieldMethod, method)
 		if event.DenyFunc != nil {
-			_ = event.DenyFunc()
+			if denyErr := event.DenyFunc(); denyErr != nil {
+				logger.Warn("app-server: deny callback failed", logger.FieldAgentID, agentID, logger.FieldError, denyErr)
+			}
 		}
 		return
 	}
@@ -1543,7 +1615,9 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 		logger.Error("app-server: approval auto-denied — agent gone",
 			logger.FieldAgentID, agentID, logger.FieldMethod, method)
 		if event.DenyFunc != nil {
-			_ = event.DenyFunc()
+			if denyErr := event.DenyFunc(); denyErr != nil {
+				logger.Warn("app-server: deny callback failed", logger.FieldAgentID, agentID, logger.FieldError, denyErr)
+			}
 		}
 		return
 	}
@@ -1657,7 +1731,9 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 		logger.Error("app-server: dynamic_tool_call dropped — agent gone",
 			logger.FieldAgentID, agentID)
 		if event.RespondFunc != nil {
-			_ = event.RespondFunc(-32603, "agent not found: "+agentID)
+			if respErr := event.RespondFunc(-32603, "agent not found: "+agentID); respErr != nil {
+				logger.Warn("app-server: respond callback failed", logger.FieldAgentID, agentID, logger.FieldError, respErr)
+			}
 		}
 		return
 	}
@@ -1678,7 +1754,9 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 			"raw", string(event.Data))
 		// 必须回复 error response，否则 codex turn 永挂。
 		if event.RequestID != nil {
-			_ = proc.Client.RespondError(*event.RequestID, -32602, "bad dynamic_tool_call data: "+err.Error())
+			if respErr := proc.Client.RespondError(*event.RequestID, -32602, "bad dynamic_tool_call data: "+err.Error()); respErr != nil {
+				logger.Warn("app-server: respond error failed", logger.FieldAgentID, agentID, logger.FieldError, respErr)
+			}
 		}
 		return
 	}
@@ -1726,6 +1804,11 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 		"result_len", len(result),
 		"success", success,
 	)
+
+	// 递增活动统计 (lsp_ 前缀工具会自动累加到 lspCalls)
+	if s.uiRuntime != nil {
+		s.uiRuntime.IncrActivityStat(agentID, "toolCall", call.Tool)
+	}
 
 	// 广播到前端 — 让 UI 可以显示 LSP 调用
 	notifyPayload := buildToolNotifyPayload(agentID, call, argMap, filePath, success, count, elapsed, result)

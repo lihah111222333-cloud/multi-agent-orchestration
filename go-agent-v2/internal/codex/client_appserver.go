@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -128,16 +129,64 @@ type AppServerClient struct {
 
 	// 活跃 turn 跟踪: turn/started 存入, turn_complete/idle/error 清空。
 	activeTurnID atomic.Value // string
+
+	// listener 兜底标记: 仅在连接重连后需要在下次 turn/start 前执行 thread/resume 确保订阅。
+	listenerEnsureNeeded atomic.Bool
+	// listener ensure 并发保护: 避免重连和 submit 同时触发重复 ensure。
+	listenerEnsureInFlight atomic.Bool
+
+	// legacy mirror 丢弃计数: 用于采样日志输出。
+	legacyMirrorDropCount atomic.Int64
 }
 
 const appServerStartupProbeTimeout = 30 * time.Second
 const appServerWriteTimeout = 10 * time.Second
-const appServerReadIdleTimeout = 75 * time.Second
 const appServerPingInterval = 25 * time.Second
 const appServerInterruptTimeout = 30 * time.Second
-const appServerStreamMaxRetries = 3
+const appServerListenerEnsureTimeout = 10 * time.Second
 const appServerReconnectBaseDelay = 300 * time.Millisecond
 const appServerReconnectMaxDelay = 3 * time.Second
+const defaultAppServerReadIdleTimeout = 300 * time.Second
+const defaultAppServerStreamMaxRetries = 5
+const maxAppServerStreamMaxRetries = 100
+
+var appServerReadIdleTimeout = appServerReadIdleTimeoutFromEnv()
+var appServerStreamMaxRetries = appServerStreamMaxRetriesFromEnv()
+
+func appServerReadIdleTimeoutFromEnv() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("GO_AGENT_APP_SERVER_STREAM_IDLE_TIMEOUT_MS"))
+	if raw == "" {
+		return defaultAppServerReadIdleTimeout
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		logger.Warn("codex: invalid GO_AGENT_APP_SERVER_STREAM_IDLE_TIMEOUT_MS, using default",
+			"value", raw,
+			"default_ms", defaultAppServerReadIdleTimeout.Milliseconds(),
+		)
+		return defaultAppServerReadIdleTimeout
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func appServerStreamMaxRetriesFromEnv() int {
+	raw := strings.TrimSpace(os.Getenv("GO_AGENT_APP_SERVER_STREAM_MAX_RETRIES"))
+	if raw == "" {
+		return defaultAppServerStreamMaxRetries
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		logger.Warn("codex: invalid GO_AGENT_APP_SERVER_STREAM_MAX_RETRIES, using default",
+			"value", raw,
+			"default", defaultAppServerStreamMaxRetries,
+		)
+		return defaultAppServerStreamMaxRetries
+	}
+	if value > maxAppServerStreamMaxRetries {
+		return maxAppServerStreamMaxRetries
+	}
+	return value
+}
 
 // NewAppServerClient 创建 app-server 客户端。
 func NewAppServerClient(port int, agentID string) *AppServerClient {
@@ -327,7 +376,11 @@ func (c *AppServerClient) emitBackgroundEvent(message string, status string, act
 func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 	trigger = strings.TrimSpace(trigger)
 	activeTurnID := c.getActiveTurnID()
-	for attempt := 1; attempt <= appServerStreamMaxRetries; attempt++ {
+	maxRetries := appServerStreamMaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 0
+	}
+	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if c.stopped.Load() {
 			return false
 		}
@@ -344,7 +397,7 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 				"phase":        "reconnect",
 				"trigger":      trigger,
 				"attempt":      attempt,
-				"max_retries":  appServerStreamMaxRetries,
+				"max_retries":  maxRetries,
 				"activeTurnId": activeTurnID,
 			},
 		)
@@ -352,12 +405,23 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 		conn, err := c.dialWS(c.ctx)
 		if err != nil {
 			retryErr := apperrors.Wrap(err, "AppServerClient.reconnectWS", "dial reconnect")
-			c.emitStreamError(retryErr, "reconnect", false)
+			willRetry := attempt < maxRetries
+			reconnectMessage := fmt.Sprintf("Reconnecting... %d/%d", attempt, maxRetries)
+			if !willRetry {
+				reconnectMessage = fmt.Sprintf("Reconnect failed %d/%d", attempt, maxRetries)
+			}
+			c.emitStreamError(retryErr, "reconnect", false, willRetry, map[string]any{
+				"message":      reconnectMessage,
+				"attempt":      attempt,
+				"max_retries":  maxRetries,
+				"trigger":      trigger,
+				"activeTurnId": activeTurnID,
+			})
 			logger.Warn("codex: ws reconnect attempt failed",
 				logger.FieldAgentID, c.AgentID,
 				"trigger", trigger,
 				"attempt", attempt,
-				"max_retries", appServerStreamMaxRetries,
+				"max_retries", maxRetries,
 				"active_turn_id", activeTurnID,
 				logger.FieldError, retryErr,
 			)
@@ -365,6 +429,8 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 		}
 
 		c.replaceWSConn(conn)
+		c.listenerEnsureNeeded.Store(true)
+		c.ensureListenerIfNeededAsync("reconnect", c.call)
 		util.SafeGo(func() { c.pingLoop(conn) })
 		c.emitBackgroundEvent(
 			"Reconnected",
@@ -375,7 +441,7 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 				"phase":        "reconnect",
 				"trigger":      trigger,
 				"attempt":      attempt,
-				"max_retries":  appServerStreamMaxRetries,
+				"max_retries":  maxRetries,
 				"activeTurnId": activeTurnID,
 			},
 		)
@@ -383,7 +449,7 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 			logger.FieldAgentID, c.AgentID,
 			"trigger", trigger,
 			"attempt", attempt,
-			"max_retries", appServerStreamMaxRetries,
+			"max_retries", maxRetries,
 			"active_turn_id", activeTurnID,
 		)
 		return true
@@ -392,8 +458,8 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 	exhausted := map[string]any{
 		"phase":       "reconnect",
 		"trigger":     trigger,
-		"attempt":     appServerStreamMaxRetries,
-		"max_retries": appServerStreamMaxRetries,
+		"attempt":     maxRetries,
+		"max_retries": maxRetries,
 	}
 	if lastErr != nil {
 		exhausted["last_error"] = lastErr.Error()
@@ -405,7 +471,7 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 	logger.Warn("codex: ws reconnect exhausted",
 		logger.FieldAgentID, c.AgentID,
 		"trigger", trigger,
-		"max_retries", appServerStreamMaxRetries,
+		"max_retries", maxRetries,
 		"active_turn_id", activeTurnID,
 		logger.FieldError, lastErr,
 	)
@@ -566,6 +632,7 @@ func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicT
 		return "", apperrors.Newf("AppServerClient.ThreadStart", "thread/start returned empty thread ID (raw: %s)", result)
 	}
 	c.ThreadID = resp.Thread.ID
+	c.listenerEnsureNeeded.Store(false)
 	logger.Info("codex: thread/start OK",
 		logger.FieldAgentID, c.AgentID,
 		logger.FieldPort, c.Port,
@@ -641,12 +708,96 @@ func buildTurnStartInputs(prompt string, images, files []string) []asTurnStartIn
 	return inputs
 }
 
+func ensureListenerViaThreadResume(
+	threadID string,
+	rpcCall func(method string, params any, timeout time.Duration) (json.RawMessage, error),
+) (string, error) {
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return "", apperrors.New("ensureListenerViaThreadResume", "thread id is required")
+	}
+	if rpcCall == nil {
+		return "", apperrors.New("ensureListenerViaThreadResume", "rpc call func is nil")
+	}
+
+	result, err := rpcCall("thread/resume", asThreadResumeParams{
+		ThreadID: id,
+	}, appServerListenerEnsureTimeout)
+	if err != nil {
+		return "", apperrors.Wrap(err, "ensureListenerViaThreadResume", "thread/resume")
+	}
+
+	resolvedID, err := parseThreadResumeResult(result, id)
+	if err != nil {
+		return "", err
+	}
+	return resolvedID, nil
+}
+
+func (c *AppServerClient) ensureListenerIfNeeded(
+	trigger string,
+	rpcCall func(method string, params any, timeout time.Duration) (json.RawMessage, error),
+) {
+	if c == nil || !c.listenerEnsureNeeded.Load() {
+		return
+	}
+	threadID := strings.TrimSpace(c.ThreadID)
+	if threadID == "" {
+		return
+	}
+	if !c.listenerEnsureInFlight.CompareAndSwap(false, true) {
+		return
+	}
+	defer c.listenerEnsureInFlight.Store(false)
+
+	callFn := rpcCall
+	if callFn == nil {
+		callFn = c.call
+	}
+	resolvedID, err := ensureListenerViaThreadResume(threadID, callFn)
+	if err != nil {
+		if isMethodNotFoundRPCError(err) || isInvalidParamsRPCError(err) {
+			c.listenerEnsureNeeded.Store(false)
+			logger.Debug("codex: listener ensure unsupported, disable",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldThreadID, threadID,
+				"trigger", strings.TrimSpace(trigger),
+				logger.FieldError, err,
+			)
+			return
+		}
+		logger.Warn("codex: listener ensure failed, keep pending",
+			logger.FieldAgentID, c.AgentID,
+			logger.FieldThreadID, threadID,
+			"trigger", strings.TrimSpace(trigger),
+			logger.FieldError, err,
+		)
+		return
+	}
+
+	if strings.EqualFold(strings.TrimSpace(c.ThreadID), threadID) {
+		c.ThreadID = resolvedID
+	}
+	c.listenerEnsureNeeded.Store(false)
+}
+
+func (c *AppServerClient) ensureListenerIfNeededAsync(
+	trigger string,
+	rpcCall func(method string, params any, timeout time.Duration) (json.RawMessage, error),
+) {
+	util.SafeGo(func() {
+		c.ensureListenerIfNeeded(trigger, rpcCall)
+	})
+}
+
 // Submit 发送用户 prompt (app-server JSON-RPC turn/start)。
 func (c *AppServerClient) Submit(prompt string, images, files []string, outputSchema json.RawMessage) error {
+	c.ensureListenerIfNeeded("turn/start", c.call)
+
 	inputs := buildTurnStartInputs(prompt, images, files)
 
 	params := map[string]any{
-		"threadId": c.ThreadID,
+		"threadId": strings.TrimSpace(c.ThreadID),
 		"input":    inputs,
 	}
 	if len(outputSchema) > 0 {
@@ -921,6 +1072,7 @@ func (c *AppServerClient) ResumeThread(req ResumeThreadRequest) error {
 		return err
 	}
 	c.ThreadID = resolvedID
+	c.listenerEnsureNeeded.Store(false)
 	return nil
 }
 
@@ -970,14 +1122,31 @@ func (c *AppServerClient) readLoop() {
 			readErr := apperrors.Wrap(err, "AppServerClient.readLoop", "read message")
 			c.failPendingCalls(readErr)
 			if !c.stopped.Load() {
-				c.emitStreamError(readErr, "read", isIdleTimeoutError(err))
+				willRetry := appServerStreamMaxRetries > 0
+				reconnectingMessage := "Reconnecting..."
+				if !willRetry {
+					reconnectingMessage = "Stream disconnected"
+				}
+				c.emitStreamError(readErr, "read", isIdleTimeoutError(err), willRetry, map[string]any{
+					"message":     reconnectingMessage,
+					"attempt":     0,
+					"max_retries": appServerStreamMaxRetries,
+					"trigger":     "read_error",
+				})
 			}
-			logger.Warn("codex: readLoop read failed",
-				logger.FieldAgentID, c.AgentID,
-				"active_turn_id", c.getActiveTurnID(),
-				"idle_timeout", isIdleTimeoutError(err),
-				logger.FieldError, readErr,
-			)
+			if c.stopped.Load() && isShutdownReadError(err) {
+				logger.Debug("codex: readLoop read failed (shutdown)",
+					logger.FieldAgentID, c.AgentID,
+					logger.FieldError, readErr,
+				)
+			} else {
+				logger.Warn("codex: readLoop read failed",
+					logger.FieldAgentID, c.AgentID,
+					"active_turn_id", c.getActiveTurnID(),
+					"idle_timeout", isIdleTimeoutError(err),
+					logger.FieldError, readErr,
+				)
+			}
 			if c.stopped.Load() {
 				return
 			}
@@ -998,12 +1167,23 @@ func (c *AppServerClient) readLoop() {
 			continue
 		}
 		if dropped, preview, convID := shouldDropLegacyMirrorNotification(msg); dropped {
-			logger.Info("codex: dropped legacy mirror stream notification",
-				logger.FieldAgentID, c.AgentID,
-				logger.FieldMethod, msg.Method,
-				"conversation_id", convID,
-				"preview", preview,
-			)
+			seq := c.legacyMirrorDropCount.Add(1)
+			if shouldLogLegacyMirrorDrop(seq) {
+				logger.Info("codex: dropped legacy mirror stream notification (sampled)",
+					logger.FieldAgentID, c.AgentID,
+					logger.FieldMethod, msg.Method,
+					"conversation_id", convID,
+					"preview", preview,
+					"drop_count", seq,
+				)
+			} else {
+				logger.Debug("codex: dropped legacy mirror stream notification",
+					logger.FieldAgentID, c.AgentID,
+					logger.FieldMethod, msg.Method,
+					"conversation_id", convID,
+					"preview", preview,
+				)
+			}
 			continue
 		}
 
@@ -1115,7 +1295,7 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 		return false
 	}
 	handler(event)
-	return event.Type == EventError || event.Type == EventShutdownComplete
+	return event.Type == EventShutdownComplete
 }
 
 // trackTurnLifecycle 从事件中提取并维护当前活跃 turnId。
@@ -1144,6 +1324,19 @@ func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 		if activeTurnID != "" {
 			c.clearActiveTurnID()
 			logger.Debug("codex: active turn cleared",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldEventType, event.Type,
+				logger.FieldMethod, method,
+				"prev_turn_id", activeTurnID,
+			)
+		}
+	case EventStreamError:
+		if streamErrorWillRetry(event.Data) {
+			return
+		}
+		if activeTurnID != "" {
+			c.clearActiveTurnID()
+			logger.Debug("codex: active turn cleared by non-retryable stream error",
 				logger.FieldAgentID, c.AgentID,
 				logger.FieldEventType, event.Type,
 				logger.FieldMethod, method,
@@ -1325,6 +1518,7 @@ var methodToEventMap = map[string]string{
 	"agent/event/mcp_startup_update":   "agent/event/mcp_startup_update",
 	"agent/event/shutdown_complete":    EventShutdownComplete,
 	"agent/event/error":                EventError,
+	"agent/event/stream_error":         EventStreamError,
 	"agent/event/warning":              EventWarning,
 
 	// 命令执行
@@ -1402,6 +1596,7 @@ var methodToEventMap = map[string]string{
 	"codex/event/item_completed":                 "item/completed",
 	"codex/event/raw_response_item":              "rawResponseItem/completed",
 	"codex/event/error":                          EventError,
+	"codex/event/stream_error":                   EventStreamError,
 	"codex/event/warning":                        EventWarning,
 	"codex/event/shutdown_complete":              EventShutdownComplete,
 }
@@ -1445,8 +1640,61 @@ func (c *AppServerClient) jsonRPCToEvent(msg jsonRPCMessage) Event {
 			logger.FieldParamsLen, len(msg.Params),
 		)
 	}
+	normalizedParams := msg.Params
+	if strings.EqualFold(strings.TrimSpace(msg.Method), "error") {
+		normalizedParams = normalizeErrorNotificationPayload(msg.Params)
+		if streamErrorWillRetry(normalizedParams) {
+			eventType = EventStreamError
+		}
+	}
 
-	return Event{Type: eventType, Data: msg.Params}
+	return Event{Type: eventType, Data: normalizedParams}
+}
+
+func normalizeErrorNotificationPayload(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return raw
+	}
+	if payload == nil {
+		return raw
+	}
+
+	if errObj, ok := payload["error"].(map[string]any); ok && errObj != nil {
+		if _, exists := payload["message"]; !exists {
+			if msg := strings.TrimSpace(trimmedStringValue(errObj["message"])); msg != "" {
+				payload["message"] = msg
+			}
+		}
+		if _, exists := payload["additional_details"]; !exists {
+			if details := strings.TrimSpace(trimmedStringValue(errObj["additionalDetails"])); details != "" {
+				payload["additional_details"] = details
+			} else if details := strings.TrimSpace(trimmedStringValue(errObj["additional_details"])); details != "" {
+				payload["additional_details"] = details
+			}
+		}
+	}
+
+	if _, exists := payload["willRetry"]; !exists {
+		if value, ok := payload["will_retry"]; ok {
+			payload["willRetry"] = value
+		}
+	}
+	if _, exists := payload["will_retry"]; !exists {
+		if value, ok := payload["willRetry"]; ok {
+			payload["will_retry"] = value
+		}
+	}
+
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return raw
+	}
+	return normalized
 }
 
 // ========================================
@@ -1459,6 +1707,24 @@ func truncateBytes(b []byte, max int) string {
 		return string(b)
 	}
 	return string(b[:max]) + "...(truncated)"
+}
+
+// isShutdownReadError 判断 readLoop 错误是否由正常关闭触发。
+// shutdown 引起的 "use of closed network connection" 不需要 WARN, 降级为 DEBUG。
+func isShutdownReadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "use of closed network connection")
+}
+
+// legacyMirrorDropLogSampleInterval 每 N 次 legacy mirror 丢弃打一次 INFO 采样日志。
+const legacyMirrorDropLogSampleInterval int64 = 100
+
+// shouldLogLegacyMirrorDrop 决定第 seq 次 legacy mirror 丢弃是否应打 INFO 日志。
+// 策略: 第 1 次 + 每 100 次。其余降级为 DEBUG。
+func shouldLogLegacyMirrorDrop(seq int64) bool {
+	return seq == 1 || seq%legacyMirrorDropLogSampleInterval == 0
 }
 
 var legacyMirrorStreamMethods = map[string]struct{}{
@@ -1591,7 +1857,7 @@ func (c *AppServerClient) failPendingCalls(err error) {
 	})
 }
 
-func (c *AppServerClient) emitStreamError(err error, phase string, idleTimeout bool) {
+func (c *AppServerClient) emitStreamError(err error, phase string, idleTimeout bool, willRetry bool, details map[string]any) {
 	if err == nil {
 		return
 	}
@@ -1602,10 +1868,24 @@ func (c *AppServerClient) emitStreamError(err error, phase string, idleTimeout b
 		return
 	}
 
+	message := strings.TrimSpace(err.Error())
 	payload := map[string]any{
-		"message":     err.Error(),
+		"message":     message,
 		"phase":       strings.TrimSpace(phase),
-		"recoverable": true,
+		"recoverable": willRetry,
+		"willRetry":   willRetry,
+		"will_retry":  willRetry,
+	}
+	if details != nil {
+		for key, value := range details {
+			payload[key] = value
+		}
+		if override := strings.TrimSpace(trimmedStringValue(details["message"])); override != "" {
+			payload["message"] = override
+			if message != "" && !strings.EqualFold(message, override) {
+				payload["additional_details"] = message
+			}
+		}
 	}
 	if c.AgentID != "" {
 		payload["agentId"] = c.AgentID
@@ -1621,6 +1901,44 @@ func (c *AppServerClient) emitStreamError(err error, phase string, idleTimeout b
 	}
 	data, _ := json.Marshal(payload)
 	handler(Event{Type: EventStreamError, Data: data})
+}
+
+func streamErrorWillRetry(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+		return false
+	}
+	if value, ok := extractBoolValue(payload, "willRetry", "will_retry", "recoverable"); ok {
+		return value
+	}
+	return false
+}
+
+func extractBoolValue(payload map[string]any, keys ...string) (bool, bool) {
+	if payload == nil {
+		return false, false
+	}
+	for _, key := range keys {
+		value, exists := payload[key]
+		if !exists {
+			continue
+		}
+		switch typed := value.(type) {
+		case bool:
+			return typed, true
+		case string:
+			switch strings.ToLower(strings.TrimSpace(typed)) {
+			case "true", "1", "yes", "y":
+				return true, true
+			case "false", "0", "no", "n":
+				return false, true
+			}
+		}
+	}
+	return false, false
 }
 
 func isIdleTimeoutError(err error) bool {

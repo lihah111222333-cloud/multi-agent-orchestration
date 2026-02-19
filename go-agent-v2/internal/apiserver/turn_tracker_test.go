@@ -123,6 +123,33 @@ func TestMaybeFinalizeTrackedTurnFromStreamError(t *testing.T) {
 	}
 }
 
+func TestMaybeFinalizeTrackedTurnSkipsRetryableStreamError(t *testing.T) {
+	srv := &Server{
+		activeTurns:         make(map[string]*trackedTurn),
+		turnWatchdogTimeout: time.Second,
+	}
+	_ = srv.beginTrackedTurn("thread-retry", "turn-retry")
+
+	notified := false
+	srv.SetNotifyHook(func(method string, params any) {
+		if method == "turn/completed" {
+			notified = true
+		}
+	})
+
+	srv.maybeFinalizeTrackedTurn("thread-retry", "stream_error", "error", map[string]any{
+		"message":   "Reconnecting... 1/5",
+		"willRetry": true,
+	})
+
+	if notified {
+		t.Fatalf("retryable stream error should not emit synthetic turn/completed")
+	}
+	if !srv.hasActiveTrackedTurn("thread-retry") {
+		t.Fatalf("retryable stream error should keep active tracked turn")
+	}
+}
+
 func TestMaybeFinalizeTrackedTurnFromTurnAborted(t *testing.T) {
 	srv := &Server{
 		activeTurns:         make(map[string]*trackedTurn),

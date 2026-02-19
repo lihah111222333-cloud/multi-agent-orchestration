@@ -9,7 +9,7 @@ test('UnifiedChatPage exposes context-window token usage tooltip formatting', as
 
   assert.equal(src.includes('Context window:'), true);
   assert.equal(src.includes('tokens used'), true);
-  assert.equal(src.includes("formatTokenPercent(usedPercent)} · ${formatTokenCompact(used)} / ${formatTokenCompact(limit)}"), true);
+  assert.equal(src.includes("formatTokenPercent(usedPercent)} used · ${formatTokenCompact(used)} / ${formatTokenCompact(limit)}"), true);
   assert.equal(src.includes(':token-inline="activeTokenInline"'), true);
   assert.equal(src.includes(':token-tooltip="activeTokenTooltip"'), true);
   assert.equal(src.includes('getThreadTokenUsage'), true);

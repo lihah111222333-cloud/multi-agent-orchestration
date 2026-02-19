@@ -16,13 +16,38 @@ import { callAPI, copyTextToClipboard, resolveThreadIdentity } from '../services
 import { logDebug, logInfo, logWarn } from '../services/log.js';
 import { useComposerStore } from '../stores/composer.js';
 
+/**
+ * @typedef {'force' | 'explicit' | 'trigger'} SkillMatchType
+ */
+
+/**
+ * @typedef {Object} SkillPreviewMatch
+ * @property {string} name
+ * @property {SkillMatchType} matchedBy
+ * @property {string[]} matchedTerms
+ */
+
+/**
+ * @typedef {Object} SkillPreviewQueuedRequest
+ * @property {number} requestSeq
+ * @property {string} threadId
+ * @property {string} text
+ */
+
+/**
+ * @param {{ loadMessages?: (threadId: string, limit?: number) => Promise<any>, getThreadTimeline?: (threadId: string) => any[] }} threadStore
+ * @param {string} threadId
+ * @param {{ force?: boolean, limit?: number }} [options]
+ */
 export async function requestHistoryLoad(threadStore, threadId, options = {}) {
   if (!threadId || typeof threadStore?.loadMessages !== 'function') {
     return false;
   }
 
-  if (options.force) {
-    const limit = Number.isFinite(options.limit) && options.limit > 0 ? options.limit : 300;
+  const opts = /** @type {{ force?: boolean, limit?: number }} */ (options || {});
+
+  if (opts.force) {
+    const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : 300;
     await threadStore.loadMessages(threadId, limit);
     return true;
   }
@@ -54,12 +79,12 @@ export const UnifiedChatPage = {
   setup(props) {
     const composer = useComposerStore();
     const composerBarRef = ref(null);
-    const composerSkillMatches = ref([]);
-    const composerSelectedSkillNames = ref([]);
+    const composerSkillMatches = /** @type {{ value: SkillPreviewMatch[] }} */ (ref([]));
+    const composerSelectedSkillNames = /** @type {{ value: string[] }} */ (ref([]));
     const composerSkillPreviewLoading = ref(false);
     let composerSkillPreviewTimer = 0;
     let composerSkillPreviewSeq = 0;
-    let composerSkillPreviewQueued = null;
+    let composerSkillPreviewQueued = /** @type {SkillPreviewQueuedRequest | null} */ (null);
     let composerSkillPreviewLastSignature = '';
     let composerSkillPreviewLastWarnAt = 0;
     const workspaceRef = ref(null);
@@ -364,7 +389,7 @@ export const UnifiedChatPage = {
 
     function normalizeSkillPreviewMatches(rawMatches) {
       if (!Array.isArray(rawMatches)) return [];
-      const deduped = [];
+      const deduped = /** @type {SkillPreviewMatch[]} */ ([]);
       const seenNames = new Set();
       rawMatches.forEach((raw) => {
         const name = (raw?.name || raw?.skill || '').toString().trim();
@@ -379,7 +404,7 @@ export const UnifiedChatPage = {
         const sourceTerms = Array.isArray(raw?.matched_terms)
           ? raw.matched_terms
           : (Array.isArray(raw?.matchedTerms) ? raw.matchedTerms : []);
-        const terms = [];
+        const terms = /** @type {string[]} */ ([]);
         const seenTerms = new Set();
         sourceTerms.forEach((rawTerm) => {
           const term = (rawTerm || '').toString().trim();
@@ -431,7 +456,7 @@ export const UnifiedChatPage = {
 
     function selectAllComposerSuggestedSkills() {
       if (!Array.isArray(composerSkillMatches.value) || composerSkillMatches.value.length === 0) return;
-      const next = [];
+      const next = /** @type {string[]} */ ([]);
       const seen = new Set();
       composerSkillMatches.value.forEach((match) => {
         const name = (match?.name || '').toString().trim();
@@ -965,7 +990,7 @@ export const UnifiedChatPage = {
       const threadId = (selectedThreadId.value || '').toString();
       if (!threadId) return;
       const runtime = activeRuntime.value || {};
-      let resolved = {};
+      let resolved = /** @type {{ codexThreadId?: string, port?: number | string }} */ ({});
       const existingCodexThreadID = (runtime.codexThreadId || '').toString().trim();
       if (!existingCodexThreadID) {
         try {
@@ -1061,7 +1086,7 @@ export const UnifiedChatPage = {
         const usedPercent = Number.isFinite(Number(usage.usedPercent))
           ? Number(usage.usedPercent)
           : (used / limit) * 100;
-        return `${formatTokenPercent(usedPercent)} · ${formatTokenCompact(used)} / ${formatTokenCompact(limit)}`;
+        return `${formatTokenPercent(usedPercent)} used · ${formatTokenCompact(used)} / ${formatTokenCompact(limit)}`;
       }
       return `${formatTokenCompact(used)} used`;
     }

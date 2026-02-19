@@ -154,7 +154,7 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 		a.Status = status
 		a.StagnantSec = stagnant
 		if _, err := p.agentStore.Upsert(ctx, &a); err != nil {
-			logger.Debugw("patrol: upsert failed", logger.FieldAgentID, a.AgentID, logger.FieldError, err)
+			logger.Warnw("patrol: upsert failed", logger.FieldAgentID, a.AgentID, logger.FieldError, err)
 		}
 	}
 

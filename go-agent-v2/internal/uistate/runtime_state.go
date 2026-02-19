@@ -895,7 +895,7 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 	}
 
 	if eventType == "token_count" || eventType == "context_compacted" || method == "thread/tokenUsage/updated" || method == "thread/compacted" {
-		m.updateTokenUsageLocked(threadID, payload, ts)
+		m.updateTokenUsageLocked(threadID, payload, eventType, method, ts)
 	}
 
 	switch normalized.UIType {
@@ -1004,6 +1004,15 @@ func (m *RuntimeManager) incrActivityStatLocked(threadID, kind, toolName string)
 		}
 	}
 	m.snapshot.ActivityStatsByThread[threadID] = stats
+}
+
+// IncrActivityStat increments a per-thread activity counter (goroutine-safe).
+//
+// Used by apiserver for dynamic tool calls that bypass the normal event pipeline.
+func (m *RuntimeManager) IncrActivityStat(threadID, kind, toolName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.incrActivityStatLocked(threadID, kind, toolName)
 }
 
 // PushAlert appends a high-priority alert for the given thread.
@@ -2218,8 +2227,9 @@ func extractFirstIntDeep(payload map[string]any, keys ...string) (int, bool) {
 	return 0, false
 }
 
-func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[string]any, ts time.Time) {
+func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[string]any, eventType, method string, ts time.Time) {
 	next := m.snapshot.TokenUsageByThread[threadID]
+	allowInfoTotalFallback := strings.EqualFold(strings.TrimSpace(eventType), "context_compacted") || strings.EqualFold(strings.TrimSpace(method), "thread/compacted")
 
 	if limit, ok := extractFirstIntByPaths(payload,
 		[]string{"tokenUsage", "modelContextWindow"},
@@ -2251,6 +2261,13 @@ func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[str
 		[]string{"info", "lastTokenUsage", "totalTokens"},
 	); ok {
 		next.UsedTokens = max(0, total)
+	} else if allowInfoTotalFallback {
+		if total, ok := extractFirstIntByPaths(payload,
+			[]string{"info", "total_token_usage", "total_tokens"},
+			[]string{"info", "totalTokenUsage", "totalTokens"},
+		); ok {
+			next.UsedTokens = max(0, total)
+		}
 	} else if total, ok := extractFirstIntDeep(payload, "total_tokens", "totalTokens", "used_tokens", "usedTokens"); ok {
 		next.UsedTokens = max(0, total)
 	} else {
@@ -2288,6 +2305,20 @@ func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[str
 				[]string{"info", "last_token_usage", "output_tokens"},
 				[]string{"info", "lastTokenUsage", "outputTokens"},
 			)
+		}
+		if (!hasInput || !hasOutput) && allowInfoTotalFallback {
+			if !hasInput {
+				input, hasInput = extractFirstIntByPaths(payload,
+					[]string{"info", "total_token_usage", "input_tokens"},
+					[]string{"info", "totalTokenUsage", "inputTokens"},
+				)
+			}
+			if !hasOutput {
+				output, hasOutput = extractFirstIntByPaths(payload,
+					[]string{"info", "total_token_usage", "output_tokens"},
+					[]string{"info", "totalTokenUsage", "outputTokens"},
+				)
+			}
 		}
 		if !hasOutput {
 			output, hasOutput = extractFirstIntDeep(payload, "output", "output_tokens", "outputTokens", "completion_tokens")
@@ -2475,6 +2506,31 @@ func cloneSnapshot(src RuntimeSnapshot) RuntimeSnapshot {
 	for key, value := range src.AgentMetaByID {
 		out.AgentMetaByID[key] = value
 	}
+
+	out.ActivityStatsByThread = make(map[string]ActivityStats, len(src.ActivityStatsByThread))
+	for key, value := range src.ActivityStatsByThread {
+		cloned := ActivityStats{
+			LSPCalls:  value.LSPCalls,
+			Commands:  value.Commands,
+			FileEdits: value.FileEdits,
+			ToolCalls: make(map[string]int64, len(value.ToolCalls)),
+		}
+		for k, v := range value.ToolCalls {
+			cloned.ToolCalls[k] = v
+		}
+		out.ActivityStatsByThread[key] = cloned
+	}
+
+	out.AlertsByThread = make(map[string][]AlertEntry, len(src.AlertsByThread))
+	for key, value := range src.AlertsByThread {
+		if len(value) == 0 {
+			continue
+		}
+		entries := make([]AlertEntry, len(value))
+		copy(entries, value)
+		out.AlertsByThread[key] = entries
+	}
+
 	return out
 }
 

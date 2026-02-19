@@ -480,6 +480,39 @@ func TestDynamicToolCallDoesNotIncreaseRunningDepth(t *testing.T) {
 	}
 }
 
+func TestIncrActivityStat_DynamicToolCallCountsLSP(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-lsp-stats"
+
+	// LSP tools: should increment both ToolCalls and LSPCalls
+	mgr.IncrActivityStat(threadID, "toolCall", "lsp_hover")
+	mgr.IncrActivityStat(threadID, "toolCall", "lsp_open_file")
+	mgr.IncrActivityStat(threadID, "toolCall", "lsp_open_file")
+	mgr.IncrActivityStat(threadID, "toolCall", "lsp_diagnostics")
+
+	// Non-LSP tool: should only increment ToolCalls
+	mgr.IncrActivityStat(threadID, "toolCall", "orchestration_list_agents")
+
+	snapshot := mgr.Snapshot()
+	stats := snapshot.ActivityStatsByThread[threadID]
+
+	if stats.LSPCalls != 4 {
+		t.Fatalf("LSPCalls = %d, want 4", stats.LSPCalls)
+	}
+	if stats.ToolCalls["lsp_hover"] != 1 {
+		t.Fatalf("ToolCalls[lsp_hover] = %d, want 1", stats.ToolCalls["lsp_hover"])
+	}
+	if stats.ToolCalls["lsp_open_file"] != 2 {
+		t.Fatalf("ToolCalls[lsp_open_file] = %d, want 2", stats.ToolCalls["lsp_open_file"])
+	}
+	if stats.ToolCalls["lsp_diagnostics"] != 1 {
+		t.Fatalf("ToolCalls[lsp_diagnostics] = %d, want 1", stats.ToolCalls["lsp_diagnostics"])
+	}
+	if stats.ToolCalls["orchestration_list_agents"] != 1 {
+		t.Fatalf("ToolCalls[orchestration_list_agents] = %d, want 1", stats.ToolCalls["orchestration_list_agents"])
+	}
+}
+
 func TestTokenUsageUpdatesAndKeepsLastLimit(t *testing.T) {
 	mgr := NewRuntimeManager()
 	threadID := "thread-token"
@@ -691,6 +724,47 @@ func TestTokenUsageDoesNotApplyInfoTotalOnlyWithoutLastUsage(t *testing.T) {
 	usage := mgr.Snapshot().TokenUsageByThread[threadID]
 	if usage.UsedTokens != 91000 {
 		t.Fatalf("used tokens = %d, want keep 91000", usage.UsedTokens)
+	}
+	if usage.ContextWindowTokens != 258400 {
+		t.Fatalf("context window tokens = %d, want 258400", usage.ContextWindowTokens)
+	}
+}
+
+func TestTokenUsageAppliesInfoTotalOnContextCompacted(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-token-info-total-on-compacted"
+
+	seed := NormalizeEvent(
+		"token_count",
+		"thread/tokenUsage/updated",
+		mustRawJSON(`{"tokenUsage":{"last":{"totalTokens":237100},"modelContextWindow":258400}}`),
+	)
+	mgr.ApplyAgentEvent(threadID, seed, map[string]any{
+		"tokenUsage": map[string]any{
+			"last": map[string]any{
+				"totalTokens": 237100,
+			},
+			"modelContextWindow": 258400,
+		},
+	})
+
+	compacted := NormalizeEvent(
+		"context_compacted",
+		"thread/compacted",
+		mustRawJSON(`{"info":{"total_token_usage":{"total_tokens":91000},"model_context_window":258400}}`),
+	)
+	mgr.ApplyAgentEvent(threadID, compacted, map[string]any{
+		"info": map[string]any{
+			"total_token_usage": map[string]any{
+				"total_tokens": 91000,
+			},
+			"model_context_window": 258400,
+		},
+	})
+
+	usage := mgr.Snapshot().TokenUsageByThread[threadID]
+	if usage.UsedTokens != 91000 {
+		t.Fatalf("used tokens = %d, want 91000 after compact", usage.UsedTokens)
 	}
 	if usage.ContextWindowTokens != 258400 {
 		t.Fatalf("context window tokens = %d, want 258400", usage.ContextWindowTokens)

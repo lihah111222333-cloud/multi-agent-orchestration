@@ -47,6 +47,7 @@ func (c *StderrCollector) Close() error {
 // scan 后台逐行读取 stderr → slog。
 func (c *StderrCollector) scan() {
 	defer close(c.done)
+	defer c.pr.Close()
 
 	scanner := bufio.NewScanner(c.pr)
 	// 默认 64KB 行缓冲已足够 codex stderr
@@ -68,6 +69,16 @@ func (c *StderrCollector) scan() {
 			FieldComponent, "stderr",
 			FieldAgentID, c.agentID,
 			"logger", "codex.stderr",
+		)
+	}
+
+	if err := scanner.Err(); err != nil {
+		slog.Log(context.Background(), slog.LevelError, "stderr collector scan failed",
+			FieldSource, "codex",
+			FieldComponent, "stderr",
+			FieldAgentID, c.agentID,
+			"logger", "codex.stderr",
+			"error", err.Error(),
 		)
 	}
 }

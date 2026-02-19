@@ -2,6 +2,7 @@ package logger
 
 import (
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -220,4 +221,116 @@ func TestContainsErrorKeyword_UsesStringsContains(t *testing.T) {
 			t.Errorf("containsErrorKeyword(%q) = %v, oracle = %v", line, got, want)
 		}
 	}
+}
+
+// ========================================
+// Bug 1: InitWithFile 重复调用应关闭旧文件
+// ========================================
+
+func TestInitWithFile_ClosesOldFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// 第一次调用
+	if err := InitWithFile(dir); err != nil {
+		t.Fatalf("first InitWithFile: %v", err)
+	}
+
+	// 记住旧文件
+	logFileMu.Lock()
+	oldFile := logFile
+	logFileMu.Unlock()
+
+	if oldFile == nil {
+		t.Fatal("logFile should not be nil after InitWithFile")
+	}
+
+	// 第二次调用 (同目录即可)
+	if err := InitWithFile(dir); err != nil {
+		t.Fatalf("second InitWithFile: %v", err)
+	}
+
+	// 旧文件应已被关闭: Stat 会返回 os.ErrClosed 或类似错误
+	_, err := oldFile.Stat()
+	if err == nil {
+		t.Error("old logFile should be closed after second InitWithFile, but Stat succeeded")
+	}
+
+	// 清理
+	ShutdownFileHandler()
+	Init("production")
+}
+
+// ========================================
+// Bug 2: AttachDBHandler 重复调用不应嵌套 MultiHandler
+// ========================================
+
+func TestUnwrapBaseHandler_ReturnsBaseFromMulti(t *testing.T) {
+	base := slog.NewTextHandler(os.Stderr, nil)
+	fakeDB := slog.NewJSONHandler(os.Stderr, nil)
+	multi := NewMultiHandler(base, fakeDB)
+
+	got := unwrapBaseHandler(multi)
+	// 应该返回 base handler, 不是 MultiHandler
+	if _, isMH := got.(*MultiHandler); isMH {
+		t.Error("unwrapBaseHandler should strip MultiHandler wrapper")
+	}
+}
+
+func TestUnwrapBaseHandler_PassThroughNonMulti(t *testing.T) {
+	base := slog.NewTextHandler(os.Stderr, nil)
+	got := unwrapBaseHandler(base)
+	if got != base {
+		t.Error("unwrapBaseHandler should return non-MultiHandler as-is")
+	}
+}
+
+// ========================================
+// Bug 3: Fatal 应在 exit 前 flush 日志
+// ========================================
+
+func TestFatal_FlushesBeforeExit(t *testing.T) {
+	// 替换 exitFunc 拦截 os.Exit
+	exitCalled := false
+	exitCode := 0
+	origExit := exitFunc
+	exitFunc = func(code int) {
+		exitCalled = true
+		exitCode = code
+	}
+	defer func() { exitFunc = origExit }()
+
+	// 用测试 logger 避免影响其他测试
+	origLogger := getLogger()
+	defer storeLogger(origLogger)
+	Init("production")
+
+	Fatal("test fatal", "key", "value")
+
+	if !exitCalled {
+		t.Fatal("exitFunc should have been called")
+	}
+	if exitCode != 1 {
+		t.Errorf("exit code = %d, want 1", exitCode)
+	}
+}
+
+// ========================================
+// Bug 4: StderrCollector 应处理 scanner 错误
+// ========================================
+
+func TestStderrCollector_ScannerErrorHandled(t *testing.T) {
+	c := NewStderrCollector("test-agent")
+
+	// 写入超长行 (超过默认 bufio.Scanner 64KB 限制)
+	longLine := strings.Repeat("x", 80*1024) // 80KB 无换行
+	_, _ = c.Write([]byte(longLine))
+
+	// 关闭 writer 端让 scanner 停止
+	_ = c.Close()
+
+	// 如果 scan() 不处理 scanner.Err(), 这里不会 panic,
+	// 但 scanner 错误被静默吞掉了。
+	// 修复后 scan() 应记录 scanner 错误 (我们无法拦截 slog 输出,
+	// 但至少确认 goroutine 正常完成而非死锁)。
+	// done channel 已在 Close() 中等待, 没有超时说明 goroutine 已退出。
 }

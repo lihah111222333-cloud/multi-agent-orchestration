@@ -30,6 +30,9 @@ var (
 
 	// utc8 固定 UTC+8 时区, 日志时间统一按此时区显示。
 	utc8 = time.FixedZone("UTC+8", 8*60*60)
+
+	// exitFunc 可替换的退出函数, 仅供测试拦截 os.Exit。
+	exitFunc = os.Exit
 )
 
 func init() { defaultLogger.Store(newLogger(false)) }
@@ -91,6 +94,10 @@ func InitWithFile(logDir string) error {
 		return pkgerr.Wrap(err, "Logger.Init", "open log file")
 	}
 	logFileMu.Lock()
+	if logFile != nil {
+		_ = logFile.Sync()
+		_ = logFile.Close()
+	}
 	logFile = f
 	logFileMu.Unlock()
 
@@ -150,10 +157,12 @@ func Errorf(format string, args ...any) { getLogger().Error(fmt.Sprintf(format, 
 func Warnf(format string, args ...any)  { getLogger().Warn(fmt.Sprintf(format, args...)) }
 func Debugf(format string, args ...any) { getLogger().Debug(fmt.Sprintf(format, args...)) }
 
-// Fatal 记录致命错误并退出。
+// Fatal 记录致命错误, flush 异步日志缓冲后退出。
 func Fatal(msg string, args ...any) {
 	getLogger().Error(msg, args...)
-	os.Exit(1)
+	ShutdownDBHandler()
+	ShutdownFileHandler()
+	exitFunc(1)
 }
 
 // Infow/Warnw/Errorw/Debugw 等同于 Info/Warn/Error/Debug (兼容别名)。

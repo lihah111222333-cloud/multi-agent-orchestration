@@ -323,17 +323,30 @@ var (
 	attachMu  sync.Mutex
 )
 
+// unwrapBaseHandler 从 MultiHandler 包装中提取原始 handler, 防止嵌套。
+func unwrapBaseHandler(h slog.Handler) slog.Handler {
+	if mh, ok := h.(*MultiHandler); ok && len(mh.handlers) > 0 {
+		return mh.handlers[0]
+	}
+	return h
+}
+
 // AttachDBHandler 在 pool 初始化后调用，将 DBHandler 作为第二路 Handler 挂载。
-// 调用前的日志只写 stdout; 调用后开始双写。
+// 调用前的日志只写 stdout; 调用后开始双写。幂等: 重复调用会先关闭旧 DBHandler。
 func AttachDBHandler(pool *pgxpool.Pool) {
 	attachMu.Lock()
 	defer attachMu.Unlock()
 
+	// 幂等: 先关闭旧的
+	if old := dbHandler.Load(); old != nil {
+		old.Shutdown()
+	}
+
 	h := NewDBHandler(pool, slog.LevelInfo)
 	dbHandler.Store(h)
 
-	// 重建 defaultLogger: 原始 text/json handler + dbHandler
-	origHandler := getLogger().Handler()
+	// 重建 defaultLogger: 取原始 handler (跳过 MultiHandler 包装层) + 新 dbHandler
+	origHandler := unwrapBaseHandler(getLogger().Handler())
 	multi := NewMultiHandler(origHandler, h)
 	storeLogger(slog.New(multi))
 }

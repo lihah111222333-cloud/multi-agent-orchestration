@@ -2158,27 +2158,52 @@ a,
   color: var(--text);
 }
 
-.composer-skill-hints {
-  margin-top: 8px;
+.composer-skill-selector {
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 32px;
+}
+
+.composer-skill-selector-head {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 6px;
 }
 
-.composer-skill-hints-label {
+.composer-skill-selector-title {
   color: var(--text-subtle);
   font-size: 11px;
   line-height: 1.2;
 }
 
-.composer-skill-hints-pending {
-  color: var(--text-muted);
+.composer-skill-selector-btn {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.72);
+  color: var(--text-sec);
+  border-radius: 999px;
+  padding: 1px 8px;
   font-size: 11px;
   line-height: 1.2;
+  cursor: pointer;
 }
 
-.composer-skill-chip {
+.composer-skill-selector-btn:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.composer-skill-selector-list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 88px;
+  overflow: auto;
+}
+
+.composer-skill-selector-item {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -2190,28 +2215,51 @@ a,
   color: var(--text-sec);
   font-size: 11px;
   line-height: 1.2;
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition), color var(--transition);
 }
 
-.composer-skill-chip.trigger {
+.composer-skill-selector-item:hover {
+  border-color: rgba(56, 189, 248, 0.56);
+}
+
+.composer-skill-selector-item.selected {
+  border-color: rgba(56, 189, 248, 0.8);
+  background: rgba(56, 189, 248, 0.14);
+  color: var(--text);
+}
+
+.composer-skill-selector-item.trigger {
   border-color: rgba(56, 189, 248, 0.46);
   color: #cfefff;
 }
 
-.composer-skill-chip.force {
+.composer-skill-selector-item.force {
   border-color: rgba(248, 113, 113, 0.54);
   color: #ffd4d4;
 }
 
-.composer-skill-chip-name {
+.composer-skill-selector-item.explicit {
+  border-color: rgba(167, 139, 250, 0.56);
+  color: #e5d7ff;
+}
+
+.composer-skill-selector-item-name {
   color: var(--text);
   font-weight: 600;
   word-break: break-all;
 }
 
-.composer-skill-chip-reason {
+.composer-skill-selector-item-reason {
   color: inherit;
   opacity: 0.9;
   word-break: break-all;
+}
+
+.composer-skill-selector-empty {
+  color: var(--text-subtle);
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .chat-input-row-vue textarea,
@@ -2616,4 +2664,177 @@ a,
   font-size: 11px;
   max-height: 120px;
   overflow: auto;
+}
+
+/* ======================================== */
+/* ActivityPanel - 右侧代码变更区下方          */
+/* ======================================== */
+
+/* 右列容器: DiffPanel + ActivityPanel 垂直排列 */
+.workspace-right-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+}
+
+/* #diff-panel 在右列容器中: 覆盖原 flex:4 为填充剩余高度 */
+.workspace-right-col #diff-panel {
+  flex: 1;
+  min-height: 0;
+  border-left: none;
+}
+
+.activity-panel {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-width: 0;
+  height: 140px;
+  background: linear-gradient(180deg, rgba(8, 16, 30, 0.98) 0%, rgba(6, 13, 24, 0.98) 100%);
+  border-top: 1px solid rgba(56, 189, 248, 0.2);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  font-family: "SF Mono", "Menlo", monospace;
+}
+
+/* --- 行为记录 (stats row) --- */
+
+.activity-stats {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  cursor: pointer;
+  transition: background var(--transition);
+  flex-shrink: 0;
+}
+
+.activity-stats:hover {
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.activity-stats .stat {
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.activity-stats .stat strong {
+  margin-left: 2px;
+  font-weight: 600;
+}
+
+.stat-lsp {
+  color: #22d3ee;
+}
+
+.stat-cmd {
+  color: #4ade80;
+}
+
+.stat-file {
+  color: #fbbf24;
+}
+
+.stat-tool {
+  color: #a78bfa;
+}
+
+.stat-sep {
+  color: var(--text-subtle);
+  font-size: 10px;
+  user-select: none;
+}
+
+/* --- 工具详情 (expandable) --- */
+
+.activity-tool-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 4px 10px 6px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  max-height: 64px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.tool-entry {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.tool-entry strong {
+  color: var(--text-sec);
+  margin-left: 2px;
+  font-weight: 600;
+}
+
+/* --- 告警日志 (alerts) --- */
+
+.activity-alerts {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.activity-alerts.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.alert-empty {
+  font-size: 10px;
+  color: var(--text-subtle);
+  text-align: center;
+  padding: 4px 10px;
+}
+
+.alert-line {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 10px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.alert-time {
+  color: var(--text-subtle);
+  flex-shrink: 0;
+  font-size: 10px;
+}
+
+.alert-icon {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.alert-msg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alert-line.alert-error .alert-icon,
+.alert-line.alert-error .alert-msg {
+  color: var(--error);
+}
+
+.alert-line.alert-warning .alert-icon,
+.alert-line.alert-warning .alert-msg {
+  color: var(--warning);
+}
+
+.alert-line.alert-info .alert-icon,
+.alert-line.alert-info .alert-msg {
+  color: var(--info);
 }

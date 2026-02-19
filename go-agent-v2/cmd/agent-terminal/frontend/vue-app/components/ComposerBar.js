@@ -13,8 +13,9 @@ export const ComposerBar = {
     tokenTooltip: { type: String, default: '' },
     skillMatches: { type: Array, default: () => [] },
     skillMatchesLoading: { type: Boolean, default: false },
+    selectedSkillNames: { type: Array, default: () => [] },
   },
-  emits: ['send', 'interrupt', 'compact'],
+  emits: ['send', 'interrupt', 'compact', 'toggle-skill', 'select-all-skills', 'clear-skills'],
   setup(props, { emit }) {
     const isComposing = ref(false);
     const pauseAcknowledged = ref(false);
@@ -213,7 +214,9 @@ export const ComposerBar = {
 
     function normalizeSkillMatchType(match) {
       const type = (match?.matchedBy || '').toString().trim().toLowerCase();
-      return type === 'force' ? 'force' : 'trigger';
+      if (type === 'force') return 'force';
+      if (type === 'explicit') return 'explicit';
+      return 'trigger';
     }
 
     function skillMatchClass(match) {
@@ -222,7 +225,7 @@ export const ComposerBar = {
 
     function skillMatchReason(match) {
       const type = normalizeSkillMatchType(match);
-      const typeLabel = type === 'force' ? '强制词' : '触发词';
+      const typeLabel = type === 'force' ? '强制词' : (type === 'explicit' ? '显式提及' : '触发词');
       const terms = Array.isArray(match?.matchedTerms)
         ? match.matchedTerms.map((item) => (item || '').toString().trim()).filter(Boolean)
         : [];
@@ -234,6 +237,24 @@ export const ComposerBar = {
       const name = (match?.name || '').toString().trim();
       const reason = skillMatchReason(match);
       return `${name}|${reason}|${index}`;
+    }
+
+    function isSkillSelected(rawName) {
+      const name = (rawName || '').toString().trim().toLowerCase();
+      if (!name) return false;
+      return props.selectedSkillNames.some((item) => (item || '').toString().trim().toLowerCase() === name);
+    }
+
+    function onToggleSkill(rawName) {
+      emit('toggle-skill', (rawName || '').toString().trim());
+    }
+
+    function onSelectAllSkills() {
+      emit('select-all-skills');
+    }
+
+    function onClearSkills() {
+      emit('clear-skills');
     }
 
     watch(
@@ -285,10 +306,49 @@ export const ComposerBar = {
       skillMatchClass,
       skillMatchReason,
       skillMatchKey,
+      isSkillSelected,
+      onToggleSkill,
+      onSelectAllSkills,
+      onClearSkills,
     };
   },
   template: `
     <div id="chat-input-bar" class="chat-input-vue">
+      <div class="composer-skill-selector" role="status" aria-live="polite">
+        <div class="composer-skill-selector-head">
+          <span class="composer-skill-selector-title">
+            {{ skillMatchesLoading ? '技能匹配中…' : ('技能选择 ' + selectedSkillNames.length + '/' + skillMatches.length) }}
+          </span>
+          <button
+            class="composer-skill-selector-btn"
+            type="button"
+            :disabled="skillMatches.length === 0"
+            @click="onSelectAllSkills"
+          >全选</button>
+          <button
+            class="composer-skill-selector-btn"
+            type="button"
+            :disabled="selectedSkillNames.length === 0"
+            @click="onClearSkills"
+          >清空</button>
+        </div>
+        <div class="composer-skill-selector-list">
+          <button
+            v-for="(match, index) in skillMatches"
+            :key="skillMatchKey(match, index)"
+            class="composer-skill-selector-item"
+            :class="[skillMatchClass(match), { selected: isSkillSelected(match.name) }]"
+            type="button"
+            :title="skillMatchReason(match)"
+            @click="onToggleSkill(match.name)"
+          >
+            <span class="composer-skill-selector-item-name">{{ match.name }}</span>
+            <span class="composer-skill-selector-item-reason">{{ skillMatchReason(match) }}</span>
+          </button>
+          <span v-if="!skillMatchesLoading && skillMatches.length === 0" class="composer-skill-selector-empty">输入触发词后可点选技能</span>
+        </div>
+      </div>
+
       <div v-if="composer.state.attachments.length > 0" class="chat-attachment-list composer-attachments">
         <span v-for="(att, idx) in composer.state.attachments" :key="att.path + idx" class="chat-attachment-pill">
           <span class="attachment-kind">{{ att.kind === 'image' ? 'IMG' : 'FILE' }}</span>
@@ -363,31 +423,6 @@ export const ComposerBar = {
             </svg>
           </button>
         </div>
-      </div>
-
-      <div
-        v-if="skillMatchesLoading || skillMatches.length > 0"
-        class="composer-skill-hints"
-        role="status"
-        aria-live="polite"
-      >
-        <span class="composer-skill-hints-label">
-          {{ skillMatchesLoading ? '技能匹配中…' : '将自动触发技能' }}
-        </span>
-        <span
-          v-if="skillMatchesLoading && skillMatches.length === 0"
-          class="composer-skill-hints-pending"
-        >请稍候…</span>
-        <span
-          v-for="(match, index) in skillMatches"
-          :key="skillMatchKey(match, index)"
-          class="composer-skill-chip"
-          :class="skillMatchClass(match)"
-          :title="skillMatchReason(match)"
-        >
-          <span class="composer-skill-chip-name">{{ match.name }}</span>
-          <span class="composer-skill-chip-reason">{{ skillMatchReason(match) }}</span>
-        </span>
       </div>
     </div>
   `,

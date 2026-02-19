@@ -10,6 +10,7 @@ import { ProjectSelect } from '../components/ProjectSelect.js';
 import { ChatTimeline } from '../components/ChatTimeline.js';
 import { DiffPanel } from '../components/DiffPanel.js';
 import { ComposerBar } from '../components/ComposerBar.js';
+import { ActivityPanel } from '../components/ActivityPanel.js';
 import { normalizeStatus } from '../services/status.js';
 import { callAPI, copyTextToClipboard, resolveThreadIdentity } from '../services/api.js';
 import { logDebug, logInfo, logWarn } from '../services/log.js';
@@ -43,6 +44,7 @@ export const UnifiedChatPage = {
     ChatTimeline,
     DiffPanel,
     ComposerBar,
+    ActivityPanel,
   },
   props: {
     projectStore: { type: Object, required: true },
@@ -53,6 +55,7 @@ export const UnifiedChatPage = {
     const composer = useComposerStore();
     const composerBarRef = ref(null);
     const composerSkillMatches = ref([]);
+    const composerSelectedSkillNames = ref([]);
     const composerSkillPreviewLoading = ref(false);
     let composerSkillPreviewTimer = 0;
     let composerSkillPreviewSeq = 0;
@@ -164,6 +167,14 @@ export const UnifiedChatPage = {
     });
     const activeTokenInline = computed(() => formatTokenInline(activeTokenUsage.value));
     const activeTokenTooltip = computed(() => formatTokenTooltip(activeTokenUsage.value));
+    const activeActivityStats = computed(() => {
+      if (typeof props.threadStore.getThreadActivityStats !== 'function') return {};
+      return props.threadStore.getThreadActivityStats(selectedThreadId.value);
+    });
+    const activeAlerts = computed(() => {
+      if (typeof props.threadStore.getThreadAlerts !== 'function') return [];
+      return props.threadStore.getThreadAlerts(selectedThreadId.value);
+    });
     const isStatusTimerModalPaused = computed(() => Boolean(props.projectStore?.state?.showModal));
     const statusSinceByThread = ref({});
     const statusPausedAtByThread = ref({});
@@ -288,14 +299,38 @@ export const UnifiedChatPage = {
       return false;
     }
 
+    function isComposerTextarea(node) {
+      if (!node || typeof node !== 'object') return false;
+      const tag = (node.tagName || '').toString().toLowerCase();
+      if (tag !== 'textarea') return false;
+      const id = (node.id || '').toString().trim();
+      if (id === 'chatInput') return true;
+      if (typeof node.closest === 'function') {
+        return Boolean(node.closest('#chat-input-bar'));
+      }
+      return false;
+    }
+
+    function isEscapeKeyEvent(event) {
+      const key = (event?.key || '').toString();
+      if (key === 'Escape' || key === 'Esc') return true;
+      const code = (event?.code || '').toString();
+      if (code === 'Escape') return true;
+      const keyCode = Number(event?.keyCode || event?.which || 0);
+      return keyCode === 27;
+    }
+
     function onGlobalEscape(event) {
-      if ((event?.key || '') !== 'Escape') return;
+      if (!isEscapeKeyEvent(event)) return;
       if (event?.repeat) return;
       if (!selectedThreadId.value) return;
       if (!canInterrupt.value) return;
       if (isStatusTimerModalPaused.value) return;
       const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
-      if (isEditableElement(event?.target) || isEditableElement(activeEl)) return;
+      const inComposerTextarea = isComposerTextarea(event?.target) || isComposerTextarea(activeEl);
+      if (!inComposerTextarea && (isEditableElement(event?.target) || isEditableElement(activeEl))) return;
+      if (event && event.__aoGlobalEscapeHandled) return;
+      if (event) event.__aoGlobalEscapeHandled = true;
       if (typeof event?.preventDefault === 'function') event.preventDefault();
       stopSelected();
     }
@@ -338,7 +373,9 @@ export const UnifiedChatPage = {
         if (seenNames.has(lowerName)) return;
         seenNames.add(lowerName);
         const matchedByRaw = (raw?.matched_by || raw?.matchedBy || '').toString().trim().toLowerCase();
-        const matchedBy = matchedByRaw === 'force' ? 'force' : 'trigger';
+        const matchedBy = matchedByRaw === 'force'
+          ? 'force'
+          : (matchedByRaw === 'explicit' ? 'explicit' : 'trigger');
         const sourceTerms = Array.isArray(raw?.matched_terms)
           ? raw.matched_terms
           : (Array.isArray(raw?.matchedTerms) ? raw.matchedTerms : []);
@@ -359,6 +396,72 @@ export const UnifiedChatPage = {
         });
       });
       return deduped;
+    }
+
+    function skillNameKey(rawName) {
+      return (rawName || '').toString().trim().toLowerCase();
+    }
+
+    function isComposerSkillSelected(rawName) {
+      const nameKey = skillNameKey(rawName);
+      if (!nameKey) return false;
+      return composerSelectedSkillNames.value.some((name) => skillNameKey(name) === nameKey);
+    }
+
+    function setComposerSelectedSkill(rawName, selected) {
+      const normalized = (rawName || '').toString().trim();
+      const nameKey = skillNameKey(normalized);
+      if (!nameKey) return;
+      const next = composerSelectedSkillNames.value.filter((name) => skillNameKey(name) !== nameKey);
+      if (selected) {
+        next.push(normalized);
+      }
+      composerSelectedSkillNames.value = next;
+    }
+
+    function toggleComposerSelectedSkill(rawName) {
+      const selected = isComposerSkillSelected(rawName);
+      setComposerSelectedSkill(rawName, !selected);
+    }
+
+    function clearComposerSelectedSkills() {
+      if (composerSelectedSkillNames.value.length === 0) return;
+      composerSelectedSkillNames.value = [];
+    }
+
+    function selectAllComposerSuggestedSkills() {
+      if (!Array.isArray(composerSkillMatches.value) || composerSkillMatches.value.length === 0) return;
+      const next = [];
+      const seen = new Set();
+      composerSkillMatches.value.forEach((match) => {
+        const name = (match?.name || '').toString().trim();
+        const key = skillNameKey(name);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        next.push(name);
+      });
+      composerSelectedSkillNames.value = next;
+    }
+
+    function normalizeComposerSkillMatchType(rawType) {
+      const type = (rawType || '').toString().trim().toLowerCase();
+      if (type === 'force') return 'force';
+      if (type === 'explicit') return 'explicit';
+      return 'trigger';
+    }
+
+    function composerSkillMatchClass(match) {
+      return normalizeComposerSkillMatchType(match?.matchedBy);
+    }
+
+    function composerSkillMatchReason(match) {
+      const type = normalizeComposerSkillMatchType(match?.matchedBy);
+      const label = type === 'force' ? '强制词' : (type === 'explicit' ? '显式提及' : '触发词');
+      const terms = Array.isArray(match?.matchedTerms)
+        ? match.matchedTerms.map((term) => (term || '').toString().trim()).filter(Boolean)
+        : [];
+      if (terms.length === 0) return label;
+      return `${label}: ${terms.join(' / ')}`;
     }
 
     function buildSkillPreviewSignature(matches) {
@@ -559,6 +662,20 @@ export const UnifiedChatPage = {
     );
 
     watch(
+      () => composerSkillMatches.value,
+      (nextMatches) => {
+        if (!Array.isArray(nextMatches) || nextMatches.length === 0) {
+          composerSelectedSkillNames.value = [];
+          return;
+        }
+        const allowed = new Set(nextMatches.map((match) => skillNameKey(match?.name)));
+        composerSelectedSkillNames.value = composerSelectedSkillNames.value
+          .filter((name) => allowed.has(skillNameKey(name)));
+      },
+      { deep: false },
+    );
+
+    watch(
       () => [
         selectedThreadId.value,
         activeStatus.value,
@@ -617,9 +734,15 @@ export const UnifiedChatPage = {
       const text = composer.state.text;
       const attachments = [...composer.state.attachments];
       if (!text.trim() && attachments.length === 0) return;
+      const selectedSkills = [...composerSelectedSkillNames.value];
+      const manualSkillSelection = composerSkillMatches.value.length > 0 || selectedSkills.length > 0;
       composer.clearComposer();
+      composerSelectedSkillNames.value = [];
       shouldAutoScroll.value = true;
-      await props.threadStore.sendMessage(threadId, text, attachments);
+      await props.threadStore.sendMessage(threadId, text, attachments, {
+        selectedSkills,
+        manualSkillSelection,
+      });
       scheduleScrollToBottom(true);
     }
 
@@ -1018,10 +1141,12 @@ export const UnifiedChatPage = {
 
     onMounted(() => {
       window.addEventListener('keydown', onGlobalEscape, true);
+      document.addEventListener('keydown', onGlobalEscape, true);
     });
 
     onBeforeUnmount(() => {
       window.removeEventListener('keydown', onGlobalEscape, true);
+      document.removeEventListener('keydown', onGlobalEscape, true);
       dragging.value = false;
       clearComposerSkillPreviewTimer();
       composerSkillPreviewSeq += 1;
@@ -1070,10 +1195,19 @@ export const UnifiedChatPage = {
       recentThreads,
       cmdCards,
       composerSkillMatches,
+      composerSelectedSkillNames,
       composerSkillPreviewLoading,
+      isComposerSkillSelected,
+      toggleComposerSelectedSkill,
+      clearComposerSelectedSkills,
+      selectAllComposerSuggestedSkills,
+      composerSkillMatchClass,
+      composerSkillMatchReason,
       dragging,
       composerBarRef,
       workspaceRef,
+      activeActivityStats,
+      activeAlerts,
       selectThread,
       launchOne,
       send,
@@ -1349,7 +1483,13 @@ export const UnifiedChatPage = {
 
               <div class="panel-resizer" :class="{dragging}" @mousedown="onResizeStart"></div>
 
-              <DiffPanel :diff-text="activeDiffText" :style="{ flex: '0 0 ' + (100 - splitRatio) + '%' }" />
+              <div class="workspace-right-col" :style="{ flex: '0 0 ' + (100 - splitRatio) + '%' }">
+                <DiffPanel :diff-text="activeDiffText" />
+                <ActivityPanel
+                  :stats="activeActivityStats"
+                  :alerts="activeAlerts"
+                />
+              </div>
             </div>
 
             <div class="chat-composer-shell" :class="{ 'for-chat': !isCmd }" :style="chatComposerShellStyle">
@@ -1364,6 +1504,11 @@ export const UnifiedChatPage = {
                 :disabled="noActiveThread"
                 :skill-matches="composerSkillMatches"
                 :skill-matches-loading="composerSkillPreviewLoading"
+                :selected-skill-names="composerSelectedSkillNames"
+                :style="{ flex: '0 0 ' + splitRatio + '%' }"
+                @toggle-skill="toggleComposerSelectedSkill"
+                @select-all-skills="selectAllComposerSuggestedSkills"
+                @clear-skills="clearComposerSelectedSkills"
                 @send="send"
                 @interrupt="interruptCurrent"
                 @compact="compactCurrent"

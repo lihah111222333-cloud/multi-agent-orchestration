@@ -15,6 +15,12 @@ test('UnifiedChatPage previews skill matches from composer input', async () => {
   assert.equal(src.includes('requestComposerSkillPreview(threadId, text);'), true);
   assert.equal(src.includes("[() => selectedThreadId.value, () => composer.state.text]"), true);
   assert.equal(src.includes("logDebug('ui', 'chat.skillPreview.done'"), true);
+  assert.equal(src.includes('const selectedSkills = [...composerSelectedSkillNames.value];'), true);
+  assert.equal(src.includes('const manualSkillSelection = composerSkillMatches.value.length > 0 || selectedSkills.length > 0;'), true);
+  assert.equal(src.includes('selectedSkills,'), true);
+  assert.equal(src.includes('manualSkillSelection,'), true);
   assert.equal(src.includes(':skill-matches="composerSkillMatches"'), true);
   assert.equal(src.includes(':skill-matches-loading="composerSkillPreviewLoading"'), true);
+  assert.equal(src.includes(':selected-skill-names="composerSelectedSkillNames"'), true);
+  assert.equal(src.includes('@toggle-skill="toggleComposerSelectedSkill"'), true);
 });

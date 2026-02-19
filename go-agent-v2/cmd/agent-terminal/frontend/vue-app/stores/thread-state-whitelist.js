@@ -18,6 +18,8 @@ const RUNTIME_STATE_KEYS = Object.freeze([
   'tokenUsageByThread',
   'agentMetaById',
   'agentRuntimeById',
+  'activityStatsByThread',
+  'alertsByThread',
 ]);
 
 export const THREAD_STORE_UI_LOCAL_STATE_WHITELIST = UI_LOCAL_STATE_KEYS;
@@ -48,6 +50,6 @@ export function assertThreadStoreStateWhitelist(candidate, context = 'thread-sto
   }
   throw new Error(
     `[${context}] unexpected thread store state keys: ${unexpected.join(', ')}. `
-      + `Only whitelist keys are allowed in JS store root state.`,
+    + `Only whitelist keys are allowed in JS store root state.`,
   );
 }

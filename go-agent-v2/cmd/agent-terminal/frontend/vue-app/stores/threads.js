@@ -46,6 +46,8 @@ const runtimeRootState = reactive({
   tokenUsageByThread: {},
   agentMetaById: {},
   agentRuntimeById: {},
+  activityStatsByThread: {},
+  alertsByThread: {},
 });
 
 for (const key of THREAD_STORE_RUNTIME_STATE_KEYS) {
@@ -509,6 +511,18 @@ function applyRuntimeSnapshot(snapshot) {
   mergeObjectMap(state.agentMetaById, data.agentMetaById);
   mergeObjectMap(state.agentRuntimeById, data.agentRuntimeById);
 
+  // --- 活动统计 + 告警: 增量合并 ---
+  mergeObjectMap(state.activityStatsByThread, data.activityStatsByThread);
+  if (data.alertsByThread && typeof data.alertsByThread === 'object') {
+    for (const [key, value] of Object.entries(data.alertsByThread)) {
+      const newAlerts = Array.isArray(value) ? value : [];
+      const oldAlerts = state.alertsByThread[key];
+      if (JSON.stringify(oldAlerts) !== JSON.stringify(newAlerts)) {
+        state.alertsByThread[key] = Object.freeze(newAlerts);
+      }
+    }
+  }
+
   if (Object.prototype.hasOwnProperty.call(data, PREF_ACTIVE_THREAD_ID)) {
     const next = (data[PREF_ACTIVE_THREAD_ID] || '').toString();
     if (state.activeThreadId !== next) state.activeThreadId = next;
@@ -746,7 +760,7 @@ async function loadMessages(threadId, limit = 300) {
   }
 }
 
-async function sendMessage(threadId, prompt, attachments = []) {
+async function sendMessage(threadId, prompt, attachments = [], options = {}) {
   const text = (prompt || '').trim();
   const hasAttachments = attachments.length > 0;
   if (!threadId || (!text && !hasAttachments)) return;
@@ -800,6 +814,11 @@ async function sendMessage(threadId, prompt, attachments = []) {
   }
 
   const start = perfNow();
+  const selectedSkillsRaw = Array.isArray(options?.selectedSkills) ? options.selectedSkills : [];
+  const selectedSkills = selectedSkillsRaw
+    .map((item) => (item || '').toString().trim())
+    .filter(Boolean);
+  const manualSkillSelection = Boolean(options?.manualSkillSelection);
   logInfo('thread', 'send.start', {
     thread_id: threadId,
     text_len: text.length,
@@ -808,9 +827,21 @@ async function sendMessage(threadId, prompt, attachments = []) {
     inline_images: remoteImageCount,
     files: fileCount,
     dropped_attachments: droppedAttachmentCount,
+    selected_skills: selectedSkills.length,
+    manual_skill_selection: manualSkillSelection,
   });
   try {
-    await callAPI('turn/start', { threadId, input });
+    const payload = {
+      threadId,
+      input,
+    };
+    if (selectedSkills.length > 0) {
+      payload.selectedSkills = selectedSkills;
+    }
+    if (manualSkillSelection) {
+      payload.manualSkillSelection = true;
+    }
+    await callAPI('turn/start', payload);
     await syncRuntimeState();
     logInfo('thread', 'send.done', {
       thread_id: threadId,
@@ -920,6 +951,16 @@ function getThreadTokenUsage(threadId) {
   return value;
 }
 
+function getThreadActivityStats(threadId) {
+  if (!threadId) return {};
+  return state.activityStatsByThread?.[threadId] || {};
+}
+
+function getThreadAlerts(threadId) {
+  if (!threadId) return [];
+  return state.alertsByThread?.[threadId] || [];
+}
+
 function getThreadCompacting(threadId) {
   if (!threadId) return false;
   return Boolean(compactPendingByThread[threadId]);
@@ -1011,5 +1052,7 @@ export function useThreadStore() {
     setThreadPinned,
     toggleThreadPin,
     displayName,
+    getThreadActivityStats,
+    getThreadAlerts,
   };
 }

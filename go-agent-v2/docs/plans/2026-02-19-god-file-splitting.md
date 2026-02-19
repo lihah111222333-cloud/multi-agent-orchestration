@@ -37,7 +37,7 @@ go test ./internal/apiserver/... ./internal/uistate/... -count=1 -short
 
 ---
 
-## 第一部分: methods.go (3165行 → 5 个新文件 + 瘦身)
+## 第一部分: methods.go (3557行 → 5 个新文件 + 瘦身)
 
 ### 任务 1: 提取 `methods_thread.go` (~1200行)
 
@@ -162,7 +162,7 @@ config + skills + mcp + model + account + command + search + logs + debug + UI p
 
 ---
 
-## 第二部分: server.go (1939行 → 2 个新文件 + 瘦身)
+## 第二部分: server.go (2023行 → 2 个新文件 + 瘦身)
 
 ### 任务 5: 提取 `dispatch.go` (~350行)
 
@@ -212,10 +212,10 @@ JSON-RPC 分发 + HTTP debug 端点。
 
 ---
 
-## 第三部分: runtime_state.go (2484行 → 4 个新文件 + 瘦身)
+## 第三部分: runtime_state.go (2511行 → 4 个新文件 + 瘦身)
 
 > [!NOTE]
-> 用户新增了 `hasAccumulatedText` 函数 (L352)，已纳入任务 10 (timeline)。
+> 用户新增了 `hasAccumulatedText` 函数，已纳入任务 10 (timeline)。
 
 ### 任务 8: 提取 `uistate_types.go` (~120行)
 
@@ -379,4 +379,76 @@ graph TD
 ```
 
 > [!WARNING]
-> 任务 1 (~1200行) 和 3 (~850行) 超过 <300 行/提交限制。执行时各拆为 2-3 个子提交。
+> 任务 1 (~1200行)、2 (~600行)、3 (~850行)、5 (~350行)、6 (~500行)、9 (~500行)、10 (~700行)、11 (~600行) 均超过 <300 行/提交限制。执行时请按“纯移动 + 可编译”拆为 2-4 个子提交。
+
+## 执行模板（按 <300 行/提交）
+
+### 通用检查
+
+```bash
+# 每个子提交前
+go build ./...
+
+# apiserver 相关任务后
+go test ./internal/apiserver/... -count=1 -short
+
+# uistate 相关任务后
+go test ./internal/uistate/... -count=1 -short
+
+# 提交前确认变更规模
+git diff --cached --shortstat
+```
+
+### 建议子提交序列（commit message 模板）
+
+```text
+# 预备任务
+refactor(apiserver): merge ui methods part 1 (dashboard)
+refactor(apiserver): merge ui methods part 2 (projects)
+
+# 任务 1
+refactor(apiserver): split methods_thread types and constants
+refactor(apiserver): split methods_thread core handlers
+refactor(apiserver): split methods_thread history helpers
+refactor(apiserver): split methods_thread alias and slash helpers
+
+# 任务 2
+refactor(apiserver): split methods_turn handlers and params
+refactor(apiserver): split methods_turn interrupt and input helpers
+
+# 任务 3
+refactor(apiserver): split methods_config config and mcp
+refactor(apiserver): split methods_config skills handlers
+refactor(apiserver): split methods_config skills import helpers
+refactor(apiserver): split methods_config account logs prefs
+
+# 任务 4
+refactor(apiserver): slim methods.go to register and init only
+
+# 任务 5
+refactor(apiserver): split dispatch jsonrpc pipeline
+refactor(apiserver): split dispatch http debug handlers
+
+# 任务 6
+refactor(apiserver): split event processing persistence and payload
+refactor(apiserver): split event processing lsp tools
+
+# 任务 7
+refactor(apiserver): slim server.go core runtime and wiring
+
+# 任务 8
+refactor(uistate): split runtime types into uistate_types.go
+
+# 任务 9
+refactor(uistate): split event dispatch framework
+refactor(uistate): split event dispatch handlers
+
+# 任务 10
+refactor(uistate): split timeline hydration and CRUD
+refactor(uistate): split timeline start append finish flows
+refactor(uistate): split timeline tool approval plan helpers
+
+# 任务 11
+refactor(uistate): split derive state and overlay logic
+refactor(uistate): split derive token workspace snapshot helpers
+```

@@ -366,3 +366,118 @@ func TestLaunch_FallbackFailureRemovesAgent(t *testing.T) {
 		t.Fatalf("rest spawn calls = %d, want 1", restClient.spawnCalls.Load())
 	}
 }
+
+// ========================================
+// 任务报告提取测试
+// ========================================
+
+// TestHandleEvent_ExtractsLastAgentMessage 验证 turn_complete 事件携带
+// last_agent_message 时, handleEvent 正确提取并存入 proc.LastReport。
+//
+// 对应 Rust TurnCompleteEvent.last_agent_message 字段。
+func TestHandleEvent_ExtractsLastAgentMessage(t *testing.T) {
+	mgr := NewAgentManager()
+
+	data, _ := json.Marshal(map[string]any{
+		"last_agent_message": "Task completed: created 3 files.",
+	})
+
+	proc := &AgentProcess{ID: "agent-report", State: StateThinking}
+	mgr.handleEvent(proc, codex.Event{
+		Type: codex.EventTurnComplete,
+		Data: data,
+	})
+
+	proc.mu.Lock()
+	defer proc.mu.Unlock()
+
+	if proc.State != StateIdle {
+		t.Errorf("state = %q, want %q", proc.State, StateIdle)
+	}
+	if proc.LastReport != "Task completed: created 3 files." {
+		t.Errorf("LastReport = %q, want %q", proc.LastReport, "Task completed: created 3 files.")
+	}
+}
+
+// TestHandleEvent_ExtractsNestedLastAgentMessage 验证嵌套在 msg 中的
+// last_agent_message 也能正确提取。
+//
+// Rust codex app-server 的 codex/event/task_complete 事件可能将
+// last_agent_message 嵌套在 msg 子对象中。
+func TestHandleEvent_ExtractsNestedLastAgentMessage(t *testing.T) {
+	mgr := NewAgentManager()
+
+	data, _ := json.Marshal(map[string]any{
+		"msg": map[string]any{
+			"last_agent_message": "Nested report content.",
+		},
+	})
+
+	proc := &AgentProcess{ID: "agent-nested", State: StateThinking}
+	mgr.handleEvent(proc, codex.Event{
+		Type: "task_complete", // 也归类为 UITypeTurnComplete
+		Data: data,
+	})
+
+	proc.mu.Lock()
+	defer proc.mu.Unlock()
+
+	if proc.LastReport != "Nested report content." {
+		t.Errorf("LastReport = %q, want %q", proc.LastReport, "Nested report content.")
+	}
+}
+
+// TestHandleEvent_NoReportOnNonTerminalEvent 验证非 turn_complete 事件
+// 不会意外设置 LastReport。
+func TestHandleEvent_NoReportOnNonTerminalEvent(t *testing.T) {
+	mgr := NewAgentManager()
+
+	data, _ := json.Marshal(map[string]any{
+		"last_agent_message": "should not be captured",
+	})
+
+	proc := &AgentProcess{ID: "agent-no-report", State: StateIdle}
+	mgr.handleEvent(proc, codex.Event{
+		Type: codex.EventTurnStarted,
+		Data: data,
+	})
+
+	proc.mu.Lock()
+	defer proc.mu.Unlock()
+
+	if proc.LastReport != "" {
+		t.Errorf("LastReport should be empty for non-terminal events, got %q", proc.LastReport)
+	}
+}
+
+// TestGetReport 验证 GetReport 方法。
+func TestGetReport(t *testing.T) {
+	mgr := NewAgentManager()
+
+	// 未注册 agent → 空字符串
+	if got := mgr.GetReport("nonexistent"); got != "" {
+		t.Errorf("GetReport(nonexistent) = %q, want empty", got)
+	}
+
+	// 注册 agent, 模拟 turn_complete 事件
+	proc := &AgentProcess{
+		ID:     "agent-report-test",
+		State:  StateThinking,
+		Client: &stubClient{port: 19999},
+	}
+	mgr.mu.Lock()
+	mgr.agents[proc.ID] = proc
+	mgr.mu.Unlock()
+
+	data, _ := json.Marshal(map[string]any{
+		"last_agent_message": "Final summary.",
+	})
+	mgr.handleEvent(proc, codex.Event{
+		Type: codex.EventTurnComplete,
+		Data: data,
+	})
+
+	if got := mgr.GetReport("agent-report-test"); got != "Final summary." {
+		t.Errorf("GetReport() = %q, want %q", got, "Final summary.")
+	}
+}

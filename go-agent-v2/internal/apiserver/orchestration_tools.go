@@ -84,6 +84,10 @@ func (s *Server) orchestrationListAgents() string {
 
 // orchestrationSendMessage 发送消息给其他 Agent。
 func (s *Server) orchestrationSendMessage(args json.RawMessage) string {
+	return s.orchestrationSendMessageFrom("", args)
+}
+
+func (s *Server) orchestrationSendMessageFrom(senderID string, args json.RawMessage) string {
 	var p struct {
 		AgentID string `json:"agent_id"`
 		Message string `json:"message"`
@@ -95,9 +99,10 @@ func (s *Server) orchestrationSendMessage(args json.RawMessage) string {
 		return `{"error":"agent_id and message are required"}`
 	}
 
-	if err := s.mgr.Submit(p.AgentID, p.Message, nil, nil); err != nil {
+	if err := s.submitAgentPrompt(p.AgentID, p.Message, nil, nil); err != nil {
 		return toolError(apperrors.Wrap(err, "orchestrationSendMessage", "submit message"))
 	}
+	s.rememberOrchestrationReportRequest(senderID, p.AgentID)
 
 	logger.Info("orchestration: message sent", "to", p.AgentID, logger.FieldLen, len(p.Message))
 	return toolJSON(map[string]any{"success": true, "agent_id": p.AgentID})

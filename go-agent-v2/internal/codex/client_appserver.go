@@ -947,11 +947,33 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 			logger.FieldError, err,
 		)
 	}
-	return c.notify("command", map[string]any{
+	threadID := strings.TrimSpace(c.ThreadID)
+	command := strings.TrimSpace(cmd)
+	logger.Info("codex: command notify sending",
+		logger.FieldAgentID, c.AgentID,
+		logger.FieldThreadID, threadID,
+		logger.FieldCommand, command,
+		"args_len", len(strings.TrimSpace(args)),
+	)
+	if err := c.notify("command", map[string]any{
 		"threadId": c.ThreadID,
 		"command":  cmd,
 		"args":     args,
-	})
+	}); err != nil {
+		logger.Warn("codex: command notify failed",
+			logger.FieldAgentID, c.AgentID,
+			logger.FieldThreadID, threadID,
+			logger.FieldCommand, command,
+			logger.FieldError, err,
+		)
+		return err
+	}
+	logger.Info("codex: command notify sent",
+		logger.FieldAgentID, c.AgentID,
+		logger.FieldThreadID, threadID,
+		logger.FieldCommand, command,
+	)
+	return nil
 }
 
 func isMethodNotFoundRPCError(err error) bool {
@@ -1564,8 +1586,10 @@ var methodToEventMap = map[string]string{
 
 	// legacy codex/event/*
 	"codex/event/task_started": EventTurnStarted,
-	// 注意: `codex/event/task_complete` 与 `turn/completed` 语义重复。
-	// 这里故意不折叠为 EventTurnComplete，保持 raw method，避免重复 turn/completed。
+	// ⚠️ DO NOT DELETE / DO NOT MODIFY — 以下注释和行为是刻意设计。
+	// `codex/event/task_complete` 故意不映射为 EventTurnComplete, 因为 v2 协议会单独发送 turn/completed。
+	// 若映射则会导致 turn_complete 被双重触发 (一次来自此映射, 一次来自 turn/completed)。
+	// runner 层通过 uistate.NormalizeEvent 独立处理 last_agent_message 提取, 不依赖此映射。
 	"codex/event/session_configured":             EventSessionConfigured,
 	"codex/event/agent_message":                  EventAgentMessage,
 	"codex/event/agent_message_delta":            EventAgentMessageDelta,

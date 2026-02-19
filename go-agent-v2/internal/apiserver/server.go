@@ -143,6 +143,8 @@ type Server struct {
 	cfg      *config.Config
 	methods  map[string]Handler
 	dynTools map[string]func(json.RawMessage) string // 动态工具注册表
+	// submitAgentMessage 统一消息下发入口，便于测试替换。
+	submitAgentMessage func(agentID, prompt string, images, files []string) error
 
 	// 消息持久化
 	msgStore *store.AgentMessageStore
@@ -199,6 +201,13 @@ type Server struct {
 	turnWatchdogTimeout time.Duration
 	turnSummaryCache    map[string]trackedTurnSummaryCacheEntry
 	turnSummaryTTL      time.Duration
+	stallThreshold      time.Duration // 无事件多久(秒)触发 stall 自动中断
+	stallHeartbeat      time.Duration // dynamic tool call / 审批等待时的保活心跳间隔
+
+	// 委托消息自动回报跟踪 (workerAgentID -> requesterAgentID -> createdAt)
+	orchestrationReportMu       sync.Mutex
+	orchestrationPendingReports map[string]map[string]time.Time
+	orchestrationReportTTL      time.Duration
 
 	// Per-session 技能配置 (agentID → skills 列表)
 	skillsMu    sync.RWMutex
@@ -243,8 +252,12 @@ func New(deps Deps) *Server {
 		fileChangeByThread:  make(map[string][]string),
 		activeTurns:         make(map[string]*trackedTurn),
 		turnWatchdogTimeout: defaultTurnWatchdogTimeout,
+		stallThreshold:      defaultStallThreshold,
+		stallHeartbeat:      defaultStallHeartbeat,
 		turnSummaryCache:    make(map[string]trackedTurnSummaryCacheEntry),
 		turnSummaryTTL:      defaultTrackedTurnSummaryTTL,
+		orchestrationPendingReports: make(map[string]map[string]time.Time),
+		orchestrationReportTTL:      defaultOrchestrationReportTTL,
 		agentSkills:         make(map[string][]string),
 		sseClients:          make(map[chan []byte]struct{}),
 		prefManager:         uistate.NewPreferenceManager(nil),
@@ -253,6 +266,9 @@ func New(deps Deps) *Server {
 		upgrader: websocket.Upgrader{
 			CheckOrigin: checkLocalOrigin,
 		},
+	}
+	if s.mgr != nil {
+		s.submitAgentMessage = s.mgr.Submit
 	}
 	if deps.DB != nil {
 		s.prefManager = uistate.NewPreferenceManager(store.NewUIPreferenceStore(deps.DB))
@@ -298,6 +314,17 @@ func New(deps Deps) *Server {
 	s.skillsDir = skillsDir
 	s.skillSvc = service.NewSkillService(skillsDir)
 	s.registerMethods()
+
+	// 从 Config 加载 stall 参数
+	if deps.Config != nil {
+		if deps.Config.StallThresholdSec > 0 {
+			s.stallThreshold = time.Duration(deps.Config.StallThresholdSec) * time.Second
+		}
+		if deps.Config.StallHeartbeatSec > 0 {
+			s.stallHeartbeat = time.Duration(deps.Config.StallHeartbeatSec) * time.Second
+		}
+	}
+
 	s.registerDynamicTools()
 	return s
 }
@@ -1370,6 +1397,7 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 
 		s.touchTrackedTurnLastEvent(agentID)
 		s.maybeFinalizeTrackedTurn(agentID, event.Type, method, payload)
+		s.maybeAutoReportOrchestrationCompletion(agentID, event.Type, method, payload)
 
 		// § 二 审批事件: 需要客户端回复 (双向请求)
 		switch event.Type {
@@ -1587,6 +1615,26 @@ func extractEventContent(event codex.Event) string {
 
 // handleApprovalRequest 处理审批事件: Server→Client 请求 → 等回复 → 回传 codex。
 func (s *Server) handleApprovalRequest(agentID, method string, payload map[string]any, event codex.Event) {
+	// 心跳: 防止 stall 检测在等待审批期间误杀
+	heartbeatDone := make(chan struct{})
+	defer close(heartbeatDone)
+	hbInterval := s.stallHeartbeat
+	if hbInterval <= 0 {
+		hbInterval = defaultStallHeartbeat
+	}
+	util.SafeGo(func() {
+		ticker := time.NewTicker(hbInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.touchTrackedTurnLastEvent(agentID)
+			case <-heartbeatDone:
+				return
+			}
+		}
+	})
+
 	approved := false
 	resp, err := s.SendRequestToAll(method, payload)
 	if err != nil {
@@ -1725,6 +1773,26 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 
 // handleDynamicToolCall 处理 codex 发回的动态工具调用 — 调 LSP 并回传结果。
 func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
+	// 心跳: 防止 stall 检测在等待 tool 执行期间误杀
+	heartbeatDone := make(chan struct{})
+	defer close(heartbeatDone)
+	hbInterval := s.stallHeartbeat
+	if hbInterval <= 0 {
+		hbInterval = defaultStallHeartbeat
+	}
+	util.SafeGo(func() {
+		ticker := time.NewTicker(hbInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.touchTrackedTurnLastEvent(agentID)
+			case <-heartbeatDone:
+				return
+			}
+		}
+	})
+
 	// 先查找 proc — 后续的所有错误路径都需要 proc.Client.RespondError 回传。
 	proc := s.mgr.Get(agentID)
 	if proc == nil {
@@ -1778,7 +1846,9 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 
 	var result string
 
-	if handler, ok := s.dynTools[call.Tool]; ok {
+	if call.Tool == "orchestration_send_message" {
+		result = s.orchestrationSendMessageFrom(agentID, call.Arguments)
+	} else if handler, ok := s.dynTools[call.Tool]; ok {
 		result = handler(call.Arguments)
 	} else {
 		result = fmt.Sprintf("unknown tool: %s", call.Tool)

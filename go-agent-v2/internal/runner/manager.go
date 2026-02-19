@@ -48,20 +48,22 @@ const (
 
 // AgentProcess 单个 Codex Agent 实例。
 type AgentProcess struct {
-	ID     string            // 唯一标识
-	Name   string            // 显示名称
-	Client codex.CodexClient // Codex API 客户端 (支持 http-api 或 app-server)
-	State  AgentState        // 当前状态
-	mu     sync.Mutex        // 保护 State 字段读写
+	ID         string            // 唯一标识
+	Name       string            // 显示名称
+	Client     codex.CodexClient // Codex API 客户端 (支持 http-api 或 app-server)
+	State      AgentState        // 当前状态
+	LastReport string            // 最近一次 turn 完成时的 agent 报告 (对应 Rust TurnCompleteEvent.last_agent_message)
+	mu         sync.Mutex        // 保护 State / LastReport 字段读写
 }
 
 // AgentInfo Agent 信息快照 (线程安全复制)。
 type AgentInfo struct {
-	ID       string     `json:"id"`
-	Name     string     `json:"name"`
-	Port     int        `json:"port"`
-	ThreadID string     `json:"thread_id"`
-	State    AgentState `json:"state"`
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	Port       int        `json:"port"`
+	ThreadID   string     `json:"thread_id"`
+	State      AgentState `json:"state"`
+	LastReport string     `json:"last_report,omitempty"` // 最近一次任务报告
 }
 
 // AgentEvent 封装 Agent 事件 (用于 UI 展示)。
@@ -275,7 +277,13 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 	return nil
 }
 
-// handleEvent 处理 Codex 事件 — 更新 Agent 状态并转发给 UI。
+// handleEvent 处理 Codex 事件 — 更新 Agent 状态、提取任务报告并转发给 UI。
+//
+// 任务报告提取:
+//
+//	Rust codex 的 TurnCompleteEvent 携带 last_agent_message (agent 完成任务时的总结消息)。
+//	该字段通过 codex/event/task_complete 或 turn/completed 事件的 JSON payload 传递。
+//	此处从 event.Data 中提取并存储到 proc.LastReport, 供 orchestrator 层读取。
 func (m *AgentManager) handleEvent(proc *AgentProcess, event codex.Event) {
 	// 归一化事件以确定状态
 	normalized := uistate.NormalizeEvent(event.Type, "", event.Data)
@@ -329,6 +337,25 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event codex.Event) {
 			proc.State = newState
 		}
 		proc.mu.Unlock()
+	}
+
+	// ⚠️ DO NOT DELETE — 此提取逻辑与 apiserver/turn_tracker.go 的 captureAndInjectTurnSummary 不是重复代码。
+	// turn_tracker 服务于 apiserver→前端通知路径; 此处服务于 runner→orchestrator 路径。
+	// 两者消费方不同，不可合并。
+	//
+	// 提取任务报告: 对应 Rust TurnCompleteEvent.last_agent_message。
+	// codex/event/task_complete 和 turn/completed 两种事件都可能携带该字段。
+	// uistate.NormalizeEvent 已将两者统一归类为 UITypeTurnComplete。
+	if normalized.UIType == uistate.UITypeTurnComplete {
+		if report := extractLastAgentMessage(event.Data); report != "" {
+			proc.mu.Lock()
+			proc.LastReport = report
+			proc.mu.Unlock()
+			logger.Info("runner: captured task report",
+				logger.FieldAgentID, proc.ID,
+				"report_len", len(report),
+			)
+		}
 	}
 
 	m.mu.RLock()
@@ -488,11 +515,12 @@ func (m *AgentManager) List() []AgentInfo {
 	for _, proc := range snapshot {
 		proc.mu.Lock()
 		info := AgentInfo{
-			ID:       proc.ID,
-			Name:     proc.Name,
-			Port:     proc.Client.GetPort(),
-			ThreadID: proc.Client.GetThreadID(),
-			State:    proc.State,
+			ID:         proc.ID,
+			Name:       proc.Name,
+			Port:       proc.Client.GetPort(),
+			ThreadID:   proc.Client.GetThreadID(),
+			State:      proc.State,
+			LastReport: proc.LastReport,
 		}
 		proc.mu.Unlock()
 		infos = append(infos, info)
@@ -530,4 +558,75 @@ func (m *AgentManager) get(id string) (*AgentProcess, error) {
 		return nil, apperrors.Newf("AgentManager.get", "agent %s not found", id)
 	}
 	return proc, nil
+}
+
+// GetReport 获取指定 Agent 最近一次任务报告。
+//
+// 返回 Codex TurnCompleteEvent 中的 last_agent_message (agent 完成任务时的总结)。
+// 空字符串表示 agent 尚未完成任何任务，或最近一次完成未携带报告。
+func (m *AgentManager) GetReport(id string) string {
+	proc := m.Get(id)
+	if proc == nil {
+		return ""
+	}
+	proc.mu.Lock()
+	defer proc.mu.Unlock()
+	return proc.LastReport
+}
+
+// ⚠️ DO NOT DELETE — 非重复代码。
+// 此函数与 apiserver/turn_tracker.go 的 trackedTurnSummaryFromPayload 职责不同:
+//   - 本函数: runner 层提取报告, 供 orchestrator 直接消费
+//   - turn_tracker: apiserver 层提取摘要, 用于 JSON-RPC 通知广播
+//
+// 两者消费方不同, 删除任一都会导致对应路径丢失任务报告。
+//
+// extractLastAgentMessage 从事件 payload 中提取任务报告。
+//
+// 对应 Rust codex-rs/protocol TurnCompleteEvent.last_agent_message:
+//   - 优先查找顶层 last_agent_message / lastAgentMessage
+//   - 再查找 turn.last_agent_message
+//   - 最后查找 msg/data/payload 嵌套层
+//
+// 返回空字符串表示 payload 中不含报告 (非 turn complete 事件或 agent 无输出)。
+func extractLastAgentMessage(data json.RawMessage) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil || payload == nil {
+		return ""
+	}
+	return extractLastAgentMessageFromMap(payload)
+}
+
+func extractLastAgentMessageFromMap(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	// 顶层: last_agent_message / lastAgentMessage
+	for _, key := range []string{"last_agent_message", "lastAgentMessage"} {
+		if v, ok := payload[key].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	// turn 子对象
+	if turn, ok := payload["turn"].(map[string]any); ok {
+		for _, key := range []string{"last_agent_message", "lastAgentMessage"} {
+			if v, ok := turn[key].(string); ok && strings.TrimSpace(v) != "" {
+				return strings.TrimSpace(v)
+			}
+		}
+	}
+	// 嵌套 msg/data/payload
+	for _, key := range []string{"msg", "data", "payload"} {
+		nested, ok := payload[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if report := extractLastAgentMessageFromMap(nested); report != "" {
+			return report
+		}
+	}
+	return ""
 }

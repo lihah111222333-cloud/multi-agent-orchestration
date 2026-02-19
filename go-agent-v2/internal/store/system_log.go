@@ -82,7 +82,7 @@ func (s *SystemLogStore) CleanupSystemLogs(ctx context.Context, retentionDays in
 		retentionDays = 30
 	}
 	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM system_logs WHERE ts < NOW() - ($1 || ' days')::INTERVAL`,
+		`DELETE FROM system_logs WHERE ts < NOW() - make_interval(days => $1)`,
 		retentionDays)
 	if err != nil {
 		return 0, err

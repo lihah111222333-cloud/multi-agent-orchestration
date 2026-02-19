@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 )
 
 // StderrCollector 将 codex 进程的 stderr 逐行转为 slog 日志。
@@ -73,14 +74,9 @@ func (c *StderrCollector) scan() {
 
 // containsErrorKeyword 简单匹配 stderr 行中的错误关键词。
 func containsErrorKeyword(line string) bool {
-	// 使用低效但简洁的字符串搜索 — stderr 行率不高
 	for _, kw := range []string{"error", "Error", "ERROR", "panic", "PANIC", "fatal", "FATAL"} {
-		if len(line) >= len(kw) {
-			for i := 0; i <= len(line)-len(kw); i++ {
-				if line[i:i+len(kw)] == kw {
-					return true
-				}
-			}
+		if strings.Contains(line, kw) {
+			return true
 		}
 	}
 	return false

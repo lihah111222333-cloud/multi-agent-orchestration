@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -178,11 +179,18 @@ func (h *DBHandler) consumeLoop() {
 	}
 }
 
-// flush 批量写入 PG。
+// flush 批量写入 PG (使用 pgx.Batch 单次往返)。
 func (h *DBHandler) flush(batch []LogEntry) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	const insertSQL = `INSERT INTO system_logs
+		(ts, level, logger, message, raw,
+		 source, component, agent_id, thread_id, trace_id,
+		 event_type, tool_name, duration_ms, extra)
+	 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`
+
+	pgBatch := &pgx.Batch{}
 	for _, e := range batch {
 		var extraJSON []byte
 		if len(e.Extra) > 0 {
@@ -193,20 +201,23 @@ func (h *DBHandler) flush(batch []LogEntry) {
 				extraJSON = nil
 			}
 		}
-
-		_, err := h.pool.Exec(ctx,
-			`INSERT INTO system_logs
-				(ts, level, logger, message, raw,
-				 source, component, agent_id, thread_id, trace_id,
-				 event_type, tool_name, duration_ms, extra)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		pgBatch.Queue(insertSQL,
 			e.Ts, e.Level, e.Logger, e.Message, e.Raw,
 			e.Source, e.Component, e.AgentID, e.ThreadID, e.TraceID,
 			e.EventType, e.ToolName, e.DurationMS, extraJSON,
 		)
-		if err != nil {
-			// 写入失败仅 stderr 输出，不影响主流程
-			slog.Default().Warn("db_handler: flush failed", "error", err)
+	}
+
+	br := h.pool.SendBatch(ctx, pgBatch)
+	defer func() {
+		if closeErr := br.Close(); closeErr != nil {
+			slog.Default().Debug("db_handler: close batch", "error", closeErr)
+		}
+	}()
+
+	for range batch {
+		if _, err := br.Exec(); err != nil {
+			slog.Default().Warn("db_handler: flush row failed", "error", err)
 		}
 	}
 }
@@ -229,7 +240,13 @@ func applyAttr(e *LogEntry, a slog.Attr) {
 	case FieldToolName:
 		e.ToolName = a.Value.String()
 	case FieldDurationMS:
-		if v, ok := a.Value.Any().(int64); ok {
+		switch v := a.Value.Any().(type) {
+		case int64:
+			ms := int(v)
+			e.DurationMS = &ms
+		case int:
+			e.DurationMS = &v
+		case float64:
 			ms := int(v)
 			e.DurationMS = &ms
 		}
@@ -316,10 +333,9 @@ func AttachDBHandler(pool *pgxpool.Pool) {
 	dbHandler.Store(h)
 
 	// 重建 defaultLogger: 原始 text/json handler + dbHandler
-	origHandler := defaultLogger.Handler()
+	origHandler := getLogger().Handler()
 	multi := NewMultiHandler(origHandler, h)
-	defaultLogger = slog.New(multi)
-	slog.SetDefault(defaultLogger)
+	storeLogger(slog.New(multi))
 }
 
 // ShutdownDBHandler 关闭 DBHandler 并 flush 剩余日志。

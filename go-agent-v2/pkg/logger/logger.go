@@ -14,18 +14,34 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 var (
-	defaultLogger = newLogger(false)
-	logFile       *os.File // 全局日志文件, Shutdown 时关闭
+	// defaultLogger 使用 atomic.Pointer 保证并发安全 (解决 data race)。
+	defaultLogger atomic.Pointer[slog.Logger]
+
+	logFile   *os.File   // 全局日志文件, Shutdown 时关闭
+	logFileMu sync.Mutex // 保护 logFile 并发关闭
 
 	// utc8 固定 UTC+8 时区, 日志时间统一按此时区显示。
 	utc8 = time.FixedZone("UTC+8", 8*60*60)
 )
+
+func init() { defaultLogger.Store(newLogger(false)) }
+
+// getLogger 原子读取当前默认日志器。
+func getLogger() *slog.Logger { return defaultLogger.Load() }
+
+// storeLogger 原子存储默认日志器并同步 slog.SetDefault。
+func storeLogger(l *slog.Logger) {
+	defaultLogger.Store(l)
+	slog.SetDefault(l)
+}
 
 // replaceTimeAttr 将 slog 输出的时间强制转为 UTC+8, 并格式化为易读字符串。
 func replaceTimeAttr(_ []string, a slog.Attr) slog.Attr {
@@ -55,8 +71,7 @@ func newLogger(development bool) *slog.Logger {
 // Init 初始化日志配置。env: "development"/"dev" 或 "production" (默认)。
 func Init(env string) {
 	dev := env == "development" || env == "dev"
-	defaultLogger = newLogger(dev)
-	slog.SetDefault(defaultLogger)
+	storeLogger(newLogger(dev))
 }
 
 // InitWithFile 初始化日志, 同时输出到 stdout 和日志文件。
@@ -75,21 +90,24 @@ func InitWithFile(logDir string) error {
 	if err != nil {
 		return pkgerr.Wrap(err, "Logger.Init", "open log file")
 	}
+	logFileMu.Lock()
 	logFile = f
+	logFileMu.Unlock()
 
 	// MultiWriter: stdout + file
 	multi := io.MultiWriter(os.Stdout, f)
 	opts := &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: replaceTimeAttr}
 	handler := slog.NewJSONHandler(multi, opts)
-	defaultLogger = slog.New(handler)
-	slog.SetDefault(defaultLogger)
+	storeLogger(slog.New(handler))
 
 	slog.Info("log file opened", "path", logPath)
 	return nil
 }
 
-// ShutdownFileHandler 关闭日志文件。
+// ShutdownFileHandler 关闭日志文件 (并发安全)。
 func ShutdownFileHandler() {
+	logFileMu.Lock()
+	defer logFileMu.Unlock()
 	if logFile != nil {
 		_ = logFile.Sync()
 		_ = logFile.Close()
@@ -113,7 +131,7 @@ func FromContext(ctx context.Context) *slog.Logger {
 	if l, ok := ctx.Value(ctxKey{}).(*slog.Logger); ok {
 		return l
 	}
-	return defaultLogger
+	return getLogger()
 }
 
 // ========================================
@@ -121,34 +139,34 @@ func FromContext(ctx context.Context) *slog.Logger {
 // ========================================
 
 // Info/Error/Warn/Debug 记录结构化日志。args 为 key-value 对。
-func Info(msg string, args ...any)  { defaultLogger.Info(msg, args...) }
-func Error(msg string, args ...any) { defaultLogger.Error(msg, args...) }
-func Warn(msg string, args ...any)  { defaultLogger.Warn(msg, args...) }
-func Debug(msg string, args ...any) { defaultLogger.Debug(msg, args...) }
+func Info(msg string, args ...any)  { getLogger().Info(msg, args...) }
+func Error(msg string, args ...any) { getLogger().Error(msg, args...) }
+func Warn(msg string, args ...any)  { getLogger().Warn(msg, args...) }
+func Debug(msg string, args ...any) { getLogger().Debug(msg, args...) }
 
 // Infof/Errorf/Warnf/Debugf 记录格式化日志。
-func Infof(format string, args ...any)  { defaultLogger.Info(fmt.Sprintf(format, args...)) }
-func Errorf(format string, args ...any) { defaultLogger.Error(fmt.Sprintf(format, args...)) }
-func Warnf(format string, args ...any)  { defaultLogger.Warn(fmt.Sprintf(format, args...)) }
-func Debugf(format string, args ...any) { defaultLogger.Debug(fmt.Sprintf(format, args...)) }
+func Infof(format string, args ...any)  { getLogger().Info(fmt.Sprintf(format, args...)) }
+func Errorf(format string, args ...any) { getLogger().Error(fmt.Sprintf(format, args...)) }
+func Warnf(format string, args ...any)  { getLogger().Warn(fmt.Sprintf(format, args...)) }
+func Debugf(format string, args ...any) { getLogger().Debug(fmt.Sprintf(format, args...)) }
 
 // Fatal 记录致命错误并退出。
 func Fatal(msg string, args ...any) {
-	defaultLogger.Error(msg, args...)
+	getLogger().Error(msg, args...)
 	os.Exit(1)
 }
 
 // Infow/Warnw/Errorw/Debugw 等同于 Info/Warn/Error/Debug (兼容别名)。
-func Infow(msg string, keysAndValues ...any)  { defaultLogger.Info(msg, keysAndValues...) }
-func Warnw(msg string, keysAndValues ...any)  { defaultLogger.Warn(msg, keysAndValues...) }
-func Errorw(msg string, keysAndValues ...any) { defaultLogger.Error(msg, keysAndValues...) }
-func Debugw(msg string, keysAndValues ...any) { defaultLogger.Debug(msg, keysAndValues...) }
+func Infow(msg string, keysAndValues ...any)  { getLogger().Info(msg, keysAndValues...) }
+func Warnw(msg string, keysAndValues ...any)  { getLogger().Warn(msg, keysAndValues...) }
+func Errorw(msg string, keysAndValues ...any) { getLogger().Error(msg, keysAndValues...) }
+func Debugw(msg string, keysAndValues ...any) { getLogger().Debug(msg, keysAndValues...) }
 
 // With 返回带附加上下文的日志器。
-func With(args ...any) *slog.Logger { return defaultLogger.With(args...) }
+func With(args ...any) *slog.Logger { return getLogger().With(args...) }
 
 // Get 返回底层 slog.Logger。
-func Get() *slog.Logger { return defaultLogger }
+func Get() *slog.Logger { return getLogger() }
 
 // Attr 类型别名 (避免调用方直接 import slog)。
 type Attr = slog.Attr

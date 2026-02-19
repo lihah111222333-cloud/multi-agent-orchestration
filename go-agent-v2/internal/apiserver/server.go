@@ -112,10 +112,10 @@ const (
 	maxMessageSize    = 4 << 20  // 4MB 消息大小限制
 	connOutboxSize    = 256      // 单连接发送缓冲
 	connBacklogCut    = 256 - 16 // 单连接过载水位
-	uiStateThrottleMs = 200      // ui/state/changed 节流间隔 (ms)
+	uiStateThrottleMs = 500      // ui/state/changed 全局节流间隔 (ms)
 )
 
-// uiStateThrottleEntry 单个 thread/agent 的节流状态。
+// uiStateThrottleEntry 全局节流状态。
 type uiStateThrottleEntry struct {
 	lastEmit time.Time      // 上次实际发送时间
 	timer    *time.Timer    // trailing timer (保证最终一致)
@@ -240,29 +240,29 @@ type Deps struct {
 // New 创建服务器。
 func New(deps Deps) *Server {
 	s := &Server{
-		mgr:                 deps.Manager,
-		lsp:                 deps.LSP,
-		cfg:                 deps.Config,
-		methods:             make(map[string]Handler),
-		dynTools:            make(map[string]func(json.RawMessage) string),
-		conns:               make(map[string]*connEntry),
-		pending:             make(map[int64]chan *Response),
-		diagCache:           make(map[string][]lsp.Diagnostic),
-		toolCallCount:       make(map[string]int64),
-		fileChangeByThread:  make(map[string][]string),
-		activeTurns:         make(map[string]*trackedTurn),
-		turnWatchdogTimeout: defaultTurnWatchdogTimeout,
-		stallThreshold:      defaultStallThreshold,
-		stallHeartbeat:      defaultStallHeartbeat,
-		turnSummaryCache:    make(map[string]trackedTurnSummaryCacheEntry),
-		turnSummaryTTL:      defaultTrackedTurnSummaryTTL,
+		mgr:                         deps.Manager,
+		lsp:                         deps.LSP,
+		cfg:                         deps.Config,
+		methods:                     make(map[string]Handler),
+		dynTools:                    make(map[string]func(json.RawMessage) string),
+		conns:                       make(map[string]*connEntry),
+		pending:                     make(map[int64]chan *Response),
+		diagCache:                   make(map[string][]lsp.Diagnostic),
+		toolCallCount:               make(map[string]int64),
+		fileChangeByThread:          make(map[string][]string),
+		activeTurns:                 make(map[string]*trackedTurn),
+		turnWatchdogTimeout:         defaultTurnWatchdogTimeout,
+		stallThreshold:              defaultStallThreshold,
+		stallHeartbeat:              defaultStallHeartbeat,
+		turnSummaryCache:            make(map[string]trackedTurnSummaryCacheEntry),
+		turnSummaryTTL:              defaultTrackedTurnSummaryTTL,
 		orchestrationPendingReports: make(map[string]map[string]time.Time),
 		orchestrationReportTTL:      defaultOrchestrationReportTTL,
-		agentSkills:         make(map[string][]string),
-		sseClients:          make(map[chan []byte]struct{}),
-		prefManager:         uistate.NewPreferenceManager(nil),
-		uiRuntime:           uistate.NewRuntimeManager(),
-		uiThrottleEntries:   make(map[string]*uiStateThrottleEntry),
+		agentSkills:                 make(map[string][]string),
+		sseClients:                  make(map[chan []byte]struct{}),
+		prefManager:                 uistate.NewPreferenceManager(nil),
+		uiRuntime:                   uistate.NewRuntimeManager(),
+		uiThrottleEntries:           make(map[string]*uiStateThrottleEntry),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: checkLocalOrigin,
 		},
@@ -489,18 +489,12 @@ func shouldEmitUIStateChanged(method string, payload map[string]any) bool {
 	return false
 }
 
-// throttledUIStateChanged 节流发送 ui/state/changed。
+// throttledUIStateChanged 全局节流发送 ui/state/changed。
 //
-// 同一 thread/agent 在 uiStateThrottleMs 内只发一次;
-// trailing timer 保证最后一个事件一定被发送。
+// 使用全局统一节流 (不再 per-thread): 多 agent 并行时也只发一条,
+// 前端只需要一个信号触发 syncRuntimeState 拉取最新快照。
 func (s *Server) throttledUIStateChanged(payload map[string]any) {
-	// 确定节流 key (threadId 优先, 其次 agent_id, 兜底 "_global")
 	key := "_global"
-	if tid, _ := payload["threadId"].(string); tid != "" {
-		key = tid
-	} else if aid, _ := payload["agent_id"].(string); aid != "" {
-		key = aid
-	}
 
 	now := time.Now()
 	interval := time.Duration(uiStateThrottleMs) * time.Millisecond
@@ -1616,11 +1610,15 @@ func extractEventContent(event codex.Event) string {
 // handleApprovalRequest 处理审批事件: Server→Client 请求 → 等回复 → 回传 codex。
 func (s *Server) handleApprovalRequest(agentID, method string, payload map[string]any, event codex.Event) {
 	// 心跳: 防止 stall 检测在等待审批期间误杀
+	// 使用 stallThreshold/6 而非 stallHeartbeat，确保在 stall 阈值内多次 touch。
 	heartbeatDone := make(chan struct{})
 	defer close(heartbeatDone)
-	hbInterval := s.stallHeartbeat
+	hbInterval := s.stallThreshold / 6
 	if hbInterval <= 0 {
-		hbInterval = defaultStallHeartbeat
+		hbInterval = defaultStallThreshold / 6
+	}
+	if hbInterval < 10*time.Second {
+		hbInterval = 10 * time.Second
 	}
 	util.SafeGo(func() {
 		ticker := time.NewTicker(hbInterval)
@@ -1774,11 +1772,15 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 // handleDynamicToolCall 处理 codex 发回的动态工具调用 — 调 LSP 并回传结果。
 func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 	// 心跳: 防止 stall 检测在等待 tool 执行期间误杀
+	// 使用 stallThreshold/6 而非 stallHeartbeat，确保在 stall 阈值内多次 touch。
 	heartbeatDone := make(chan struct{})
 	defer close(heartbeatDone)
-	hbInterval := s.stallHeartbeat
+	hbInterval := s.stallThreshold / 6
 	if hbInterval <= 0 {
-		hbInterval = defaultStallHeartbeat
+		hbInterval = defaultStallThreshold / 6
+	}
+	if hbInterval < 10*time.Second {
+		hbInterval = 10 * time.Second
 	}
 	util.SafeGo(func() {
 		ticker := time.NewTicker(hbInterval)

@@ -109,7 +109,8 @@ func TestMaybeFinalizeTrackedTurnFromStreamError(t *testing.T) {
 	})
 
 	srv.maybeFinalizeTrackedTurn("thread-4", "stream_error", "codex/event/stream_error", map[string]any{
-		"reason": "idle_timeout",
+		"reason":    "idle_timeout",
+		"willRetry": false,
 	})
 
 	if gotMethod != "turn/completed" {
@@ -316,5 +317,78 @@ func TestTrackedTurnWatchdogTimeout(t *testing.T) {
 		}
 	case <-time.After(300 * time.Millisecond):
 		t.Fatal("expected watchdog completion notification")
+	}
+}
+
+func TestCheckTurnStall_FirstDetectionUsesGraceEvenWithTailHint(t *testing.T) {
+	srv := &Server{
+		activeTurns:      make(map[string]*trackedTurn),
+		stallThreshold:   20 * time.Millisecond,
+		stallHeartbeat:   10 * time.Millisecond,
+		turnSummaryTTL:   time.Minute,
+		turnSummaryCache: make(map[string]trackedTurnSummaryCacheEntry),
+	}
+
+	turn := &trackedTurn{
+		ID:              "turn-stall-1",
+		ThreadID:        "thread-stall-1",
+		StartedAt:       time.Now().Add(-time.Minute),
+		LastEventAt:     time.Now().Add(-time.Minute),
+		done:            make(chan string, 1),
+		stallHintLogged: true,
+	}
+	srv.activeTurns["thread-stall-1"] = turn
+
+	srv.checkTurnStall("thread-stall-1", "turn-stall-1")
+
+	srv.turnMu.Lock()
+	got := srv.activeTurns["thread-stall-1"]
+	if got == nil {
+		srv.turnMu.Unlock()
+		t.Fatalf("turn should remain active during grace period")
+	}
+	if got.stallAutoInterrupted {
+		srv.turnMu.Unlock()
+		t.Fatalf("first stall detection should not auto-interrupt immediately")
+	}
+	if !got.stallGraceStarted {
+		srv.turnMu.Unlock()
+		t.Fatalf("first stall detection should start grace period")
+	}
+	timer := got.stallTimer
+	srv.turnMu.Unlock()
+
+	if timer == nil {
+		t.Fatalf("grace period timer should be scheduled")
+	}
+	timer.Stop()
+}
+
+func TestTouchTrackedTurnLastEvent_ClearsStallGraceState(t *testing.T) {
+	srv := &Server{
+		activeTurns: make(map[string]*trackedTurn),
+	}
+
+	before := time.Now().Add(-time.Minute)
+	srv.activeTurns["thread-stall-2"] = &trackedTurn{
+		ID:                "turn-stall-2",
+		ThreadID:          "thread-stall-2",
+		LastEventAt:       before,
+		stallGraceStarted: true,
+	}
+
+	srv.touchTrackedTurnLastEvent("thread-stall-2")
+
+	srv.turnMu.Lock()
+	got := srv.activeTurns["thread-stall-2"]
+	srv.turnMu.Unlock()
+	if got == nil {
+		t.Fatalf("expected active turn")
+	}
+	if got.stallGraceStarted {
+		t.Fatalf("touch should clear previous stall grace state")
+	}
+	if !got.LastEventAt.After(before) {
+		t.Fatalf("LastEventAt should be refreshed")
 	}
 }

@@ -24,6 +24,7 @@ type trackedTurn struct {
 	InterruptRequested   bool
 	InterruptRequestedAt time.Time
 	stallHintLogged      bool
+	stallGraceStarted    bool
 	stallAutoInterrupted bool
 	done                 chan string
 	timer                *time.Timer
@@ -697,6 +698,41 @@ func (s *Server) checkTurnStall(threadID, turnID string) {
 		s.turnMu.Unlock()
 		return
 	}
+
+	// Grace period: first detection → warn + reschedule 30s.
+	// Second detection (after grace period) → actually interrupt.
+	const stallGracePeriod = 30 * time.Second
+	if !turn.stallGraceStarted {
+		turn.stallGraceStarted = true
+		s.turnMu.Unlock()
+
+		logger.Warn("turn tracker: thinking stall detected — grace period started",
+			logger.FieldThreadID, threadID,
+			"turn_id", turnID,
+			"silent_ms", silent.Milliseconds(),
+			"threshold_ms", threshold.Milliseconds(),
+			"grace_period_ms", stallGracePeriod.Milliseconds(),
+		)
+
+		// Push "thinking slow" warning to UI.
+		if s.uiRuntime != nil {
+			s.uiRuntime.PushAlert(threadID, "stall_warning",
+				fmt.Sprintf("思考已 %ds 未响应，将在 %ds 后自动中断",
+					int(silent.Seconds()), int(stallGracePeriod.Seconds())))
+		}
+
+		// Re-lock to schedule grace period timer.
+		s.turnMu.Lock()
+		turn, ok = s.activeTurns[threadID]
+		if ok && turn != nil && turn.ID == turnID {
+			turn.stallTimer = time.AfterFunc(stallGracePeriod, func() {
+				s.checkTurnStall(threadID, turnID)
+			})
+		}
+		s.turnMu.Unlock()
+		return
+	}
+
 	turn.stallAutoInterrupted = true
 	s.turnMu.Unlock()
 
@@ -754,6 +790,7 @@ func (s *Server) touchTrackedTurnLastEvent(threadID string) {
 		return
 	}
 	turn.LastEventAt = time.Now()
+	turn.stallGraceStarted = false
 }
 
 func trackedTurnTerminalFromEvent(eventType, method string, payload map[string]any) (string, string, string, bool, bool) {
@@ -787,7 +824,13 @@ func trackedTurnTerminalFromEvent(eventType, method string, payload map[string]a
 		eventKey == "error",
 		methodKey == "error",
 		methodKey == "codex/event/stream_error":
-		if retryable, known := extractTrackedRetryable(payload); known && retryable {
+		retryable, known := extractTrackedRetryable(payload)
+		if known && retryable {
+			return "", "", "", false, false
+		}
+		// willRetry 缺失 (known=false) → 不视为 terminal, codex 会自行处理。
+		// 只有明确 willRetry=false 时才终止 turn。
+		if !known {
 			return "", "", "", false, false
 		}
 		reason := extractTrackedTurnReason(payload)

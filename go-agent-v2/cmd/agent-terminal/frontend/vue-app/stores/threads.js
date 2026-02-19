@@ -581,16 +581,26 @@ function handleAgentEvent() {
 let _syncDebounceTimer = 0;
 let _syncThrottleLastRun = 0;
 const SYNC_THROTTLE_MS = 500;
+let _tokenUsageDebounceTimer = 0;
 
 function handleBridgeEvent(evt) {
   const eventType = (evt?.type || evt?.method || '').toString();
+
+  // tokenUsage: 独立长 debounce (2s), 不触发全量 syncRuntimeState
+  if (eventType === 'thread/tokenUsage/updated') {
+    clearTimeout(_tokenUsageDebounceTimer);
+    _tokenUsageDebounceTimer = setTimeout(() => {
+      syncRuntimeState().catch(() => { });
+    }, 2000);
+    return;
+  }
+
   if (
     eventType === 'ui/state/changed'
     || eventType === 'thread/messages/page'
     || eventType === 'thread/compacted'
-    || eventType === 'thread/tokenUsage/updated'
   ) {
-    const debounceMs = (eventType === 'thread/compacted' || eventType === 'thread/tokenUsage/updated')
+    const debounceMs = eventType === 'thread/compacted'
       ? 80
       : 200;
 

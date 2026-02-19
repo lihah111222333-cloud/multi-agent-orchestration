@@ -15,6 +15,7 @@ func resetDebugBridgeStateForTest() {
 	debugBridgeMetrics.publishedTotal.Store(0)
 	debugBridgeMetrics.droppedTotal.Store(0)
 	debugBridgeMetrics.overflowCount.Store(0)
+	debugBridgeMetrics.droppableSkipTotal.Store(0)
 	debugBridgeMetrics.pollRequestTotal.Store(0)
 	debugBridgeMetrics.pollResponseTotal.Store(0)
 	debugBridgeMetrics.pollEventOutTotal.Store(0)
@@ -133,5 +134,99 @@ func TestShouldLogOverflow_HighFreqPatterns(t *testing.T) {
 		if shouldLogOverflow(m, 2) {
 			t.Errorf("method %q should be recognized as high-freq and sampled at count=2", m)
 		}
+	}
+}
+
+// ────────────────────────────────────────────────────
+// Fix 1: isDroppableHighFreqMethod — 分类准确性
+// ────────────────────────────────────────────────────
+
+func TestIsDroppableHighFreqMethod_DeltaMethods(t *testing.T) {
+	droppable := []string{
+		"item/agentMessage/delta",
+		"item/reasoning/summaryTextDelta",
+		"item/reasoning/textDelta",
+		"item/plan/delta",
+		"item/commandExecution/outputDelta",
+		"item/fileChange/outputDelta",
+	}
+	for _, m := range droppable {
+		if !isDroppableHighFreqMethod(m) {
+			t.Errorf("expected %q to be droppable high-freq", m)
+		}
+	}
+}
+
+func TestIsDroppableHighFreqMethod_NonDroppable(t *testing.T) {
+	nonDroppable := []string{
+		"ui/state/changed",
+		"thread/tokenUsage/updated",
+		"thread/started",
+		"turn/completed",
+		"item/started",
+		"item/completed",
+		"error",
+		"account/rateLimits/updated",
+	}
+	for _, m := range nonDroppable {
+		if isDroppableHighFreqMethod(m) {
+			t.Errorf("expected %q to NOT be droppable", m)
+		}
+	}
+}
+
+// ────────────────────────────────────────────────────
+// Fix 1: 可丢弃事件入队采样
+// ────────────────────────────────────────────────────
+
+func TestPublishDebugBridgeEvent_DroppableHighFreqSampled(t *testing.T) {
+	resetDebugBridgeStateForTest()
+	debugBridgeEnabled.Store(true)
+
+	// 发 10 条 delta 事件
+	for i := 0; i < 10; i++ {
+		publishDebugBridgeEvent("item/agentMessage/delta", map[string]any{"threadId": "t-1"})
+	}
+
+	debugBridgeHub.mu.RLock()
+	got := len(debugBridgeHub.events)
+	debugBridgeHub.mu.RUnlock()
+
+	// 采样率 1/5: 10 条应该只入队 2 条
+	if got != 2 {
+		t.Fatalf("expected 2 events queued from 10 droppable, got %d", got)
+	}
+}
+
+func TestPublishDebugBridgeEvent_NonDroppableAlwaysQueued(t *testing.T) {
+	resetDebugBridgeStateForTest()
+	debugBridgeEnabled.Store(true)
+
+	// 发 10 条 state/changed 事件 — 不可丢弃
+	for i := 0; i < 10; i++ {
+		publishDebugBridgeEvent("ui/state/changed", map[string]any{"threadId": "t-1"})
+	}
+
+	debugBridgeHub.mu.RLock()
+	got := len(debugBridgeHub.events)
+	debugBridgeHub.mu.RUnlock()
+
+	// 不可丢弃: 10 条全部入队
+	if got != 10 {
+		t.Fatalf("expected all 10 non-droppable events queued, got %d", got)
+	}
+}
+
+func TestPublishDebugBridgeEvent_DroppableSkipMetric(t *testing.T) {
+	resetDebugBridgeStateForTest()
+	debugBridgeEnabled.Store(true)
+
+	for i := 0; i < 10; i++ {
+		publishDebugBridgeEvent("item/agentMessage/delta", map[string]any{"threadId": "t-1"})
+	}
+
+	skipTotal := debugBridgeMetrics.droppableSkipTotal.Load()
+	if skipTotal != 10 {
+		t.Fatalf("expected droppableSkipTotal=10, got %d", skipTotal)
 	}
 }

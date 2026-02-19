@@ -147,7 +147,7 @@ const appServerInterruptTimeout = 30 * time.Second
 const appServerListenerEnsureTimeout = 10 * time.Second
 const appServerReconnectBaseDelay = 300 * time.Millisecond
 const appServerReconnectMaxDelay = 3 * time.Second
-const defaultAppServerReadIdleTimeout = 300 * time.Second
+const defaultAppServerReadIdleTimeout = 600 * time.Second
 const defaultAppServerStreamMaxRetries = 5
 const maxAppServerStreamMaxRetries = 100
 
@@ -390,6 +390,14 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if c.stopped.Load() {
 			return false
+		}
+		// 子进程已退出则无需重连 — 避免无效 dial 浪费时间。
+		if !c.Running() {
+			logger.Warn("codex: reconnect aborted — process exited",
+				logger.FieldAgentID, c.AgentID,
+				"trigger", trigger,
+			)
+			break
 		}
 		delay := appServerReconnectDelay(attempt)
 		if !c.sleepWithContext(delay) {
@@ -1147,6 +1155,12 @@ func (c *AppServerClient) readLoop() {
 			continue
 		}
 		_, message, err := conn.ReadMessage()
+		if err == nil {
+			// 收到有效消息 = 连接活跃, 重置 idle deadline。
+			// 注意: 必须用循环内的 conn 局部变量, 不能用 c.currentWSConn(),
+			// 因为 reconnect 后 c.ws 已指向新 conn。
+			_ = conn.SetReadDeadline(time.Now().Add(appServerReadIdleTimeout))
+		}
 		if err != nil {
 			readErr := apperrors.Wrap(err, "AppServerClient.readLoop", "read message")
 			c.failPendingCalls(readErr)
@@ -2032,6 +2046,9 @@ func (c *AppServerClient) Shutdown() error {
 	// 避免等待 75s 的 read idle deadline。
 	c.wsMu.Lock()
 	if c.ws != nil {
+		// 先发 WebSocket Close Frame, 给对端时间优雅关闭。
+		closeMsg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutdown")
+		_ = c.ws.WriteControl(websocket.CloseMessage, closeMsg, time.Now().Add(time.Second))
 		_ = c.ws.Close()
 	}
 	c.wsMu.Unlock()

@@ -54,6 +54,9 @@ const debugBridgeMaxEvents = 20000
 const debugBridgePublishSampleEvery int64 = 120
 const debugBridgePollSampleEvery int64 = 120
 
+// debugBridgeDroppableSampleRate 可丢弃高频事件的入队采样率 (每 N 条入队 1 条)。
+const debugBridgeDroppableSampleRate int64 = 5
+
 // debugBridgeOverflowLogEvery 溢出日志采样间隔 — 第 1 次和每第 N 次溢出打 WARN。
 const debugBridgeOverflowLogEvery int64 = 1000
 
@@ -61,6 +64,7 @@ var debugBridgeMetrics = struct {
 	publishedTotal     atomic.Int64
 	droppedTotal       atomic.Int64
 	overflowCount      atomic.Int64
+	droppableSkipTotal atomic.Int64
 	pollRequestTotal   atomic.Int64
 	pollResponseTotal  atomic.Int64
 	pollEventOutTotal  atomic.Int64
@@ -87,6 +91,16 @@ func isHighFreqMethod(method string) bool {
 		strings.Contains(lower, "ratelimits")
 }
 
+// isDroppableHighFreqMethod 判断是否为可安全丢弃的高频方法。
+// 仅含 streaming 类事件 (delta/output/stream)。
+// 注意: ui/state/changed 和 tokenUsage/updated 不可丢弃 — 前端依赖它们触发状态同步。
+func isDroppableHighFreqMethod(method string) bool {
+	lower := strings.ToLower(method)
+	return strings.Contains(lower, "delta") ||
+		strings.Contains(lower, "output") ||
+		strings.Contains(lower, "stream")
+}
+
 var debugBridgeEnabled atomic.Bool
 
 func shouldLogBridgePublish(method string, seq int64) bool {
@@ -101,6 +115,14 @@ func shouldLogBridgePublish(method string, seq int64) bool {
 func publishDebugBridgeEvent(method string, params any) {
 	if !debugBridgeEnabled.Load() {
 		return
+	}
+
+	// 可丢弃高频事件: 每 N 条只入队 1 条 (真正减少队列压力)。
+	if isDroppableHighFreqMethod(method) {
+		n := debugBridgeMetrics.droppableSkipTotal.Add(1)
+		if n%debugBridgeDroppableSampleRate != 0 {
+			return
+		}
 	}
 
 	payloadMap := util.ToMapAny(params)
@@ -143,7 +165,7 @@ func publishDebugBridgeEvent(method string, params any) {
 	}
 
 	publishedTotal := debugBridgeMetrics.publishedTotal.Add(1)
-	if dropped > 0 || shouldLogBridgePublish(method, publishedTotal) {
+	if shouldLogBridgePublish(method, publishedTotal) {
 		logger.Info("debug bridge: event queued",
 			logger.FieldMethod, method,
 			"event_id", eventID,
@@ -420,7 +442,7 @@ func serveDebugPollEvents(w http.ResponseWriter, pollID int64, pp debugPollParam
 		return
 	}
 
-	if eventCount > 0 || laggingCursor || truncated || pollID%debugBridgePollSampleEvery == 0 {
+	if laggingCursor || truncated || pollID%debugBridgePollSampleEvery == 0 {
 		logger.Info("debug bridge: poll served",
 			"poll_id", pollID,
 			"after", pp.after,

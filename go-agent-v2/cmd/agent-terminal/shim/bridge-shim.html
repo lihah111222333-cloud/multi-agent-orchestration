@@ -149,7 +149,9 @@
             } catch (err) {
                 console.warn('[shim] bridge poll failed:', err);
             } finally {
-                setTimeout(pollBridgeEvents, 350);
+                // 非活跃标签页降频 poll (2s vs 350ms)
+                const interval = (typeof document !== 'undefined' && document.hidden) ? 2000 : 350;
+                setTimeout(pollBridgeEvents, interval);
             }
         }
         pollBridgeEvents();

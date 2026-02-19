@@ -150,6 +150,7 @@ export const UnifiedChatPage = {
           showId: displayName === threadID,
           status: normalizeStatus(props.threadStore.getThreadStatus(threadID)),
           statusHeader: getThreadStatusHeader(threadID) || '等待指示',
+          interruptible: isThreadInterruptible(threadID),
           pinnedAt,
           isPinned: Number.isFinite(pinnedAt) && pinnedAt > 0,
           selected: threadID === selectedThreadId.value,
@@ -162,6 +163,11 @@ export const UnifiedChatPage = {
     const activeDiffText = computed(() => props.threadStore.getThreadDiff(selectedThreadId.value));
     const activeStatus = computed(() => normalizeStatus(props.threadStore.getThreadStatus(selectedThreadId.value)));
     const dismissedPlanKeyByThread = ref({});
+    function isThreadInterruptible(threadId) {
+      if (!threadId) return false;
+      if (typeof props.threadStore.getThreadInterruptible !== 'function') return false;
+      return Boolean(props.threadStore.getThreadInterruptible(threadId));
+    }
     function getThreadStatusHeader(threadId) {
       if (!threadId) return '';
       if (typeof props.threadStore.getThreadStatusHeader !== 'function') return '';
@@ -178,10 +184,7 @@ export const UnifiedChatPage = {
       if (typeof props.threadStore.getThreadTokenUsage !== 'function') return null;
       return props.threadStore.getThreadTokenUsage(selectedThreadId.value);
     });
-    const canInterrupt = computed(() => {
-      if (typeof props.threadStore.getThreadInterruptible !== 'function') return false;
-      return props.threadStore.getThreadInterruptible(selectedThreadId.value);
-    });
+    const canInterrupt = computed(() => isThreadInterruptible(selectedThreadId.value));
     const compacting = computed(() => {
       if (typeof props.threadStore.getThreadCompacting !== 'function') return false;
       return props.threadStore.getThreadCompacting(selectedThreadId.value);
@@ -625,6 +628,7 @@ export const UnifiedChatPage = {
           name: props.threadStore.displayName(thread),
           status: props.threadStore.getThreadStatus(thread.id),
           statusHeader: getThreadStatusHeader(thread.id) || '等待指示',
+          interruptible: isThreadInterruptible(thread.id),
           selected,
           preview: [],
           diff: '',
@@ -858,7 +862,16 @@ export const UnifiedChatPage = {
     }
 
     function stopSelected() {
-      props.threadStore.stopThread(selectedThreadId.value);
+      const threadId = (selectedThreadId.value || '').toString().trim();
+      if (!threadId) return;
+      if (!isThreadInterruptible(threadId)) {
+        logInfo('ui', 'chat.interrupt.skipped.notInterruptible', {
+          thread_id: threadId,
+          source: 'toolbar',
+        });
+        return;
+      }
+      interruptCurrent({ threadId });
     }
 
     function renameSelected() {
@@ -882,7 +895,16 @@ export const UnifiedChatPage = {
     }
 
     function stopCard(cardId) {
-      props.threadStore.stopThread(cardId);
+      const threadId = (cardId || '').toString().trim();
+      if (!threadId) return;
+      if (!isThreadInterruptible(threadId)) {
+        logInfo('ui', 'chat.interrupt.skipped.notInterruptible', {
+          thread_id: threadId,
+          source: 'card',
+        });
+        return;
+      }
+      interruptCurrent({ threadId });
     }
 
     function toggleThreadPin(threadId) {
@@ -1319,6 +1341,8 @@ export const UnifiedChatPage = {
         <button
           v-if="!isCmd && selectedThreadId"
           class="btn btn-ghost btn-xs"
+          :disabled="!canInterrupt"
+          :title="canInterrupt ? '中断当前执行' : '当前没有可中断任务'"
           @click="stopSelected"
         >停止</button>
         <button
@@ -1444,7 +1468,12 @@ export const UnifiedChatPage = {
                   <button class="btn btn-ghost btn-xs" @click.stop="selectThread(card.id)">打开</button>
                   <button class="btn btn-ghost btn-xs" @click.stop="loadCardHistory(card.id)">历史</button>
                   <button class="btn btn-ghost btn-xs" @click.stop="renameCard(card.id)">改名</button>
-                  <button class="btn btn-ghost btn-xs" @click.stop="stopCard(card.id)">停止</button>
+                  <button
+                    class="btn btn-ghost btn-xs"
+                    :disabled="!card.interruptible"
+                    :title="card.interruptible ? '中断该 Agent 当前执行' : '当前没有可中断任务'"
+                    @click.stop="stopCard(card.id)"
+                  >停止</button>
                 </div>
               </article>
             </div>

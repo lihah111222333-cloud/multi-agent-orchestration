@@ -589,11 +589,15 @@ a,
 .chat-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   padding: 10px 14px;
   background: linear-gradient(180deg, rgba(13, 23, 40, 0.96) 0%, rgba(9, 17, 31, 0.98) 100%);
   border-bottom: 1px solid var(--border);
   gap: 8px;
   flex-shrink: 0;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
   box-shadow: inset 0 -1px 0 rgba(148, 163, 184, 0.06);
 }
 
@@ -654,8 +658,26 @@ a,
 
 .chat-toolbar .chat-status {
   margin-left: auto;
+  min-width: 0;
+  max-width: min(50vw, 620px);
+  flex-shrink: 1;
   font-size: 11px;
   padding: 4px 10px;
+}
+
+.chat-toolbar .btn,
+.chat-toolbar .mode-badge,
+.chat-toolbar .layout-switch,
+.chat-toolbar .project-select-wrap {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.chat-toolbar .chat-status>span:not(.status-dot) {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-toolbar .chat-status-meta {
@@ -2508,6 +2530,95 @@ a,
 
 .settings-log-card {
   gap: 8px;
+}
+
+.settings-prompt-card {
+  gap: 8px;
+}
+
+.settings-prompt-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-prompt-textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.66);
+  color: var(--text-pri);
+  font-family: "Menlo", "Consolas", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 10px 12px;
+}
+
+.settings-prompt-textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.22);
+}
+
+.settings-prompt-notice {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-prompt-notice.is-info {
+  color: var(--info);
+}
+
+.settings-prompt-notice.is-error {
+  color: var(--error);
+}
+
+.settings-action-inline {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-stall-card {
+  gap: 8px;
+}
+
+.settings-stall-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.settings-stall-input {
+  width: 100px;
+  background: rgba(15, 23, 42, 0.66);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-pri);
+  font-family: "Menlo", "Consolas", monospace;
+  font-size: 13px;
+  padding: 6px 10px;
+  text-align: right;
+  outline: none;
+  transition: border-color var(--transition);
+}
+
+.settings-stall-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.22);
+}
+
+.settings-stall-input:disabled {
+  opacity: 0.5;
+}
+
+.settings-stall-unit {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 80px;
 }
 
 .settings-log-empty {

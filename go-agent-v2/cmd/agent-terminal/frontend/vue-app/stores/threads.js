@@ -863,12 +863,37 @@ async function compactThread(threadId) {
   if (compactPendingByThread[id]) return;
   const start = perfNow();
   const baselineSignature = tokenUsageSignature(id);
+  let interruptAttempted = false;
+  let interruptConfirmed = false;
+  let interruptSettled = false;
+  let interruptMode = '';
   compactPendingByThread[id] = true;
   logInfo('thread', 'compact.start', {
     thread_id: id,
     token_usage_sig_before: baselineSignature,
   });
   try {
+    await syncRuntimeState();
+    if (getThreadInterruptible(id)) {
+      interruptAttempted = true;
+      logInfo('thread', 'compact.interrupt.before', {
+        thread_id: id,
+      });
+      const interruptResult = await stopThread(id);
+      interruptMode = (interruptResult?.mode || '').toString().trim();
+      interruptConfirmed = Boolean(interruptResult?.confirmed);
+      interruptSettled = Boolean(interruptResult?.settled || interruptConfirmed || interruptMode === 'no_active_turn');
+      logInfo('thread', 'compact.interrupt.result', {
+        thread_id: id,
+        interrupt_confirmed: interruptConfirmed,
+        interrupt_settled: interruptSettled,
+        interrupt_mode: interruptMode,
+      });
+      if (!interruptSettled) {
+        throw new Error(`compact_interrupt_not_settled:${interruptMode || 'unknown'}`);
+      }
+      await waitMs(120);
+    }
     await callAPI('thread/compact/start', { threadId: id });
     await syncRuntimeState();
     const refreshed = await waitCompactTokenUsageRefresh(id, baselineSignature);
@@ -876,11 +901,19 @@ async function compactThread(threadId) {
       thread_id: id,
       token_usage_refreshed: refreshed,
       token_usage_sig_after: tokenUsageSignature(id),
+      interrupt_attempted: interruptAttempted,
+      interrupt_confirmed: interruptConfirmed,
+      interrupt_settled: interruptSettled,
+      interrupt_mode: interruptMode,
       duration_ms: Math.round(perfNow() - start),
     });
   } catch (error) {
     logWarn('thread', 'compact.failed', {
       thread_id: id,
+      interrupt_attempted: interruptAttempted,
+      interrupt_confirmed: interruptConfirmed,
+      interrupt_settled: interruptSettled,
+      interrupt_mode: interruptMode,
       error,
       duration_ms: Math.round(perfNow() - start),
     });

@@ -379,8 +379,8 @@ export const ComposerBar = {
               class="composer-compact-btn"
               :class="{ loading: compacting }"
               type="button"
-              :title="compacting ? '压缩中…' : '压缩上下文'"
-              :aria-label="compacting ? '压缩中…' : '压缩上下文'"
+              :title="compacting ? '压缩中…' : (interruptible ? '将先暂停再压缩上下文' : '压缩上下文')"
+              :aria-label="compacting ? '压缩中…' : (interruptible ? '将先暂停再压缩上下文' : '压缩上下文')"
               :disabled="disabled || !threadId || compacting"
               @click="onCompact"
             >
@@ -399,7 +399,7 @@ export const ComposerBar = {
               v-if="tokenInline || compacting"
               class="composer-token-chip"
               :class="{ loading: compacting }"
-              :title="compacting ? '正在压缩上下文，等待 token 使用量刷新' : tokenTooltip"
+              :title="compacting ? '正在暂停并压缩上下文，等待 token 使用量刷新' : tokenTooltip"
             >{{ compacting ? 'CTX 更新中…' : ('CTX ' + tokenInline) }}</span>
           </div>
           <button

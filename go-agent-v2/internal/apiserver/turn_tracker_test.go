@@ -143,6 +143,124 @@ func TestMaybeFinalizeTrackedTurnFromTurnAborted(t *testing.T) {
 	}
 }
 
+func TestMaybeFinalizeTrackedTurnFromThreadStatusIdle(t *testing.T) {
+	srv := &Server{
+		activeTurns:         make(map[string]*trackedTurn),
+		turnWatchdogTimeout: time.Second,
+	}
+	_ = srv.beginTrackedTurn("thread-8", "turn-8")
+
+	gotMethod := ""
+	gotStatus := ""
+	gotReason := ""
+	srv.SetNotifyHook(func(method string, params any) {
+		if method != "turn/completed" {
+			return
+		}
+		gotMethod = method
+		payload, _ := params.(map[string]any)
+		gotStatus, _ = payload["status"].(string)
+		gotReason, _ = payload["reason"].(string)
+	})
+
+	srv.maybeFinalizeTrackedTurn("thread-8", "thread/status/changed", "thread/status/changed", map[string]any{
+		"status": map[string]any{
+			"type": "idle",
+		},
+	})
+
+	if gotMethod != "turn/completed" {
+		t.Fatalf("notify method = %q, want turn/completed", gotMethod)
+	}
+	if gotStatus != "completed" {
+		t.Fatalf("notify status = %q, want completed", gotStatus)
+	}
+	if gotReason != "thread_status_idle" {
+		t.Fatalf("notify reason = %q, want thread_status_idle", gotReason)
+	}
+	if srv.hasActiveTrackedTurn("thread-8") {
+		t.Fatalf("expected active turn cleared after thread/status/changed idle")
+	}
+}
+
+func TestMaybeFinalizeTrackedTurnPreservesLastAgentMessage(t *testing.T) {
+	srv := &Server{
+		activeTurns:         make(map[string]*trackedTurn),
+		turnWatchdogTimeout: time.Second,
+	}
+	_ = srv.beginTrackedTurn("thread-9", "turn-9")
+
+	payload := map[string]any{
+		"turn": map[string]any{
+			"id":               "turn-9",
+			"status":           "completed",
+			"lastAgentMessage": "已完成：修复了 JSON-RPC 回调，并补充了测试。",
+		},
+	}
+	srv.maybeFinalizeTrackedTurn("thread-9", "turn_complete", "turn/completed", payload)
+
+	turn, ok := payload["turn"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload turn missing")
+	}
+	gotSummary, _ := turn["lastAgentMessage"].(string)
+	if gotSummary == "" {
+		t.Fatalf("turn.lastAgentMessage should be preserved")
+	}
+}
+
+func TestMaybeFinalizeTrackedTurnUsesCachedSummaryForSyntheticCompletion(t *testing.T) {
+	srv := &Server{
+		activeTurns:         make(map[string]*trackedTurn),
+		turnWatchdogTimeout: time.Second,
+	}
+	_ = srv.beginTrackedTurn("thread-10", "turn-10")
+	srv.rememberTrackedTurnSummary("thread-10", "turn-10", "cached_summary")
+
+	gotSummary := ""
+	srv.SetNotifyHook(func(method string, params any) {
+		if method != "turn/completed" {
+			return
+		}
+		payload, _ := params.(map[string]any)
+		turn, _ := payload["turn"].(map[string]any)
+		gotSummary, _ = turn["lastAgentMessage"].(string)
+	})
+
+	srv.maybeFinalizeTrackedTurn("thread-10", "thread/status/changed", "thread/status/changed", map[string]any{
+		"turnId": "turn-10",
+		"status": map[string]any{
+			"type": "idle",
+		},
+	})
+
+	if gotSummary != "cached_summary" {
+		t.Fatalf("turn.lastAgentMessage = %q, want cached_summary", gotSummary)
+	}
+}
+
+func TestCaptureAndInjectTurnSummaryBindsMissingTurnIDToActiveTurn(t *testing.T) {
+	srv := &Server{
+		activeTurns:         make(map[string]*trackedTurn),
+		turnWatchdogTimeout: time.Second,
+	}
+	_ = srv.beginTrackedTurn("thread-11", "turn-11")
+
+	payload := map[string]any{
+		"msg": map[string]any{
+			"last_agent_message": "bound_to_active_turn",
+		},
+	}
+	srv.captureAndInjectTurnSummary("thread-11", "codex/event/task_complete", "codex/event/task_complete", payload)
+
+	if got := srv.lookupTrackedTurnSummary("thread-11", "turn-11"); got != "bound_to_active_turn" {
+		t.Fatalf("summary for active turn = %q, want bound_to_active_turn", got)
+	}
+	if got := srv.lookupTrackedTurnSummary("thread-11", "turn-other"); got != "" {
+		t.Fatalf("summary should not leak to other turn, got %q", got)
+	}
+}
+
 func TestTrackedTurnWatchdogTimeout(t *testing.T) {
 	srv := &Server{
 		activeTurns:         make(map[string]*trackedTurn),

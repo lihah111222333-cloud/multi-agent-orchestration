@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -10,16 +11,29 @@ import (
 )
 
 const defaultTurnWatchdogTimeout = 10 * time.Minute
+const defaultTrackedTurnSummaryTTL = 30 * time.Minute
+const trackedTurnSummaryCacheMaxEntries = 512
+const stallCheckInterval = 30 * time.Second
+const stallThreshold = 90 * time.Second
 
 type trackedTurn struct {
 	ID                   string
 	ThreadID             string
 	StartedAt            time.Time
+	LastEventAt          time.Time
 	InterruptRequested   bool
 	InterruptRequestedAt time.Time
 	stallHintLogged      bool
+	stallAutoInterrupted bool
 	done                 chan string
 	timer                *time.Timer
+	stallTimer           *time.Timer
+}
+
+type trackedTurnSummaryCacheEntry struct {
+	TurnID    string
+	Summary   string
+	UpdatedAt time.Time
 }
 
 func (s *Server) ensureTurnTrackerLocked() {
@@ -28,6 +42,12 @@ func (s *Server) ensureTurnTrackerLocked() {
 	}
 	if s.turnWatchdogTimeout <= 0 {
 		s.turnWatchdogTimeout = defaultTurnWatchdogTimeout
+	}
+	if s.turnSummaryCache == nil {
+		s.turnSummaryCache = make(map[string]trackedTurnSummaryCacheEntry)
+	}
+	if s.turnSummaryTTL <= 0 {
+		s.turnSummaryTTL = defaultTrackedTurnSummaryTTL
 	}
 }
 
@@ -49,6 +69,9 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 		delete(s.activeTurns, id)
 		if prev.timer != nil {
 			prev.timer.Stop()
+		}
+		if prev.stallTimer != nil {
+			prev.stallTimer.Stop()
 		}
 		select {
 		case prev.done <- "failed":
@@ -73,10 +96,11 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 	}
 
 	turn := &trackedTurn{
-		ID:        tid,
-		ThreadID:  id,
-		StartedAt: time.Now(),
-		done:      make(chan string, 1),
+		ID:          tid,
+		ThreadID:    id,
+		StartedAt:   time.Now(),
+		LastEventAt: time.Now(),
+		done:        make(chan string, 1),
 	}
 	watchdogTurnID := tid
 	watchdogThreadID := id
@@ -93,6 +117,14 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 		}
 	})
 	s.activeTurns[id] = turn
+
+	// Start stall detection timer
+	stallThreadID := id
+	stallTurnID := tid
+	turn.stallTimer = time.AfterFunc(stallCheckInterval, func() {
+		s.checkTurnStall(stallThreadID, stallTurnID)
+	})
+
 	s.turnMu.Unlock()
 
 	logger.Info("turn tracker: begin turn tracking",
@@ -205,6 +237,9 @@ func (s *Server) completeTrackedTurnByID(threadID, turnID, status, reason string
 	if turn.timer != nil {
 		turn.timer.Stop()
 	}
+	if turn.stallTimer != nil {
+		turn.stallTimer.Stop()
+	}
 	finalStatus := normalizeTrackedTurnStatus(status)
 	if turn.InterruptRequested && finalStatus == "completed" {
 		finalStatus = "interrupted"
@@ -233,6 +268,231 @@ func (s *Server) completeTrackedTurnByID(threadID, turnID, status, reason string
 		"interrupt_requested", turn.InterruptRequested,
 	)
 	return payload, true
+}
+
+func trackedTurnSummaryFromPayload(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	if summary := extractTrackedString(payload, "lastAgentMessage", "last_agent_message"); summary != "" {
+		return summary
+	}
+	if turn, ok := payload["turn"].(map[string]any); ok {
+		if summary := extractTrackedString(turn, "lastAgentMessage", "last_agent_message"); summary != "" {
+			return summary
+		}
+	}
+	if msg, ok := payload["msg"].(map[string]any); ok {
+		if summary := extractTrackedString(msg, "lastAgentMessage", "last_agent_message"); summary != "" {
+			return summary
+		}
+	}
+	return ""
+}
+
+func trackedTurnSummaryCacheKey(threadID, turnID string) string {
+	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID)
+}
+
+func (s *Server) pruneTrackedTurnSummaryCacheLocked(now time.Time) {
+	s.ensureTurnTrackerLocked()
+	if len(s.turnSummaryCache) == 0 {
+		return
+	}
+
+	cutoff := now.Add(-s.turnSummaryTTL)
+	for key, entry := range s.turnSummaryCache {
+		if entry.UpdatedAt.Before(cutoff) {
+			delete(s.turnSummaryCache, key)
+		}
+	}
+
+	if len(s.turnSummaryCache) <= trackedTurnSummaryCacheMaxEntries {
+		return
+	}
+
+	type summaryCacheKV struct {
+		key       string
+		updatedAt time.Time
+	}
+	entries := make([]summaryCacheKV, 0, len(s.turnSummaryCache))
+	for key, entry := range s.turnSummaryCache {
+		entries = append(entries, summaryCacheKV{key: key, updatedAt: entry.UpdatedAt})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].updatedAt.Before(entries[j].updatedAt)
+	})
+
+	trimCount := len(s.turnSummaryCache) - trackedTurnSummaryCacheMaxEntries
+	for i := 0; i < trimCount && i < len(entries); i++ {
+		delete(s.turnSummaryCache, entries[i].key)
+	}
+}
+
+func (s *Server) rememberTrackedTurnSummary(threadID, turnID, summary string) {
+	id := strings.TrimSpace(threadID)
+	tid := strings.TrimSpace(turnID)
+	msg := strings.TrimSpace(summary)
+	if id == "" || msg == "" {
+		return
+	}
+
+	now := time.Now()
+
+	s.turnMu.Lock()
+	s.ensureTurnTrackerLocked()
+	s.pruneTrackedTurnSummaryCacheLocked(now)
+	entry := trackedTurnSummaryCacheEntry{
+		TurnID:    tid,
+		Summary:   msg,
+		UpdatedAt: now,
+	}
+	s.turnSummaryCache[trackedTurnSummaryCacheKey(id, "")] = entry
+	if tid != "" {
+		s.turnSummaryCache[trackedTurnSummaryCacheKey(id, tid)] = entry
+	}
+	s.turnMu.Unlock()
+}
+
+func (s *Server) lookupTrackedTurnSummary(threadID, turnID string) string {
+	id := strings.TrimSpace(threadID)
+	tid := strings.TrimSpace(turnID)
+	if id == "" {
+		return ""
+	}
+
+	now := time.Now()
+
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+	s.ensureTurnTrackerLocked()
+	s.pruneTrackedTurnSummaryCacheLocked(now)
+
+	if tid != "" {
+		if entry, ok := s.turnSummaryCache[trackedTurnSummaryCacheKey(id, tid)]; ok {
+			return strings.TrimSpace(entry.Summary)
+		}
+	}
+	if entry, ok := s.turnSummaryCache[trackedTurnSummaryCacheKey(id, "")]; ok {
+		entryTurnID := strings.TrimSpace(entry.TurnID)
+		if tid != "" && entryTurnID != "" && !strings.EqualFold(tid, entryTurnID) {
+			return ""
+		}
+		return strings.TrimSpace(entry.Summary)
+	}
+	return ""
+}
+
+func injectTrackedTurnSummary(payload map[string]any, summary string) {
+	if payload == nil {
+		return
+	}
+	msg := strings.TrimSpace(summary)
+	if msg == "" {
+		return
+	}
+
+	payload["lastAgentMessage"] = msg
+
+	turnPayload, _ := payload["turn"].(map[string]any)
+	if turnPayload == nil {
+		turnPayload = make(map[string]any)
+	}
+	turnPayload["lastAgentMessage"] = msg
+	payload["turn"] = turnPayload
+}
+
+func (s *Server) captureAndInjectTurnSummary(threadID, eventType, method string, payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return
+	}
+
+	turnID := extractTrackedTurnID(payload)
+	resolvedTurnID := turnID
+	if resolvedTurnID == "" {
+		if activeTurnID, _, _, ok := s.peekTrackedTurnMeta(id); ok {
+			resolvedTurnID = activeTurnID
+		}
+	}
+	summary := trackedTurnSummaryFromPayload(payload)
+	if summary != "" {
+		_, _, _, terminal, _ := trackedTurnTerminalFromEvent(eventType, method, payload)
+		methodKey := strings.ToLower(strings.TrimSpace(method))
+		eventKey := strings.ToLower(strings.TrimSpace(eventType))
+		if terminal || methodKey == "codex/event/task_complete" || eventKey == "codex/event/task_complete" {
+			s.rememberTrackedTurnSummary(id, resolvedTurnID, summary)
+		}
+	}
+
+	if !strings.EqualFold(strings.TrimSpace(method), "turn/completed") {
+		return
+	}
+	if summary == "" {
+		summary = s.lookupTrackedTurnSummary(id, resolvedTurnID)
+	}
+	if summary == "" {
+		return
+	}
+	injectTrackedTurnSummary(payload, summary)
+	s.rememberTrackedTurnSummary(id, resolvedTurnID, summary)
+}
+
+func mergeTrackedTurnCompletionPayload(payload, completion map[string]any) {
+	if payload == nil || completion == nil {
+		return
+	}
+	for key, value := range completion {
+		if key != "turn" {
+			payload[key] = value
+			continue
+		}
+		completionTurn, ok := value.(map[string]any)
+		if !ok {
+			payload[key] = value
+			continue
+		}
+		currentTurn, ok := payload[key].(map[string]any)
+		if !ok || currentTurn == nil {
+			currentTurn = make(map[string]any, len(completionTurn))
+		}
+		for turnKey, turnValue := range completionTurn {
+			currentTurn[turnKey] = turnValue
+		}
+		payload[key] = currentTurn
+	}
+}
+
+func threadStatusTerminalFromPayload(payload map[string]any) (status string, reason string, terminal bool) {
+	if payload == nil {
+		return "", "", false
+	}
+
+	statusType := ""
+	switch raw := payload["status"].(type) {
+	case string:
+		statusType = strings.ToLower(strings.TrimSpace(raw))
+	case map[string]any:
+		statusType = strings.ToLower(strings.TrimSpace(extractTrackedString(raw, "type")))
+	}
+
+	if statusType == "" {
+		return "", "", false
+	}
+
+	switch statusType {
+	case "idle":
+		return "completed", "thread_status_idle", true
+	case "systemerror", "system_error", "error":
+		return "failed", "thread_status_system_error", true
+	case "notloaded", "not_loaded":
+		return "failed", "thread_status_not_loaded", true
+	default:
+		return "", "", false
+	}
 }
 
 func normalizeTrackedTurnStatus(status string) string {
@@ -302,13 +562,20 @@ func (s *Server) maybeFinalizeTrackedTurn(threadID, eventType, method string, pa
 		logger.FieldMethod, strings.TrimSpace(method),
 	)
 
+	summary := trackedTurnSummaryFromPayload(payload)
+	if summary == "" {
+		summary = s.lookupTrackedTurnSummary(id, util.FirstNonEmpty(eventTurnID, extractTrackedTurnID(payload), turnID))
+	}
+	if summary != "" {
+		injectTrackedTurnSummary(completion, summary)
+		s.rememberTrackedTurnSummary(id, util.FirstNonEmpty(extractTrackedTurnID(completion), eventTurnID, extractTrackedTurnID(payload)), summary)
+	}
+
 	if synthetic {
 		s.Notify("turn/completed", completion)
 		return
 	}
-	for key, value := range completion {
-		payload[key] = value
-	}
+	mergeTrackedTurnCompletionPayload(payload, completion)
 }
 
 func (s *Server) peekTrackedTurnMeta(threadID string) (string, time.Time, bool, bool) {
@@ -378,6 +645,99 @@ func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time
 	}
 }
 
+// checkTurnStall is called periodically by the stall timer.
+// If no events have been received for stallThreshold (90s), it pushes an
+// alert and auto-interrupts the turn.
+func (s *Server) checkTurnStall(threadID, turnID string) {
+	s.turnMu.Lock()
+	if s.activeTurns == nil {
+		s.turnMu.Unlock()
+		return
+	}
+	turn, ok := s.activeTurns[threadID]
+	if !ok || turn == nil || turn.ID != turnID {
+		s.turnMu.Unlock()
+		return
+	}
+
+	silent := time.Since(turn.LastEventAt)
+	if silent < stallThreshold {
+		// Not stalled yet — reschedule and check again.
+		remaining := stallCheckInterval
+		if remaining > stallThreshold-silent {
+			remaining = stallThreshold - silent + time.Second
+		}
+		turn.stallTimer = time.AfterFunc(remaining, func() {
+			s.checkTurnStall(threadID, turnID)
+		})
+		s.turnMu.Unlock()
+		return
+	}
+
+	// Stall detected.
+	if turn.stallAutoInterrupted {
+		s.turnMu.Unlock()
+		return
+	}
+	turn.stallAutoInterrupted = true
+	s.turnMu.Unlock()
+
+	logger.Warn("turn tracker: thinking stall detected — auto interrupting",
+		logger.FieldThreadID, threadID,
+		"turn_id", turnID,
+		"silent_ms", silent.Milliseconds(),
+		"threshold_ms", stallThreshold.Milliseconds(),
+	)
+
+	// Push alert to UI.
+	if s.uiRuntime != nil {
+		s.uiRuntime.PushAlert(threadID, "stall",
+			fmt.Sprintf("思考超时 %ds 未响应，自动中断", int(silent.Seconds())))
+	}
+
+	// Auto-interrupt: send /interrupt to codex process (same as turnInterrupt).
+	util.SafeGo(func() {
+		s.markTrackedTurnInterruptRequested(threadID)
+		interrupted := false
+		if proc := s.mgr.Get(threadID); proc != nil {
+			if err := proc.Client.SendCommand("/interrupt", ""); err != nil {
+				logger.Warn("turn tracker: stall auto-interrupt failed",
+					logger.FieldThreadID, threadID,
+					"turn_id", turnID,
+					logger.FieldError, err,
+				)
+			} else {
+				interrupted = true
+			}
+		}
+		// Fallback: if /interrupt failed or process is gone, force-complete the tracker.
+		if !interrupted {
+			if completion, ok := s.completeTrackedTurnByID(threadID, turnID, "failed", "thinking_stall_timeout"); ok {
+				s.Notify("turn/completed", completion)
+			}
+		}
+	})
+}
+
+// touchTrackedTurnLastEvent updates the LastEventAt heartbeat for the turn.
+// Call this whenever any event arrives for a tracked turn.
+func (s *Server) touchTrackedTurnLastEvent(threadID string) {
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return
+	}
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+	if s.activeTurns == nil {
+		return
+	}
+	turn, ok := s.activeTurns[id]
+	if !ok || turn == nil {
+		return
+	}
+	turn.LastEventAt = time.Now()
+}
+
 func trackedTurnTerminalFromEvent(eventType, method string, payload map[string]any) (string, string, string, bool, bool) {
 	eventKey := strings.ToLower(strings.TrimSpace(eventType))
 	methodKey := strings.ToLower(strings.TrimSpace(method))
@@ -419,6 +779,13 @@ func trackedTurnTerminalFromEvent(eventType, method string, payload map[string]a
 			)
 		}
 		return extractTrackedTurnID(payload), "failed", reason, true, true
+	case methodKey == "thread/status/changed",
+		eventKey == "thread/status/changed":
+		status, reason, ok := threadStatusTerminalFromPayload(payload)
+		if !ok {
+			return "", "", "", false, false
+		}
+		return extractTrackedTurnID(payload), status, reason, true, true
 	default:
 		return "", "", "", false, false
 	}

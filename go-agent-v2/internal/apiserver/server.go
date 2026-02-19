@@ -197,6 +197,8 @@ type Server struct {
 	turnMu              sync.Mutex
 	activeTurns         map[string]*trackedTurn
 	turnWatchdogTimeout time.Duration
+	turnSummaryCache    map[string]trackedTurnSummaryCacheEntry
+	turnSummaryTTL      time.Duration
 
 	// Per-session 技能配置 (agentID → skills 列表)
 	skillsMu    sync.RWMutex
@@ -241,6 +243,8 @@ func New(deps Deps) *Server {
 		fileChangeByThread:  make(map[string][]string),
 		activeTurns:         make(map[string]*trackedTurn),
 		turnWatchdogTimeout: defaultTurnWatchdogTimeout,
+		turnSummaryCache:    make(map[string]trackedTurnSummaryCacheEntry),
+		turnSummaryTTL:      defaultTrackedTurnSummaryTTL,
 		agentSkills:         make(map[string][]string),
 		sseClients:          make(map[chan []byte]struct{}),
 		prefManager:         uistate.NewPreferenceManager(nil),
@@ -1012,6 +1016,7 @@ var payloadExtractKeys = []string{
 	"delta", "content", "message", "command",
 	"exit_code", "reason", "name", "status",
 	"file", "files", "diff", "tool_name",
+	"turn", "last_agent_message", "lastAgentMessage",
 	// v2 protocol fields
 	"text", "summary", "args", "arguments", "output",
 	"id", "type", "item_id", "callId", "call_id",
@@ -1308,6 +1313,7 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 		// 从 event.Data 提取前端常用字段到顶层 (含嵌套 msg/data/payload)。
 		mergePayloadFields(payload, event.Data)
 		s.enrichFileChangePayload(agentID, event.Type, method, payload)
+		s.captureAndInjectTurnSummary(agentID, event.Type, method, payload)
 
 		// Normalize event for UI
 		normalized := uistate.NormalizeEventFromPayload(event.Type, method, payload)
@@ -1328,6 +1334,7 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 			s.uiRuntime.ApplyAgentEvent(agentID, normalized, payload)
 		}
 
+		s.touchTrackedTurnLastEvent(agentID)
 		s.maybeFinalizeTrackedTurn(agentID, event.Type, method, payload)
 
 		// § 二 审批事件: 需要客户端回复 (双向请求)

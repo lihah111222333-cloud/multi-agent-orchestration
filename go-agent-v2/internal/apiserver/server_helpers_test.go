@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 func TestHandleClientResponse(t *testing.T) {
@@ -100,6 +102,25 @@ func TestMergePayloadFieldsKeepsTokenUsageContainers(t *testing.T) {
 	}
 	if _, ok := payload["usage"].(map[string]any); !ok {
 		t.Fatalf("payload usage should be extracted from nested msg")
+	}
+}
+
+func TestMergePayloadFieldsKeepsTurnAndLastAgentMessage(t *testing.T) {
+	payload := map[string]any{
+		"threadId": "agent-2",
+	}
+	raw := json.RawMessage(`{
+		"turn":{"id":"turn-1","status":"completed","lastAgentMessage":"done"},
+		"msg":{"last_agent_message":"legacy_done"}
+	}`)
+
+	mergePayloadFields(payload, raw)
+
+	if _, ok := payload["turn"].(map[string]any); !ok {
+		t.Fatalf("payload turn should be kept as object")
+	}
+	if got, _ := payload["last_agent_message"].(string); got != "legacy_done" {
+		t.Fatalf("payload last_agent_message = %q, want legacy_done", got)
 	}
 }
 
@@ -208,5 +229,199 @@ func TestHandleApprovalRequest_ProcNil_AutoDenies(t *testing.T) {
 
 	if !denied {
 		t.Fatal("P1: expected DenyFunc to be called when proc is nil")
+	}
+}
+
+func TestAgentEventHandlerBackfillsTurnCompletedSummaryFromTaskComplete(t *testing.T) {
+	srv := &Server{
+		mgr: runner.NewAgentManager(),
+	}
+
+	var completedPayload map[string]any
+	srv.SetNotifyHook(func(method string, params any) {
+		if method != "turn/completed" {
+			return
+		}
+		completedPayload = util.ToMapAny(params)
+	})
+
+	handler := srv.AgentEventHandler("thread-abc")
+	summary := "已完成：修复了 JSON-RPC 回调，并补充了测试。"
+
+	handler(codex.Event{
+		Type: "codex/event/task_complete",
+		Data: json.RawMessage(`{
+			"id":"turn_123",
+			"msg":{
+				"type":"task_complete",
+				"turn_id":"turn_123",
+				"last_agent_message":"已完成：修复了 JSON-RPC 回调，并补充了测试。"
+			}
+		}`),
+	})
+	handler(codex.Event{
+		Type: "turn_complete",
+		Data: json.RawMessage(`{
+			"turn":{"id":"turn_123","items":[],"status":"completed","error":null}
+		}`),
+	})
+
+	if completedPayload == nil {
+		t.Fatal("expected turn/completed payload")
+	}
+	turn, _ := completedPayload["turn"].(map[string]any)
+	if turn == nil {
+		t.Fatalf("expected turn payload")
+	}
+	if got, _ := turn["lastAgentMessage"].(string); got != summary {
+		t.Fatalf("turn.lastAgentMessage = %q, want %q", got, summary)
+	}
+	if got, _ := completedPayload["lastAgentMessage"].(string); got != summary {
+		t.Fatalf("lastAgentMessage = %q, want %q", got, summary)
+	}
+}
+
+func TestAgentEventHandlerTurnCompletedPreservesExplicitSummary(t *testing.T) {
+	srv := &Server{
+		mgr: runner.NewAgentManager(),
+	}
+
+	var completedPayload map[string]any
+	srv.SetNotifyHook(func(method string, params any) {
+		if method != "turn/completed" {
+			return
+		}
+		completedPayload = util.ToMapAny(params)
+	})
+
+	handler := srv.AgentEventHandler("thread-explicit")
+	handler(codex.Event{
+		Type: "turn_complete",
+		Data: json.RawMessage(`{
+			"turn":{"id":"turn_explicit","status":"completed","lastAgentMessage":"explicit_summary"}
+		}`),
+	})
+
+	turn, _ := completedPayload["turn"].(map[string]any)
+	if turn == nil {
+		t.Fatalf("expected turn payload")
+	}
+	if got, _ := turn["lastAgentMessage"].(string); got != "explicit_summary" {
+		t.Fatalf("turn.lastAgentMessage = %q, want explicit_summary", got)
+	}
+}
+
+func TestAgentEventHandlerTurnCompletedWithoutSummaryKeepsEmpty(t *testing.T) {
+	srv := &Server{
+		mgr: runner.NewAgentManager(),
+	}
+
+	var completedPayload map[string]any
+	srv.SetNotifyHook(func(method string, params any) {
+		if method != "turn/completed" {
+			return
+		}
+		completedPayload = util.ToMapAny(params)
+	})
+
+	handler := srv.AgentEventHandler("thread-empty")
+	handler(codex.Event{
+		Type: "turn_complete",
+		Data: json.RawMessage(`{
+			"turn":{"id":"turn_empty","status":"completed"}
+		}`),
+	})
+
+	if completedPayload == nil {
+		t.Fatal("expected turn/completed payload")
+	}
+	turn, _ := completedPayload["turn"].(map[string]any)
+	if turn == nil {
+		t.Fatalf("expected turn payload")
+	}
+	if _, exists := turn["lastAgentMessage"]; exists {
+		t.Fatalf("did not expect turn.lastAgentMessage when no summary exists")
+	}
+	if _, exists := completedPayload["lastAgentMessage"]; exists {
+		t.Fatalf("did not expect payload lastAgentMessage when no summary exists")
+	}
+}
+
+func TestAgentEventHandlerBackfillsSummaryWhenTaskCompleteMissingTurnID(t *testing.T) {
+	srv := &Server{
+		mgr: runner.NewAgentManager(),
+	}
+
+	var completedPayload map[string]any
+	srv.SetNotifyHook(func(method string, params any) {
+		if method != "turn/completed" {
+			return
+		}
+		completedPayload = util.ToMapAny(params)
+	})
+
+	handler := srv.AgentEventHandler("thread-missing-id")
+	handler(codex.Event{
+		Type: "codex/event/task_complete",
+		Data: json.RawMessage(`{
+			"msg":{"last_agent_message":"summary_without_turn_id"}
+		}`),
+	})
+	handler(codex.Event{
+		Type: "turn_complete",
+		Data: json.RawMessage(`{
+			"turn":{"id":"turn_missing_id","status":"completed"}
+		}`),
+	})
+
+	turn, _ := completedPayload["turn"].(map[string]any)
+	if turn == nil {
+		t.Fatalf("expected turn payload")
+	}
+	if got, _ := turn["lastAgentMessage"].(string); got != "summary_without_turn_id" {
+		t.Fatalf("turn.lastAgentMessage = %q, want summary_without_turn_id", got)
+	}
+}
+
+func TestAgentEventHandlerDoesNotLeakSummaryAcrossDifferentTurnID(t *testing.T) {
+	srv := &Server{
+		mgr: runner.NewAgentManager(),
+	}
+
+	var completedPayload map[string]any
+	srv.SetNotifyHook(func(method string, params any) {
+		if method != "turn/completed" {
+			return
+		}
+		completedPayload = util.ToMapAny(params)
+	})
+
+	handler := srv.AgentEventHandler("thread-no-leak")
+	handler(codex.Event{
+		Type: "codex/event/task_complete",
+		Data: json.RawMessage(`{
+			"id":"turn_1",
+			"msg":{"turn_id":"turn_1","last_agent_message":"summary_turn_1"}
+		}`),
+	})
+	handler(codex.Event{
+		Type: "turn_complete",
+		Data: json.RawMessage(`{
+			"turn":{"id":"turn_2","status":"completed"}
+		}`),
+	})
+
+	if completedPayload == nil {
+		t.Fatal("expected turn/completed payload")
+	}
+	turn, _ := completedPayload["turn"].(map[string]any)
+	if turn == nil {
+		t.Fatalf("expected turn payload")
+	}
+	if _, exists := turn["lastAgentMessage"]; exists {
+		t.Fatalf("did not expect stale summary for different turn id")
+	}
+	if _, exists := completedPayload["lastAgentMessage"]; exists {
+		t.Fatalf("did not expect stale payload summary for different turn id")
 	}
 }

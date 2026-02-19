@@ -54,20 +54,43 @@ const debugBridgeMaxEvents = 20000
 const debugBridgePublishSampleEvery int64 = 120
 const debugBridgePollSampleEvery int64 = 120
 
+// debugBridgeOverflowLogEvery 溢出日志采样间隔 — 第 1 次和每第 N 次溢出打 WARN。
+const debugBridgeOverflowLogEvery int64 = 1000
+
 var debugBridgeMetrics = struct {
 	publishedTotal     atomic.Int64
 	droppedTotal       atomic.Int64
+	overflowCount      atomic.Int64
 	pollRequestTotal   atomic.Int64
 	pollResponseTotal  atomic.Int64
 	pollEventOutTotal  atomic.Int64
 	pollWriteFailTotal atomic.Int64
 }{}
 
+// shouldLogOverflow 判断是否应该打印溢出 WARN 日志。
+// 高频事件 (delta/output/stream/state/rateLimits): 第 1 次 + 每 N 次采样。
+// 低频事件: 始终打印。
+func shouldLogOverflow(method string, overflowCount int64) bool {
+	if !isHighFreqMethod(method) {
+		return true
+	}
+	return overflowCount == 1 || overflowCount%debugBridgeOverflowLogEvery == 0
+}
+
+// isHighFreqMethod 判断是否为高频事件方法 (与 shouldLogBridgePublish 共享模式).
+func isHighFreqMethod(method string) bool {
+	lower := strings.ToLower(method)
+	return strings.Contains(lower, "delta") ||
+		strings.Contains(lower, "output") ||
+		strings.Contains(lower, "stream") ||
+		strings.Contains(lower, "state/changed") ||
+		strings.Contains(lower, "ratelimits")
+}
+
 var debugBridgeEnabled atomic.Bool
 
 func shouldLogBridgePublish(method string, seq int64) bool {
-	lower := strings.ToLower(method)
-	if strings.Contains(lower, "delta") || strings.Contains(lower, "output") || strings.Contains(lower, "stream") {
+	if isHighFreqMethod(method) {
 		return seq%debugBridgePublishSampleEvery == 0
 	}
 	return true
@@ -107,12 +130,16 @@ func publishDebugBridgeEvent(method string, params any) {
 		dropped = len(debugBridgeHub.events) - debugBridgeMaxEvents
 		debugBridgeHub.events = append([]debugBridgeEvent(nil), debugBridgeHub.events[dropped:]...)
 		totalDropped := debugBridgeMetrics.droppedTotal.Add(int64(dropped))
-		logger.Warn("debug bridge: queue overflow, dropped oldest events",
-			logger.FieldMethod, method,
-			"dropped", dropped,
-			"queue_depth", len(debugBridgeHub.events),
-			"max_events", debugBridgeMaxEvents,
-			"dropped_total", totalDropped)
+		overflowSeq := debugBridgeMetrics.overflowCount.Add(1)
+		if shouldLogOverflow(method, overflowSeq) {
+			logger.Warn("debug bridge: queue overflow, dropped oldest events",
+				logger.FieldMethod, method,
+				"dropped", dropped,
+				"queue_depth", len(debugBridgeHub.events),
+				"max_events", debugBridgeMaxEvents,
+				"dropped_total", totalDropped,
+				"overflow_seq", overflowSeq)
+		}
 	}
 
 	publishedTotal := debugBridgeMetrics.publishedTotal.Add(1)

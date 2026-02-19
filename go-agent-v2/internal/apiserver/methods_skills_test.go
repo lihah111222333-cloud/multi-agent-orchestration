@@ -151,6 +151,41 @@ func TestBuildConfiguredSkillPrompt(t *testing.T) {
 	}
 }
 
+func TestBuildSelectedSkillPrompt(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("backend", "backend rules")
+	writeSkill("tdd", "tdd rules")
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+	}
+	input := []UserInput{
+		{Type: "skill", Name: "tdd", Content: "manual tdd"},
+	}
+	prompt, count := srv.buildSelectedSkillPrompt([]string{"backend", "tdd", "missing"}, input)
+	if count != 1 {
+		t.Fatalf("selected skill count=%d, want=1", count)
+	}
+	if !strings.Contains(prompt, "[skill:backend]") {
+		t.Fatalf("expected backend selected skill in prompt, got=%q", prompt)
+	}
+	if strings.Contains(prompt, "[skill:tdd]") {
+		t.Fatalf("input skill should skip selected duplicate, got=%q", prompt)
+	}
+}
+
 func TestBuildAutoMatchedSkillPrompt(t *testing.T) {
 	tmp := t.TempDir()
 	writeSkill := func(name, content string) {
@@ -231,6 +266,38 @@ brand guide`)
 	}
 }
 
+func TestBuildAutoMatchedSkillPromptMatchesExplicitSkillName(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("后端", `---
+description: Go后端规范
+---
+backend guide`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+	}
+
+	prompt, count := srv.buildAutoMatchedSkillPrompt("thread-1", "请按@后端规范实现接口", nil)
+	if count != 1 {
+		t.Fatalf("auto matched skill count=%d, want=1", count)
+	}
+	if !strings.Contains(prompt, "[skill:后端]") {
+		t.Fatalf("expected explicit skill match, got=%q", prompt)
+	}
+}
+
 func TestSkillsMatchPreviewTypedReturnsReasonAndTerms(t *testing.T) {
 	tmp := t.TempDir()
 	writeSkill := func(name, content string) {
@@ -291,6 +358,58 @@ brand guide`)
 	}
 	if !reflect.DeepEqual(matches[0].MatchedTerms, []string{"@品牌"}) {
 		t.Fatalf("match[0].MatchedTerms=%v, want=[@品牌]", matches[0].MatchedTerms)
+	}
+}
+
+func TestSkillsMatchPreviewTypedIncludesConfiguredExplicitSkill(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("后端", `---
+description: Go后端规范
+---
+backend guide`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+		agentSkills: map[string][]string{
+			"thread-1": {"后端"},
+		},
+	}
+
+	raw, err := srv.skillsMatchPreviewTyped(context.Background(), skillsMatchPreviewParams{
+		ThreadID: "thread-1",
+		Text:     "请按@后端实现",
+	})
+	if err != nil {
+		t.Fatalf("skillsMatchPreviewTyped error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	matches, ok := resp["matches"].([]skillsMatchPreviewItem)
+	if !ok {
+		t.Fatalf("matches type=%T, want=[]skillsMatchPreviewItem", resp["matches"])
+	}
+	if len(matches) != 1 {
+		t.Fatalf("len(matches)=%d, want=1", len(matches))
+	}
+	if matches[0].Name != "后端" {
+		t.Fatalf("match[0].Name=%q, want=后端", matches[0].Name)
+	}
+	if matches[0].MatchedBy != "explicit" {
+		t.Fatalf("match[0].MatchedBy=%q, want=explicit", matches[0].MatchedBy)
+	}
+	if !reflect.DeepEqual(matches[0].MatchedTerms, []string{"@后端"}) {
+		t.Fatalf("match[0].MatchedTerms=%v, want=[@后端]", matches[0].MatchedTerms)
 	}
 }
 

@@ -790,12 +790,14 @@ type UserInput struct {
 }
 
 type turnStartParams struct {
-	ThreadID       string          `json:"threadId"`
-	Input          []UserInput     `json:"input"`
-	Cwd            string          `json:"cwd,omitempty"`
-	ApprovalPolicy string          `json:"approvalPolicy,omitempty"`
-	Model          string          `json:"model,omitempty"`
-	OutputSchema   json.RawMessage `json:"outputSchema,omitempty"`
+	ThreadID             string          `json:"threadId"`
+	Input                []UserInput     `json:"input"`
+	SelectedSkills       []string        `json:"selectedSkills,omitempty"`
+	ManualSkillSelection bool            `json:"manualSkillSelection,omitempty"`
+	Cwd                  string          `json:"cwd,omitempty"`
+	ApprovalPolicy       string          `json:"approvalPolicy,omitempty"`
+	Model                string          `json:"model,omitempty"`
+	OutputSchema         json.RawMessage `json:"outputSchema,omitempty"`
 }
 
 // turnInfo 通用 turn 信息。
@@ -898,6 +900,25 @@ func mergePromptText(prompt, extra string) string {
 	return prompt + "\n" + extra
 }
 
+func appendSkillPlaceholders(input []UserInput, skillNames []string) []UserInput {
+	if len(skillNames) == 0 {
+		return input
+	}
+	out := make([]UserInput, 0, len(input)+len(skillNames))
+	out = append(out, input...)
+	for _, name := range skillNames {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, UserInput{
+			Type: "skill",
+			Name: trimmed,
+		})
+	}
+	return out
+}
+
 func (s *Server) buildConfiguredSkillPrompt(agentID string, input []UserInput) (string, int) {
 	if s.skillSvc == nil {
 		return "", 0
@@ -934,6 +955,36 @@ func (s *Server) buildConfiguredSkillPrompt(agentID string, input []UserInput) (
 	return strings.Join(texts, "\n"), len(texts)
 }
 
+func (s *Server) buildSelectedSkillPrompt(selectedSkills []string, input []UserInput) (string, int) {
+	if s.skillSvc == nil || len(selectedSkills) == 0 {
+		return "", 0
+	}
+	inputSkillSet := collectInputSkillNames(input)
+	texts := make([]string, 0, len(selectedSkills))
+	for _, rawName := range selectedSkills {
+		skillName := strings.TrimSpace(rawName)
+		if skillName == "" {
+			continue
+		}
+		if _, exists := inputSkillSet[strings.ToLower(skillName)]; exists {
+			continue
+		}
+		content, err := s.skillSvc.ReadSkillContent(skillName)
+		if err != nil {
+			logger.Warn("turn/start: selected skill unavailable, skip",
+				logger.FieldSkill, skillName,
+				logger.FieldError, err,
+			)
+			continue
+		}
+		texts = append(texts, skillInputText(skillName, content))
+	}
+	if len(texts) == 0 {
+		return "", 0
+	}
+	return strings.Join(texts, "\n"), len(texts)
+}
+
 func lowerMatchedTerms(text string, candidates []string) []string {
 	if text == "" || len(candidates) == 0 {
 		return nil
@@ -961,7 +1012,43 @@ func lowerMatchedTerms(text string, candidates []string) []string {
 	return terms
 }
 
-func classifyAutoSkillMatch(normalizedPrompt string, forceWords, triggerWords []string) (string, []string) {
+type autoMatchedSkillMatch struct {
+	Name         string
+	MatchedBy    string
+	MatchedTerms []string
+}
+
+type autoSkillMatchOptions struct {
+	IncludeConfiguredExplicit bool
+}
+
+func explicitSkillMentionTerms(normalizedPrompt, skillName string) []string {
+	trimmedName := strings.TrimSpace(skillName)
+	if trimmedName == "" {
+		return nil
+	}
+	lowerName := strings.ToLower(trimmedName)
+	if lowerName == "" {
+		return nil
+	}
+	terms := make([]string, 0, 2)
+	if strings.Contains(normalizedPrompt, "@"+lowerName) {
+		terms = append(terms, "@"+trimmedName)
+	}
+	if strings.Contains(normalizedPrompt, "[skill:"+lowerName+"]") {
+		terms = append(terms, "[skill:"+trimmedName+"]")
+	}
+	if len(terms) == 0 {
+		return nil
+	}
+	return terms
+}
+
+func classifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
+	explicitTerms := explicitSkillMentionTerms(normalizedPrompt, skillName)
+	if len(explicitTerms) > 0 {
+		return "explicit", explicitTerms
+	}
 	forceTerms := lowerMatchedTerms(normalizedPrompt, forceWords)
 	if len(forceTerms) > 0 {
 		return "force", forceTerms
@@ -973,13 +1060,7 @@ func classifyAutoSkillMatch(normalizedPrompt string, forceWords, triggerWords []
 	return "", nil
 }
 
-type autoMatchedSkillMatch struct {
-	Name         string
-	MatchedBy    string
-	MatchedTerms []string
-}
-
-func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []UserInput) []autoMatchedSkillMatch {
+func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []UserInput, options autoSkillMatchOptions) []autoMatchedSkillMatch {
 	if s.skillSvc == nil {
 		return nil
 	}
@@ -999,8 +1080,8 @@ func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []
 		return nil
 	}
 
-	skipSet := collectInputSkillNames(input)
-	skipSet = mergeSkillNameSets(skipSet, collectSkillNameSet(s.GetAgentSkills(agentID)))
+	inputSkillSet := collectInputSkillNames(input)
+	configuredSet := collectSkillNameSet(s.GetAgentSkills(agentID))
 
 	matches := make([]autoMatchedSkillMatch, 0, len(allSkills))
 	for _, skill := range allSkills {
@@ -1008,12 +1089,18 @@ func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []
 		if skillName == "" {
 			continue
 		}
-		if _, exists := skipSet[strings.ToLower(skillName)]; exists {
+		skillNameLower := strings.ToLower(skillName)
+		if _, exists := inputSkillSet[skillNameLower]; exists {
 			continue
 		}
-		matchedBy, matchedTerms := classifyAutoSkillMatch(normalizedPrompt, skill.ForceWords, skill.TriggerWords)
+		matchedBy, matchedTerms := classifyAutoSkillMatch(normalizedPrompt, skillName, skill.ForceWords, skill.TriggerWords)
 		if matchedBy == "" {
 			continue
+		}
+		if _, configured := configuredSet[skillNameLower]; configured {
+			if !(options.IncludeConfiguredExplicit && matchedBy == "explicit") {
+				continue
+			}
 		}
 		matches = append(matches, autoMatchedSkillMatch{
 			Name:         skillName,
@@ -1025,7 +1112,7 @@ func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []
 }
 
 func (s *Server) buildAutoMatchedSkillPrompt(agentID, prompt string, input []UserInput) (string, int) {
-	matches := s.collectAutoMatchedSkillMatches(agentID, prompt, input)
+	matches := s.collectAutoMatchedSkillMatches(agentID, prompt, input, autoSkillMatchOptions{})
 	if len(matches) == 0 {
 		return "", 0
 	}
@@ -1059,10 +1146,22 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 		return nil, err
 	}
 
+	selectedSkills, err := normalizeSkillNames(p.SelectedSkills)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.turnStart", "normalize selected skills")
+	}
+
 	prompt, images, files := extractInputs(p.Input)
-	configuredSkillPrompt, configuredSkillCount := s.buildConfiguredSkillPrompt(p.ThreadID, p.Input)
-	autoMatchedSkillPrompt, autoMatchedSkillCount := s.buildAutoMatchedSkillPrompt(p.ThreadID, prompt, p.Input)
+	matchingInput := appendSkillPlaceholders(p.Input, selectedSkills)
+	configuredSkillPrompt, configuredSkillCount := s.buildConfiguredSkillPrompt(p.ThreadID, matchingInput)
+	selectedSkillPrompt, selectedSkillCount := s.buildSelectedSkillPrompt(selectedSkills, p.Input)
+	autoMatchedSkillPrompt := ""
+	autoMatchedSkillCount := 0
+	if !p.ManualSkillSelection {
+		autoMatchedSkillPrompt, autoMatchedSkillCount = s.buildAutoMatchedSkillPrompt(p.ThreadID, prompt, matchingInput)
+	}
 	submitPrompt := mergePromptText(prompt, configuredSkillPrompt)
+	submitPrompt = mergePromptText(submitPrompt, selectedSkillPrompt)
 	submitPrompt = mergePromptText(submitPrompt, autoMatchedSkillPrompt)
 	logger.Info("turn/start: input prepared",
 		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
@@ -1070,6 +1169,8 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 		"images", len(images),
 		"files", len(files),
 		"configured_skills", configuredSkillCount,
+		"selected_skills", selectedSkillCount,
+		"manual_skill_selection", p.ManualSkillSelection,
 		"auto_matched_skills", autoMatchedSkillCount,
 	)
 	if err := proc.Client.Submit(submitPrompt, images, files, p.OutputSchema); err != nil {
@@ -1099,16 +1200,28 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 }
 
 type turnSteerParams struct {
-	ThreadID string      `json:"threadId"`
-	Input    []UserInput `json:"input"`
+	ThreadID             string      `json:"threadId"`
+	Input                []UserInput `json:"input"`
+	SelectedSkills       []string    `json:"selectedSkills,omitempty"`
+	ManualSkillSelection bool        `json:"manualSkillSelection,omitempty"`
 }
 
 func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, error) {
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
+		selectedSkills, err := normalizeSkillNames(p.SelectedSkills)
+		if err != nil {
+			return nil, apperrors.Wrap(err, "Server.turnSteer", "normalize selected skills")
+		}
 		prompt, images, files := extractInputs(p.Input)
-		configuredSkillPrompt, _ := s.buildConfiguredSkillPrompt(p.ThreadID, p.Input)
-		autoMatchedSkillPrompt, _ := s.buildAutoMatchedSkillPrompt(p.ThreadID, prompt, p.Input)
+		matchingInput := appendSkillPlaceholders(p.Input, selectedSkills)
+		configuredSkillPrompt, _ := s.buildConfiguredSkillPrompt(p.ThreadID, matchingInput)
+		selectedSkillPrompt, _ := s.buildSelectedSkillPrompt(selectedSkills, p.Input)
+		autoMatchedSkillPrompt := ""
+		if !p.ManualSkillSelection {
+			autoMatchedSkillPrompt, _ = s.buildAutoMatchedSkillPrompt(p.ThreadID, prompt, matchingInput)
+		}
 		submitPrompt := mergePromptText(prompt, configuredSkillPrompt)
+		submitPrompt = mergePromptText(submitPrompt, selectedSkillPrompt)
 		submitPrompt = mergePromptText(submitPrompt, autoMatchedSkillPrompt)
 		if err := proc.Client.Submit(submitPrompt, images, files, nil); err != nil {
 			return nil, err
@@ -2045,7 +2158,9 @@ type skillsConfigReadParams struct {
 
 func (s *Server) skillsMatchPreviewTyped(_ context.Context, p skillsMatchPreviewParams) (any, error) {
 	threadID := resolveSkillMatchPreviewThreadID(p)
-	matches := s.collectAutoMatchedSkillMatches(threadID, p.Text, p.Input)
+	matches := s.collectAutoMatchedSkillMatches(threadID, p.Text, p.Input, autoSkillMatchOptions{
+		IncludeConfiguredExplicit: true,
+	})
 	items := make([]skillsMatchPreviewItem, 0, len(matches))
 	for _, match := range matches {
 		name := strings.TrimSpace(match.Name)
@@ -3305,6 +3420,8 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 		"activeThreadId":        resolvedActiveThreadID,
 		"activeCmdThreadId":     resolvedActiveCmdThreadID,
 		"mainAgentId":           resolvedMain,
+		"activityStatsByThread": snapshot.ActivityStatsByThread,
+		"alertsByThread":        snapshot.AlertsByThread,
 	}
 	agentRuntimeByID := map[string]map[string]any{}
 	if s.mgr != nil {

@@ -60,6 +60,22 @@ type TokenUsageSnapshot struct {
 	UpdatedAt           string  `json:"updatedAt,omitempty"`
 }
 
+// ActivityStats holds per-thread cumulative activity counters.
+type ActivityStats struct {
+	LSPCalls  int64            `json:"lspCalls"`
+	Commands  int64            `json:"commands"`
+	FileEdits int64            `json:"fileEdits"`
+	ToolCalls map[string]int64 `json:"toolCalls"`
+}
+
+// AlertEntry is a single high-priority alert for the UI panel.
+type AlertEntry struct {
+	ID      string `json:"id"`
+	Time    string `json:"time"`
+	Level   string `json:"level"` // "error" | "warning" | "stall"
+	Message string `json:"message"`
+}
+
 // RuntimeSnapshot is a full UI runtime state snapshot.
 type RuntimeSnapshot struct {
 	Threads                 []ThreadSnapshot              `json:"threads"`
@@ -74,6 +90,8 @@ type RuntimeSnapshot struct {
 	WorkspaceFeatureEnabled *bool                         `json:"workspaceFeatureEnabled"`
 	WorkspaceLastError      string                        `json:"workspaceLastError"`
 	AgentMetaByID           map[string]AgentMeta          `json:"agentMetaById"`
+	ActivityStatsByThread   map[string]ActivityStats      `json:"activityStatsByThread"`
+	AlertsByThread          map[string][]AlertEntry       `json:"alertsByThread"`
 }
 
 // HistoryRecord is a compact history message for timeline hydration.
@@ -148,6 +166,8 @@ func NewRuntimeManager() *RuntimeManager {
 			TokenUsageByThread:    map[string]TokenUsageSnapshot{},
 			WorkspaceRunsByKey:    map[string]map[string]any{},
 			AgentMetaByID:         map[string]AgentMeta{},
+			ActivityStatsByThread: map[string]ActivityStats{},
+			AlertsByThread:        map[string][]AlertEntry{},
 		},
 		runtime: map[string]*threadRuntime{},
 	}
@@ -830,6 +850,7 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 		rt.streamErrorText = text
 		if eventType == "stream_error" {
 			rt.streamErrorDetails = deriveStreamErrorDetails(payload)
+			m.pushAlertLocked(threadID, "error", text)
 		} else {
 			rt.streamErrorDetails = ""
 		}
@@ -904,6 +925,7 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 		rt.approvalDepth = 0
 		rt.terminalWaitOverlay = false
 		rt.terminalWaitLabel = ""
+		m.incrActivityStatLocked(threadID, "command", "")
 	case UITypeCommandOutput:
 		if rt.commandDepth == 0 {
 			rt.commandDepth = 1
@@ -917,6 +939,7 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 	case UITypeFileEditStart:
 		rt.fileEditDepth += 1
 		rt.approvalDepth = 0
+		m.incrActivityStatLocked(threadID, "fileEdit", "")
 	case UITypeFileEditDone:
 		rt.fileEditDepth = max(0, rt.fileEditDepth-1)
 	case UITypeApprovalRequest:
@@ -924,6 +947,11 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 	case UITypeToolCall:
 		if eventType == "mcp_tool_call_begin" {
 			rt.toolCallDepth += 1
+			toolName := ""
+			if fields.text != "" {
+				toolName = fields.text
+			}
+			m.incrActivityStatLocked(threadID, "toolCall", toolName)
 		}
 		if eventType == "mcp_tool_call_end" {
 			rt.toolCallDepth = max(0, rt.toolCallDepth-1)
@@ -948,6 +976,59 @@ func (m *RuntimeManager) clearTurnLifecycleLocked(threadID string) {
 	rt.streamErrorDetails = ""
 	rt.statusHeader = ""
 	rt.reasoningHeaderBuf = ""
+}
+
+// incrActivityStatLocked increments a per-thread activity counter.
+// Must be called with m.mu held.
+func (m *RuntimeManager) incrActivityStatLocked(threadID, kind, toolName string) {
+	stats, ok := m.snapshot.ActivityStatsByThread[threadID]
+	if !ok {
+		stats = ActivityStats{ToolCalls: map[string]int64{}}
+	}
+	switch kind {
+	case "command":
+		stats.Commands++
+	case "fileEdit":
+		stats.FileEdits++
+	case "toolCall":
+		name := toolName
+		if name == "" {
+			name = "unknown"
+		}
+		if stats.ToolCalls == nil {
+			stats.ToolCalls = map[string]int64{}
+		}
+		stats.ToolCalls[name]++
+		if strings.HasPrefix(name, "lsp_") || strings.HasPrefix(name, "lsp/") {
+			stats.LSPCalls++
+		}
+	}
+	m.snapshot.ActivityStatsByThread[threadID] = stats
+}
+
+// PushAlert appends a high-priority alert for the given thread.
+func (m *RuntimeManager) PushAlert(threadID, level, message string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pushAlertLocked(threadID, level, message)
+}
+
+// pushAlertLocked appends an alert; must be called with m.mu held.
+func (m *RuntimeManager) pushAlertLocked(threadID, level, message string) {
+	alerts := m.snapshot.AlertsByThread[threadID]
+	entry := AlertEntry{
+		ID:      fmt.Sprintf("a-%d", m.seq),
+		Time:    time.Now().Format("15:04"),
+		Level:   level,
+		Message: message,
+	}
+	alerts = append(alerts, entry)
+	// 保留最近 20 条
+	if len(alerts) > 20 {
+		alerts = alerts[len(alerts)-20:]
+	}
+	m.snapshot.AlertsByThread[threadID] = alerts
+	m.seq++
 }
 
 func (m *RuntimeManager) deriveThreadStateLocked(threadID string) string {
@@ -2138,9 +2219,7 @@ func extractFirstIntDeep(payload map[string]any, keys ...string) (int, bool) {
 }
 
 func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[string]any, ts time.Time) {
-	prev := m.snapshot.TokenUsageByThread[threadID]
-	next := prev
-	usedFromInfoTotal := false
+	next := m.snapshot.TokenUsageByThread[threadID]
 
 	if limit, ok := extractFirstIntByPaths(payload,
 		[]string{"tokenUsage", "modelContextWindow"},
@@ -2152,7 +2231,6 @@ func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[str
 	} else if limit, ok := extractFirstIntDeep(payload, "context_window_tokens", "contextWindowTokens", "context_window", "model_context_window", "modelContextWindow", "max_input_tokens", "maxTokens", "limit_tokens", "token_limit"); ok && limit > 0 {
 		next.ContextWindowTokens = limit
 	}
-	limit := next.ContextWindowTokens
 
 	if total, ok := extractFirstIntByPaths(payload,
 		[]string{"tokenUsage", "last", "totalTokens"},
@@ -2173,28 +2251,6 @@ func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[str
 		[]string{"info", "lastTokenUsage", "totalTokens"},
 	); ok {
 		next.UsedTokens = max(0, total)
-	} else if total, ok := extractFirstIntByPaths(payload,
-		[]string{"info", "total_token_usage", "total_tokens"},
-		[]string{"info", "totalTokenUsage", "totalTokens"},
-	); ok {
-		next.UsedTokens = max(0, total)
-		usedFromInfoTotal = true
-		if limit > 0 && next.UsedTokens > limit {
-			fallbackUsed := prev.UsedTokens
-			if fallbackUsed < 0 || fallbackUsed > limit {
-				fallbackUsed = 0
-			}
-			if prev.UsedTokens > 0 && prev.UsedTokens <= limit {
-				next.UsedTokens = prev.UsedTokens
-			} else if lastTotal, ok := extractFirstIntByPaths(payload,
-				[]string{"info", "last_token_usage", "total_tokens"},
-				[]string{"info", "lastTokenUsage", "totalTokens"},
-			); ok && lastTotal > 0 && lastTotal <= limit {
-				next.UsedTokens = lastTotal
-			} else {
-				next.UsedTokens = fallbackUsed
-			}
-		}
 	} else if total, ok := extractFirstIntDeep(payload, "total_tokens", "totalTokens", "used_tokens", "usedTokens"); ok {
 		next.UsedTokens = max(0, total)
 	} else {
@@ -2213,15 +2269,6 @@ func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[str
 				[]string{"info", "last_token_usage", "input_tokens"},
 				[]string{"info", "lastTokenUsage", "inputTokens"},
 			)
-		}
-		if !hasInput {
-			input, hasInput = extractFirstIntByPaths(payload,
-				[]string{"info", "total_token_usage", "input_tokens"},
-				[]string{"info", "totalTokenUsage", "inputTokens"},
-			)
-			if hasInput {
-				usedFromInfoTotal = true
-			}
 		}
 		if !hasInput {
 			input, hasInput = extractFirstIntDeep(payload, "input", "input_tokens", "inputTokens", "prompt_tokens")
@@ -2243,39 +2290,11 @@ func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[str
 			)
 		}
 		if !hasOutput {
-			output, hasOutput = extractFirstIntByPaths(payload,
-				[]string{"info", "total_token_usage", "output_tokens"},
-				[]string{"info", "totalTokenUsage", "outputTokens"},
-			)
-			if hasOutput {
-				usedFromInfoTotal = true
-			}
-		}
-		if !hasOutput {
 			output, hasOutput = extractFirstIntDeep(payload, "output", "output_tokens", "outputTokens", "completion_tokens")
 		}
 		if hasInput || hasOutput {
 			next.UsedTokens = max(0, input+output)
 		}
-	}
-
-	if usedFromInfoTotal && limit > 0 && next.UsedTokens > limit {
-		fallbackUsed := prev.UsedTokens
-		if fallbackUsed < 0 || fallbackUsed > limit {
-			fallbackUsed = 0
-		}
-		if lastTotal, ok := extractFirstIntByPaths(payload,
-			[]string{"info", "last_token_usage", "total_tokens"},
-			[]string{"info", "lastTokenUsage", "totalTokens"},
-		); ok && lastTotal > 0 && lastTotal <= limit {
-			next.UsedTokens = lastTotal
-		} else {
-			next.UsedTokens = fallbackUsed
-		}
-	}
-
-	if next.ContextWindowTokens > 0 && next.UsedTokens > next.ContextWindowTokens && prev.UsedTokens > 0 && prev.UsedTokens <= next.ContextWindowTokens {
-		next.UsedTokens = prev.UsedTokens
 	}
 
 	if next.ContextWindowTokens > 0 {
@@ -2511,6 +2530,31 @@ func cloneSnapshotLight(src RuntimeSnapshot) RuntimeSnapshot {
 	for key, value := range src.AgentMetaByID {
 		out.AgentMetaByID[key] = value
 	}
+
+	out.ActivityStatsByThread = make(map[string]ActivityStats, len(src.ActivityStatsByThread))
+	for key, value := range src.ActivityStatsByThread {
+		cloned := ActivityStats{
+			LSPCalls:  value.LSPCalls,
+			Commands:  value.Commands,
+			FileEdits: value.FileEdits,
+			ToolCalls: make(map[string]int64, len(value.ToolCalls)),
+		}
+		for k, v := range value.ToolCalls {
+			cloned.ToolCalls[k] = v
+		}
+		out.ActivityStatsByThread[key] = cloned
+	}
+
+	out.AlertsByThread = make(map[string][]AlertEntry, len(src.AlertsByThread))
+	for key, value := range src.AlertsByThread {
+		if len(value) == 0 {
+			continue
+		}
+		entries := make([]AlertEntry, len(value))
+		copy(entries, value)
+		out.AlertsByThread[key] = entries
+	}
+
 	return out
 }
 

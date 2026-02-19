@@ -629,11 +629,16 @@ func TestTokenUsageUpdatesFromTokenCountInfoShape(t *testing.T) {
 	event := NormalizeEvent(
 		"token_count",
 		"codex/event/token_count",
-		mustRawJSON(`{"info":{"total_token_usage":{"total_tokens":1800,"input_tokens":1400,"output_tokens":400},"model_context_window":128000}}`),
+		mustRawJSON(`{"info":{"total_token_usage":{"total_tokens":1800,"input_tokens":1400,"output_tokens":400},"last_token_usage":{"total_tokens":1800,"input_tokens":1400,"output_tokens":400},"model_context_window":128000}}`),
 	)
 	mgr.ApplyAgentEvent(threadID, event, map[string]any{
 		"info": map[string]any{
 			"total_token_usage": map[string]any{
+				"total_tokens":  1800,
+				"input_tokens":  1400,
+				"output_tokens": 400,
+			},
+			"last_token_usage": map[string]any{
 				"total_tokens":  1800,
 				"input_tokens":  1400,
 				"output_tokens": 400,
@@ -648,6 +653,47 @@ func TestTokenUsageUpdatesFromTokenCountInfoShape(t *testing.T) {
 	}
 	if usage.ContextWindowTokens != 128000 {
 		t.Fatalf("context window tokens = %d, want 128000", usage.ContextWindowTokens)
+	}
+}
+
+func TestTokenUsageDoesNotApplyInfoTotalOnlyWithoutLastUsage(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-token-info-total-only-ignored"
+
+	seed := NormalizeEvent(
+		"token_count",
+		"thread/tokenUsage/updated",
+		mustRawJSON(`{"tokenUsage":{"last":{"totalTokens":91000},"modelContextWindow":258400}}`),
+	)
+	mgr.ApplyAgentEvent(threadID, seed, map[string]any{
+		"tokenUsage": map[string]any{
+			"last": map[string]any{
+				"totalTokens": 91000,
+			},
+			"modelContextWindow": 258400,
+		},
+	})
+
+	event := NormalizeEvent(
+		"token_count",
+		"codex/event/token_count",
+		mustRawJSON(`{"info":{"total_token_usage":{"total_tokens":180000},"model_context_window":258400}}`),
+	)
+	mgr.ApplyAgentEvent(threadID, event, map[string]any{
+		"info": map[string]any{
+			"total_token_usage": map[string]any{
+				"total_tokens": 180000,
+			},
+			"model_context_window": 258400,
+		},
+	})
+
+	usage := mgr.Snapshot().TokenUsageByThread[threadID]
+	if usage.UsedTokens != 91000 {
+		t.Fatalf("used tokens = %d, want keep 91000", usage.UsedTokens)
+	}
+	if usage.ContextWindowTokens != 258400 {
+		t.Fatalf("context window tokens = %d, want 258400", usage.ContextWindowTokens)
 	}
 }
 

@@ -100,7 +100,7 @@ func (s *Server) registerMethods() {
 
 	// § 7. 账号 (5 methods)
 	s.methods["account/login/start"] = typedHandler(s.accountLoginStartTyped)
-	s.methods["account/login/cancel"] = noop
+	s.methods["account/login/cancel"] = s.accountLoginCancel
 	s.methods["account/logout"] = s.accountLogout
 	s.methods["account/read"] = s.accountRead
 	s.methods["account/rateLimits/read"] = s.accountRateLimitsRead
@@ -262,6 +262,12 @@ type threadResumeResponse struct {
 func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (any, error) {
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
 		candidates := buildResumeCandidates(p.ThreadID, s.resolveHistoricalCodexThreadIDs(ctx, p.ThreadID))
+		logger.Info("thread/resume: resolved candidates",
+			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+			"candidate_count", len(candidates),
+			"candidates", previewResumeCandidates(candidates, 4),
+			"cwd", strings.TrimSpace(p.Cwd),
+		)
 		resumedID, err := tryResumeCandidates(candidates, p.ThreadID, func(id string) error {
 			return proc.Client.ResumeThread(codex.ResumeThreadRequest{
 				ThreadID: id,
@@ -564,6 +570,7 @@ func (s *Server) threadResolveTyped(ctx context.Context, p threadIDParams) (any,
 	}
 
 	var codexThreadID string
+	resolveSource := "history"
 	for _, info := range s.mgr.List() {
 		if strings.TrimSpace(info.ID) != id {
 			continue
@@ -575,6 +582,7 @@ func (s *Server) threadResolveTyped(ctx context.Context, p threadIDParams) (any,
 			result["port"] = port
 		}
 		codexThreadID = strings.TrimSpace(info.ThreadID)
+		resolveSource = "running"
 		break
 	}
 
@@ -588,6 +596,14 @@ func (s *Server) threadResolveTyped(ctx context.Context, p threadIDParams) (any,
 		result["uuid"] = codexThreadID
 	}
 	result["hasHistory"] = s.threadExistsInHistory(ctx, id)
+	logger.Info("thread/resolve: identity resolved",
+		logger.FieldAgentID, id, logger.FieldThreadID, id,
+		"source", resolveSource,
+		"state", result["state"],
+		logger.FieldPort, result["port"],
+		"codex_thread_id", codexThreadID,
+		"has_history", result["hasHistory"],
+	)
 
 	return result, nil
 }
@@ -1181,10 +1197,21 @@ func (s *Server) buildAutoMatchedSkillPrompt(agentID, prompt string, input []Use
 }
 
 func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, error) {
+	logger.Info("turn/start: request received",
+		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+		logger.FieldCwd, strings.TrimSpace(p.Cwd),
+		"input_count", len(p.Input),
+		"selected_skills_count", len(p.SelectedSkills),
+	)
 	proc, err := s.ensureThreadReadyForTurn(ctx, p.ThreadID, p.Cwd)
 	if err != nil {
 		return nil, err
 	}
+	logger.Info("turn/start: thread dispatch resolved",
+		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+		logger.FieldPort, proc.Client.GetPort(),
+		"codex_thread_id", strings.TrimSpace(proc.Client.GetThreadID()),
+	)
 
 	selectedSkills, err := normalizeSkillNames(p.SelectedSkills)
 	if err != nil {
@@ -2698,6 +2725,18 @@ func tryResumeCandidates(candidates []string, fallbackID string, resumeFn func(s
 	return "", apperrors.Newf("tryResumeCandidates", "all resume candidates unavailable for thread %s after %d attempts", fallbackID, len(candidates))
 }
 
+func previewResumeCandidates(candidates []string, max int) []string {
+	if len(candidates) == 0 || max <= 0 {
+		return nil
+	}
+	if len(candidates) <= max {
+		return append([]string(nil), candidates...)
+	}
+	preview := append([]string(nil), candidates[:max]...)
+	preview = append(preview, fmt.Sprintf("...+%d more", len(candidates)-max))
+	return preview
+}
+
 func resolveResumeThreadIDsFromMessages(messages []store.AgentMessage) []string {
 	type sessionCandidate struct {
 		threadID   string
@@ -2790,7 +2829,14 @@ func (s *Server) resolveHistoricalCodexThreadIDs(ctx context.Context, agentID st
 		)
 		return nil
 	}
-	return resolveResumeThreadIDsFromMessages(msgs)
+	ids := resolveResumeThreadIDsFromMessages(msgs)
+	logger.Info("turn/start: historical resume candidates",
+		logger.FieldAgentID, id, logger.FieldThreadID, id,
+		"history_message_count", len(msgs),
+		"candidate_count", len(ids),
+		"candidates", previewResumeCandidates(ids, 4),
+	)
+	return ids
 }
 
 func isHistoricalResumeCandidateError(err error) bool {
@@ -2856,17 +2902,46 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	}
 
 	if proc := s.mgr.Get(id); proc != nil {
+		logger.Info("turn/start: using running process",
+			logger.FieldAgentID, id, logger.FieldThreadID, id,
+			logger.FieldPort, proc.Client.GetPort(),
+			"codex_thread_id", strings.TrimSpace(proc.Client.GetThreadID()),
+		)
 		return proc, nil
 	}
-	if !s.threadExistsInHistory(ctx, id) {
+	hasHistory := s.threadExistsInHistory(ctx, id)
+	if !hasHistory {
 		return nil, apperrors.Newf("Server.ensureThreadReady", "thread %s not found", id)
 	}
 	resumeCandidates := make([]string, 0, 4)
-	if isLikelyCodexThreadID(id) {
-		resumeCandidates = append(resumeCandidates, id)
-	} else {
-		resumeCandidates = append(resumeCandidates, s.resolveHistoricalCodexThreadIDs(ctx, id)...)
+
+	// 优先从 agent_codex_binding 表获取绑定的 codexThreadId (根基约束: 1:1 共生)。
+	if s.bindingStore != nil {
+		if binding, err := s.bindingStore.FindByAgentID(ctx, id); err == nil && binding != nil {
+			resumeCandidates = append(resumeCandidates, binding.CodexThreadID)
+			logger.Info("turn/start: found DB binding",
+				logger.FieldAgentID, id,
+				"bound_codex_thread_id", binding.CodexThreadID,
+			)
+		}
 	}
+
+	// Fallback: 如果 DB 无绑定, 从历史消息扫描 (兼容旧数据)。
+	if len(resumeCandidates) == 0 {
+		if isLikelyCodexThreadID(id) {
+			resumeCandidates = append(resumeCandidates, id)
+		} else {
+			resumeCandidates = append(resumeCandidates, s.resolveHistoricalCodexThreadIDs(ctx, id)...)
+		}
+	}
+
+	logger.Info("turn/start: restoring historical thread",
+		logger.FieldAgentID, id, logger.FieldThreadID, id,
+		"has_history", hasHistory,
+		logger.FieldCwd, launchCwd,
+		"candidate_count", len(resumeCandidates),
+		"candidates", previewResumeCandidates(resumeCandidates, 4),
+	)
 
 	dynamicTools := s.buildAllDynamicTools()
 
@@ -2882,10 +2957,16 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	if proc == nil {
 		return nil, apperrors.Newf("Server.ensureThreadReady", "thread %s loaded but not found", id)
 	}
+	logger.Info("turn/start: process launched for restore",
+		logger.FieldAgentID, id, logger.FieldThreadID, id,
+		logger.FieldPort, proc.Client.GetPort(),
+		"codex_thread_id_before_resume", strings.TrimSpace(proc.Client.GetThreadID()),
+	)
 	if len(resumeCandidates) == 0 {
 		logger.Warn("turn/start: no valid historical codex thread id, continue with fresh session",
 			logger.FieldAgentID, id, logger.FieldThreadID, id,
 		)
+		proc.MarkSessionLost()
 		return proc, nil
 	}
 	var lastResumeErr error
@@ -2898,59 +2979,58 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 			logger.Info("turn/start: historical thread auto-loaded",
 				logger.FieldAgentID, id, logger.FieldThreadID, id,
 				"resume_thread_id", resumeThreadID,
+				"codex_thread_id_after_resume", strings.TrimSpace(proc.Client.GetThreadID()),
 				logger.FieldCwd, launchCwd,
 			)
+			s.registerBinding(ctx, id, proc)
 			return proc, nil
 		}
 
 		lastResumeErr = err
-		if isHistoricalResumeCandidateError(err) {
-			logger.Warn("turn/start: historical resume candidate unavailable, try next",
+
+		// codex 进程 crash → 直接返回错误，不偷偷换 fresh session
+		if isCodexProcessCrashError(err) {
+			logger.Error("turn/start: codex crashed during resume, returning error",
 				logger.FieldAgentID, id, logger.FieldThreadID, id,
 				"resume_thread_id", resumeThreadID,
 				logger.FieldError, err,
 			)
-			// codex 进程 crash → 需要 re-spawn 新进程后才能继续
-			if isCodexProcessCrashError(err) {
-				_ = s.mgr.Stop(id)
-				if launchErr := s.mgr.Launch(ctx, id, id, "", launchCwd, dynamicTools); launchErr != nil {
-					logger.Warn("turn/start: re-spawn after crash failed, fallback to fresh session",
-						logger.FieldAgentID, id, logger.FieldThreadID, id,
-						logger.FieldError, launchErr,
-					)
-					break
-				}
-				if p := s.mgr.Get(id); p != nil {
-					proc = p
-				} else {
-					logger.Warn("turn/start: re-spawned proc not found, fallback to fresh session",
-						logger.FieldAgentID, id, logger.FieldThreadID, id,
-					)
-					break
-				}
-			}
+			_ = s.mgr.Stop(id)
+			s.broadcastNotification(buildSessionLostNotification(id, err))
+			return nil, apperrors.Wrapf(err, "Server.ensureThreadReady",
+				"codex crashed while resuming thread %s (rollout=%s)", id, resumeThreadID)
+		}
+
+		// 非 crash 的候选错误 (rollout 不存在等) → 尝试下一个候选
+		if isHistoricalResumeCandidateError(err) {
+			logger.Warn("turn/start: resume candidate unavailable, try next",
+				logger.FieldAgentID, id, logger.FieldThreadID, id,
+				"resume_thread_id", resumeThreadID,
+				logger.FieldError, err,
+			)
 			continue
 		}
 
-		// 不可识别的错误也降级处理，不再卡死 agent
-		logger.Warn("turn/start: unrecognized resume error, fallback to fresh session",
+		// 不可识别的错误 → 也返回错误
+		logger.Error("turn/start: unrecognized resume error",
 			logger.FieldAgentID, id, logger.FieldThreadID, id,
 			"resume_thread_id", resumeThreadID,
 			logger.FieldError, err,
 		)
-		break
+		return nil, apperrors.Wrapf(err, "Server.ensureThreadReady",
+			"resume failed for thread %s (rollout=%s)", id, resumeThreadID)
 	}
 
-	// 所有候选失败 → fallback 到 fresh session + 通知前端
+	// 所有候选的 rollout 都不可用 (非 crash) → fallback 到 fresh session + 通知前端
 	if lastResumeErr != nil {
-		logger.Warn("turn/start: session history lost, continue with fresh session",
+		logger.Warn("turn/start: all resume candidates exhausted, fallback to fresh session",
 			logger.FieldAgentID, id, logger.FieldThreadID, id,
 			"candidate_count", len(resumeCandidates),
 			"last_error", lastResumeErr,
 			logger.FieldCwd, launchCwd,
 		)
-		// 确保 proc 仍然可用 (可能在 crash 后 re-spawn 失败)
-		if proc == nil || s.mgr.Get(id) == nil {
+		// proc 在 non-crash 路径中仍然存活，但可能被 mgr 移除
+		if s.mgr.Get(id) == nil {
 			_ = s.mgr.Stop(id)
 			if launchErr := s.mgr.Launch(ctx, id, id, "", launchCwd, dynamicTools); launchErr != nil {
 				return nil, apperrors.Wrapf(launchErr, "Server.ensureThreadReady", "final re-spawn thread %s", id)
@@ -2960,7 +3040,9 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 				return nil, apperrors.Newf("Server.ensureThreadReady", "thread %s final re-spawn failed", id)
 			}
 		}
+		proc.MarkSessionLost()
 		s.broadcastNotification(buildSessionLostNotification(id, lastResumeErr))
+		s.registerBinding(ctx, id, proc)
 		return proc, nil
 	}
 
@@ -2969,7 +3051,31 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 		"candidate_count", len(resumeCandidates),
 		logger.FieldCwd, launchCwd,
 	)
+	proc.MarkSessionLost()
+	s.registerBinding(ctx, id, proc)
 	return proc, nil
+}
+
+// registerBinding 注册 agentId ↔ codexThreadId 绑定。
+//
+// ⚠️  根基约束: agent_id 与 codex_thread_id 1:1 共生。
+// 此函数在每次 ensureThreadReadyForTurn 成功后调用,
+// 确保 DB 绑定记录始终与运行时状态一致。
+func (s *Server) registerBinding(ctx context.Context, agentID string, proc *runner.AgentProcess) {
+	if s.bindingStore == nil || proc == nil || proc.Client == nil {
+		return
+	}
+	codexThreadID := strings.TrimSpace(proc.Client.GetThreadID())
+	if codexThreadID == "" {
+		return
+	}
+	if err := s.bindingStore.Bind(ctx, agentID, codexThreadID, ""); err != nil {
+		logger.Warn("turn/start: failed to register binding",
+			logger.FieldAgentID, agentID,
+			"codex_thread_id", codexThreadID,
+			logger.FieldError, err,
+		)
+	}
 }
 
 // sendSlashCommand 通用斜杠命令发送 (compact, interrupt 等)。

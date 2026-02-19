@@ -171,6 +171,9 @@ type Server struct {
 	uiRuntime        *uistate.RuntimeManager
 	threadAliasMu    sync.Mutex
 
+	// Agent ↔ Codex Thread 1:1 共生绑定 (根基约束, 不允许绕过)。
+	bindingStore *store.AgentCodexBindingStore
+
 	// 连接管理 (支持多 IDE 同时连接)
 	mu     sync.RWMutex
 	conns  map[string]*connEntry // connID → entry
@@ -286,6 +289,7 @@ func New(deps Deps) *Server {
 		s.busLogStore = store.NewBusLogStore(deps.DB)
 		s.taskAckStore = store.NewTaskAckStore(deps.DB)
 		s.taskTraceStore = store.NewTaskTraceStore(deps.DB)
+		s.bindingStore = store.NewAgentCodexBindingStore(deps.DB)
 
 		if s.cfg != nil {
 			maxFileBytes := int64(s.cfg.OrchestrationWorkspaceMaxFileBytes)
@@ -595,9 +599,7 @@ func (s *Server) broadcastNotification(method string, params any) {
 	}
 	s.mu.RUnlock()
 	for id, entry := range snapshot {
-		if ok := s.enqueueConnMessage(id, entry, websocket.TextMessage, data, "notify_backpressure"); !ok {
-			continue
-		}
+		s.enqueueConnMessage(id, entry, websocket.TextMessage, data, "notify_backpressure")
 	}
 }
 

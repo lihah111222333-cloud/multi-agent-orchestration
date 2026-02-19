@@ -1096,18 +1096,51 @@ func (c *AppServerClient) ResumeThread(req ResumeThreadRequest) error {
 	}
 	path := strings.TrimSpace(req.Path)
 	cwd := strings.TrimSpace(req.Cwd)
+	logger.Info("[DIAG] ResumeThread: calling thread/resume",
+		logger.FieldAgentID, c.AgentID,
+		"request_thread_id", id,
+		"request_path", path,
+		"request_cwd", cwd,
+		"current_thread_id", c.ThreadID,
+	)
 	result, err := c.call("thread/resume", asThreadResumeParams{
 		ThreadID: id,
 		Path:     path,
 		Cwd:      cwd,
 	}, 30*time.Second)
 	if err != nil {
+		logger.Warn("[DIAG] ResumeThread: thread/resume RPC failed",
+			logger.FieldAgentID, c.AgentID,
+			"request_thread_id", id,
+			logger.FieldError, err,
+		)
 		return apperrors.Wrap(err, "AppServerClient.ResumeThread", "thread/resume")
 	}
+	logger.Info("[DIAG] ResumeThread: raw response",
+		logger.FieldAgentID, c.AgentID,
+		"request_thread_id", id,
+		"raw_response_len", len(result),
+		"raw_response_preview", truncStr(string(result), 500),
+	)
 	resolvedID, err := parseThreadResumeResult(result, id)
 	if err != nil {
+		logger.Warn("[DIAG] ResumeThread: parseThreadResumeResult failed",
+			logger.FieldAgentID, c.AgentID,
+			"request_thread_id", id,
+			logger.FieldError, err,
+		)
 		return err
 	}
+	idMatch := "RESUMED_SAME_ID"
+	if resolvedID != id {
+		idMatch = "FORKED_NEW_ID"
+	}
+	logger.Info("[DIAG] ResumeThread: success",
+		logger.FieldAgentID, c.AgentID,
+		"request_thread_id", id,
+		"resolved_thread_id", resolvedID,
+		"id_match", idMatch,
+	)
 	c.ThreadID = resolvedID
 	c.listenerEnsureNeeded.Store(false)
 	return nil
@@ -2115,4 +2148,12 @@ func (c *AppServerClient) Kill() error {
 // Running 返回是否在运行。
 func (c *AppServerClient) Running() bool {
 	return !c.stopped.Load() && c.Cmd != nil && c.Cmd.ProcessState == nil
+}
+
+// truncStr 截断字符串用于日志输出。
+func truncStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "...(truncated)"
 }

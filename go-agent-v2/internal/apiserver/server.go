@@ -37,10 +37,26 @@ import (
 // Handler JSON-RPC 方法处理器。
 type Handler func(ctx context.Context, params json.RawMessage) (any, error)
 
+type wsOutbound struct {
+	msgType int
+	data    []byte
+}
+
 // connEntry WebSocket 连接 + 写锁 (gorilla/websocket 不安全并发写)。
 type connEntry struct {
-	ws   *websocket.Conn
-	wrMu sync.Mutex // 序列化所有写操作
+	ws        *websocket.Conn
+	wrMu      sync.Mutex // 序列化所有写操作
+	outbox    chan wsOutbound
+	closeCh   chan struct{}
+	closeOnce sync.Once
+}
+
+func newConnEntry(ws *websocket.Conn) *connEntry {
+	return &connEntry{
+		ws:      ws,
+		outbox:  make(chan wsOutbound, connOutboxSize),
+		closeCh: make(chan struct{}),
+	}
 }
 
 // writeMsg 线程安全地写入 WebSocket 消息。
@@ -51,9 +67,51 @@ func (c *connEntry) writeMsg(msgType int, data []byte) error {
 	return c.ws.WriteMessage(msgType, data)
 }
 
+func (c *connEntry) enqueue(msgType int, data []byte) bool {
+	select {
+	case <-c.closeCh:
+		return false
+	default:
+	}
+	select {
+	case c.outbox <- wsOutbound{msgType: msgType, data: data}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *connEntry) outboxDepth() int {
+	return len(c.outbox)
+}
+
+func (c *connEntry) closeNow() {
+	c.closeOnce.Do(func() {
+		close(c.closeCh)
+		if c.ws != nil {
+			_ = c.ws.Close()
+		}
+	})
+}
+
+func (c *connEntry) writeLoop() error {
+	for {
+		select {
+		case <-c.closeCh:
+			return nil
+		case msg := <-c.outbox:
+			if err := c.writeMsg(msg.msgType, msg.data); err != nil {
+				return err
+			}
+		}
+	}
+}
+
 const (
-	maxConnections = 100     // 最大并发连接数
-	maxMessageSize = 4 << 20 // 4MB 消息大小限制
+	maxConnections = 100      // 最大并发连接数
+	maxMessageSize = 4 << 20  // 4MB 消息大小限制
+	connOutboxSize = 256      // 单连接发送缓冲
+	connBacklogCut = 256 - 16 // 单连接过载水位
 )
 
 // Server JSON-RPC WebSocket 服务器。
@@ -70,6 +128,7 @@ type Server struct {
 	// skillsMu:     agentSkills (技能配置)
 	// sseMu:        sseClients (SSE 推送)
 	// notifyHookMu: notifyHook (桌面端通知钩子)
+	// turnMu:       activeTurns (turn 生命周期跟踪)
 	// ========================================
 	mgr      *runner.AgentManager
 	lsp      *lsp.Manager
@@ -124,6 +183,11 @@ type Server struct {
 	fileChangeMu       sync.Mutex
 	fileChangeByThread map[string][]string
 
+	// turn 生命周期跟踪 (threadId → active turn)
+	turnMu              sync.Mutex
+	activeTurns         map[string]*trackedTurn
+	turnWatchdogTimeout time.Duration
+
 	// Per-session 技能配置 (agentID → skills 列表)
 	skillsMu    sync.RWMutex
 	agentSkills map[string][]string // agentID → ["skill1", "skill2"]
@@ -151,20 +215,22 @@ type Deps struct {
 // New 创建服务器。
 func New(deps Deps) *Server {
 	s := &Server{
-		mgr:                deps.Manager,
-		lsp:                deps.LSP,
-		cfg:                deps.Config,
-		methods:            make(map[string]Handler),
-		dynTools:           make(map[string]func(json.RawMessage) string),
-		conns:              make(map[string]*connEntry),
-		pending:            make(map[int64]chan *Response),
-		diagCache:          make(map[string][]lsp.Diagnostic),
-		toolCallCount:      make(map[string]int64),
-		fileChangeByThread: make(map[string][]string),
-		agentSkills:        make(map[string][]string),
-		sseClients:         make(map[chan []byte]struct{}),
-		prefManager:        uistate.NewPreferenceManager(nil),
-		uiRuntime:          uistate.NewRuntimeManager(),
+		mgr:                 deps.Manager,
+		lsp:                 deps.LSP,
+		cfg:                 deps.Config,
+		methods:             make(map[string]Handler),
+		dynTools:            make(map[string]func(json.RawMessage) string),
+		conns:               make(map[string]*connEntry),
+		pending:             make(map[int64]chan *Response),
+		diagCache:           make(map[string][]lsp.Diagnostic),
+		toolCallCount:       make(map[string]int64),
+		fileChangeByThread:  make(map[string][]string),
+		activeTurns:         make(map[string]*trackedTurn),
+		turnWatchdogTimeout: defaultTurnWatchdogTimeout,
+		agentSkills:         make(map[string][]string),
+		sseClients:          make(map[chan []byte]struct{}),
+		prefManager:         uistate.NewPreferenceManager(nil),
+		uiRuntime:           uistate.NewRuntimeManager(),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: checkLocalOrigin,
 		},
@@ -339,9 +405,14 @@ func (s *Server) Notify(method string, params any) {
 	s.broadcastNotification(method, payload)
 
 	if shouldEmitUIStateChanged(method, payload) {
-		s.broadcastNotification("ui/state/changed", map[string]any{
-			"source": method,
-		})
+		statePayload := map[string]any{"source": method}
+		if tid, _ := payload["threadId"].(string); tid != "" {
+			statePayload["threadId"] = tid
+		}
+		if aid, _ := payload["agent_id"].(string); aid != "" {
+			statePayload["agent_id"] = aid
+		}
+		s.broadcastNotification("ui/state/changed", statePayload)
 	}
 }
 
@@ -394,11 +465,48 @@ func (s *Server) broadcastNotification(method string, params any) {
 	s.sseMu.RUnlock()
 
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	snapshot := make(map[string]*connEntry, len(s.conns))
 	for id, entry := range s.conns {
-		if err := entry.writeMsg(websocket.TextMessage, data); err != nil {
-			logger.Warn("app-server: notify failed", logger.FieldConn, id, logger.FieldError, err)
+		snapshot[id] = entry
+	}
+	s.mu.RUnlock()
+	for id, entry := range snapshot {
+		if ok := s.enqueueConnMessage(id, entry, websocket.TextMessage, data, "notify_backpressure"); !ok {
+			continue
 		}
+	}
+}
+
+func (s *Server) enqueueConnMessage(connID string, entry *connEntry, msgType int, data []byte, reason string) bool {
+	if entry == nil {
+		return false
+	}
+	if entry.enqueue(msgType, data) {
+		return true
+	}
+	logger.Warn("app-server: client send queue overloaded, disconnecting",
+		logger.FieldConn, connID,
+		"reason", strings.TrimSpace(reason),
+		"outbox_depth", entry.outboxDepth(),
+		"outbox_cap", connOutboxSize,
+	)
+	s.disconnectConn(connID)
+	return false
+}
+
+func (s *Server) disconnectConn(connID string) {
+	id := strings.TrimSpace(connID)
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	entry, ok := s.conns[id]
+	if ok {
+		delete(s.conns, id)
+	}
+	s.mu.Unlock()
+	if ok && entry != nil {
+		entry.closeNow()
 	}
 }
 
@@ -421,6 +529,30 @@ func (s *Server) syncUIRuntimeFromNotify(method string, params any) {
 			return
 		}
 		s.uiRuntime.ApplyWorkspaceMergeResult(runKey, result)
+	}
+	if shouldReplayThreadNotifyToUIRuntime(method, payload) {
+		threadID, _ := payload["threadId"].(string)
+		normalized := uistate.NormalizeEventFromPayload(method, method, payload)
+		s.uiRuntime.ApplyAgentEvent(strings.TrimSpace(threadID), normalized, payload)
+	}
+}
+
+func shouldReplayThreadNotifyToUIRuntime(method string, payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	if _, hasUIType := payload["uiType"]; hasUIType {
+		return false
+	}
+	threadID, _ := payload["threadId"].(string)
+	if strings.TrimSpace(threadID) == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "turn/completed", "turn/aborted", "error", "codex/event/stream_error":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -469,8 +601,8 @@ func (s *Server) SendRequest(connID, method string, params any) (*Response, erro
 		return nil, pkgerr.Newf("Server.SendRequest", "connection %s not found", connID)
 	}
 
-	if err := entry.writeMsg(websocket.TextMessage, data); err != nil {
-		return nil, pkgerr.Wrapf(err, "Server.SendRequest", "write to %s", connID)
+	if !s.enqueueConnMessage(connID, entry, websocket.TextMessage, data, "server_request_backpressure") {
+		return nil, pkgerr.Newf("Server.SendRequest", "connection %s overloaded; retry later", connID)
 	}
 
 	logger.Info("app-server: sent request to client", logger.FieldConn, connID, logger.FieldMethod, method, logger.FieldID, reqID)
@@ -526,10 +658,16 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	ws.SetReadLimit(maxMessageSize)
 
 	connID := fmt.Sprintf("conn-%d", s.nextID.Add(1))
-	entry := &connEntry{ws: ws}
+	entry := newConnEntry(ws)
 	s.mu.Lock()
 	s.conns[connID] = entry
 	s.mu.Unlock()
+	util.SafeGo(func() {
+		if err := entry.writeLoop(); err != nil {
+			logger.Warn("app-server: write loop failed", logger.FieldConn, connID, logger.FieldError, err)
+			s.disconnectConn(connID)
+		}
+	})
 
 	logger.Info("app-server: client connected", logger.FieldConn, connID, logger.FieldRemote, r.RemoteAddr)
 
@@ -537,7 +675,7 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		delete(s.conns, connID)
 		s.mu.Unlock()
-		_ = ws.Close()
+		entry.closeNow()
 		logger.Info("app-server: client disconnected", logger.FieldConn, connID)
 	}()
 
@@ -615,6 +753,13 @@ func rawIDtoAny(raw json.RawMessage) any {
 //  2. Client→Server 通知 (有 method, 无 id): 路由到 dispatchRequest
 //  3. Client 对 Server 请求的响应 (有 id, 无 method): 直接匹配 pending map
 func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("app-server: readLoop panicked, disconnecting",
+				logger.FieldConn, connID, logger.FieldError, r)
+			s.disconnectConn(connID)
+		}
+	}()
 	for {
 		_, message, err := entry.ws.ReadMessage()
 		if err != nil {
@@ -627,14 +772,22 @@ func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) 
 		// 单次 Unmarshal: 路由 + 延迟解析
 		var env rpcEnvelope
 		if err := json.Unmarshal(message, &env); err != nil {
-			data, _ := json.Marshal(newError(nil, CodeParseError, "parse error: "+err.Error()))
-			_ = entry.writeMsg(websocket.TextMessage, data)
+			_ = s.sendResponseViaOutbox(connID, entry, newError(nil, CodeParseError, "parse error: "+err.Error()), "parse_error_response")
 			continue
 		}
 
 		// 快速路径: 客户端响应 (有 id + 无 method + 有 result/error)
 		// 直接从 raw bytes 解析 int64 ID → pending map 查找, 零 alloc
 		if s.handleClientResponse(env) {
+			continue
+		}
+		if env.Method != "" && len(env.ID) > 0 && string(env.ID) != "null" && entry.outboxDepth() >= connBacklogCut {
+			overloaded := newErrorData(rawIDtoAny(env.ID), CodeOverloaded, "Server overloaded; retry later.", map[string]any{
+				"retry_after_ms": 500,
+			})
+			if !s.sendResponseViaOutbox(connID, entry, overloaded, "request_overloaded") {
+				return
+			}
 			continue
 		}
 
@@ -644,17 +797,22 @@ func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) 
 			continue
 		}
 
-		data, err := json.Marshal(resp)
-		if err != nil {
-			logger.Error("app-server: marshal response failed", logger.FieldError, err)
-			continue
-		}
-
-		if err := entry.writeMsg(websocket.TextMessage, data); err != nil {
-			logger.Warn("app-server: write failed", logger.FieldConn, connID, logger.FieldError, err)
+		if !s.sendResponseViaOutbox(connID, entry, resp, "request_response") {
 			return
 		}
 	}
+}
+
+func (s *Server) sendResponseViaOutbox(connID string, entry *connEntry, resp *Response, reason string) bool {
+	if resp == nil {
+		return true
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		logger.Error("app-server: marshal response failed", logger.FieldConn, connID, logger.FieldError, err)
+		return false
+	}
+	return s.enqueueConnMessage(connID, entry, websocket.TextMessage, data, reason)
 }
 
 func (s *Server) handleClientResponse(env rpcEnvelope) bool {
@@ -761,6 +919,12 @@ var payloadExtractKeys = []string{
 	"id", "type", "item_id", "callId", "call_id",
 	"file_path", "path", "chunk", "stream",
 	"plan", "explanation",
+	// token usage fields (keep nested shapes for runtime parser)
+	"tokenUsage", "token_usage", "usage", "info",
+	"total_tokens", "totalTokens", "used_tokens", "usedTokens",
+	"input_tokens", "inputTokens", "output_tokens", "outputTokens",
+	"context_window_tokens", "contextWindowTokens",
+	"model_context_window", "modelContextWindow",
 }
 
 func mergePayloadFromMap(payload map[string]any, data map[string]any) {
@@ -925,15 +1089,6 @@ func parseFilesFromPatchDelta(delta string) []string {
 	return uniqueStrings(files)
 }
 
-func firstNonEmpty(files []string) string {
-	for _, file := range files {
-		if strings.TrimSpace(file) != "" {
-			return strings.TrimSpace(file)
-		}
-	}
-	return ""
-}
-
 func toolResultSuccess(result string) bool {
 	value := strings.TrimSpace(strings.ToLower(result))
 	if value == "" {
@@ -1057,9 +1212,8 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 		s.enrichFileChangePayload(agentID, event.Type, method, payload)
 
 		// Normalize event for UI
-		normalized := uistate.NormalizeEvent(event.Type, method, event.Data)
+		normalized := uistate.NormalizeEventFromPayload(event.Type, method, payload)
 		payload["uiType"] = string(normalized.UIType)
-		payload["uiStatus"] = string(normalized.UIStatus)
 		if normalized.Text != "" {
 			payload["uiText"] = normalized.Text
 		}
@@ -1076,13 +1230,15 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 			s.uiRuntime.ApplyAgentEvent(agentID, normalized, payload)
 		}
 
+		s.maybeFinalizeTrackedTurn(agentID, event.Type, method, payload)
+
 		// § 二 审批事件: 需要客户端回复 (双向请求)
 		switch event.Type {
 		case "exec_approval_request":
-			util.SafeGo(func() { s.handleApprovalRequest(agentID, "item/commandExecution/requestApproval", payload) })
+			util.SafeGo(func() { s.handleApprovalRequest(agentID, "item/commandExecution/requestApproval", payload, event) })
 			return
 		case "file_change_approval_request":
-			util.SafeGo(func() { s.handleApprovalRequest(agentID, "item/fileChange/requestApproval", payload) })
+			util.SafeGo(func() { s.handleApprovalRequest(agentID, "item/fileChange/requestApproval", payload, event) })
 			return
 		case codex.EventDynamicToolCall:
 			util.SafeGo(func() { s.handleDynamicToolCall(agentID, event) })
@@ -1255,16 +1411,12 @@ func extractEventContent(event codex.Event) string {
 }
 
 // handleApprovalRequest 处理审批事件: Server→Client 请求 → 等回复 → 回传 codex。
-func (s *Server) handleApprovalRequest(agentID, method string, payload map[string]any) {
+func (s *Server) handleApprovalRequest(agentID, method string, payload map[string]any, event codex.Event) {
+	approved := false
 	resp, err := s.SendRequestToAll(method, payload)
 	if err != nil {
 		logger.Warn("app-server: approval request failed", logger.FieldAgentID, agentID, logger.FieldError, err)
-		return
-	}
-
-	// 解析客户端的审批决定
-	approved := false
-	if resp.Result != nil {
+	} else if resp != nil && resp.Result != nil {
 		if m, ok := resp.Result.(map[string]any); ok {
 			if v, ok := m["approved"]; ok {
 				approved, _ = v.(bool)
@@ -1273,8 +1425,21 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 	}
 
 	// 回传给 codex agent
+	if s.mgr == nil {
+		logger.Error("app-server: approval auto-denied — mgr is nil",
+			logger.FieldAgentID, agentID, logger.FieldMethod, method)
+		if event.DenyFunc != nil {
+			_ = event.DenyFunc()
+		}
+		return
+	}
 	proc := s.mgr.Get(agentID)
 	if proc == nil {
+		logger.Error("app-server: approval auto-denied — agent gone",
+			logger.FieldAgentID, agentID, logger.FieldMethod, method)
+		if event.DenyFunc != nil {
+			_ = event.DenyFunc()
+		}
 		return
 	}
 	decision := "no"
@@ -1381,6 +1546,17 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 
 // handleDynamicToolCall 处理 codex 发回的动态工具调用 — 调 LSP 并回传结果。
 func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
+	// 先查找 proc — 后续的所有错误路径都需要 proc.Client.RespondError 回传。
+	proc := s.mgr.Get(agentID)
+	if proc == nil {
+		logger.Error("app-server: dynamic_tool_call dropped — agent gone",
+			logger.FieldAgentID, agentID)
+		if event.RespondFunc != nil {
+			_ = event.RespondFunc(-32603, "agent not found: "+agentID)
+		}
+		return
+	}
+
 	// codex 事件信封: {"id": "...", "msg": {DynamicToolCallParams}, "conversationId": "..."}
 	// 先提取 msg 字段, 再解析工具调用参数。
 	var envelope struct {
@@ -1395,11 +1571,10 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 	if err := json.Unmarshal(raw, &call); err != nil {
 		logger.Warn("app-server: bad dynamic_tool_call data", logger.FieldAgentID, agentID, logger.FieldError, err,
 			"raw", string(event.Data))
-		return
-	}
-
-	proc := s.mgr.Get(agentID)
-	if proc == nil {
+		// 必须回复 error response，否则 codex turn 永挂。
+		if event.RequestID != nil {
+			_ = proc.Client.RespondError(*event.RequestID, -32602, "bad dynamic_tool_call data: "+err.Error())
+		}
 		return
 	}
 

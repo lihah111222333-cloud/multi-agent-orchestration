@@ -190,7 +190,7 @@ func (r *AgentRouter) getOrCreateClient(threadID string, port int) *codex.Client
 		return c
 	}
 
-	client := codex.NewClient(port)
+	client := codex.NewClient(port, threadID)
 	client.ThreadID = threadID
 	client.Transport = codex.TransportSSE // 跨 Agent 通信用 POST+SSE (无需维持 WS)
 	r.clients[threadID] = client

@@ -51,18 +51,39 @@ func TestTrackedTurnInterruptMapsToInterrupted(t *testing.T) {
 	}
 }
 
-func TestCompleteTrackedTurnByIDRejectsMismatchedTurn(t *testing.T) {
+func TestCompleteTrackedTurnByIDMismatchedIDStillCompletes(t *testing.T) {
 	srv := &Server{
 		activeTurns:         make(map[string]*trackedTurn),
 		turnWatchdogTimeout: time.Second,
 	}
 
 	_ = srv.beginTrackedTurn("thread-3", "turn-3")
-	if _, ok := srv.completeTrackedTurnByID("thread-3", "turn-x", "completed", "turn_complete"); ok {
-		t.Fatalf("expected completion rejected for mismatched turn id")
+	completion, ok := srv.completeTrackedTurnByID("thread-3", "turn-x", "completed", "turn_complete")
+	if !ok {
+		t.Fatalf("expected completion to succeed even with mismatched turn id")
 	}
-	if !srv.hasActiveTrackedTurn("thread-3") {
-		t.Fatalf("turn should still be active after mismatched completion")
+	if completion["status"] != "completed" {
+		t.Fatalf("status = %v, want completed", completion["status"])
+	}
+	if srv.hasActiveTrackedTurn("thread-3") {
+		t.Fatalf("expected active turn cleared after mismatched completion")
+	}
+}
+
+func TestMaybeFinalizeTrackedTurnMismatchedIDStillCompletes(t *testing.T) {
+	srv := &Server{
+		activeTurns:         make(map[string]*trackedTurn),
+		turnWatchdogTimeout: time.Second,
+	}
+	_ = srv.beginTrackedTurn("thread-7", "turn-7a")
+
+	payload := map[string]any{
+		"turnId": "turn-7b",
+	}
+	srv.maybeFinalizeTrackedTurn("thread-7", "turn_complete", "turn/completed", payload)
+
+	if srv.hasActiveTrackedTurn("thread-7") {
+		t.Fatalf("expected active turn cleared even with mismatched turnId")
 	}
 }
 

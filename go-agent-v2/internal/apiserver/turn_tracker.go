@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 const defaultTurnWatchdogTimeout = 10 * time.Minute
@@ -192,15 +193,13 @@ func (s *Server) completeTrackedTurnByID(threadID, turnID, status, reason string
 		return nil, false
 	}
 	if wantTurnID != "" && !strings.EqualFold(strings.TrimSpace(turn.ID), wantTurnID) {
-		logger.Warn("turn tracker: turn id mismatch, skip completion",
+		logger.Warn("turn tracker: turn id mismatch, completing anyway to avoid stuck state",
 			logger.FieldThreadID, id,
 			"active_turn_id", strings.TrimSpace(turn.ID),
 			"event_turn_id", wantTurnID,
 			logger.FieldStatus, strings.TrimSpace(status),
 			"reason", strings.TrimSpace(reason),
 		)
-		s.turnMu.Unlock()
-		return nil, false
 	}
 	delete(s.activeTurns, id)
 	if turn.timer != nil {
@@ -412,7 +411,7 @@ func trackedTurnTerminalFromEvent(eventType, method string, payload map[string]a
 		methodKey == "codex/event/stream_error":
 		reason := extractTrackedTurnReason(payload)
 		if reason == "" {
-			reason = firstTrackedTurnNonEmpty(
+			reason = util.FirstNonEmpty(
 				extractTrackedString(payload, "phase"),
 				eventKey,
 				methodKey,
@@ -477,16 +476,6 @@ func extractTrackedString(payload map[string]any, keys ...string) string {
 		text = strings.TrimSpace(text)
 		if text != "" {
 			return text
-		}
-	}
-	return ""
-}
-
-func firstTrackedTurnNonEmpty(values ...string) string {
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed != "" {
-			return trimmed
 		}
 	}
 	return ""

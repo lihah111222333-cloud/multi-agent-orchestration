@@ -9,6 +9,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"sync"
@@ -74,6 +75,8 @@ type AgentMessage struct {
 // EventHandler Agent 事件回调。
 type EventHandler func(agentID string, event codex.Event)
 
+type clientFactory func(port int, agentID string) codex.CodexClient
+
 // AgentManager 管理多个 Codex Agent 子进程。
 type AgentManager struct {
 	// ========================================
@@ -88,12 +91,18 @@ type AgentManager struct {
 	agents   map[string]*AgentProcess
 	nextPort atomic.Int32
 	onEvent  EventHandler
+
+	// 传输构造器 (便于测试注入 + fallback)
+	appServerFactory clientFactory
+	restFactory      clientFactory
 }
 
 // NewAgentManager 创建管理器。
 func NewAgentManager() *AgentManager {
 	m := &AgentManager{
-		agents: make(map[string]*AgentProcess),
+		agents:           make(map[string]*AgentProcess),
+		appServerFactory: func(port int, agentID string) codex.CodexClient { return codex.NewAppServerClient(port, agentID) },
+		restFactory:      func(port int, agentID string) codex.CodexClient { return codex.NewClient(port, agentID) },
 	}
 	m.nextPort.Store(int32(basePort))
 	return m
@@ -172,8 +181,12 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 		return err
 	}
 
-	// 使用 AppServerClient (JSON-RPC) 支持 dynamicTools
-	client := codex.NewAppServerClient(port)
+	// 优先使用 AppServerClient (JSON-RPC, 支持实时事件 + dynamicTools)。
+	client := m.appServerFactory(port, id)
+	if client == nil {
+		m.mu.Unlock()
+		return apperrors.New("AgentManager.Launch", "app-server client factory returned nil")
+	}
 
 	proc := &AgentProcess{
 		ID:     id,
@@ -191,6 +204,50 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 
 	// SpawnAndConnect: 启动 app-server → WS 连接 → initialize → thread/start (with dynamicTools)
 	if err := client.SpawnAndConnect(ctx, prompt, cwd, "", dynamicTools); err != nil {
+		logger.Warn("runner: app-server launch failed, attempting REST fallback",
+			logger.FieldAgentID, id,
+			logger.FieldPort, port,
+			logger.FieldError, err,
+		)
+		_ = client.Kill()
+
+		fallback := m.restFactory(port, id)
+		if fallback != nil {
+			proc.mu.Lock()
+			proc.Client = fallback
+			proc.mu.Unlock()
+			fallback.SetEventHandler(func(event codex.Event) {
+				m.handleEvent(proc, event)
+			})
+			if fallbackErr := fallback.SpawnAndConnect(ctx, prompt, cwd, "", dynamicTools); fallbackErr == nil {
+				payload, _ := json.Marshal(map[string]any{
+					"message": "App-server unavailable; using HTTP fallback",
+					"status":  "degraded",
+					"active":  false,
+					"done":    true,
+					"phase":   "transport_fallback",
+				})
+				m.handleEvent(proc, codex.Event{
+					Type: codex.EventBackgroundEvent,
+					Data: payload,
+				})
+				logger.Warn("runner: launched with REST fallback",
+					logger.FieldAgentID, id,
+					logger.FieldPort, port,
+				)
+				return nil
+			} else {
+				logger.Error("runner: REST fallback launch failed",
+					logger.FieldAgentID, id,
+					logger.FieldPort, port,
+					logger.FieldError, fallbackErr,
+				)
+				err = apperrors.Wrapf(fallbackErr, "AgentManager.Launch", "fallback launch %s after app-server failure: %v", id, err)
+			}
+		} else {
+			err = apperrors.Wrap(err, "AgentManager.Launch", "app-server launch failed and REST fallback unavailable")
+		}
+
 		proc.mu.Lock()
 		proc.State = StateError
 		proc.mu.Unlock()
@@ -215,15 +272,36 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event codex.Event) {
 	normalized := uistate.NormalizeEvent(event.Type, "", event.Data)
 
 	var newState AgentState
-	switch normalized.UIStatus {
-	case uistate.UIStatusThinking:
+	switch normalized.UIType {
+	case uistate.UITypeAssistantDelta,
+		uistate.UITypeAssistantDone,
+		uistate.UITypeReasoningDelta,
+		uistate.UITypePlanDelta,
+		uistate.UITypeTurnStarted,
+		uistate.UITypeUserMessage:
 		newState = StateThinking
-	case uistate.UIStatusRunning:
+	case uistate.UITypeCommandStart,
+		uistate.UITypeCommandOutput,
+		uistate.UITypeCommandDone,
+		uistate.UITypeFileEditStart,
+		uistate.UITypeFileEditDone,
+		uistate.UITypeToolCall,
+		uistate.UITypeApprovalRequest:
 		newState = StateRunning
-	case uistate.UIStatusIdle:
+	case uistate.UITypeTurnComplete, uistate.UITypeDiffUpdate:
 		newState = StateIdle
-	case uistate.UIStatusError:
+	case uistate.UITypeError:
 		newState = StateError
+	case uistate.UITypeSystem:
+		switch normalized.RawType {
+		case codex.EventCollabAgentSpawnBegin,
+			codex.EventCollabAgentInteractionBegin,
+			codex.EventCollabWaitingBegin,
+			codex.EventCollabAgentSpawnEnd,
+			codex.EventCollabAgentInteractionEnd,
+			codex.EventCollabWaitingEnd:
+			newState = StateRunning
+		}
 	}
 
 	// 特殊状态处理

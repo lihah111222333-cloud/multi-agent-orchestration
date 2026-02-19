@@ -27,26 +27,19 @@ const state = reactive({
   activeThreadId: '',
   activeCmdThreadId: '',
   mainAgentId: '',
-  viewPrefs: {
-    chat: {
-      layout: defaultLayoutForMode('chat'),
-      splitRatio: 64,
-    },
-    cmd: {
-      layout: defaultLayoutForMode('cmd'),
-      splitRatio: 56,
-      cardCols: 3,
-    },
-  },
-  loadingThreads: false,
-  sending: false,
 });
 
 const runtimeRootState = reactive({
   threads: [],
   statuses: {},
+  interruptibleByThread: {},
+  viewPrefsChat: null,
+  viewPrefsCmd: null,
+  statusHeadersByThread: {},
+  statusDetailsByThread: {},
   timelinesByThread: {},
   diffTextByThread: {},
+  tokenUsageByThread: {},
   agentMetaById: {},
   agentRuntimeById: {},
 });
@@ -91,7 +84,7 @@ function persistPreferenceAndSync(prefKey, value, logMeta = {}) {
   const current = prev
     .catch(() => { })
     .then(() => persistRemote(queueKey, value))
-    .then(() => syncRuntimeState())
+    .then(() => { syncRuntimeState().catch(() => { }); })  // 非阻塞: 乐观更新已生效
     .catch((error) => {
       logDebug('thread', 'prefs.persist.failed', { key: prefKey, error, ...logMeta });
     });
@@ -107,6 +100,7 @@ function saveActiveThread(id) {
   const next = id || '';
   if (state.activeThreadId === next) return;
   const prev = state.activeThreadId || '';
+  state.activeThreadId = next;                       // 乐观更新: 立即切换
   persistPreferenceAndSync(PREF_ACTIVE_THREAD_ID, next, { previous: prev, current: next });
   logDebug('thread', 'activeChat.changed', {
     from: prev,
@@ -118,6 +112,7 @@ function saveActiveCmdThread(id) {
   const next = id || '';
   if (state.activeCmdThreadId === next) return;
   const prev = state.activeCmdThreadId || '';
+  state.activeCmdThreadId = next;                    // 乐观更新: 立即切换
   persistPreferenceAndSync(PREF_ACTIVE_CMD_THREAD_ID, next, { previous: prev, current: next });
   logDebug('thread', 'activeCmd.changed', {
     from: prev,
@@ -153,30 +148,6 @@ async function renameThread(threadId, name) {
   }
 }
 
-function ensureModePrefs(mode) {
-  if (mode === 'cmd') {
-    if (!state.viewPrefs.cmd || typeof state.viewPrefs.cmd !== 'object') {
-      state.viewPrefs.cmd = {};
-    }
-    const current = state.viewPrefs.cmd;
-    const nextLayout = normalizeCmdLayout(current.layout);
-    const nextSplitRatio = normalizeSplitRatio(current.splitRatio);
-    const nextCardCols = normalizeCmdCardCols(current.cardCols);
-    if (current.layout !== nextLayout) current.layout = nextLayout;
-    if (current.splitRatio !== nextSplitRatio) current.splitRatio = nextSplitRatio;
-    if (current.cardCols !== nextCardCols) current.cardCols = nextCardCols;
-    return;
-  }
-  if (!state.viewPrefs.chat || typeof state.viewPrefs.chat !== 'object') {
-    state.viewPrefs.chat = {};
-  }
-  const current = state.viewPrefs.chat;
-  const nextLayout = normalizeChatLayout(current.layout);
-  const nextSplitRatio = normalizeSplitRatio(current.splitRatio);
-  if (current.layout !== nextLayout) current.layout = nextLayout;
-  if (current.splitRatio !== nextSplitRatio) current.splitRatio = nextSplitRatio;
-}
-
 function normalizeSplitRatio(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 60;
@@ -187,52 +158,103 @@ function normalizeCmdCardCols(value) {
   return Number(value) === 2 ? 2 : 3;
 }
 
+function normalizeChatPrefs(value) {
+  const input = value && typeof value === 'object' ? value : {};
+  return {
+    layout: normalizeChatLayout(input.layout || defaultLayoutForMode('chat')),
+    splitRatio: normalizeSplitRatio(input.splitRatio),
+  };
+}
+
+function normalizeCmdPrefs(value) {
+  const input = value && typeof value === 'object' ? value : {};
+  return {
+    layout: normalizeCmdLayout(input.layout || defaultLayoutForMode('cmd')),
+    splitRatio: normalizeSplitRatio(input.splitRatio),
+    cardCols: normalizeCmdCardCols(input.cardCols),
+  };
+}
+
+function readChatPrefs() {
+  return normalizeChatPrefs(state.viewPrefsChat);
+}
+
+function readCmdPrefs() {
+  return normalizeCmdPrefs(state.viewPrefsCmd);
+}
+
 function getLayout(mode) {
-  ensureModePrefs(mode);
   return mode === 'cmd'
-    ? state.viewPrefs.cmd.layout
-    : state.viewPrefs.chat.layout;
+    ? readCmdPrefs().layout
+    : readChatPrefs().layout;
 }
 
 function setLayout(mode, layout) {
-  ensureModePrefs(mode);
   if (mode === 'cmd') {
-    state.viewPrefs.cmd.layout = normalizeCmdLayout(layout);
-    persistRemote(PREF_VIEW_CMD, state.viewPrefs.cmd);
+    const current = readCmdPrefs();
+    const next = {
+      ...current,
+      layout: normalizeCmdLayout(layout),
+    };
+    persistPreferenceAndSync(PREF_VIEW_CMD, next, {
+      mode: 'cmd',
+      field: 'layout',
+    });
     return;
   }
-  state.viewPrefs.chat.layout = normalizeChatLayout(layout);
-  persistRemote(PREF_VIEW_CHAT, state.viewPrefs.chat);
+  const current = readChatPrefs();
+  const next = {
+    ...current,
+    layout: normalizeChatLayout(layout),
+  };
+  persistPreferenceAndSync(PREF_VIEW_CHAT, next, {
+    mode: 'chat',
+    field: 'layout',
+  });
 }
 
 function getSplitRatio(mode) {
-  ensureModePrefs(mode);
   return mode === 'cmd'
-    ? normalizeSplitRatio(state.viewPrefs.cmd.splitRatio)
-    : normalizeSplitRatio(state.viewPrefs.chat.splitRatio);
+    ? readCmdPrefs().splitRatio
+    : readChatPrefs().splitRatio;
 }
 
 function setSplitRatio(mode, ratio) {
-  ensureModePrefs(mode);
   const next = normalizeSplitRatio(ratio);
   if (mode === 'cmd') {
-    state.viewPrefs.cmd.splitRatio = next;
-    persistRemote(PREF_VIEW_CMD, state.viewPrefs.cmd);
+    const current = readCmdPrefs();
+    persistPreferenceAndSync(PREF_VIEW_CMD, {
+      ...current,
+      splitRatio: next,
+    }, {
+      mode: 'cmd',
+      field: 'splitRatio',
+    });
     return;
   }
-  state.viewPrefs.chat.splitRatio = next;
-  persistRemote(PREF_VIEW_CHAT, state.viewPrefs.chat);
+  const current = readChatPrefs();
+  persistPreferenceAndSync(PREF_VIEW_CHAT, {
+    ...current,
+    splitRatio: next,
+  }, {
+    mode: 'chat',
+    field: 'splitRatio',
+  });
 }
 
 function getCmdCardCols() {
-  ensureModePrefs('cmd');
-  return normalizeCmdCardCols(state.viewPrefs.cmd.cardCols);
+  return readCmdPrefs().cardCols;
 }
 
 function setCmdCardCols(cols) {
-  ensureModePrefs('cmd');
-  state.viewPrefs.cmd.cardCols = normalizeCmdCardCols(cols);
-  persistRemote(PREF_VIEW_CMD, state.viewPrefs.cmd);
+  const current = readCmdPrefs();
+  persistPreferenceAndSync(PREF_VIEW_CMD, {
+    ...current,
+    cardCols: normalizeCmdCardCols(cols),
+  }, {
+    mode: 'cmd',
+    field: 'cardCols',
+  });
 }
 
 function getThreadsByMode(mode) {
@@ -267,63 +289,123 @@ function normalizeThread(item) {
 }
 
 
+
+// 增量合并 helper: 只更新 string 值变化的 key
+function mergeStringMap(target, source) {
+  if (!source || typeof source !== 'object') return;
+  for (const [key, value] of Object.entries(source)) {
+    const str = (value || '').toString();
+    if (target[key] !== str) target[key] = str;
+  }
+}
+
+// 增量合并 helper: 用 JSON.stringify 对比的 object map
+function mergeObjectMap(target, source) {
+  if (!source || typeof source !== 'object') return;
+  for (const [key, value] of Object.entries(source)) {
+    const next = value && typeof value === 'object' ? value : {};
+    if (JSON.stringify(target[key]) !== JSON.stringify(next)) {
+      Object.freeze(next);
+      target[key] = next;
+    }
+  }
+}
+
 function applyRuntimeSnapshot(snapshot) {
   const data = snapshot && typeof snapshot === 'object' ? snapshot : {};
 
+  // --- threads: 只在列表长度或 ID 变化时替换 ---
   const nextThreads = Array.isArray(data.threads)
     ? data.threads.map(normalizeThread)
     : [];
-  const nextStatuses = {};
+  const oldIds = state.threads.map((t) => t.id).join(',');
+  const newIds = nextThreads.map((t) => t.id).join(',');
+  if (oldIds !== newIds) {
+    state.threads = nextThreads;
+  }
+
+  // --- statuses: 增量合并, 只更新变化的 key ---
   if (data.statuses && typeof data.statuses === 'object') {
     for (const [key, value] of Object.entries(data.statuses)) {
-      nextStatuses[key] = normalizeStatus(value);
+      const normalized = normalizeStatus(value);
+      if (state.statuses[key] !== normalized) {
+        state.statuses[key] = normalized;
+      }
     }
   }
   for (const thread of nextThreads) {
-    if (!nextStatuses[thread.id]) {
-      nextStatuses[thread.id] = normalizeStatus(thread.state || 'idle');
+    if (!state.statuses[thread.id]) {
+      state.statuses[thread.id] = normalizeStatus(thread.state || 'idle');
     }
   }
 
-  const nextTimelines = {};
+  // --- interruptibleByThread: 增量合并 ---
+  if (data.interruptibleByThread && typeof data.interruptibleByThread === 'object') {
+    for (const [key, value] of Object.entries(data.interruptibleByThread)) {
+      const b = Boolean(value);
+      if (state.interruptibleByThread[key] !== b) {
+        state.interruptibleByThread[key] = b;
+      }
+    }
+  }
+
+  // --- timelinesByThread: freeze items + 只在变化时替换 ---
   if (data.timelinesByThread && typeof data.timelinesByThread === 'object') {
     for (const [key, value] of Object.entries(data.timelinesByThread)) {
-      nextTimelines[key] = Array.isArray(value) ? value : [];
+      const newItems = Array.isArray(value) ? value : [];
+      const oldItems = state.timelinesByThread[key];
+      // 快速对比: 长度相同 + 最后一条 item 的 id/content 相同 → 跳过
+      if (
+        oldItems &&
+        oldItems.length === newItems.length &&
+        oldItems.length > 0 &&
+        oldItems[oldItems.length - 1]?.id === newItems[newItems.length - 1]?.id
+      ) {
+        continue;
+      }
+      // freeze 每条 item, 阻止 Vue 深层追踪
+      for (let i = 0; i < newItems.length; i++) {
+        if (newItems[i] && typeof newItems[i] === 'object') {
+          Object.freeze(newItems[i]);
+        }
+      }
+      state.timelinesByThread[key] = Object.freeze(newItems);
     }
   }
 
-  const nextDiffs = {};
+  // --- diffTextByThread: 增量合并 ---
   if (data.diffTextByThread && typeof data.diffTextByThread === 'object') {
     for (const [key, value] of Object.entries(data.diffTextByThread)) {
-      nextDiffs[key] = (value || '').toString();
+      const str = (value || '').toString();
+      if (state.diffTextByThread[key] !== str) {
+        state.diffTextByThread[key] = str;
+      }
     }
   }
 
-  state.threads = nextThreads;
-  state.statuses = nextStatuses;
-  state.timelinesByThread = nextTimelines;
-  state.diffTextByThread = nextDiffs;
-  state.agentMetaById = data.agentMetaById && typeof data.agentMetaById === 'object'
-    ? data.agentMetaById
-    : {};
-  state.agentRuntimeById = data.agentRuntimeById && typeof data.agentRuntimeById === 'object'
-    ? data.agentRuntimeById
-    : {};
+  // --- 轻量 string 字段: 增量合并 ---
+  mergeStringMap(state.statusHeadersByThread, data.statusHeadersByThread);
+  mergeStringMap(state.statusDetailsByThread, data.statusDetailsByThread);
+
+  // --- 对象字段: JSON.stringify 对比后赋值 ---
+  mergeObjectMap(state.tokenUsageByThread, data.tokenUsageByThread);
+  mergeObjectMap(state.agentMetaById, data.agentMetaById);
+  mergeObjectMap(state.agentRuntimeById, data.agentRuntimeById);
+
   if (Object.prototype.hasOwnProperty.call(data, PREF_ACTIVE_THREAD_ID)) {
-    state.activeThreadId = (data[PREF_ACTIVE_THREAD_ID] || '').toString();
+    const next = (data[PREF_ACTIVE_THREAD_ID] || '').toString();
+    if (state.activeThreadId !== next) state.activeThreadId = next;
   }
   if (Object.prototype.hasOwnProperty.call(data, PREF_ACTIVE_CMD_THREAD_ID)) {
-    state.activeCmdThreadId = (data[PREF_ACTIVE_CMD_THREAD_ID] || '').toString();
+    const next = (data[PREF_ACTIVE_CMD_THREAD_ID] || '').toString();
+    if (state.activeCmdThreadId !== next) state.activeCmdThreadId = next;
   }
   if (Object.prototype.hasOwnProperty.call(data, PREF_MAIN_AGENT_ID)) {
-    state.mainAgentId = (data[PREF_MAIN_AGENT_ID] || '').toString();
+    const next = (data[PREF_MAIN_AGENT_ID] || '').toString();
+    if (state.mainAgentId !== next) state.mainAgentId = next;
   }
-  if (data[PREF_VIEW_CHAT] && typeof data[PREF_VIEW_CHAT] === 'object') {
-    state.viewPrefs.chat = data[PREF_VIEW_CHAT];
-  }
-  if (data[PREF_VIEW_CMD] && typeof data[PREF_VIEW_CMD] === 'object') {
-    state.viewPrefs.cmd = data[PREF_VIEW_CMD];
-  }
+  state.viewPrefsChat = normalizeChatPrefs(data[PREF_VIEW_CHAT]);
+  state.viewPrefsCmd = normalizeCmdPrefs(data[PREF_VIEW_CMD]);
 }
 
 async function syncRuntimeState() {
@@ -332,7 +414,7 @@ async function syncRuntimeState() {
     return runtimeSyncPromise;
   }
 
-  runtimeSyncPromise = callAPI('ui/state/get', {})
+  runtimeSyncPromise = callAPI('ui/state/get', { threadId: state.activeThreadId || '' })
     .then((res) => {
       applyRuntimeSnapshot(res || {});
     })
@@ -349,18 +431,24 @@ function handleAgentEvent() {
   // runtime sync is backend-driven by bridge event `ui/state/changed`
 }
 
+let _syncDebounceTimer = 0;
+
 function handleBridgeEvent(evt) {
   const eventType = (evt?.type || evt?.method || '').toString();
-  if (eventType !== 'ui/state/changed') return;
-  syncRuntimeState().catch((error) => {
-    logWarn('thread', 'state.sync.failed', { error, by_event: eventType });
-  });
+  if (eventType === 'ui/state/changed' || eventType === 'thread/messages/page') {
+    // 防抖: 合并短时间内的多次触发, 避免事件风暴导致 UI 卡顿
+    clearTimeout(_syncDebounceTimer);
+    _syncDebounceTimer = setTimeout(() => {
+      syncRuntimeState().catch((error) => {
+        logWarn('thread', 'state.sync.failed', { error, by_event: eventType });
+      });
+    }, 200);
+  }
 }
 
 
 async function refreshThreads() {
   const start = perfNow();
-  state.loadingThreads = true;
   try {
     await callAPI('thread/list', {});
     await syncRuntimeState();
@@ -376,8 +464,6 @@ async function refreshThreads() {
       error,
       duration_ms: Math.round(perfNow() - start),
     });
-  } finally {
-    state.loadingThreads = false;
   }
 }
 
@@ -408,18 +494,72 @@ async function startThread(cwd = '.', options = {}) {
 
 
 async function stopThread(threadId) {
-  if (!threadId) return;
-  const start = perfNow();
-  try {
-    await callAPI('thread/abort', { threadId });
-  } catch {
-    // ignore remote error and update UI optimistically
+  if (!threadId) {
+    return {
+      confirmed: false,
+      mode: 'no_thread',
+      interruptSent: false,
+      settled: false,
+    };
   }
-  syncRuntimeState().catch(() => { });
+  const start = perfNow();
+  let interruptSent = false;
+  let confirmed = false;
+  let mode = 'failed';
+  let settled = false;
+  logInfo('thread', 'stop.request', {
+    thread_id: threadId,
+  });
+  try {
+    const interruptResult = await callAPI('turn/interrupt', { threadId });
+    interruptSent = Boolean(interruptResult?.interruptSent);
+    confirmed = Boolean(interruptResult?.confirmed);
+    mode = (interruptResult?.mode || '').toString().trim() || (confirmed ? 'interrupt_confirmed' : 'interrupt_not_confirmed');
+    settled = confirmed ||
+      mode === 'interrupt_terminal_completed' ||
+      mode === 'interrupt_terminal_failed' ||
+      mode === 'no_active_turn';
+    logInfo('thread', 'stop.interrupt.sent', {
+      thread_id: threadId,
+      confirmed,
+      mode,
+      settled,
+      interrupt_sent: interruptSent,
+      state_before: (interruptResult?.stateBefore || '').toString(),
+      state_after: (interruptResult?.stateAfter || '').toString(),
+      waited_ms: Number(interruptResult?.waitedMs || 0),
+      duration_ms: Math.round(perfNow() - start),
+    });
+  } catch (interruptError) {
+    logWarn('thread', 'stop.interrupt.failed', {
+      thread_id: threadId,
+      error: interruptError,
+      duration_ms: Math.round(perfNow() - start),
+    });
+  }
+  try {
+    await syncRuntimeState();
+  } catch (syncError) {
+    logWarn('thread', 'stop.sync.failed', {
+      thread_id: threadId,
+      error: syncError,
+      duration_ms: Math.round(perfNow() - start),
+    });
+  }
   logInfo('thread', 'stop.done', {
     thread_id: threadId,
+    confirmed,
+    mode,
+    settled,
+    interrupt_sent: interruptSent,
     duration_ms: Math.round(perfNow() - start),
   });
+  return {
+    confirmed,
+    mode,
+    interruptSent,
+    settled,
+  };
 }
 
 async function loadMessages(threadId, limit = 300) {
@@ -427,7 +567,7 @@ async function loadMessages(threadId, limit = 300) {
   const start = perfNow();
   try {
     const res = await callAPI('thread/messages', { threadId, limit });
-    await syncRuntimeState();
+    syncRuntimeState().catch(() => { });  // 非阻塞: 后端已 hydrate snapshot
     logInfo('thread', 'messages.loaded', {
       thread_id: threadId,
       count: Array.isArray(res?.messages) ? res.messages.length : 0,
@@ -459,9 +599,14 @@ async function sendMessage(threadId, prompt, attachments = []) {
   for (const item of attachments) {
     const path = (item?.path || '').trim();
     const previewUrl = (item?.previewUrl || '').trim();
+    const previewLower = previewUrl.toLowerCase();
     if (item?.kind === 'image') {
       if (path) {
-        input.push({ type: 'localImage', path });
+        const payload = { type: 'localImage', path };
+        if (previewLower.startsWith('data:image/')) {
+          payload.url = previewUrl;
+        }
+        input.push(payload);
         localImageCount += 1;
         continue;
       }
@@ -500,7 +645,6 @@ async function sendMessage(threadId, prompt, attachments = []) {
     files: fileCount,
     dropped_attachments: droppedAttachmentCount,
   });
-  state.sending = true;
   try {
     await callAPI('turn/start', { threadId, input });
     await syncRuntimeState();
@@ -515,8 +659,54 @@ async function sendMessage(threadId, prompt, attachments = []) {
       duration_ms: Math.round(perfNow() - start),
     });
     throw error;
-  } finally {
-    state.sending = false;
+  }
+}
+
+async function compactThread(threadId) {
+  const id = (threadId || '').toString().trim();
+  if (!id) return;
+  const start = perfNow();
+  logInfo('thread', 'compact.start', {
+    thread_id: id,
+  });
+  try {
+    await callAPI('thread/compact/start', { threadId: id });
+    await syncRuntimeState();
+    logInfo('thread', 'compact.done', {
+      thread_id: id,
+      duration_ms: Math.round(perfNow() - start),
+    });
+  } catch (error) {
+    logWarn('thread', 'compact.failed', {
+      thread_id: id,
+      error,
+      duration_ms: Math.round(perfNow() - start),
+    });
+    throw error;
+  }
+}
+
+async function forceCompleteThread(threadId) {
+  const id = (threadId || '').toString().trim();
+  if (!id) return;
+  const start = perfNow();
+  logInfo('thread', 'forceComplete.start', { thread_id: id });
+  try {
+    const result = await callAPI('turn/forceComplete', { threadId: id });
+    await syncRuntimeState();
+    logInfo('thread', 'forceComplete.done', {
+      thread_id: id,
+      confirmed: Boolean(result?.confirmed),
+      duration_ms: Math.round(perfNow() - start),
+    });
+    return result;
+  } catch (error) {
+    logWarn('thread', 'forceComplete.failed', {
+      thread_id: id,
+      error,
+      duration_ms: Math.round(perfNow() - start),
+    });
+    throw error;
   }
 }
 
@@ -533,6 +723,28 @@ function getThreadDiff(threadId) {
 function getThreadStatus(threadId) {
   if (!threadId) return 'idle';
   return state.statuses[threadId] || 'idle';
+}
+
+function getThreadInterruptible(threadId) {
+  if (!threadId) return false;
+  return Boolean(state.interruptibleByThread[threadId]);
+}
+
+function getThreadStatusHeader(threadId) {
+  if (!threadId) return '';
+  return (state.statusHeadersByThread?.[threadId] || '').toString();
+}
+
+function getThreadStatusDetails(threadId) {
+  if (!threadId) return '';
+  return (state.statusDetailsByThread?.[threadId] || '').toString();
+}
+
+function getThreadTokenUsage(threadId) {
+  if (!threadId) return null;
+  const value = state.tokenUsageByThread?.[threadId];
+  if (!value || typeof value !== 'object') return null;
+  return value;
 }
 
 function promptRenameThread(threadId) {
@@ -558,6 +770,8 @@ export function useThreadStore() {
     startThread,
 
     stopThread,
+    compactThread,
+    forceCompleteThread,
     loadMessages,
     sendMessage,
     handleAgentEvent,
@@ -577,6 +791,10 @@ export function useThreadStore() {
     getThreadTimeline,
     getThreadDiff,
     getThreadStatus,
+    getThreadInterruptible,
+    getThreadStatusHeader,
+    getThreadStatusDetails,
+    getThreadTokenUsage,
     displayName,
   };
 }

@@ -2,6 +2,7 @@ import {
   ref,
   computed,
   watch,
+  onMounted,
   nextTick,
   onBeforeUnmount,
 } from '../../lib/vue.esm-browser.prod.js';
@@ -9,8 +10,9 @@ import { ProjectSelect } from '../components/ProjectSelect.js';
 import { ChatTimeline } from '../components/ChatTimeline.js';
 import { DiffPanel } from '../components/DiffPanel.js';
 import { ComposerBar } from '../components/ComposerBar.js';
-import { statusLabel, normalizeStatus } from '../services/status.js';
+import { normalizeStatus } from '../services/status.js';
 import { copyTextToClipboard, resolveThreadIdentity } from '../services/api.js';
+import { logInfo, logWarn } from '../services/log.js';
 import { useComposerStore } from '../stores/composer.js';
 
 export async function requestHistoryLoad(threadStore, threadId, options = {}) {
@@ -22,6 +24,12 @@ export async function requestHistoryLoad(threadStore, threadId, options = {}) {
     const limit = Number.isFinite(options.limit) && options.limit > 0 ? options.limit : 300;
     await threadStore.loadMessages(threadId, limit);
     return true;
+  }
+
+  // 如果 timeline 已有数据, 跳过重复加载
+  const existing = threadStore.getThreadTimeline(threadId);
+  if (Array.isArray(existing) && existing.length > 0) {
+    return false;
   }
 
   await threadStore.loadMessages(threadId);
@@ -43,6 +51,7 @@ export const UnifiedChatPage = {
   },
   setup(props) {
     const composer = useComposerStore();
+    const composerBarRef = ref(null);
     const workspaceRef = ref(null);
     const dragging = ref(false);
     const copyState = ref('idle');
@@ -92,6 +101,52 @@ export const UnifiedChatPage = {
     const activeTimeline = computed(() => props.threadStore.getThreadTimeline(selectedThreadId.value));
     const activeDiffText = computed(() => props.threadStore.getThreadDiff(selectedThreadId.value));
     const activeStatus = computed(() => normalizeStatus(props.threadStore.getThreadStatus(selectedThreadId.value)));
+    function getThreadStatusHeader(threadId) {
+      if (!threadId) return '';
+      if (typeof props.threadStore.getThreadStatusHeader !== 'function') return '';
+      const header = (props.threadStore.getThreadStatusHeader(threadId) || '').toString().trim();
+      if (header) return header;
+      return '等待指示';
+    }
+    const activeStatusHeader = computed(() => getThreadStatusHeader(selectedThreadId.value));
+    const activeStatusDetails = computed(() => {
+      if (typeof props.threadStore.getThreadStatusDetails !== 'function') return '';
+      return (props.threadStore.getThreadStatusDetails(selectedThreadId.value) || '').toString().trim();
+    });
+    const activeTokenUsage = computed(() => {
+      if (typeof props.threadStore.getThreadTokenUsage !== 'function') return null;
+      return props.threadStore.getThreadTokenUsage(selectedThreadId.value);
+    });
+    const canInterrupt = computed(() => {
+      if (typeof props.threadStore.getThreadInterruptible !== 'function') return false;
+      return props.threadStore.getThreadInterruptible(selectedThreadId.value);
+    });
+    const displayStatusText = computed(() => {
+      if (!selectedThreadId.value) return '未选择会话';
+      return activeStatusHeader.value || '等待指示';
+    });
+    const activeTokenInline = computed(() => formatTokenInline(activeTokenUsage.value));
+    const activeTokenTooltip = computed(() => formatTokenTooltip(activeTokenUsage.value));
+    const isStatusTimerModalPaused = computed(() => Boolean(props.projectStore?.state?.showModal));
+    const statusSinceByThread = ref({});
+    const statusPausedAtByThread = ref({});
+    const statusTick = ref(Date.now());
+    let statusTickTimer = 0;
+    const activeStatusMeta = computed(() => {
+      const threadId = selectedThreadId.value;
+      if (!threadId) return '';
+      const state = normalizeStatus(activeStatus.value);
+      if (state === 'idle') return '';
+      const since = Number(statusSinceByThread.value[threadId]) || Date.now();
+      const elapsedSeconds = Math.max(0, Math.floor((statusTick.value - since) / 1000));
+      const elapsed = formatElapsedCompact(elapsedSeconds);
+      const hint = canInterrupt.value ? ' • Esc 可中断' : '';
+      const detail = activeStatusDetails.value;
+      if (detail) {
+        return `(${elapsed}${hint}) · ${detail}`;
+      }
+      return `(${elapsed}${hint})`;
+    });
     const activeRuntime = computed(() => {
       const map = props.threadStore.state.agentRuntimeById || {};
       return map[selectedThreadId.value] || null;
@@ -127,6 +182,29 @@ export const UnifiedChatPage = {
       return document.querySelector('.chat-messages-vue');
     }
 
+    function isEditableElement(node) {
+      if (!node || typeof node !== 'object') return false;
+      const tag = (node.tagName || '').toString().toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+      if (Boolean(node.isContentEditable)) return true;
+      if (typeof node.closest === 'function') {
+        const editableRoot = node.closest('[contenteditable], [contenteditable="true"]');
+        if (editableRoot) return true;
+      }
+      return false;
+    }
+
+    function onGlobalEscape(event) {
+      if ((event?.key || '') !== 'Escape') return;
+      if (event?.defaultPrevented || event?.repeat) return;
+      if (!selectedThreadId.value) return;
+      if (!canInterrupt.value) return;
+      if (isStatusTimerModalPaused.value) return;
+      const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
+      if (isEditableElement(event?.target) || isEditableElement(activeEl)) return;
+      composerBarRef.value?.onEscape?.(event);
+    }
+
     function distanceFromBottom(el) {
       if (!el) return 0;
       return el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -138,32 +216,32 @@ export const UnifiedChatPage = {
 
     function scheduleScrollToBottom(force = false) {
       if (scrollTimer) {
-        window.clearTimeout(scrollTimer);
+        cancelAnimationFrame(scrollTimer);
       }
-      scrollTimer = window.setTimeout(async () => {
-        await nextTick();
+      scrollTimer = requestAnimationFrame(() => {
         const el = resolveChatScroller();
         if (!el) return;
         if (!force && !shouldAutoScroll.value) return;
         el.scrollTop = el.scrollHeight;
-      }, 40);
+      });
     }
 
+    let _lastStatsKey = '';
+    let _lastStats = { total: 0, running: 0, thinking: 0, editing: 0, error: 0 };
     const stats = computed(() => {
-      const summary = {
-        total: threads.value.length,
-        running: 0,
-        thinking: 0,
-        editing: 0,
-        error: 0,
-      };
-      for (const thread of threads.value) {
-        const status = normalizeStatus(props.threadStore.getThreadStatus(thread.id));
+      const ids = threads.value.map((t) => t.id);
+      const key = ids.map((id) => `${id}:${normalizeStatus(props.threadStore.getThreadStatus(id))}`).join(',');
+      if (key === _lastStatsKey) return _lastStats;
+      _lastStatsKey = key;
+      const summary = { total: ids.length, running: 0, thinking: 0, editing: 0, error: 0 };
+      for (const id of ids) {
+        const status = normalizeStatus(props.threadStore.getThreadStatus(id));
         if (status === 'running') summary.running += 1;
         if (status === 'thinking' || status === 'responding' || status === 'waiting') summary.thinking += 1;
         if (status === 'editing') summary.editing += 1;
         if (status === 'error') summary.error += 1;
       }
+      _lastStats = summary;
       return summary;
     });
 
@@ -180,20 +258,25 @@ export const UnifiedChatPage = {
 
     const cmdCards = computed(() => {
       if (!isCmd.value) return [];
+      const selId = selectedThreadId.value;
+      const layout = layoutMode.value;
       return threads.value.map((thread) => {
-        const selected = thread.id === selectedThreadId.value;
-        return {
+        const selected = thread.id === selId;
+        const card = {
           id: thread.id,
           name: props.threadStore.displayName(thread),
           status: props.threadStore.getThreadStatus(thread.id),
+          statusHeader: getThreadStatusHeader(thread.id) || '等待指示',
           selected,
-          preview: layoutMode.value !== 'overview' && selected
-            ? timelinePreview(thread.id)
-            : [],
-          diff: layoutMode.value === 'mix' && selected
-            ? diffPreview(thread.id)
-            : '',
+          preview: [],
+          diff: '',
         };
+        // 只为选中的 card 计算 preview/diff (跳过未选中 card 的昂贵操作)
+        if (selected) {
+          if (layout !== 'overview') card.preview = timelinePreview(thread.id);
+          if (layout === 'mix') card.diff = diffPreview(thread.id);
+        }
+        return card;
       });
     });
 
@@ -237,6 +320,49 @@ export const UnifiedChatPage = {
       },
     );
 
+    watch(
+      () => [
+        selectedThreadId.value,
+        activeStatus.value,
+        canInterrupt.value,
+        isStatusTimerModalPaused.value,
+      ],
+      ([threadId, status, interruptible, modalPaused]) => {
+        const now = Date.now();
+        statusTick.value = now;
+        if (!threadId) {
+          stopStatusTickTimer();
+          return;
+        }
+        const state = normalizeStatus(status);
+        if (state === 'idle') {
+          statusSinceByThread.value[threadId] = 0;
+          statusPausedAtByThread.value[threadId] = 0;
+          stopStatusTickTimer();
+          return;
+        }
+        if (!statusSinceByThread.value[threadId]) {
+          statusSinceByThread.value[threadId] = now;
+        }
+        const shouldTick = Boolean(interruptible) && !modalPaused;
+        const pausedAt = Number(statusPausedAtByThread.value[threadId]) || 0;
+        if (shouldTick) {
+          if (pausedAt > 0) {
+            const since = Number(statusSinceByThread.value[threadId]) || now;
+            statusSinceByThread.value[threadId] = since + Math.max(0, now - pausedAt);
+            statusPausedAtByThread.value[threadId] = 0;
+          }
+          ensureStatusTickTimer();
+          return;
+        }
+        if (!pausedAt) {
+          statusPausedAtByThread.value[threadId] = now;
+        }
+        stopStatusTickTimer();
+      },
+      { immediate: true },
+    );
+
     function launchOne() {
       return props.threadStore.startThread(props.projectStore.state.active || '.', {
         focusMode: modeKey.value,
@@ -259,6 +385,77 @@ export const UnifiedChatPage = {
       scheduleScrollToBottom(true);
     }
 
+    async function interruptCurrent(control) {
+      const threadId = (control?.threadId || selectedThreadId.value || '').toString();
+      if (!threadId) {
+        control?.reject?.({ reason: 'no_thread' });
+        return;
+      }
+      logInfo('ui', 'chat.interrupt.request', {
+        thread_id: threadId,
+      });
+      try {
+        const result = await props.threadStore.stopThread(threadId);
+        const confirmed = Boolean(result?.confirmed);
+        const settled = Boolean(result?.settled || confirmed);
+        const mode = (result?.mode || '').toString();
+        logInfo('ui', 'chat.interrupt.result', {
+          thread_id: threadId,
+          confirmed,
+          settled,
+          mode,
+        });
+        if (settled) {
+          control?.confirm?.({
+            mode,
+            threadId,
+          });
+        } else {
+          control?.reject?.({
+            reason: mode || 'not_confirmed',
+            mode,
+            threadId,
+          });
+        }
+      } catch (error) {
+        logWarn('ui', 'chat.interrupt.failed', {
+          thread_id: threadId,
+          error,
+        });
+        control?.reject?.({
+          reason: 'error',
+          threadId,
+        });
+      }
+    }
+
+    async function compactCurrent() {
+      const threadId = (selectedThreadId.value || '').toString().trim();
+      if (!threadId) return;
+      try {
+        await props.threadStore.compactThread(threadId);
+      } catch (error) {
+        logWarn('ui', 'chat.compact.failed', {
+          thread_id: threadId,
+          error,
+        });
+      }
+    }
+
+    async function forceCompleteCurrent() {
+      const threadId = (selectedThreadId.value || '').toString().trim();
+      if (!threadId) return;
+      logInfo('ui', 'chat.forceComplete.request', { thread_id: threadId });
+      try {
+        await props.threadStore.forceCompleteThread(threadId);
+      } catch (error) {
+        logWarn('ui', 'chat.forceComplete.failed', {
+          thread_id: threadId,
+          error,
+        });
+      }
+    }
+
     async function loadCurrentHistory() {
       const threadId = selectedThreadId.value;
       if (!threadId) return;
@@ -267,6 +464,38 @@ export const UnifiedChatPage = {
 
     function selectThread(threadId) {
       selectedThreadId.value = threadId;
+    }
+
+    function refreshAll() {
+      props.threadStore.refreshThreads();
+    }
+
+    function stopSelected() {
+      props.threadStore.stopThread(selectedThreadId.value);
+    }
+
+    function renameSelected() {
+      props.threadStore.promptRenameThread(selectedThreadId.value);
+    }
+
+    function setMainSelected() {
+      props.threadStore.setMainAgent(selectedThreadId.value);
+    }
+
+    function loadCardHistory(cardId) {
+      props.threadStore.loadMessages(cardId, 300);
+    }
+
+    function renameCard(cardId) {
+      props.threadStore.promptRenameThread(cardId);
+    }
+
+    function stopCard(cardId) {
+      props.threadStore.stopThread(cardId);
+    }
+
+    function getDisplayName(thread) {
+      return props.threadStore.displayName(thread);
     }
 
     function setChatFocus() {
@@ -361,6 +590,57 @@ export const UnifiedChatPage = {
       return lines.join('\n');
     }
 
+    function formatTokenCompact(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number) || number < 0) return '0';
+      if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(1).replace(/\\.0$/, '')}m`;
+      if (number >= 1_000) return `${(number / 1_000).toFixed(1).replace(/\\.0$/, '')}k`;
+      return `${Math.round(number)}`;
+    }
+
+    function formatTokenPercent(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return '';
+      const clamped = Math.max(0, Math.min(100, number));
+      return `${Math.round(clamped)}%`;
+    }
+
+    function formatTokenInline(usage) {
+      if (!usage || typeof usage !== 'object') return '';
+      const used = Number(usage.usedTokens);
+      const limit = Number(usage.contextWindowTokens);
+      if (!Number.isFinite(used) || used <= 0) return '';
+      if (Number.isFinite(limit) && limit > 0) {
+        const usedPercent = Number.isFinite(Number(usage.usedPercent))
+          ? Number(usage.usedPercent)
+          : (used / limit) * 100;
+        return `${formatTokenPercent(usedPercent)} · ${formatTokenCompact(used)} / ${formatTokenCompact(limit)}`;
+      }
+      return `${formatTokenCompact(used)} used`;
+    }
+
+    function formatTokenTooltip(usage) {
+      if (!usage || typeof usage !== 'object') return '';
+      const used = Number(usage.usedTokens);
+      const limit = Number(usage.contextWindowTokens);
+      if (!Number.isFinite(used) || used <= 0) return '';
+      if (Number.isFinite(limit) && limit > 0) {
+        const usedPercent = Number.isFinite(Number(usage.usedPercent))
+          ? Number(usage.usedPercent)
+          : (used / limit) * 100;
+        const leftPercent = 100 - usedPercent;
+        return [
+          'Context window:',
+          `${formatTokenPercent(usedPercent)} used (${formatTokenPercent(leftPercent)} left)`,
+          `${formatTokenCompact(used)} / ${formatTokenCompact(limit)} tokens used`,
+        ].join('\n');
+      }
+      return [
+        'Context window:',
+        `${formatTokenCompact(used)} tokens used`,
+      ].join('\n');
+    }
+
     function onResizeStart(event) {
       if (!showWorkspace.value) return;
       if (event.button !== 0) return;
@@ -385,16 +665,49 @@ export const UnifiedChatPage = {
       window.addEventListener('mouseup', onUp);
     }
 
+    function ensureStatusTickTimer() {
+      if (statusTickTimer) return;
+      statusTickTimer = window.setInterval(() => {
+        statusTick.value = Date.now();
+      }, 1000);
+    }
+
+    function stopStatusTickTimer() {
+      if (!statusTickTimer) return;
+      window.clearInterval(statusTickTimer);
+      statusTickTimer = 0;
+    }
+
+    function formatElapsedCompact(elapsedSeconds) {
+      const seconds = Math.max(0, Math.floor(Number(elapsedSeconds) || 0));
+      if (seconds < 60) return `${seconds}s`;
+      if (seconds < 3600) {
+        const minutes = Math.floor(seconds / 60);
+        const sec = seconds % 60;
+        return `${minutes}m ${sec.toString().padStart(2, '0')}s`;
+      }
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const sec = seconds % 60;
+      return `${hours}h ${minutes.toString().padStart(2, '0')}m ${sec.toString().padStart(2, '0')}s`;
+    }
+
+    onMounted(() => {
+      window.addEventListener('keydown', onGlobalEscape);
+    });
+
     onBeforeUnmount(() => {
+      window.removeEventListener('keydown', onGlobalEscape);
       dragging.value = false;
       if (scrollTimer) {
-        window.clearTimeout(scrollTimer);
+        cancelAnimationFrame(scrollTimer);
         scrollTimer = 0;
       }
       if (copyStateTimer) {
         window.clearTimeout(copyStateTimer);
         copyStateTimer = 0;
       }
+      stopStatusTickTimer();
     });
 
     return {
@@ -408,6 +721,13 @@ export const UnifiedChatPage = {
       activeTimeline,
       activeDiffText,
       activeStatus,
+      activeStatusHeader,
+      activeStatusDetails,
+      activeStatusMeta,
+      activeTokenInline,
+      activeTokenTooltip,
+      canInterrupt,
+      displayStatusText,
       noActiveThread,
       copyButtonLabel,
       layoutMode,
@@ -419,11 +739,14 @@ export const UnifiedChatPage = {
       recentThreads,
       cmdCards,
       dragging,
+      composerBarRef,
       workspaceRef,
-      statusLabel,
       selectThread,
       launchOne,
       send,
+      interruptCurrent,
+      compactCurrent,
+      forceCompleteCurrent,
       loadCurrentHistory,
       setChatFocus,
       setChatMix,
@@ -433,6 +756,14 @@ export const UnifiedChatPage = {
       timelinePreview,
       diffPreview,
       onResizeStart,
+      refreshAll,
+      stopSelected,
+      renameSelected,
+      setMainSelected,
+      loadCardHistory,
+      renameCard,
+      stopCard,
+      getDisplayName,
     };
   },
   template: `
@@ -463,13 +794,13 @@ export const UnifiedChatPage = {
           <button class="btn btn-ghost btn-xs" :class="{active: layoutMode==='mix'}" @click="setChatMix">混合</button>
         </div>
 
-        <button class="btn btn-secondary" style="font-size:11px;padding:4px 10px" @click="launchOne">+ 启动 Agent</button>
-        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" @click="loadCurrentHistory">加载历史</button>
-        <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" @click="threadStore.refreshThreads">刷新</button>
+        <button class="btn btn-secondary btn-toolbar-sm" @click="launchOne">+ 启动 Agent</button>
+        <button class="btn btn-ghost btn-toolbar-sm" @click="loadCurrentHistory">加载历史</button>
+        <button class="btn btn-ghost btn-toolbar-sm" @click="refreshAll">刷新</button>
 
         <div v-if="!isCmd" class="thread-selector-group">
           <select class="agent-selector" v-model="selectedThreadId">
-            <option v-for="thread in chatThreadOptions" :key="thread.id" :value="thread.id">{{ threadStore.displayName(thread) }}</option>
+            <option v-for="thread in chatThreadOptions" :key="thread.id" :value="thread.id">{{ getDisplayName(thread) }}</option>
           </select>
           <button
             v-if="selectedThreadId"
@@ -480,23 +811,33 @@ export const UnifiedChatPage = {
         <button
           v-if="!isCmd && selectedThreadId"
           class="btn btn-ghost btn-xs"
-          @click="threadStore.setMainAgent(selectedThreadId)"
+          @click="setMainSelected"
         >
           {{ selectedThreadId === mainAgentId ? '主Agent' : '设为主Agent' }}
         </button>
         <button
           v-if="!isCmd && selectedThreadId"
           class="btn btn-ghost btn-xs"
-          @click="threadStore.promptRenameThread(selectedThreadId)"
+          @click="renameSelected"
         >改名</button>
         <button
           v-if="!isCmd && selectedThreadId"
           class="btn btn-ghost btn-xs"
-          @click="threadStore.stopThread(selectedThreadId)"
+          @click="stopSelected"
         >停止</button>
+        <button
+          v-if="!isCmd && selectedThreadId && activeStatus === 'running'"
+          class="btn btn-ghost btn-xs btn-warning"
+          @click="forceCompleteCurrent"
+          title="强制完成当前 turn，重置状态机"
+        >重链</button>
         <div v-if="!isCmd" class="chat-status" :title="selectedThreadId || '未选择会话'">
           <span class="status-dot" :class="activeStatus"></span>
-          <span>{{ noActiveThread ? '未选择会话' : statusLabel(activeStatus) }}</span>
+          <span>{{ displayStatusText }}</span>
+          <span
+            v-if="activeStatusMeta"
+            class="chat-status-meta"
+          >{{ activeStatusMeta }}</span>
         </div>
 
       </div>
@@ -526,7 +867,7 @@ export const UnifiedChatPage = {
                     <small>{{ card.id }}</small>
                   </div>
                   <span class="badge" :class="'badge-' + card.status">
-                    {{ statusLabel(card.status) }}
+                    {{ card.statusHeader }}
                   </span>
                 </header>
 
@@ -542,9 +883,9 @@ export const UnifiedChatPage = {
 
                 <div class="cmd-thread-actions">
                   <button class="btn btn-ghost btn-xs" @click.stop="selectThread(card.id)">打开</button>
-                  <button class="btn btn-ghost btn-xs" @click.stop="threadStore.loadMessages(card.id, 300)">历史</button>
-                  <button class="btn btn-ghost btn-xs" @click.stop="threadStore.promptRenameThread(card.id)">改名</button>
-                  <button class="btn btn-ghost btn-xs" @click.stop="threadStore.stopThread(card.id)">停止</button>
+                  <button class="btn btn-ghost btn-xs" @click.stop="loadCardHistory(card.id)">历史</button>
+                  <button class="btn btn-ghost btn-xs" @click.stop="renameCard(card.id)">改名</button>
+                  <button class="btn btn-ghost btn-xs" @click.stop="stopCard(card.id)">停止</button>
                 </div>
               </article>
             </div>
@@ -567,7 +908,7 @@ export const UnifiedChatPage = {
                 :class="{active: thread.id === selectedThreadId}"
                 @click="selectThread(thread.id)"
               >
-                {{ threadStore.displayName(thread) }}
+                {{ getDisplayName(thread) }}
               </button>
             </div>
           </section>
@@ -578,7 +919,12 @@ export const UnifiedChatPage = {
                 <div v-if="noActiveThread" class="chat-messages-vue">
                   <div class="diff-empty">选择或启动一个 Agent 开始对话</div>
                 </div>
-                <ChatTimeline v-else :items="activeTimeline" :active-status="activeStatus" />
+                <ChatTimeline
+                  v-else
+                  :items="activeTimeline"
+                  :active-status="activeStatus"
+                  :active-status-text="displayStatusText"
+                />
               </div>
 
               <div class="panel-resizer" :class="{dragging}" @mousedown="onResizeStart"></div>
@@ -586,7 +932,18 @@ export const UnifiedChatPage = {
               <DiffPanel :diff-text="activeDiffText" :style="{ flex: '0 0 ' + (100 - splitRatio) + '%' }" />
             </div>
 
-            <ComposerBar :composer="composer" :disabled="noActiveThread || threadStore.state.sending" @send="send" />
+            <ComposerBar
+              ref="composerBarRef"
+              :composer="composer"
+              :thread-id="selectedThreadId"
+              :interruptible="canInterrupt"
+              :token-inline="activeTokenInline"
+              :token-tooltip="activeTokenTooltip"
+              :disabled="noActiveThread"
+              @send="send"
+              @interrupt="interruptCurrent"
+              @compact="compactCurrent"
+            />
           </div>
         </div>
       </div>

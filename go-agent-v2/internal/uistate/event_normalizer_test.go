@@ -11,97 +11,172 @@ func TestClassifyEvent_AllKnownTypes(t *testing.T) {
 	cases := []struct {
 		codexType string
 		wantType  UIType
-		wantStat  UIStatus
 	}{
 		// Assistant
-		{"agent_message_delta", UITypeAssistantDelta, UIStatusThinking},
-		{"agent_message_content_delta", UITypeAssistantDelta, UIStatusThinking},
-		{"agent_message_completed", UITypeAssistantDone, UIStatusThinking},
-		{"agent_message", UITypeAssistantDone, UIStatusThinking},
+		{"agent_message_delta", UITypeAssistantDelta},
+		{"agent_message_content_delta", UITypeAssistantDelta},
+		{"agent_message_completed", UITypeAssistantDone},
+		{"agent_message", UITypeAssistantDone},
 		// Reasoning
-		{"agent_reasoning", UITypeReasoningDelta, UIStatusThinking},
-		{"agent_reasoning_delta", UITypeReasoningDelta, UIStatusThinking},
-		{"agent_reasoning_raw", UITypeReasoningDelta, UIStatusThinking},
-		{"agent_reasoning_raw_delta", UITypeReasoningDelta, UIStatusThinking},
-		{"agent_reasoning_section_break", UITypeReasoningDelta, UIStatusThinking},
+		{"agent_reasoning", UITypeReasoningDelta},
+		{"agent_reasoning_delta", UITypeReasoningDelta},
+		{"agent_reasoning_raw", UITypeReasoningDelta},
+		{"agent_reasoning_raw_delta", UITypeReasoningDelta},
+		{"agent_reasoning_section_break", UITypeReasoningDelta},
 		// Command Execution
-		{"exec_command_begin", UITypeCommandStart, UIStatusRunning},
-		{"exec_output_delta", UITypeCommandOutput, UIStatusRunning},
-		{"exec_command_output_delta", UITypeCommandOutput, UIStatusRunning},
-		{"exec_command_end", UITypeCommandDone, UIStatusRunning},
+		{"exec_command_begin", UITypeCommandStart},
+		{"exec_output_delta", UITypeCommandOutput},
+		{"exec_command_output_delta", UITypeCommandOutput},
+		{"exec_command_end", UITypeCommandDone},
+		{"exec_terminal_interaction", UITypeSystem},
 		// File Editing
-		{"patch_apply_begin", UITypeFileEditStart, UIStatusRunning},
-		{"file_read", UITypeFileEditStart, UIStatusRunning},
-		{"patch_apply", UITypeCommandOutput, UIStatusRunning},
-		{"patch_apply_delta", UITypeCommandOutput, UIStatusRunning},
-		{"patch_apply_end", UITypeFileEditDone, UIStatusRunning},
-		{"file_updated", UITypeFileEditDone, UIStatusRunning},
+		{"patch_apply_begin", UITypeFileEditStart},
+		{"file_read", UITypeFileEditStart},
+		{"patch_apply", UITypeCommandOutput},
+		{"patch_apply_delta", UITypeCommandOutput},
+		{"patch_apply_end", UITypeFileEditDone},
+		{"file_updated", UITypeFileEditDone},
 		// Tool Calls
-		{"mcp_tool_call_begin", UITypeToolCall, UIStatusRunning},
-		{"mcp_tool_call", UITypeToolCall, UIStatusRunning},
-		{"dynamic_tool_call", UITypeToolCall, UIStatusRunning},
-		{"mcp_tool_call_end", UITypeCommandDone, UIStatusRunning},
+		{"mcp_tool_call_begin", UITypeToolCall},
+		{"mcp_tool_call", UITypeToolCall},
+		{"dynamic_tool_call", UITypeSystem},
+		{"mcp_tool_call_end", UITypeToolCall},
 		// Approval
-		{"exec_approval_request", UITypeApprovalRequest, UIStatusRunning},
-		{"file_change_approval_request", UITypeApprovalRequest, UIStatusRunning},
+		{"exec_approval_request", UITypeApprovalRequest},
+		{"file_change_approval_request", UITypeApprovalRequest},
 		// Turn Lifecycle
-		{"turn_started", UITypeTurnStarted, UIStatusThinking},
-		{"task_started", UITypeTurnStarted, UIStatusThinking},
-		{"codex/event/task_started", UITypeTurnStarted, UIStatusThinking},
-		{"turn_complete", UITypeTurnComplete, UIStatusIdle},
-		{"task_complete", UITypeTurnComplete, UIStatusIdle},
-		{"codex/event/task_complete", UITypeTurnComplete, UIStatusIdle},
-		{"turn/completed", UITypeTurnComplete, UIStatusIdle},
-		{"idle", UITypeTurnComplete, UIStatusIdle},
+		{"turn_started", UITypeTurnStarted},
+		{"task_started", UITypeTurnStarted},
+		{"codex/event/task_started", UITypeTurnStarted},
+		{"agent/event/task_started", UITypeTurnStarted},
+		{"turn_complete", UITypeTurnComplete},
+		{"task_complete", UITypeTurnComplete},
+		{"codex/event/task_complete", UITypeTurnComplete},
+		{"agent/event/task_complete", UITypeTurnComplete},
+		{"turn/completed", UITypeTurnComplete},
+		{"idle", UITypeTurnComplete},
 		// Plan / Diff
-		{"plan_delta", UITypePlanDelta, UIStatusThinking},
-		{"plan_update", UITypePlanDelta, UIStatusThinking},
-		{"turn_diff", UITypeDiffUpdate, UIStatusIdle},
+		{"plan_delta", UITypePlanDelta},
+		{"plan_update", UITypePlanDelta},
+		{"turn_diff", UITypeDiffUpdate},
 		// User Message
-		{"user_message", UITypeUserMessage, UIStatusThinking},
+		{"user_message", UITypeUserMessage},
 		// Errors
-		{"error", UITypeError, UIStatusError},
-		{"stream_error", UITypeError, UIStatusError},
+		{"error", UITypeError},
+		{"stream_error", UITypeError},
 		// Warnings
-		{"warning", UITypeSystem, ""},
+		{"warning", UITypeSystem},
 		// System / Lifecycle
-		{"shutdown_complete", UITypeSystem, UIStatusIdle},
-		{"session_configured", UITypeSystem, ""},
-		{"mcp_startup_complete", UITypeSystem, ""},
-		{"mcp_list_tools_response", UITypeSystem, ""},
-		{"list_skills_response", UITypeSystem, ""},
-		{"token_count", UITypeSystem, ""},
-		{"context_compacted", UITypeSystem, ""},
-		{"thread_name_updated", UITypeSystem, ""},
-		{"thread_rolled_back", UITypeSystem, ""},
-		{"undo_started", UITypeSystem, ""},
-		{"undo_completed", UITypeSystem, ""},
-		{"entered_review_mode", UITypeSystem, ""},
-		{"exited_review_mode", UITypeSystem, ""},
-		{"background_event", UITypeSystem, ""},
+		{"shutdown_complete", UITypeSystem},
+		{"session_configured", UITypeSystem},
+		{"mcp_startup_update", UITypeSystem},
+		{"mcp_startup_complete", UITypeSystem},
+		{"mcp_list_tools_response", UITypeSystem},
+		{"list_skills_response", UITypeSystem},
+		{"token_count", UITypeSystem},
+		{"context_compacted", UITypeSystem},
+		{"thread_name_updated", UITypeSystem},
+		{"thread_rolled_back", UITypeSystem},
+		{"undo_started", UITypeSystem},
+		{"undo_completed", UITypeSystem},
+		{"entered_review_mode", UITypeSystem},
+		{"exited_review_mode", UITypeSystem},
+		{"background_event", UITypeSystem},
 		// Collab Agents
-		{"collab_agent_spawn_begin", UITypeSystem, UIStatusRunning},
-		{"collab_agent_interaction_begin", UITypeSystem, UIStatusRunning},
-		{"collab_waiting_begin", UITypeSystem, UIStatusRunning},
-		{"collab_agent_spawn_end", UITypeSystem, UIStatusRunning},
-		{"collab_agent_interaction_end", UITypeSystem, UIStatusRunning},
-		{"collab_waiting_end", UITypeSystem, UIStatusRunning},
+		{"collab_agent_spawn_begin", UITypeSystem},
+		{"collab_agent_interaction_begin", UITypeSystem},
+		{"collab_waiting_begin", UITypeSystem},
+		{"collab_agent_spawn_end", UITypeSystem},
+		{"collab_agent_interaction_end", UITypeSystem},
+		{"collab_waiting_end", UITypeSystem},
 	}
 
 	for _, tc := range cases {
-		gotType, gotStat := classifyEvent(tc.codexType)
-		if gotType != tc.wantType || gotStat != tc.wantStat {
-			t.Errorf("classifyEvent(%q) = (%q, %q), want (%q, %q)",
-				tc.codexType, gotType, gotStat, tc.wantType, tc.wantStat)
+		gotType := classifyEvent(tc.codexType)
+		if gotType != tc.wantType {
+			t.Errorf("classifyEvent(%q) = %q, want %q",
+				tc.codexType, gotType, tc.wantType)
 		}
 	}
 }
 
+func TestClassifyEventWithMethod_Fallback(t *testing.T) {
+	gotType := classifyEventWithMethod("unmapped_event", "turn/started")
+	if gotType != UITypeTurnStarted {
+		t.Fatalf("classifyEventWithMethod turn started = %q, want %q", gotType, UITypeTurnStarted)
+	}
+
+	gotType = classifyEventWithMethod("unmapped_event", "turn/completed")
+	if gotType != UITypeTurnComplete {
+		t.Fatalf("classifyEventWithMethod turn completed = %q, want %q", gotType, UITypeTurnComplete)
+	}
+
+	gotType = classifyEventWithMethod("unmapped_event", "codex/event/task_complete")
+	if gotType != UITypeTurnComplete {
+		t.Fatalf("classifyEventWithMethod task complete = %q, want %q", gotType, UITypeTurnComplete)
+	}
+
+	gotType = classifyEventWithMethod("unmapped_event", "item/commandExecution/terminalInteraction")
+	if gotType != UITypeSystem {
+		t.Fatalf("classifyEventWithMethod terminal interaction = %q, want %q", gotType, UITypeSystem)
+	}
+
+	gotType = classifyEventWithMethod("unmapped_event", "codex/event/mcp_startup_update")
+	if gotType != UITypeSystem {
+		t.Fatalf("classifyEventWithMethod mcp startup = %q, want %q", gotType, UITypeSystem)
+	}
+
+	gotType = classifyEventWithMethod("unmapped_event", "codex/event/background_event")
+	if gotType != UITypeSystem {
+		t.Fatalf("classifyEventWithMethod background event = %q, want %q", gotType, UITypeSystem)
+	}
+}
+
+func TestNormalizeEventFromPayload_ItemLifecycleCommand(t *testing.T) {
+	start := NormalizeEventFromPayload("item/started", "item/started", map[string]any{
+		"type":    "commandExecution",
+		"command": "go test ./...",
+	})
+	if start.UIType != UITypeCommandStart {
+		t.Fatalf("item/started command uiType = %q, want %q", start.UIType, UITypeCommandStart)
+	}
+
+	end := NormalizeEventFromPayload("item/completed", "item/completed", map[string]any{
+		"type":      "commandExecution",
+		"exit_code": float64(9),
+	})
+	if end.UIType != UITypeCommandDone {
+		t.Fatalf("item/completed command uiType = %q, want %q", end.UIType, UITypeCommandDone)
+	}
+	if end.ExitCode == nil || *end.ExitCode != 9 {
+		t.Fatalf("item/completed command exitCode = %v, want 9", end.ExitCode)
+	}
+}
+
+func TestNormalizeEventFromPayload_ItemLifecycleFile(t *testing.T) {
+	start := NormalizeEventFromPayload("item/started", "item/started", map[string]any{
+		"item": map[string]any{
+			"type": "fileChange",
+		},
+		"file": "README.md",
+	})
+	if start.UIType != UITypeFileEditStart {
+		t.Fatalf("item/started file uiType = %q, want %q", start.UIType, UITypeFileEditStart)
+	}
+
+	end := NormalizeEventFromPayload("item/completed", "item/completed", map[string]any{
+		"msg": `{"type":"file_change"}`,
+	})
+	if end.UIType != UITypeFileEditDone {
+		t.Fatalf("item/completed file uiType = %q, want %q", end.UIType, UITypeFileEditDone)
+	}
+}
+
 func TestClassifyEvent_UnknownFallback(t *testing.T) {
-	gotType, gotStat := classifyEvent("some_unknown_event_xyz")
-	if gotType != UITypeSystem || gotStat != "" {
-		t.Errorf("classifyEvent(unknown) = (%q, %q), want (%q, %q)",
-			gotType, gotStat, UITypeSystem, "")
+	gotType := classifyEvent("some_unknown_event_xyz")
+	if gotType != UITypeSystem {
+		t.Errorf("classifyEvent(unknown) = %q, want %q",
+			gotType, UITypeSystem)
 	}
 }
 
@@ -191,6 +266,8 @@ func TestExtractExitCodeFromPayload(t *testing.T) {
 	}{
 		{"exec_command_end with exit_code", "exec_command_end", map[string]any{"exit_code": float64(0)}, false, 0},
 		{"exec_command_end nonzero", "exec_command_end", map[string]any{"exit_code": float64(1)}, false, 1},
+		{"item/completed with exit_code", "item/completed", map[string]any{"exit_code": float64(2)}, false, 2},
+		{"codex/event/item_completed with exit_code", "codex/event/item_completed", map[string]any{"exit_code": float64(3)}, false, 3},
 		{"non exec_command_end ignored", "other", map[string]any{"exit_code": float64(0)}, true, 0},
 		{"exec_command_end missing exit_code", "exec_command_end", map[string]any{}, true, 0},
 	}
@@ -225,9 +302,6 @@ func TestNormalizeEvent_Integration(t *testing.T) {
 	ev := NormalizeEvent("exec_command_begin", "", data)
 	if ev.UIType != UITypeCommandStart {
 		t.Errorf("UIType = %q, want %q", ev.UIType, UITypeCommandStart)
-	}
-	if ev.UIStatus != UIStatusRunning {
-		t.Errorf("UIStatus = %q, want %q", ev.UIStatus, UIStatusRunning)
 	}
 	if ev.Text != "hello world" {
 		t.Errorf("Text = %q, want %q", ev.Text, "hello world")

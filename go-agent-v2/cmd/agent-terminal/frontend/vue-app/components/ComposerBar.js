@@ -1,51 +1,259 @@
-import { logDebug } from '../services/log.js';
+import { ref, watch, onUpdated, onBeforeUnmount } from '../../lib/vue.esm-browser.prod.js';
+import { logDebug, logInfo } from '../services/log.js';
 
 export const ComposerBar = {
   name: 'ComposerBar',
   props: {
     composer: { type: Object, required: true },
     disabled: { type: Boolean, default: false },
+    threadId: { type: String, default: '' },
+    interruptible: { type: Boolean, default: false },
+    tokenInline: { type: String, default: '' },
+    tokenTooltip: { type: String, default: '' },
   },
-  emits: ['send'],
-  data() {
-    return {
-      isComposing: false,
-    };
-  },
-  methods: {
-    onPaste(event) {
-      logDebug('ui', 'composerBar.paste', {});
-      this.composer.handlePaste(event);
-    },
-    onCompositionStart() {
-      this.isComposing = true;
-    },
-    onCompositionEnd() {
-      this.isComposing = false;
-    },
-    onSend(event) {
-      const keyCode = Number(event?.keyCode || event?.which || 0);
-      if (event?.type === 'keydown' && (event?.isComposing || this.isComposing || keyCode === 229)) {
-        logDebug('ui', 'composerBar.send.blockedByComposition', {
-          key_code: keyCode,
+  emits: ['send', 'interrupt', 'compact'],
+  setup(props, { emit }) {
+    const isComposing = ref(false);
+    const pauseAcknowledged = ref(false);
+    const interruptPending = ref(false);
+    const interruptRequestThreadId = ref('');
+    const interruptTimeoutId = ref(0);
+
+    function clearInterruptTimeout() {
+      if (!interruptTimeoutId.value) return;
+      window.clearTimeout(interruptTimeoutId.value);
+      interruptTimeoutId.value = 0;
+    }
+
+    function hasReadyInput() {
+      return props.composer.canSend.value;
+    }
+
+    function onInterruptConfirmed(meta = {}) {
+      const currentThreadID = (props.threadId || '').toString();
+      const requestThreadID = (meta.threadId || interruptRequestThreadId.value || '').toString();
+      if (requestThreadID && currentThreadID && requestThreadID !== currentThreadID) {
+        logDebug('ui', 'composerBar.interrupt.confirmed.ignored', {
+          request_thread_id: requestThreadID,
+          current_thread_id: currentThreadID,
         });
         return;
       }
+      clearInterruptTimeout();
+      interruptPending.value = false;
+      interruptRequestThreadId.value = '';
+      pauseAcknowledged.value = true;
+      logInfo('ui', 'composerBar.interrupt.confirmed', {
+        mode: (meta.mode || '').toString(),
+      });
+    }
+
+    function onInterruptRejected(meta = {}) {
+      const currentThreadID = (props.threadId || '').toString();
+      const requestThreadID = (meta.threadId || interruptRequestThreadId.value || '').toString();
+      if (requestThreadID && currentThreadID && requestThreadID !== currentThreadID) {
+        logDebug('ui', 'composerBar.interrupt.rejected.ignored', {
+          request_thread_id: requestThreadID,
+          current_thread_id: currentThreadID,
+        });
+        return;
+      }
+      clearInterruptTimeout();
+      interruptPending.value = false;
+      interruptRequestThreadId.value = '';
+      logInfo('ui', 'composerBar.interrupt.rejected', {
+        reason: (meta.reason || '').toString(),
+        mode: (meta.mode || '').toString(),
+      });
+    }
+
+    function armInterruptTimeout(requestThreadID) {
+      clearInterruptTimeout();
+      interruptTimeoutId.value = window.setTimeout(() => {
+        interruptTimeoutId.value = 0;
+        if (!interruptPending.value) return;
+        onInterruptRejected({
+          reason: 'timeout',
+          mode: 'timeout',
+          threadId: requestThreadID,
+        });
+      }, 15000);
+    }
+
+    function isPauseMode() {
+      return Boolean(props.interruptible);
+    }
+
+    function onPaste(event) {
+      logDebug('ui', 'composerBar.paste', {});
+      props.composer.handlePaste(event);
+    }
+
+    function onCompositionStart() {
+      isComposing.value = true;
+      logDebug('ui', 'composerBar.composition.start', {});
+    }
+
+    function onCompositionEnd() {
+      isComposing.value = false;
+      logDebug('ui', 'composerBar.composition.end', {});
+    }
+
+    function onSend(event) {
+      const keyCode = Number(event?.keyCode || event?.which || 0);
+      const key = (event?.key || '').toString();
+      const imeLikely = event?.isComposing || isComposing.value || keyCode === 229 || key === 'Process' || key === 'Unidentified';
+      if (event?.type === 'keydown' && imeLikely) {
+        logDebug('ui', 'composerBar.send.blockedByComposition', {
+          key_code: keyCode,
+          key,
+          composing: Boolean(event?.isComposing || isComposing.value),
+        });
+        return;
+      }
+      if (!hasReadyInput()) {
+        logDebug('ui', 'composerBar.send.skipped.noInput', {
+          trigger: event?.type || '',
+        });
+        return;
+      }
+      if (event?.type === 'keydown' && typeof event.preventDefault === 'function') {
+        event.preventDefault();
+      }
+      pauseAcknowledged.value = false;
       logDebug('ui', 'composerBar.send.click', {
-        disabled: this.disabled,
+        disabled: props.disabled,
       });
-      this.$emit('send');
-    },
-    onAttach() {
+      emit('send');
+    }
+
+    function onPrimaryAction(event) {
+      if (isPauseMode()) {
+        if (interruptPending.value) return;
+        const requestThreadID = (props.threadId || '').toString();
+        interruptPending.value = true;
+        interruptRequestThreadId.value = requestThreadID;
+        armInterruptTimeout(requestThreadID);
+        logInfo('ui', 'composerBar.interrupt.click', {
+          disabled: props.disabled,
+          pause_ack: pauseAcknowledged.value,
+          pending: true,
+          has_input: Boolean(hasReadyInput()),
+          thread_id: requestThreadID,
+        });
+        emit('interrupt', {
+          threadId: requestThreadID,
+          confirm: (meta) => onInterruptConfirmed({
+            ...meta,
+            threadId: requestThreadID,
+          }),
+          reject: (meta) => onInterruptRejected({
+            ...meta,
+            threadId: requestThreadID,
+          }),
+        });
+        return;
+      }
+      onSend(event);
+    }
+
+    function onEscape(event) {
+      if (!Boolean(props.interruptible)) return;
+      if (interruptPending.value) {
+        if (typeof event?.preventDefault === 'function') event.preventDefault();
+        return;
+      }
+      const requestThreadID = (props.threadId || '').toString();
+      if (!requestThreadID) return;
+      if (typeof event?.preventDefault === 'function') event.preventDefault();
+      interruptPending.value = true;
+      interruptRequestThreadId.value = requestThreadID;
+      armInterruptTimeout(requestThreadID);
+      logInfo('ui', 'composerBar.interrupt.escape', {
+        disabled: props.disabled,
+        pause_ack: pauseAcknowledged.value,
+        pending: true,
+        has_input: Boolean(hasReadyInput()),
+        thread_id: requestThreadID,
+      });
+      emit('interrupt', {
+        threadId: requestThreadID,
+        confirm: (meta) => onInterruptConfirmed({
+          ...meta,
+          threadId: requestThreadID,
+        }),
+        reject: (meta) => onInterruptRejected({
+          ...meta,
+          threadId: requestThreadID,
+        }),
+      });
+    }
+
+    function onCompact() {
+      if (props.disabled) return;
+      if (!(props.threadId || '').toString().trim()) return;
+      emit('compact');
+    }
+
+    function onAttach() {
       logDebug('ui', 'composerBar.attach.click', {
-        disabled: this.disabled || this.composer.state.attaching,
+        disabled: props.disabled || props.composer.state.attaching,
       });
-      this.composer.attachByPicker();
-    },
-    onRemoveAttachment(index) {
+      props.composer.attachByPicker();
+    }
+
+    function onRemoveAttachment(index) {
       logDebug('ui', 'composerBar.attachment.remove', { index });
-      this.composer.removeAttachment(index);
-    },
+      props.composer.removeAttachment(index);
+    }
+
+    watch(
+      () => props.threadId,
+      (next, prev) => {
+        const nextID = (next || '').toString();
+        const prevID = (prev || '').toString();
+        if (nextID === prevID) return;
+        clearInterruptTimeout();
+        isComposing.value = false;
+        pauseAcknowledged.value = false;
+        interruptPending.value = false;
+        interruptRequestThreadId.value = '';
+        logDebug('ui', 'composerBar.thread.switch.reset', {
+          from_thread_id: prevID,
+          to_thread_id: nextID,
+        });
+      },
+    );
+
+    onUpdated(() => {
+      if (pauseAcknowledged.value && hasReadyInput()) {
+        pauseAcknowledged.value = false;
+        logDebug('ui', 'composerBar.pauseAck.resetByInput', {});
+      }
+    });
+
+    onBeforeUnmount(() => {
+      clearInterruptTimeout();
+    });
+
+    return {
+      isComposing,
+      pauseAcknowledged,
+      interruptPending,
+      interruptRequestThreadId,
+      interruptTimeoutId,
+      hasReadyInput,
+      isPauseMode,
+      onPaste,
+      onCompositionStart,
+      onCompositionEnd,
+      onSend,
+      onPrimaryAction,
+      onEscape,
+      onCompact,
+      onAttach,
+      onRemoveAttachment,
+    };
   },
   template: `
     <div id="chat-input-bar" class="chat-input-vue">
@@ -70,9 +278,57 @@ export const ComposerBar = {
           @paste="onPaste"
           @compositionstart="onCompositionStart"
           @compositionend="onCompositionEnd"
-          @keydown.enter.exact.prevent="onSend"
+          @keydown.enter.exact="onSend"
+          @keydown.esc.exact="onEscape"
         ></textarea>
-        <button id="btnSend" class="btn btn-primary" :disabled="disabled || !composer.canSend.value" @click="onSend">发送</button>
+        <div class="composer-action-stack">
+          <div class="composer-top-actions">
+            <button
+              class="composer-compact-btn"
+              type="button"
+              title="压缩上下文"
+              aria-label="压缩上下文"
+              :disabled="disabled || !threadId"
+              @click="onCompact"
+            >
+              <svg class="composer-compact-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M9 5l-4 4 4 4M15 5l4 4-4 4M9 19l-4-4 4-4M15 19l4-4-4-4"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.9"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <span
+              v-if="tokenInline"
+              class="composer-token-chip"
+              :title="tokenTooltip"
+            >CTX {{ tokenInline }}</span>
+          </div>
+          <button
+            id="btnSend"
+            class="btn btn-primary"
+            :class="{ 'btn-stop': isPauseMode() }"
+            :disabled="disabled || (isPauseMode() && interruptPending) || (!isPauseMode() && !hasReadyInput())"
+            :aria-label="isPauseMode() ? '中断' : '发送'"
+            @click="onPrimaryAction"
+          >
+            <span v-if="isPauseMode()" class="btn-stop-icon" aria-hidden="true"></span>
+            <svg v-else class="btn-send-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 17V7M7.5 11.5L12 7l4.5 4.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   `,

@@ -47,6 +47,7 @@ type Client struct {
 	Port      int
 	Cmd       *exec.Cmd
 	ThreadID  string
+	AgentID   string        // 所属 Agent 标识, 用于日志关联
 	Transport TransportMode // 保留字段兼容, 不再使用
 
 	baseURL         string
@@ -60,10 +61,11 @@ type Client struct {
 }
 
 // NewClient 创建客户端 (不启动进程)。
-func NewClient(port int) *Client {
+func NewClient(port int, agentID string) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
 		Port:    port,
+		AgentID: agentID,
 		baseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
 		ctx:     ctx,
 		cancel:  cancel,
@@ -120,6 +122,7 @@ func (c *Client) Spawn(ctx context.Context) error {
 	}
 
 	logger.Infow("codex: process spawned",
+		logger.FieldAgentID, c.AgentID,
 		logger.FieldPort, c.Port,
 		logger.FieldPID, c.Cmd.Process.Pid,
 	)
@@ -139,7 +142,7 @@ func (c *Client) waitForKnownPort(ctx context.Context, deadline time.Time) error
 	backoff := 100 * time.Millisecond
 	for time.Now().Before(deadline) {
 		if err := c.Health(); err == nil {
-			logger.Infow("codex: health check passed", logger.FieldPort, c.Port)
+			logger.Infow("codex: health check passed", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port)
 			return nil
 		}
 		select {
@@ -149,7 +152,7 @@ func (c *Client) waitForKnownPort(ctx context.Context, deadline time.Time) error
 		}
 		backoff = min(backoff*2, 2*time.Second)
 	}
-	logger.Warn("codex: health check timeout", logger.FieldPort, c.Port)
+	logger.Warn("codex: health check timeout", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port)
 	return apperrors.Newf("Client.Spawn", "health check timeout on port %d", c.Port)
 }
 
@@ -428,6 +431,13 @@ func (c *Client) SendDynamicToolResult(callID, output string, requestID *int64) 
 	return apperrors.New("Client.SendDynamicToolResult", "dynamic tool result not supported in REST client, use AppServerClient")
 }
 
+// RespondError 向 codex 发送 JSON-RPC 错误响应。
+//
+// 纯 REST 客户端无 JSON-RPC server request 通道，因此该方法仅用于接口兼容。
+func (c *Client) RespondError(id int64, code int, message string) error {
+	return apperrors.New("Client.RespondError", "server request response not supported in REST client, use AppServerClient")
+}
+
 // ========================================
 // 完整启动流程
 // ========================================
@@ -445,12 +455,13 @@ func (c *Client) SpawnAndConnect(ctx context.Context, prompt, cwd, model string,
 		DynamicTools: dynamicTools,
 	}
 	if _, err := c.CreateThread(req); err != nil {
-		logger.Error("codex: create thread failed", logger.FieldPort, c.Port, logger.FieldError, err)
+		logger.Error("codex: create thread failed", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldError, err)
 		_ = c.Kill()
 		return err
 	}
 
 	logger.Infow("codex: spawn and connect complete",
+		logger.FieldAgentID, c.AgentID,
 		logger.FieldPort, c.Port,
 		logger.FieldThreadID, c.ThreadID,
 	)
@@ -466,7 +477,7 @@ func (c *Client) Shutdown() error {
 	if c.stopped.Swap(true) {
 		return nil
 	}
-	logger.Infow("codex: shutting down", logger.FieldPort, c.Port)
+	logger.Infow("codex: shutting down", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port)
 	if c.stderrCollector != nil {
 		_ = c.stderrCollector.Close()
 	}
@@ -477,7 +488,7 @@ func (c *Client) Shutdown() error {
 // Kill 强制终止子进程。
 func (c *Client) Kill() error {
 	if c.Cmd != nil && c.Cmd.Process != nil {
-		logger.Warn("codex: force killing process", logger.FieldPID, c.Cmd.Process.Pid)
+		logger.Warn("codex: force killing process", logger.FieldAgentID, c.AgentID, logger.FieldPID, c.Cmd.Process.Pid)
 		_ = c.Cmd.Process.Kill()
 		_ = c.Cmd.Wait()
 	}

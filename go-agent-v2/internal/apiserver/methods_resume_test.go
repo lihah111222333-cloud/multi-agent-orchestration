@@ -3,6 +3,7 @@ package apiserver
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/multi-agent/go-agent-v2/internal/store"
@@ -167,6 +168,101 @@ func TestBuildResumeCandidates_NonUUID_EmptyResolved_FallsBackToOriginal(t *test
 	got := buildResumeCandidates("thread-12345", []string{})
 	if len(got) != 1 || got[0] != "thread-12345" {
 		t.Fatalf("expected fallback to original id, got %v", got)
+	}
+}
+
+// ========================================
+// tryResumeCandidates 测试 (TDD RED)
+// ========================================
+
+func TestTryResumeCandidates_SuccessOnFirstCandidate(t *testing.T) {
+	called := []string{}
+	resumeFn := func(id string) error {
+		called = append(called, id)
+		return nil
+	}
+	resumedID, err := tryResumeCandidates(
+		[]string{"uuid-a", "uuid-b"}, "thread-1", resumeFn,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resumedID != "uuid-a" {
+		t.Fatalf("resumedID = %q, want uuid-a", resumedID)
+	}
+	if len(called) != 1 {
+		t.Fatalf("called %d times, want 1", len(called))
+	}
+}
+
+func TestTryResumeCandidates_RetriesOnCandidateError(t *testing.T) {
+	called := []string{}
+	resumeFn := func(id string) error {
+		called = append(called, id)
+		if id == "uuid-a" {
+			return errors.New("rpc error: no rollout found for thread id uuid-a")
+		}
+		return nil
+	}
+	resumedID, err := tryResumeCandidates(
+		[]string{"uuid-a", "uuid-b"}, "thread-1", resumeFn,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resumedID != "uuid-b" {
+		t.Fatalf("resumedID = %q, want uuid-b", resumedID)
+	}
+	if len(called) != 2 {
+		t.Fatalf("called %d times, want 2", len(called))
+	}
+}
+
+func TestTryResumeCandidates_PropagatesNonCandidateError(t *testing.T) {
+	resumeFn := func(id string) error {
+		return errors.New("websocket closed unexpectedly")
+	}
+	_, err := tryResumeCandidates(
+		[]string{"uuid-a"}, "thread-1", resumeFn,
+	)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "websocket closed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTryResumeCandidates_AllExhausted_ReturnsError(t *testing.T) {
+	// 所有候选都是 candidate error → 返回 error，避免伪装 resumed 成功。
+	resumeFn := func(id string) error {
+		return errors.New("rpc error: no rollout found for thread id " + id)
+	}
+	resumedID, err := tryResumeCandidates(
+		[]string{"uuid-a", "uuid-b"}, "thread-1", resumeFn,
+	)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if resumedID != "" {
+		t.Fatalf("resumedID = %q, want empty on error", resumedID)
+	}
+	if !strings.Contains(err.Error(), "all resume candidates unavailable") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTryResumeCandidates_NoCandidates_ReturnsError(t *testing.T) {
+	// 空候选列表 → 返回 error，避免 thread/resume 虚假成功。
+	resumedID, err := tryResumeCandidates(nil, "thread-1", nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if resumedID != "" {
+		t.Fatalf("resumedID = %q, want empty on error", resumedID)
+	}
+	if !strings.Contains(err.Error(), "no resume candidates available") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

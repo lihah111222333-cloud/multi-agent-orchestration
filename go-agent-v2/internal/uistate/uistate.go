@@ -35,20 +35,9 @@ const (
 	UITypeSystem          UIType = "system"
 )
 
-// UIStatus 前端状态标签 (4 种)。
-type UIStatus string
-
-const (
-	UIStatusIdle     UIStatus = "idle"
-	UIStatusThinking UIStatus = "thinking"
-	UIStatusRunning  UIStatus = "running"
-	UIStatusError    UIStatus = "error"
-)
-
 // NormalizedEvent 归一化后的 UI 事件。
 type NormalizedEvent struct {
 	UIType   UIType   `json:"uiType"`
-	UIStatus UIStatus `json:"uiStatus"`
 	Text     string   `json:"text,omitempty"`
 	Command  string   `json:"command,omitempty"`
 	File     string   `json:"file,omitempty"`
@@ -56,6 +45,8 @@ type NormalizedEvent struct {
 	Ref      string   `json:"ref,omitempty"`   // 引用 ID (run_id/thread_id)
 	Error    string   `json:"error,omitempty"` // 错误信息
 	ExitCode *int     `json:"exitCode,omitempty"`
+	RawType  string   `json:"-"`
+	Method   string   `json:"-"`
 }
 
 // ========================================

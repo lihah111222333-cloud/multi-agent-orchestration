@@ -5,9 +5,9 @@ export const SettingsPage = {
   name: 'SettingsPage',
   props: {
     buildInfo: { type: Object, required: true },
-    refreshBuildInfo: { type: Function, required: true },
   },
-  setup(props) {
+  emits: ['refresh'],
+  setup(props, { emit }) {
     const versionText = computed(() => `Agent Orchestrator ${props.buildInfo.version || 'dev'}`);
     const runtimeText = computed(() => props.buildInfo.runtime
       ? `Wails WebKit · Go Backend · ${props.buildInfo.runtime}`
@@ -16,7 +16,7 @@ export const SettingsPage = {
     const commitText = computed(() => props.buildInfo.commit || '-');
     const refresh = () => {
       logInfo('page', 'settings.refreshBuildInfo.click', {});
-      props.refreshBuildInfo();
+      emit('refresh');
     };
 
     onMounted(() => {
@@ -51,7 +51,7 @@ export const SettingsPage = {
           <div class="data-row-vue"><strong>构建时间</strong><span>{{ buildTimeText }}</span></div>
           <div class="data-row-vue"><strong>Commit</strong><span>{{ commitText }}</span></div>
         </div>
-        <div style="margin-top:12px">
+        <div class="settings-action-row">
           <button class="btn btn-secondary" @click="refresh">刷新构建信息</button>
         </div>
       </div>

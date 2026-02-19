@@ -47,3 +47,32 @@ func TestExtractInputs(t *testing.T) {
 		t.Fatalf("files = %#v", files)
 	}
 }
+
+func TestBuildUserTimelineAttachmentsFromInputs_PreferLocalImageURL(t *testing.T) {
+	attachments := buildUserTimelineAttachmentsFromInputs([]UserInput{
+		{
+			Type: "localImage",
+			Path: "/tmp/clipboard-1.png",
+			URL:  "data:image/png;base64,AAAA",
+		},
+		{
+			Type: "mention",
+			Path: "/tmp/spec.md",
+		},
+	})
+	if len(attachments) != 2 {
+		t.Fatalf("len(attachments) = %d, want 2", len(attachments))
+	}
+	if attachments[0].Kind != "image" {
+		t.Fatalf("attachments[0].Kind = %q, want image", attachments[0].Kind)
+	}
+	if attachments[0].PreviewURL != "data:image/png;base64,AAAA" {
+		t.Fatalf("attachments[0].PreviewURL = %q", attachments[0].PreviewURL)
+	}
+	if attachments[0].Path != "/tmp/clipboard-1.png" {
+		t.Fatalf("attachments[0].Path = %q", attachments[0].Path)
+	}
+	if attachments[1].Kind != "file" || attachments[1].Path != "/tmp/spec.md" {
+		t.Fatalf("attachments[1] = %+v", attachments[1])
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	goruntime "runtime"
 	"strings"
 	"time"
 
@@ -58,6 +59,7 @@ func (s *Server) registerMethods() {
 	s.methods["turn/start"] = typedHandler(s.turnStartTyped)
 	s.methods["turn/steer"] = typedHandler(s.turnSteerTyped)
 	s.methods["turn/interrupt"] = s.turnInterrupt
+	s.methods["turn/forceComplete"] = s.turnForceComplete
 	s.methods["review/start"] = typedHandler(s.reviewStartTyped)
 
 	// § 4. 文件搜索 (4 methods)
@@ -132,6 +134,10 @@ func (s *Server) registerMethods() {
 	s.methods["ui/projects/setActive"] = typedHandler(s.uiProjectsSetActive)
 	s.methods["ui/dashboard/get"] = typedHandler(s.uiDashboardGet)
 	s.methods["ui/state/get"] = s.uiStateGet
+
+	// § 15. Debug (运行时诊断)
+	s.methods["debug/runtime"] = s.debugRuntime
+	s.methods["debug/gc"] = s.debugForceGC
 }
 
 // ========================================
@@ -241,25 +247,21 @@ type threadResumeResponse struct {
 
 func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (any, error) {
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		resumeThreadID := strings.TrimSpace(p.ThreadID)
-		if !isLikelyCodexThreadID(resumeThreadID) {
-			if resolved := s.resolveHistoricalCodexThreadID(ctx, p.ThreadID); resolved != "" {
-				resumeThreadID = resolved
-			}
-		}
-		if !isLikelyCodexThreadID(resumeThreadID) {
-			return nil, apperrors.Newf("Server.threadResume", "unable to resolve codex thread id for %s", p.ThreadID)
-		}
-		if err := proc.Client.ResumeThread(codex.ResumeThreadRequest{
-			ThreadID: resumeThreadID,
-			Path:     p.Path,
-			Cwd:      p.Cwd,
-		}); err != nil {
+		candidates := buildResumeCandidates(p.ThreadID, s.resolveHistoricalCodexThreadIDs(ctx, p.ThreadID))
+		resumedID, err := tryResumeCandidates(candidates, p.ThreadID, func(id string) error {
+			return proc.Client.ResumeThread(codex.ResumeThreadRequest{
+				ThreadID: id,
+				Path:     p.Path,
+				Cwd:      p.Cwd,
+			})
+		})
+		if err != nil {
 			return nil, apperrors.Wrap(err, "Server.threadResume", "resume thread")
 		}
+		_ = resumedID // logged inside tryResumeCandidates
 		return threadResumeResponse{
 			Thread: threadInfo{ID: p.ThreadID, Status: "resumed"},
-			Model:  p.Model, // model is optional in request, reflect back if needed or empty
+			Model:  p.Model,
 		}, nil
 	})
 }
@@ -542,7 +544,7 @@ type threadMessagesParams struct {
 }
 
 const (
-	threadMessageHydrationMaxRecords = 5000
+	threadMessageHydrationMaxRecords = 20000
 	threadMessageHydrationPageSize   = 500
 )
 
@@ -565,62 +567,121 @@ func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams
 	total, totalErr := s.msgStore.CountByAgent(ctx, p.ThreadID)
 	if totalErr != nil {
 		logger.Warn("thread/messages: count messages failed",
-			logger.FieldThreadID, p.ThreadID,
+			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 			logger.FieldError, totalErr,
 		)
 	}
 
-	if s.uiRuntime != nil {
-		hydrateMsgs := msgs
-		if p.Before == 0 {
-			hydrateLimit := calculateHydrationLoadLimit(len(msgs), total)
-			if hydrateLimit > len(msgs) {
-				allMsgs, loadErr := s.loadHistoryForHydration(ctx, p.ThreadID, hydrateLimit)
-				if loadErr != nil {
-					logger.Warn("thread/messages: hydrate load full history failed",
-						logger.FieldThreadID, p.ThreadID,
-						logger.FieldError, loadErr,
-						"hydrate_limit", hydrateLimit,
-					)
-				} else {
-					hydrateMsgs = allMsgs
-				}
-			}
-			if total > threadMessageHydrationMaxRecords {
-				logger.Warn("thread/messages: hydration capped by max records",
-					logger.FieldThreadID, p.ThreadID,
-					"total", total,
-					"hydrate_max", threadMessageHydrationMaxRecords,
-				)
-			}
-		}
-
-		records := make([]uistate.HistoryRecord, 0, len(hydrateMsgs))
-		for _, msg := range hydrateMsgs {
-			records = append(records, uistate.HistoryRecord{
-				ID:        msg.ID,
-				Role:      msg.Role,
-				EventType: msg.EventType,
-				Method:    msg.Method,
-				Content:   msg.Content,
-				Metadata:  msg.Metadata,
-				CreatedAt: msg.CreatedAt,
-			})
-		}
-		s.uiRuntime.HydrateHistory(p.ThreadID, records)
-		logger.Debug("thread/messages: history hydrated",
-			logger.FieldThreadID, p.ThreadID,
-			"response_count", len(msgs),
-			"hydrate_count", len(hydrateMsgs),
+	// 第一页立即返回, 剩余页后台流式加载 + 通知
+	if s.uiRuntime != nil && p.Before == 0 {
+		firstRecords := msgsToRecords(msgs)
+		s.uiRuntime.HydrateHistory(p.ThreadID, firstRecords)
+		logger.Debug("thread/messages: first page hydrated",
+			logger.FieldAgentID, p.ThreadID,
+			"first_page_count", len(msgs),
 			"total", total,
-			"before", p.Before,
 		)
+
+		hydrateLimit := calculateHydrationLoadLimit(len(msgs), total)
+		if hydrateLimit > len(msgs) {
+			threadID := p.ThreadID
+			util.SafeGo(func() { s.streamRemainingHistory(threadID, msgs, hydrateLimit) })
+		}
+	} else if s.uiRuntime != nil {
+		// 翻页请求: 直接 hydrate 当前页
+		records := msgsToRecords(msgs)
+		s.uiRuntime.HydrateHistory(p.ThreadID, records)
 	}
 
 	return map[string]any{
 		"messages": msgs,
 		"total":    total,
 	}, nil
+}
+
+// streamRemainingHistory 后台分页加载剩余历史, 加载完后通过 AppendHistory 追加到 timeline。
+//
+// firstPage 已通过 HydrateHistory 加载, 此处只加载后续页并追加。
+func (s *Server) streamRemainingHistory(threadID string, firstPage []store.AgentMessage, limit int) {
+	if s.msgStore == nil || limit <= 0 {
+		return
+	}
+
+	before := int64(0)
+	if len(firstPage) > 0 {
+		before = firstPage[len(firstPage)-1].ID
+	}
+
+	// 只累积后续页 (不含 firstPage)
+	remaining := make([]store.AgentMessage, 0, limit-len(firstPage))
+	pageNum := 1
+	loaded := len(firstPage)
+
+	for loaded < limit {
+		batchLimit := min(threadMessageHydrationPageSize, limit-loaded)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		batch, err := s.msgStore.ListByAgent(ctx, threadID, batchLimit, before)
+		cancel()
+		if err != nil {
+			logger.Warn("thread/messages: stream page load failed",
+				logger.FieldAgentID, threadID,
+				logger.FieldError, err,
+				"page", pageNum,
+				"loaded", loaded,
+			)
+			break
+		}
+		if len(batch) == 0 {
+			break
+		}
+
+		remaining = append(remaining, batch...)
+		pageNum++
+		loaded += len(batch)
+
+		if len(batch) < batchLimit {
+			break
+		}
+		before = batch[len(batch)-1].ID
+	}
+
+	if len(remaining) == 0 {
+		return
+	}
+
+	// 追加到已有 timeline (不重置)
+	records := msgsToRecords(remaining)
+	s.uiRuntime.AppendHistory(threadID, records)
+
+	// 通知前端 timeline 已更新
+	s.Notify("thread/messages/page", map[string]any{
+		"threadId":   threadID,
+		"totalCount": loaded,
+		"pages":      pageNum,
+	})
+
+	logger.Debug("thread/messages: streaming hydration complete",
+		logger.FieldAgentID, threadID,
+		"total_loaded", loaded,
+		"pages", pageNum,
+	)
+}
+
+// msgsToRecords 将消息列表转为 hydration 记录。
+func msgsToRecords(msgs []store.AgentMessage) []uistate.HistoryRecord {
+	records := make([]uistate.HistoryRecord, 0, len(msgs))
+	for _, msg := range msgs {
+		records = append(records, uistate.HistoryRecord{
+			ID:        msg.ID,
+			Role:      msg.Role,
+			EventType: msg.EventType,
+			Method:    msg.Method,
+			Content:   msg.Content,
+			Metadata:  msg.Metadata,
+			CreatedAt: msg.CreatedAt,
+		})
+	}
+	return records
 }
 
 func calculateHydrationLoadLimit(initialCount int, total int64) int {
@@ -642,11 +703,11 @@ func (s *Server) loadHistoryForHydration(ctx context.Context, threadID string, l
 		return []store.AgentMessage{}, nil
 	}
 
-	result := make([]store.AgentMessage, 0, minInt(limit, threadMessageHydrationPageSize))
+	result := make([]store.AgentMessage, 0, min(limit, threadMessageHydrationPageSize))
 	before := int64(0)
 
 	for len(result) < limit {
-		batchLimit := minInt(threadMessageHydrationPageSize, limit-len(result))
+		batchLimit := min(threadMessageHydrationPageSize, limit-len(result))
 		batch, err := s.msgStore.ListByAgent(ctx, threadID, batchLimit, before)
 		if err != nil {
 			return nil, err
@@ -662,13 +723,6 @@ func (s *Server) loadHistoryForHydration(ctx context.Context, threadID string, l
 	}
 
 	return result, nil
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // ========================================
@@ -705,6 +759,21 @@ type turnStartResponse struct {
 	Turn turnInfo `json:"turn"`
 }
 
+type activeTurnIDReader interface {
+	GetActiveTurnID() string
+}
+
+func resolveClientActiveTurnID(client codex.CodexClient) string {
+	if client == nil {
+		return ""
+	}
+	reader, ok := client.(activeTurnIDReader)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(reader.GetActiveTurnID())
+}
+
 func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, error) {
 	proc, err := s.ensureThreadReadyForTurn(ctx, p.ThreadID, p.Cwd)
 	if err != nil {
@@ -713,7 +782,7 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 
 	prompt, images, files := extractInputs(p.Input)
 	logger.Info("turn/start: input prepared",
-		logger.FieldThreadID, p.ThreadID,
+		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 		"text_len", len(prompt),
 		"images", len(images),
 		"files", len(files),
@@ -722,15 +791,25 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 		return nil, apperrors.Wrap(err, "Server.turnStart", "submit prompt")
 	}
 	if s.uiRuntime != nil {
-		s.uiRuntime.AppendUserMessage(p.ThreadID, prompt, buildUserTimelineAttachments(images, files))
+		attachments := buildUserTimelineAttachmentsFromInputs(p.Input)
+		if len(attachments) == 0 {
+			attachments = buildUserTimelineAttachments(images, files)
+		}
+		s.uiRuntime.AppendUserMessage(p.ThreadID, prompt, attachments)
 	}
 
 	// 持久化用户消息
 	util.SafeGo(func() { s.PersistUserMessage(p.ThreadID, prompt, p.Input) })
 
-	turnID := fmt.Sprintf("turn-%d", time.Now().UnixMilli())
+	resolvedTurnID := resolveClientActiveTurnID(proc.Client)
+	if resolvedTurnID == "" {
+		logger.Warn("turn/start: active turn id unavailable after submit; tracker will use synthetic id",
+			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+		)
+	}
+	turnID := s.beginTrackedTurn(p.ThreadID, resolvedTurnID)
 	return turnStartResponse{
-		Turn: turnInfo{ID: turnID, Status: "started"},
+		Turn: turnInfo{ID: turnID, Status: "inProgress"},
 	}, nil
 }
 
@@ -750,7 +829,229 @@ func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, erro
 }
 
 func (s *Server) turnInterrupt(_ context.Context, params json.RawMessage) (any, error) {
-	return s.sendSlashCommand(params, "/interrupt")
+	start := time.Now()
+	var p threadIDParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, apperrors.Wrap(err, "Server.turnInterrupt", "unmarshal params")
+	}
+	beforeState := s.readThreadRuntimeState(p.ThreadID)
+	activeTrackedBefore := s.hasActiveTrackedTurn(p.ThreadID)
+	activeBefore := isInterruptActiveState(beforeState)
+	logger.Info("turn/interrupt: request",
+		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+		logger.FieldParamsLen, len(params),
+		"state_before", beforeState,
+		"active_before", activeBefore,
+		"active_tracked_before", activeTrackedBefore,
+	)
+	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
+		if err := proc.Client.SendCommand("/interrupt", ""); err != nil {
+			if isInterruptNoActiveTurnError(err) {
+				if activeBefore || activeTrackedBefore {
+					if completion, ok := s.completeTrackedTurn(p.ThreadID, "completed", "interrupt_no_active_turn"); ok {
+						s.Notify("turn/completed", completion)
+					} else {
+						s.Notify("turn/completed", map[string]any{
+							"threadId": p.ThreadID,
+							"status":   "completed",
+							"reason":   "interrupt_no_active_turn",
+						})
+					}
+				}
+				logger.Info("turn/interrupt: no active turn",
+					logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+					"state_before", beforeState,
+					logger.FieldDurationMS, time.Since(start).Milliseconds(),
+				)
+				return map[string]any{
+					"confirmed":     false,
+					"mode":          "no_active_turn",
+					"interruptSent": false,
+					"stateBefore":   beforeState,
+					"stateAfter":    beforeState,
+				}, nil
+			}
+			logger.Warn("turn/interrupt: send command failed",
+				logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+				logger.FieldError, err,
+				logger.FieldDurationMS, time.Since(start).Milliseconds(),
+			)
+			return nil, err
+		}
+		logger.Info("turn/interrupt: command sent",
+			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+			logger.FieldDurationMS, time.Since(start).Milliseconds(),
+		)
+		s.markTrackedTurnInterruptRequested(p.ThreadID)
+		confirmed, afterState, waitedMS, observedActive := s.waitInterruptOutcome(
+			p.ThreadID,
+			6*time.Second,
+			activeBefore || activeTrackedBefore,
+		)
+		mode := interruptSettleMode(confirmed, afterState)
+		if !observedActive {
+			confirmed = false
+			mode = "no_active_turn"
+		}
+		logger.Info("turn/interrupt: settle",
+			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+			"confirmed", confirmed,
+			"mode", mode,
+			"active_observed", observedActive,
+			"state_before", beforeState,
+			"state_after", afterState,
+			"waited_ms", waitedMS,
+			logger.FieldDurationMS, time.Since(start).Milliseconds(),
+		)
+		return map[string]any{
+			"confirmed":      confirmed,
+			"mode":           mode,
+			"interruptSent":  true,
+			"stateBefore":    beforeState,
+			"stateAfter":     afterState,
+			"waitedMs":       waitedMS,
+			"activeObserved": observedActive,
+		}, nil
+	})
+}
+
+// turnForceComplete 强制完成当前 turn (中断 + 清理跟踪状态)。
+func (s *Server) turnForceComplete(_ context.Context, params json.RawMessage) (any, error) {
+	var p threadIDParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, apperrors.Wrap(err, "Server.turnForceComplete", "unmarshal params")
+	}
+	logger.Info("turn/forceComplete: request",
+		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+	)
+	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
+		// 尝试发送中断; 忽略 "no active turn" 错误。
+		_ = proc.Client.SendCommand("/interrupt", "")
+
+		// 无论中断是否成功, 都强制清理 tracked turn 状态。
+		if completion, ok := s.completeTrackedTurn(p.ThreadID, "completed", "force_complete"); ok {
+			s.Notify("turn/completed", completion)
+		} else {
+			s.Notify("turn/completed", map[string]any{
+				"threadId": p.ThreadID,
+				"status":   "completed",
+				"reason":   "force_complete",
+			})
+		}
+
+		return map[string]any{
+			"confirmed":      true,
+			"forceCompleted": true,
+		}, nil
+	})
+}
+
+func normalizeInterruptState(raw string) string {
+	state := strings.ToLower(strings.TrimSpace(raw))
+	if state == "" {
+		return "idle"
+	}
+	switch state {
+	case "completed", "complete", "done", "success", "succeeded", "ready", "stopped", "ended", "closed":
+		return "idle"
+	case "failed", "fail":
+		return "error"
+	default:
+		return state
+	}
+}
+
+func isInterruptActiveState(state string) bool {
+	switch normalizeInterruptState(state) {
+	case "starting", "thinking", "responding", "running", "editing", "waiting", "syncing":
+		return true
+	default:
+		return false
+	}
+}
+
+func isInterruptNoActiveTurnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no active turn") ||
+		strings.Contains(message, "nothing to interrupt") ||
+		strings.Contains(message, "not interruptible")
+}
+
+func (s *Server) readThreadRuntimeState(threadID string) string {
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return "idle"
+	}
+	if s.uiRuntime == nil {
+		if s.hasActiveTrackedTurn(id) {
+			return "running"
+		}
+		return ""
+	}
+	snapshot := s.uiRuntime.Snapshot()
+	state := normalizeInterruptState(snapshot.Statuses[id])
+	if state == "idle" && s.hasActiveTrackedTurn(id) {
+		return "running"
+	}
+	return state
+}
+
+func (s *Server) waitInterruptSettled(threadID string, timeout time.Duration) (bool, string, int64) {
+	confirmed, afterState, waitedMS, _ := s.waitInterruptOutcome(threadID, timeout, true)
+	return confirmed, afterState, waitedMS
+}
+
+func (s *Server) waitInterruptOutcome(threadID string, timeout time.Duration, activeHint bool) (bool, string, int64, bool) {
+	start := time.Now()
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return false, "idle", 0, false
+	}
+	observedActive := activeHint
+	if terminalStatus, ok := s.waitTrackedTurnTerminal(id, timeout); ok {
+		afterState := normalizeInterruptState(terminalStatus)
+		confirmed := strings.EqualFold(terminalStatus, "interrupted")
+		return confirmed, afterState, time.Since(start).Milliseconds(), true
+	}
+	if s.uiRuntime == nil {
+		return false, "", time.Since(start).Milliseconds(), observedActive
+	}
+	deadline := start.Add(timeout)
+	lastState := s.readThreadRuntimeState(id)
+	if isInterruptActiveState(lastState) {
+		observedActive = true
+	}
+	for {
+		if !isInterruptActiveState(lastState) {
+			if !observedActive {
+				return false, lastState, time.Since(start).Milliseconds(), false
+			}
+			return true, lastState, time.Since(start).Milliseconds(), true
+		}
+		observedActive = true
+		if time.Now().After(deadline) {
+			return false, lastState, time.Since(start).Milliseconds(), true
+		}
+		time.Sleep(120 * time.Millisecond)
+		lastState = s.readThreadRuntimeState(id)
+	}
+}
+
+func interruptSettleMode(confirmed bool, afterState string) string {
+	if confirmed {
+		return "interrupt_confirmed"
+	}
+	switch normalizeInterruptState(afterState) {
+	case "error":
+		return "interrupt_terminal_failed"
+	case "idle":
+		return "interrupt_terminal_completed"
+	default:
+		return "interrupt_timeout"
+	}
 }
 
 // reviewStartParams review/start 请求参数。
@@ -1252,7 +1553,7 @@ func (s *Server) threadExistsInHistory(ctx context.Context, threadID string) boo
 	count, err := s.msgStore.CountByAgent(dbCtx, id)
 	if err != nil {
 		logger.Warn("turn/start: check thread history failed",
-			logger.FieldThreadID, id,
+			logger.FieldAgentID, id, logger.FieldThreadID, id,
 			logger.FieldError, err,
 		)
 		return false
@@ -1379,6 +1680,55 @@ func buildResumeCandidates(threadID string, resolved []string) []string {
 	return []string{id}
 }
 
+// tryResumeCandidates 按顺序尝试候选 thread ID 恢复会话。
+//
+// 行为:
+//   - 成功 → 返回 (成功ID, nil)
+//   - 候选错误 (isHistoricalResumeCandidateError) → 跳过,尝试下一个
+//   - 非候选错误 (网络等) → 立即返回 error
+//   - 所有候选耗尽 → 返回 error (避免伪造 resumed 成功)
+//   - 无候选 → 返回 error
+func tryResumeCandidates(candidates []string, fallbackID string, resumeFn func(string) error) (string, error) {
+	if len(candidates) == 0 {
+		logger.Warn("thread/resume: no resume candidates available",
+			logger.FieldAgentID, fallbackID, logger.FieldThreadID, fallbackID,
+			"reason", "no codex thread ID resolved from history",
+		)
+		return "", apperrors.Newf("tryResumeCandidates", "no resume candidates available for thread %s", fallbackID)
+	}
+
+	var lastErr error
+	for _, id := range candidates {
+		err := resumeFn(id)
+		if err == nil {
+			return id, nil
+		}
+		lastErr = err
+		if isHistoricalResumeCandidateError(err) {
+			logger.Warn("thread/resume: candidate unavailable, trying next",
+				logger.FieldAgentID, fallbackID, logger.FieldThreadID, fallbackID,
+				"resume_thread_id", id,
+				logger.FieldError, err,
+			)
+			continue
+		}
+		// 非候选错误 (网络断开等) → 直接传播
+		return "", err
+	}
+
+	// 所有候选都是 candidate error → 返回 error，避免伪装恢复成功
+	logger.Warn("thread/resume: all resume candidates exhausted",
+		logger.FieldAgentID, fallbackID, logger.FieldThreadID, fallbackID,
+		"candidate_count", len(candidates),
+		"last_error", lastErr,
+		"reason", "all historical rollouts unavailable",
+	)
+	if lastErr != nil {
+		return "", apperrors.Wrapf(lastErr, "tryResumeCandidates", "all resume candidates unavailable for thread %s after %d attempts", fallbackID, len(candidates))
+	}
+	return "", apperrors.Newf("tryResumeCandidates", "all resume candidates unavailable for thread %s after %d attempts", fallbackID, len(candidates))
+}
+
 func resolveResumeThreadIDsFromMessages(messages []store.AgentMessage) []string {
 	type sessionCandidate struct {
 		threadID   string
@@ -1466,7 +1816,7 @@ func (s *Server) resolveHistoricalCodexThreadIDs(ctx context.Context, agentID st
 	msgs, err := s.msgStore.ListByAgent(dbCtx, id, 500, 0)
 	if err != nil {
 		logger.Warn("turn/start: resolve historical codex thread id failed",
-			logger.FieldThreadID, id,
+			logger.FieldAgentID, id, logger.FieldThreadID, id,
 			logger.FieldError, err,
 		)
 		return nil
@@ -1492,12 +1842,33 @@ func isHistoricalResumeCandidateError(err error) bool {
 }
 
 func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd string) (*runner.AgentProcess, error) {
+	// D11: 总超时 45s，避免 Launch(30s)+Resume(30s) 串行导致前端 turn/start 永不回。
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+
 	id := strings.TrimSpace(threadID)
 	if id == "" {
 		return nil, apperrors.New("Server.ensureThreadReady", "threadId is required")
 	}
+	launchCwd := strings.TrimSpace(cwd)
+	if launchCwd == "" {
+		launchCwd = "."
+	}
 
 	if proc := s.mgr.Get(id); proc != nil {
+		codexThreadID := strings.TrimSpace(proc.Client.GetThreadID())
+		if codexThreadID != "" {
+			if err := proc.Client.ResumeThread(codex.ResumeThreadRequest{
+				ThreadID: codexThreadID,
+				Cwd:      launchCwd,
+			}); err != nil {
+				logger.Warn("turn/start: running thread listener refresh failed, continue with existing session",
+					logger.FieldAgentID, id, logger.FieldThreadID, id,
+					"resume_thread_id", codexThreadID,
+					logger.FieldError, err,
+				)
+			}
+		}
 		return proc, nil
 	}
 	if !s.threadExistsInHistory(ctx, id) {
@@ -1510,10 +1881,6 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 		resumeCandidates = append(resumeCandidates, s.resolveHistoricalCodexThreadIDs(ctx, id)...)
 	}
 
-	launchCwd := strings.TrimSpace(cwd)
-	if launchCwd == "" {
-		launchCwd = "."
-	}
 	dynamicTools := s.buildAllDynamicTools()
 
 	if err := s.mgr.Launch(ctx, id, id, "", launchCwd, dynamicTools); err != nil {
@@ -1530,7 +1897,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	}
 	if len(resumeCandidates) == 0 {
 		logger.Warn("turn/start: no valid historical codex thread id, continue with fresh session",
-			logger.FieldThreadID, id,
+			logger.FieldAgentID, id, logger.FieldThreadID, id,
 		)
 		return proc, nil
 	}
@@ -1542,7 +1909,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 		})
 		if err == nil {
 			logger.Info("turn/start: historical thread auto-loaded",
-				logger.FieldThreadID, id,
+				logger.FieldAgentID, id, logger.FieldThreadID, id,
 				"resume_thread_id", resumeThreadID,
 				logger.FieldCwd, launchCwd,
 			)
@@ -1552,7 +1919,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 		lastResumeErr = err
 		if isHistoricalResumeCandidateError(err) {
 			logger.Warn("turn/start: historical resume candidate unavailable, try next",
-				logger.FieldThreadID, id,
+				logger.FieldAgentID, id, logger.FieldThreadID, id,
 				"resume_thread_id", resumeThreadID,
 				logger.FieldError, err,
 			)
@@ -1561,7 +1928,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 
 		if stopErr := s.mgr.Stop(id); stopErr != nil {
 			logger.Warn("turn/start: auto-loaded thread stop after resume failed",
-				logger.FieldThreadID, id,
+				logger.FieldAgentID, id, logger.FieldThreadID, id,
 				logger.FieldError, stopErr,
 			)
 		}
@@ -1571,7 +1938,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	if lastResumeErr != nil && !isHistoricalResumeCandidateError(lastResumeErr) {
 		if stopErr := s.mgr.Stop(id); stopErr != nil {
 			logger.Warn("turn/start: auto-loaded thread stop after resume failed",
-				logger.FieldThreadID, id,
+				logger.FieldAgentID, id, logger.FieldThreadID, id,
 				logger.FieldError, stopErr,
 			)
 		}
@@ -1579,7 +1946,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	}
 
 	logger.Warn("turn/start: no available historical rollout, continue with fresh session",
-		logger.FieldThreadID, id,
+		logger.FieldAgentID, id, logger.FieldThreadID, id,
 		"candidate_count", len(resumeCandidates),
 		logger.FieldCwd, launchCwd,
 	)
@@ -1631,6 +1998,12 @@ func (s *Server) sendSlashCommandWithArgs(params json.RawMessage, command string
 // extractInputs 从 UserInput 数组提取 prompt/images/files。
 func extractInputs(inputs []UserInput) (prompt string, images, files []string) {
 	var texts []string
+	isRemoteImageURL := func(raw string) bool {
+		value := strings.ToLower(strings.TrimSpace(raw))
+		return strings.HasPrefix(value, "http://") ||
+			strings.HasPrefix(value, "https://") ||
+			strings.HasPrefix(value, "data:image/")
+	}
 	for _, inp := range inputs {
 		switch strings.ToLower(strings.TrimSpace(inp.Type)) {
 		case "text":
@@ -1644,6 +2017,10 @@ func extractInputs(inputs []UserInput) (prompt string, images, files []string) {
 				images = append(images, value)
 			}
 		case "localimage":
+			if value := strings.TrimSpace(inp.URL); isRemoteImageURL(value) {
+				images = append(images, value)
+				continue
+			}
 			if value := strings.TrimSpace(inp.Path); value != "" {
 				images = append(images, value)
 			}
@@ -1731,6 +2108,62 @@ func buildUserTimelineAttachments(images, files []string) []uistate.TimelineAtta
 			Name: buildAttachmentName(path),
 			Path: path,
 		})
+	}
+	return attachments
+}
+
+func buildUserTimelineAttachmentsFromInputs(inputs []UserInput) []uistate.TimelineAttachment {
+	if len(inputs) == 0 {
+		return nil
+	}
+	attachments := make([]uistate.TimelineAttachment, 0, len(inputs))
+	for _, input := range inputs {
+		kind := strings.ToLower(strings.TrimSpace(input.Type))
+		switch kind {
+		case "image":
+			imageURL := strings.TrimSpace(input.URL)
+			if imageURL == "" {
+				imageURL = strings.TrimSpace(input.Path)
+			}
+			if imageURL == "" {
+				continue
+			}
+			attachments = append(attachments, uistate.TimelineAttachment{
+				Kind:       "image",
+				Name:       buildAttachmentName(imageURL),
+				Path:       imageURL,
+				PreviewURL: buildAttachmentPreviewURL(imageURL),
+			})
+		case "localimage":
+			imagePath := strings.TrimSpace(input.Path)
+			preview := strings.TrimSpace(input.URL)
+			if preview == "" {
+				preview = imagePath
+			}
+			if preview == "" {
+				continue
+			}
+			nameSource := imagePath
+			if nameSource == "" {
+				nameSource = preview
+			}
+			attachments = append(attachments, uistate.TimelineAttachment{
+				Kind:       "image",
+				Name:       buildAttachmentName(nameSource),
+				Path:       imagePath,
+				PreviewURL: buildAttachmentPreviewURL(preview),
+			})
+		case "mention", "filecontent", "file":
+			path := strings.TrimSpace(input.Path)
+			if path == "" {
+				continue
+			}
+			attachments = append(attachments, uistate.TimelineAttachment{
+				Kind: "file",
+				Name: buildAttachmentName(path),
+				Path: path,
+			})
+		}
 	}
 	return attachments
 }
@@ -1950,7 +2383,7 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 	if s.uiRuntime == nil {
 		return map[string]any{}, nil
 	}
-	snapshot := s.uiRuntime.Snapshot()
+	snapshot := s.uiRuntime.SnapshotLight()
 	prefs := map[string]any{}
 	if s.prefManager != nil {
 		loaded, err := s.prefManager.GetAll(ctx)
@@ -1964,29 +2397,56 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 	resolvedMain := resolveMainAgentPreference(snapshot, prefs)
 	if resolvedMain != asString(prefs["mainAgentId"]) {
 		s.uiRuntime.SetMainAgent(resolvedMain)
-		snapshot = s.uiRuntime.Snapshot()
-		persistResolvedUIPreference(ctx, s.prefManager, "mainAgentId", resolvedMain, prefs["mainAgentId"])
+		snapshot = s.uiRuntime.SnapshotLight()
+		pm := s.prefManager
+		prev := prefs["mainAgentId"]
+		util.SafeGo(func() { persistResolvedUIPreference(context.Background(), pm, "mainAgentId", resolvedMain, prev) })
 		prefs["mainAgentId"] = resolvedMain
 	}
 
 	resolvedActiveThreadID := resolvePreferredThreadID(snapshot.Threads, asString(prefs["activeThreadId"]))
-	persistResolvedUIPreference(ctx, s.prefManager, "activeThreadId", resolvedActiveThreadID, prefs["activeThreadId"])
+	prevActive := prefs["activeThreadId"]
+	util.SafeGo(func() {
+		persistResolvedUIPreference(context.Background(), s.prefManager, "activeThreadId", resolvedActiveThreadID, prevActive)
+	})
 	prefs["activeThreadId"] = resolvedActiveThreadID
 
 	resolvedActiveCmdThreadID := resolvePreferredCmdThreadID(snapshot.Threads, resolvedMain, asString(prefs["activeCmdThreadId"]))
-	persistResolvedUIPreference(ctx, s.prefManager, "activeCmdThreadId", resolvedActiveCmdThreadID, prefs["activeCmdThreadId"])
+	prevCmd := prefs["activeCmdThreadId"]
+	util.SafeGo(func() {
+		persistResolvedUIPreference(context.Background(), s.prefManager, "activeCmdThreadId", resolvedActiveCmdThreadID, prevCmd)
+	})
 	prefs["activeCmdThreadId"] = resolvedActiveCmdThreadID
 
+	// 按需获取活跃线程的 timeline/diff, 避免深拷贝所有线程
+	timelinesByThread := map[string][]uistate.TimelineItem{}
+	diffTextByThread := map[string]string{}
+	activeIDs := []string{resolvedActiveThreadID, resolvedActiveCmdThreadID}
+	for _, tid := range activeIDs {
+		tid = strings.TrimSpace(tid)
+		if tid == "" {
+			continue
+		}
+		if _, ok := timelinesByThread[tid]; ok {
+			continue
+		}
+		timelinesByThread[tid] = s.uiRuntime.ThreadTimeline(tid)
+		diffTextByThread[tid] = s.uiRuntime.ThreadDiff(tid)
+	}
+
 	result := map[string]any{
-		"threads":            snapshot.Threads,
-		"statuses":           snapshot.Statuses,
-		"timelinesByThread":  snapshot.TimelinesByThread,
-		"diffTextByThread":   snapshot.DiffTextByThread,
-		"agentMetaById":      snapshot.AgentMetaByID,
-		"workspaceRunsByKey": snapshot.WorkspaceRunsByKey,
-		"activeThreadId":     resolvedActiveThreadID,
-		"activeCmdThreadId":  resolvedActiveCmdThreadID,
-		"mainAgentId":        resolvedMain,
+		"threads":               snapshot.Threads,
+		"statuses":              snapshot.Statuses,
+		"statusHeadersByThread": snapshot.StatusHeadersByThread,
+		"statusDetailsByThread": snapshot.StatusDetailsByThread,
+		"timelinesByThread":     timelinesByThread,
+		"diffTextByThread":      diffTextByThread,
+		"tokenUsageByThread":    snapshot.TokenUsageByThread,
+		"agentMetaById":         snapshot.AgentMetaByID,
+		"workspaceRunsByKey":    snapshot.WorkspaceRunsByKey,
+		"activeThreadId":        resolvedActiveThreadID,
+		"activeCmdThreadId":     resolvedActiveCmdThreadID,
+		"mainAgentId":           resolvedMain,
 	}
 	agentRuntimeByID := map[string]map[string]any{}
 	if s.mgr != nil {
@@ -2139,4 +2599,65 @@ func looksLikeMainAgent(name string) bool {
 		strings.Contains(value, "主 agent") ||
 		strings.Contains(value, "main agent") ||
 		value == "main"
+}
+
+// ========================================
+// Debug 运行时诊断
+// ========================================
+
+func (s *Server) debugRuntime(_ context.Context, _ json.RawMessage) (any, error) {
+	var mem goruntime.MemStats
+	goruntime.ReadMemStats(&mem)
+
+	result := map[string]any{
+		"go": map[string]any{
+			"goroutines":     goruntime.NumGoroutine(),
+			"heapAllocMB":    float64(mem.HeapAlloc) / 1024 / 1024,
+			"heapSysMB":      float64(mem.HeapSys) / 1024 / 1024,
+			"heapInuseMB":    float64(mem.HeapInuse) / 1024 / 1024,
+			"heapObjects":    mem.HeapObjects,
+			"sysMB":          float64(mem.Sys) / 1024 / 1024,
+			"gcCycles":       mem.NumGC,
+			"gcTotalPauseMs": float64(mem.PauseTotalNs) / 1e6,
+			"gcLastPauseMs":  float64(mem.PauseNs[(mem.NumGC+255)%256]) / 1e6,
+			"stackInuseMB":   float64(mem.StackInuse) / 1024 / 1024,
+			"mallocs":        mem.Mallocs,
+			"frees":          mem.Frees,
+			"liveObjects":    mem.Mallocs - mem.Frees,
+			"nextGCMB":       float64(mem.NextGC) / 1024 / 1024,
+			"gcCPUPercent":   mem.GCCPUFraction * 100,
+		},
+	}
+
+	if s.uiRuntime != nil {
+		result["timeline"] = s.uiRuntime.TimelineStats()
+	}
+
+	return result, nil
+}
+
+func (s *Server) debugForceGC(_ context.Context, _ json.RawMessage) (any, error) {
+	var before goruntime.MemStats
+	goruntime.ReadMemStats(&before)
+
+	goruntime.GC()
+
+	var after goruntime.MemStats
+	goruntime.ReadMemStats(&after)
+
+	return map[string]any{
+		"before": map[string]any{
+			"heapAllocMB": float64(before.HeapAlloc) / 1024 / 1024,
+			"heapObjects": before.HeapObjects,
+			"liveObjects": before.Mallocs - before.Frees,
+		},
+		"after": map[string]any{
+			"heapAllocMB": float64(after.HeapAlloc) / 1024 / 1024,
+			"heapObjects": after.HeapObjects,
+			"liveObjects": after.Mallocs - after.Frees,
+		},
+		"freedMB":      float64(before.HeapAlloc-after.HeapAlloc) / 1024 / 1024,
+		"freedObjects": int64(before.HeapObjects) - int64(after.HeapObjects),
+		"gcCycles":     after.NumGC,
+	}, nil
 }

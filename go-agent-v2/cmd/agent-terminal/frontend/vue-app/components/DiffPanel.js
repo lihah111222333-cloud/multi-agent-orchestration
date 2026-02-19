@@ -75,7 +75,7 @@ export const DiffPanel = {
             </div>
           </div>
           <div class="diff-file-lines">
-            <div v-for="(line, idx) in file.lines" :key="idx" class="diff-line" :class="line.type">
+            <div v-for="(line, idx) in file.lines" :key="line.type + '-' + (line.oldNo || line.newNo || idx)" class="diff-line" :class="line.type">
               <span class="diff-line-num old">{{ line.oldNo }}</span>
               <span class="diff-line-num new">{{ line.newNo }}</span>
               <span class="diff-line-prefix">{{ linePrefix(line.type) }}</span>

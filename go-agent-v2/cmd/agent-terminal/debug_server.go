@@ -50,7 +50,7 @@ var debugBridgeHub = struct {
 	events: make([]debugBridgeEvent, 0, 256),
 }
 
-const debugBridgeMaxEvents = 2000
+const debugBridgeMaxEvents = 20000
 const debugBridgePublishSampleEvery int64 = 120
 const debugBridgePollSampleEvery int64 = 120
 

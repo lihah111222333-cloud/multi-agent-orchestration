@@ -51,16 +51,29 @@ type AgentMeta struct {
 	IsMain       bool   `json:"isMain,omitempty"`
 }
 
+// TokenUsageSnapshot stores context-window token usage for UI.
+type TokenUsageSnapshot struct {
+	UsedTokens          int     `json:"usedTokens"`
+	ContextWindowTokens int     `json:"contextWindowTokens,omitempty"`
+	UsedPercent         float64 `json:"usedPercent,omitempty"`
+	LeftPercent         float64 `json:"leftPercent,omitempty"`
+	UpdatedAt           string  `json:"updatedAt,omitempty"`
+}
+
 // RuntimeSnapshot is a full UI runtime state snapshot.
 type RuntimeSnapshot struct {
-	Threads                 []ThreadSnapshot          `json:"threads"`
-	Statuses                map[string]string         `json:"statuses"`
-	TimelinesByThread       map[string][]TimelineItem `json:"timelinesByThread"`
-	DiffTextByThread        map[string]string         `json:"diffTextByThread"`
-	WorkspaceRunsByKey      map[string]map[string]any `json:"workspaceRunsByKey"`
-	WorkspaceFeatureEnabled *bool                     `json:"workspaceFeatureEnabled"`
-	WorkspaceLastError      string                    `json:"workspaceLastError"`
-	AgentMetaByID           map[string]AgentMeta      `json:"agentMetaById"`
+	Threads                 []ThreadSnapshot              `json:"threads"`
+	Statuses                map[string]string             `json:"statuses"`
+	InterruptibleByThread   map[string]bool               `json:"interruptibleByThread"`
+	StatusHeadersByThread   map[string]string             `json:"statusHeadersByThread"`
+	StatusDetailsByThread   map[string]string             `json:"statusDetailsByThread"`
+	TimelinesByThread       map[string][]TimelineItem     `json:"timelinesByThread"`
+	DiffTextByThread        map[string]string             `json:"diffTextByThread"`
+	TokenUsageByThread      map[string]TokenUsageSnapshot `json:"tokenUsageByThread"`
+	WorkspaceRunsByKey      map[string]map[string]any     `json:"workspaceRunsByKey"`
+	WorkspaceFeatureEnabled *bool                         `json:"workspaceFeatureEnabled"`
+	WorkspaceLastError      string                        `json:"workspaceLastError"`
+	AgentMetaByID           map[string]AgentMeta          `json:"agentMetaById"`
 }
 
 // HistoryRecord is a compact history message for timeline hydration.
@@ -80,6 +93,26 @@ type threadRuntime struct {
 	commandIndex   int
 	planIndex      int
 	editingFiles   map[string]struct{}
+
+	turnDepth     int
+	approvalDepth int
+	commandDepth  int
+	fileEditDepth int
+	toolCallDepth int
+	collabDepth   int
+
+	terminalWaitOverlay bool
+	terminalWaitLabel   string
+	mcpStartupOverlay   bool
+	mcpStartupLabel     string
+	backgroundOverlay   bool
+	backgroundLabel     string
+	backgroundDetails   string
+	streamErrorText     string
+	streamErrorDetails  string
+	statusHeader        string
+	reasoningHeaderBuf  string
+	hasDerivedState     bool
 }
 
 func newThreadRuntime() *threadRuntime {
@@ -105,12 +138,16 @@ type RuntimeManager struct {
 func NewRuntimeManager() *RuntimeManager {
 	return &RuntimeManager{
 		snapshot: RuntimeSnapshot{
-			Threads:            []ThreadSnapshot{},
-			Statuses:           map[string]string{},
-			TimelinesByThread:  map[string][]TimelineItem{},
-			DiffTextByThread:   map[string]string{},
-			WorkspaceRunsByKey: map[string]map[string]any{},
-			AgentMetaByID:      map[string]AgentMeta{},
+			Threads:               []ThreadSnapshot{},
+			Statuses:              map[string]string{},
+			InterruptibleByThread: map[string]bool{},
+			StatusHeadersByThread: map[string]string{},
+			StatusDetailsByThread: map[string]string{},
+			TimelinesByThread:     map[string][]TimelineItem{},
+			DiffTextByThread:      map[string]string{},
+			TokenUsageByThread:    map[string]TokenUsageSnapshot{},
+			WorkspaceRunsByKey:    map[string]map[string]any{},
+			AgentMetaByID:         map[string]AgentMeta{},
 		},
 		runtime: map[string]*threadRuntime{},
 	}
@@ -121,6 +158,41 @@ func (m *RuntimeManager) Snapshot() RuntimeSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return cloneSnapshot(m.snapshot)
+}
+
+// SnapshotLight returns a snapshot without timelines and diffs (the heaviest fields).
+// Use ThreadTimeline / ThreadDiff to fetch specific thread data separately.
+func (m *RuntimeManager) SnapshotLight() RuntimeSnapshot {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return cloneSnapshotLight(m.snapshot)
+}
+
+// ThreadTimeline returns a single thread's timeline items (read-only reference).
+// Callers must NOT mutate the returned slice.
+func (m *RuntimeManager) ThreadTimeline(threadID string) []TimelineItem {
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	src := m.snapshot.TimelinesByThread[id]
+	if len(src) == 0 {
+		return []TimelineItem{}
+	}
+	return src
+}
+
+// ThreadDiff returns a single thread's diff text.
+func (m *RuntimeManager) ThreadDiff(threadID string) string {
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return ""
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.snapshot.DiffTextByThread[id]
 }
 
 // ReplaceThreads upserts thread list and status snapshot.
@@ -139,16 +211,25 @@ func (m *RuntimeManager) ReplaceThreads(threads []ThreadSnapshot) {
 		if name == "" {
 			name = id
 		}
-		thread := ThreadSnapshot{
+		m.ensureThreadLocked(id)
+		rt := m.runtime[id]
+		if state != "" && !rt.hasDerivedState {
+			m.snapshot.Statuses[id] = state
+			m.snapshot.StatusHeadersByThread[id] = defaultStatusHeaderForState(state)
+		}
+		resolvedState := m.snapshot.Statuses[id]
+		if resolvedState == "" {
+			resolvedState = "idle"
+			m.snapshot.Statuses[id] = resolvedState
+		}
+		if strings.TrimSpace(m.snapshot.StatusHeadersByThread[id]) == "" {
+			m.snapshot.StatusHeadersByThread[id] = defaultStatusHeaderForState(resolvedState)
+		}
+		next = append(next, ThreadSnapshot{
 			ID:    id,
 			Name:  name,
-			State: state,
-		}
-		next = append(next, thread)
-		m.ensureThreadLocked(id)
-		if state != "" {
-			m.snapshot.Statuses[id] = state
-		}
+			State: resolvedState,
+		})
 	}
 	m.snapshot.Threads = next
 }
@@ -243,6 +324,31 @@ func (m *RuntimeManager) ApplyAgentEvent(threadID string, normalized NormalizedE
 	m.applyAgentEventLocked(id, normalized, payload, time.Now())
 }
 
+// TimelineStats returns per-thread timeline item counts for diagnostics.
+func (m *RuntimeManager) TimelineStats() map[string]any {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	perThread := map[string]int{}
+	totalItems := 0
+	for tid, items := range m.snapshot.TimelinesByThread {
+		perThread[tid] = len(items)
+		totalItems += len(items)
+	}
+
+	diffBytes := 0
+	for _, d := range m.snapshot.DiffTextByThread {
+		diffBytes += len(d)
+	}
+
+	return map[string]any{
+		"threadCount":   len(m.snapshot.TimelinesByThread),
+		"totalItems":    totalItems,
+		"diffByteTotal": diffBytes,
+		"perThread":     perThread,
+	}
+}
+
 // HydrateHistory rebuilds thread timeline from stored messages.
 func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord) {
 	id := strings.TrimSpace(threadID)
@@ -294,9 +400,73 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 		}
 		if normalized.UIType == UITypeSystem && role == "assistant" && strings.TrimSpace(rec.Content) != "" {
 			normalized.UIType = UITypeAssistantDone
-			if normalized.UIStatus == "" {
-				normalized.UIStatus = UIStatusThinking
+		}
+
+		m.applyAgentEventLocked(id, normalized, payload, ts)
+	}
+
+	// 清理瞬态 overlay 状态: MCP/terminal/background overlay 依赖实时事件,
+	// 不会被持久化, 因此 hydration 重放可能错误地重新启用 overlay。
+	if rt := m.runtime[id]; rt != nil {
+		rt.mcpStartupOverlay = false
+		rt.mcpStartupLabel = ""
+		rt.terminalWaitOverlay = false
+		rt.terminalWaitLabel = ""
+		rt.backgroundOverlay = false
+		rt.backgroundLabel = ""
+		rt.backgroundDetails = ""
+	}
+}
+
+// AppendHistory appends additional history records without resetting the timeline.
+// Used by streaming pages after the initial HydrateHistory call.
+func (m *RuntimeManager) AppendHistory(threadID string, records []HistoryRecord) {
+	id := strings.TrimSpace(threadID)
+	if id == "" || len(records) == 0 {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.ensureThreadLocked(id)
+
+	ordered := make([]HistoryRecord, 0, len(records))
+	ordered = append(ordered, records...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].ID < ordered[j].ID
+	})
+
+	for _, rec := range ordered {
+		ts := rec.CreatedAt
+		if ts.IsZero() {
+			ts = time.Now()
+		}
+		role := strings.ToLower(strings.TrimSpace(rec.Role))
+		if role == "user" {
+			var payload map[string]any
+			if len(rec.Metadata) > 0 {
+				_ = json.Unmarshal(rec.Metadata, &payload)
 			}
+			m.appendUserLocked(id, rec.Content, extractUserAttachmentsFromPayload(payload), ts)
+			continue
+		}
+
+		var payload map[string]any
+		if len(rec.Metadata) > 0 {
+			_ = json.Unmarshal(rec.Metadata, &payload)
+		}
+		if payload == nil {
+			payload = map[string]any{}
+		}
+		hydrateContentPayload(rec, payload)
+
+		normalized := NormalizeEvent(rec.EventType, rec.Method, rec.Metadata)
+		if normalized.Text == "" {
+			normalized.Text = rec.Content
+		}
+		if normalized.UIType == UITypeSystem && role == "assistant" && strings.TrimSpace(rec.Content) != "" {
+			normalized.UIType = UITypeAssistantDone
 		}
 
 		m.applyAgentEventLocked(id, normalized, payload, ts)
@@ -355,16 +525,23 @@ func extractUserAttachmentsFromPayload(payload map[string]any) []TimelineAttachm
 				PreviewURL: attachmentPreview(path),
 			})
 		case "localimage":
-			path := extractFirstString(item, "path")
-			path = strings.TrimSpace(path)
-			if path == "" {
+			path := strings.TrimSpace(extractFirstString(item, "path"))
+			preview := strings.TrimSpace(extractFirstString(item, "url"))
+			if preview == "" {
+				preview = path
+			}
+			if preview == "" {
 				continue
+			}
+			nameSource := path
+			if nameSource == "" {
+				nameSource = preview
 			}
 			attachments = append(attachments, TimelineAttachment{
 				Kind:       "image",
-				Name:       attachmentName(path),
+				Name:       attachmentName(nameSource),
 				Path:       path,
-				PreviewURL: attachmentPreview(path),
+				PreviewURL: attachmentPreview(preview),
 			})
 		case "mention", "filecontent":
 			path := extractFirstString(item, "path")
@@ -588,14 +765,493 @@ func resolveEventFields(normalized NormalizedEvent, payload map[string]any) reso
 }
 
 func (m *RuntimeManager) applyAgentEventLocked(threadID string, normalized NormalizedEvent, payload map[string]any, ts time.Time) {
-	if normalized.UIStatus != "" {
-		m.setThreadStateLocked(threadID, string(normalized.UIStatus))
-	}
 	m.markAgentActiveLocked(threadID, ts)
+	rt := m.runtime[threadID]
+	rt.hasDerivedState = true
 	fields := resolveEventFields(normalized, payload)
+	m.applyLifecycleStateLocked(threadID, normalized, payload, fields, ts)
 	if handler, ok := runtimeEventHandlers[normalized.UIType]; ok {
 		handler(m, threadID, fields, payload, ts)
 	}
+	nextState := m.deriveThreadStateLocked(threadID)
+	m.setThreadStateLocked(threadID, nextState)
+	m.snapshot.StatusHeadersByThread[threadID] = m.deriveThreadStatusHeaderLocked(threadID, nextState)
+	m.snapshot.StatusDetailsByThread[threadID] = m.deriveThreadStatusDetailsLocked(threadID, nextState)
+}
+
+func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized NormalizedEvent, payload map[string]any, fields resolvedFields, ts time.Time) {
+	rt := m.runtime[threadID]
+	eventType := strings.ToLower(strings.TrimSpace(normalized.RawType))
+	method := strings.TrimSpace(normalized.Method)
+
+	if normalized.UIType == UITypeError {
+		text := strings.TrimSpace(fields.text)
+		if text == "" {
+			text = "发生错误"
+		}
+		rt.streamErrorText = text
+		if eventType == "stream_error" {
+			rt.streamErrorDetails = deriveStreamErrorDetails(payload)
+		} else {
+			rt.streamErrorDetails = ""
+		}
+	} else if eventType != "stream_error" {
+		rt.streamErrorText = ""
+		rt.streamErrorDetails = ""
+	}
+
+	if isTerminalInteractionEvent(eventType, method) {
+		if isTerminalWaitPayload(payload) {
+			rt.terminalWaitOverlay = true
+			rt.terminalWaitLabel = deriveTerminalWaitLabel(payload)
+		} else {
+			rt.terminalWaitOverlay = false
+			rt.terminalWaitLabel = ""
+		}
+	}
+	if isMCPStartupUpdateEvent(eventType, method) {
+		rt.mcpStartupOverlay = true
+		rt.mcpStartupLabel = deriveMCPStartupLabel(payload)
+	}
+	if isMCPStartupCompleteEvent(eventType, method) {
+		rt.mcpStartupOverlay = false
+		rt.mcpStartupLabel = ""
+	}
+	if isBackgroundEvent(eventType, method) {
+		if shouldClearBackgroundOverlay(payload) {
+			rt.backgroundOverlay = false
+			rt.backgroundLabel = ""
+			rt.backgroundDetails = ""
+		} else {
+			rt.backgroundOverlay = true
+			rt.backgroundLabel = deriveBackgroundLabel(payload)
+			rt.backgroundDetails = deriveBackgroundDetails(payload)
+		}
+	}
+
+	if eventType == "collab_agent_spawn_begin" || eventType == "collab_agent_interaction_begin" || eventType == "collab_waiting_begin" {
+		rt.collabDepth += 1
+	} else if eventType == "collab_agent_spawn_end" || eventType == "collab_agent_interaction_end" || eventType == "collab_waiting_end" {
+		rt.collabDepth = max(0, rt.collabDepth-1)
+	}
+
+	if eventType == "token_count" || method == "thread/tokenUsage/updated" {
+		m.updateTokenUsageLocked(threadID, payload, ts)
+	}
+
+	switch normalized.UIType {
+	case UITypeTurnStarted:
+		m.clearTurnLifecycleLocked(threadID)
+		rt.turnDepth = 1
+		rt.approvalDepth = 0
+		rt.terminalWaitOverlay = false
+		rt.terminalWaitLabel = ""
+		rt.statusHeader = "工作中"
+	case UITypeTurnComplete:
+		m.clearTurnLifecycleLocked(threadID)
+	case UITypeReasoningDelta:
+		if rt.turnDepth == 0 {
+			rt.turnDepth = 1
+		}
+		if isReasoningSectionBreakEvent(eventType, method) {
+			rt.reasoningHeaderBuf = ""
+		}
+		m.captureReasoningHeaderLocked(threadID, fields.text)
+	case UITypeCommandStart:
+		rt.commandDepth += 1
+		rt.approvalDepth = 0
+		rt.terminalWaitOverlay = false
+		rt.terminalWaitLabel = ""
+	case UITypeCommandOutput:
+		if rt.commandDepth == 0 {
+			rt.commandDepth = 1
+		}
+		rt.terminalWaitOverlay = false
+		rt.terminalWaitLabel = ""
+	case UITypeCommandDone:
+		rt.commandDepth = max(0, rt.commandDepth-1)
+		rt.terminalWaitOverlay = false
+		rt.terminalWaitLabel = ""
+	case UITypeFileEditStart:
+		rt.fileEditDepth += 1
+		rt.approvalDepth = 0
+	case UITypeFileEditDone:
+		rt.fileEditDepth = max(0, rt.fileEditDepth-1)
+	case UITypeApprovalRequest:
+		rt.approvalDepth += 1
+	case UITypeToolCall:
+		if eventType == "mcp_tool_call_begin" {
+			rt.toolCallDepth += 1
+		}
+		if eventType == "mcp_tool_call_end" {
+			rt.toolCallDepth = max(0, rt.toolCallDepth-1)
+		}
+	}
+}
+
+func (m *RuntimeManager) clearTurnLifecycleLocked(threadID string) {
+	rt := m.runtime[threadID]
+	rt.turnDepth = 0
+	rt.approvalDepth = 0
+	rt.commandDepth = 0
+	rt.fileEditDepth = 0
+	rt.toolCallDepth = 0
+	rt.collabDepth = 0
+	rt.terminalWaitOverlay = false
+	rt.terminalWaitLabel = ""
+	rt.backgroundOverlay = false
+	rt.backgroundLabel = ""
+	rt.backgroundDetails = ""
+	rt.streamErrorText = ""
+	rt.streamErrorDetails = ""
+	rt.statusHeader = ""
+	rt.reasoningHeaderBuf = ""
+}
+
+func (m *RuntimeManager) deriveThreadStateLocked(threadID string) string {
+	rt := m.runtime[threadID]
+	switch {
+	case strings.TrimSpace(rt.streamErrorText) != "":
+		return "error"
+	case rt.terminalWaitOverlay:
+		return "waiting"
+	case rt.approvalDepth > 0:
+		return "waiting"
+	case rt.fileEditDepth > 0:
+		return "editing"
+	case rt.commandDepth > 0 || rt.toolCallDepth > 0 || rt.collabDepth > 0:
+		return "running"
+	case rt.turnDepth > 0:
+		return "thinking"
+	case rt.mcpStartupOverlay:
+		return "syncing"
+	default:
+		return "idle"
+	}
+}
+
+func (m *RuntimeManager) deriveThreadStatusHeaderLocked(threadID, state string) string {
+	rt := m.runtime[threadID]
+	switch {
+	case strings.TrimSpace(rt.streamErrorText) != "":
+		return rt.streamErrorText
+	case rt.terminalWaitOverlay:
+		if strings.TrimSpace(rt.terminalWaitLabel) != "" {
+			return rt.terminalWaitLabel
+		}
+		return "等待后台终端"
+	case shouldShowMCPStartupOverlay(rt):
+		if strings.TrimSpace(rt.mcpStartupLabel) != "" {
+			return rt.mcpStartupLabel
+		}
+		return "MCP 启动中"
+	case rt.backgroundOverlay:
+		if strings.TrimSpace(rt.backgroundLabel) != "" {
+			return rt.backgroundLabel
+		}
+		return "后台处理中"
+	case rt.approvalDepth > 0:
+		return "等待确认"
+	case shouldUseReasoningHeader(rt):
+		return rt.statusHeader
+	}
+	switch state {
+	case "running":
+		return "工作中"
+	case "editing":
+		return "工作中"
+	case "thinking":
+		return "工作中"
+	case "responding":
+		return "工作中"
+	case "starting":
+		return "启动中"
+	case "waiting":
+		return "等待确认"
+	case "syncing":
+		return "同步中"
+	case "error":
+		return "异常"
+	default:
+		return "等待指示"
+	}
+}
+
+func defaultStatusHeaderForState(state string) string {
+	switch normalizeThreadState(state) {
+	case "starting":
+		return "启动中"
+	case "waiting":
+		return "等待确认"
+	case "syncing":
+		return "同步中"
+	case "error":
+		return "异常"
+	case "running", "editing", "thinking", "responding":
+		return "工作中"
+	default:
+		return "等待指示"
+	}
+}
+
+func (m *RuntimeManager) deriveThreadStatusDetailsLocked(threadID, state string) string {
+	rt := m.runtime[threadID]
+	switch {
+	case strings.TrimSpace(rt.streamErrorText) != "":
+		return strings.TrimSpace(rt.streamErrorDetails)
+	case rt.terminalWaitOverlay:
+		return "命令正在等待终端输入"
+	case shouldShowMCPStartupOverlay(rt):
+		return "正在初始化 MCP 服务"
+	case rt.backgroundOverlay:
+		if strings.TrimSpace(rt.backgroundDetails) != "" {
+			return rt.backgroundDetails
+		}
+		return "后台事件处理中"
+	case rt.approvalDepth > 0:
+		return "等待用户审批后继续"
+	case shouldUseReasoningHeader(rt):
+		return "根据推理标题展示当前阶段"
+	}
+	switch state {
+	case "running":
+		return "命令或工具正在执行"
+	case "editing":
+		return "文件修改进行中"
+	case "thinking":
+		return "模型推理中"
+	case "syncing":
+		return "后台同步中"
+	case "error":
+		return "运行出现异常"
+	default:
+		return ""
+	}
+}
+
+func shouldShowMCPStartupOverlay(rt *threadRuntime) bool {
+	if rt == nil || !rt.mcpStartupOverlay {
+		return false
+	}
+	return rt.turnDepth == 0 &&
+		rt.approvalDepth == 0 &&
+		rt.commandDepth == 0 &&
+		rt.fileEditDepth == 0 &&
+		rt.toolCallDepth == 0 &&
+		rt.collabDepth == 0
+}
+
+func isTerminalInteractionEvent(eventType, method string) bool {
+	return eventType == "exec_terminal_interaction" || eventType == "item/commandexecution/terminalinteraction" || strings.EqualFold(method, "item/commandExecution/terminalInteraction")
+}
+
+func isMCPStartupUpdateEvent(eventType, method string) bool {
+	return eventType == "mcp_startup_update" || eventType == "codex/event/mcp_startup_update" || strings.EqualFold(method, "codex/event/mcp_startup_update")
+}
+
+func isMCPStartupCompleteEvent(eventType, method string) bool {
+	return eventType == "mcp_startup_complete" || eventType == "codex/event/mcp_startup_complete" || strings.EqualFold(method, "codex/event/mcp_startup_complete")
+}
+
+func isTerminalWaitPayload(payload map[string]any) bool {
+	if payload == nil {
+		return true
+	}
+	if value, ok := payload["stdin"]; ok {
+		switch v := value.(type) {
+		case nil:
+			return true
+		case string:
+			return strings.TrimSpace(v) == ""
+		case []any:
+			return len(v) == 0
+		case []string:
+			return len(v) == 0
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func deriveTerminalWaitLabel(payload map[string]any) string {
+	command := strings.TrimSpace(extractFirstString(payload, "command", "command_display", "displayCommand"))
+	if command == "" {
+		command = strings.TrimSpace(extractNestedFirstString(payload, []string{"process", "command_display"}, []string{"process", "command"}))
+	}
+	if command == "" {
+		return "等待后台终端"
+	}
+	return "等待后台终端 · " + command
+}
+
+func deriveMCPStartupLabel(payload map[string]any) string {
+	server := strings.TrimSpace(extractFirstString(payload, "server", "name"))
+	if server == "" {
+		server = strings.TrimSpace(extractNestedFirstString(payload, []string{"status", "server"}, []string{"msg", "server"}))
+	}
+	if server == "" {
+		return "MCP 启动中"
+	}
+	return "MCP 启动中 · " + server
+}
+
+func isReasoningSectionBreakEvent(eventType, method string) bool {
+	return eventType == "agent_reasoning_section_break" ||
+		strings.EqualFold(method, "agent/reasoningSectionBreak")
+}
+
+func isBackgroundEvent(eventType, method string) bool {
+	return eventType == "background_event" ||
+		eventType == "codex/event/background_event" ||
+		strings.EqualFold(method, "codex/event/background_event")
+}
+
+func shouldClearBackgroundOverlay(payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	if done, ok := payload["done"].(bool); ok {
+		return done
+	}
+	if active, ok := payload["active"].(bool); ok {
+		return !active
+	}
+	status := strings.ToLower(strings.TrimSpace(extractFirstString(payload, "status", "state", "phase")))
+	switch status {
+	case "done", "completed", "complete", "finished", "success", "succeeded", "idle", "stopped", "closed", "ended":
+		return true
+	default:
+		return false
+	}
+}
+
+func deriveBackgroundLabel(payload map[string]any) string {
+	text := extractFirstString(payload, "uiHeader", "statusHeader", "title", "event", "name")
+	if strings.TrimSpace(text) == "" {
+		text = extractFirstString(payload, "message", "text", "content")
+	}
+	if strings.TrimSpace(text) == "" {
+		text = extractNestedFirstString(
+			payload,
+			[]string{"msg", "title"},
+			[]string{"msg", "text"},
+			[]string{"data", "title"},
+			[]string{"data", "text"},
+		)
+	}
+	text = compactOneLine(text, 48)
+	if text == "" {
+		return "后台处理中"
+	}
+	if strings.HasPrefix(text, "后台") {
+		return text
+	}
+	return "后台处理中 · " + text
+}
+
+func deriveBackgroundDetails(payload map[string]any) string {
+	text := extractFirstString(payload, "details", "detail", "description", "message", "text", "content")
+	if strings.TrimSpace(text) == "" {
+		text = extractNestedFirstString(
+			payload,
+			[]string{"msg", "details"},
+			[]string{"msg", "text"},
+			[]string{"data", "details"},
+			[]string{"data", "text"},
+		)
+	}
+	text = compactOneLine(text, 120)
+	if text == "" {
+		return "后台事件处理中"
+	}
+	return text
+}
+
+func deriveStreamErrorDetails(payload map[string]any) string {
+	text := extractFirstString(payload, "additional_details", "additionalDetails", "details")
+	if strings.TrimSpace(text) == "" {
+		text = extractNestedFirstString(
+			payload,
+			[]string{"msg", "additional_details"},
+			[]string{"msg", "details"},
+			[]string{"data", "additional_details"},
+			[]string{"data", "details"},
+		)
+	}
+	return compactOneLine(text, 180)
+}
+
+func shouldUseReasoningHeader(rt *threadRuntime) bool {
+	if rt == nil {
+		return false
+	}
+	if strings.TrimSpace(rt.statusHeader) == "" {
+		return false
+	}
+	if rt.turnDepth <= 0 {
+		return false
+	}
+	if rt.approvalDepth > 0 || rt.commandDepth > 0 || rt.fileEditDepth > 0 || rt.toolCallDepth > 0 || rt.collabDepth > 0 {
+		return false
+	}
+	if rt.terminalWaitOverlay || rt.mcpStartupOverlay || rt.backgroundOverlay {
+		return false
+	}
+	return strings.TrimSpace(rt.streamErrorText) == ""
+}
+
+func (m *RuntimeManager) captureReasoningHeaderLocked(threadID, delta string) {
+	rt := m.runtime[threadID]
+	if rt == nil {
+		return
+	}
+	header, buf := extractReasoningHeader(rt.reasoningHeaderBuf, delta)
+	rt.reasoningHeaderBuf = buf
+	if strings.TrimSpace(header) == "" {
+		return
+	}
+	rt.statusHeader = header
+}
+
+func extractReasoningHeader(buffer, delta string) (string, string) {
+	merged := buffer + delta
+	merged = compactOneLine(merged, 512)
+	if merged == "" {
+		return "", ""
+	}
+	start := strings.Index(merged, "**")
+	if start < 0 {
+		return "", merged
+	}
+	rest := merged[start+2:]
+	end := strings.Index(rest, "**")
+	if end < 0 {
+		return "", merged[start:]
+	}
+	header := compactOneLine(rest[:end], 80)
+	if header == "" {
+		return "", compactOneLine(rest[end+2:], 512)
+	}
+	return header, ""
+}
+
+func compactOneLine(text string, limit int) string {
+	cleaned := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if cleaned == "" {
+		return ""
+	}
+	if limit <= 0 {
+		return cleaned
+	}
+	runes := []rune(cleaned)
+	if len(runes) <= limit {
+		return cleaned
+	}
+	if limit == 1 {
+		return "…"
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 func handleTurnStartedEvent(m *RuntimeManager, threadID string, _ resolvedFields, _ map[string]any, ts time.Time) {
@@ -689,6 +1345,15 @@ func handleErrorEvent(m *RuntimeManager, threadID string, fields resolvedFields,
 }
 
 func (m *RuntimeManager) ensureThreadLocked(threadID string) {
+	if m.snapshot.StatusHeadersByThread == nil {
+		m.snapshot.StatusHeadersByThread = map[string]string{}
+	}
+	if m.snapshot.StatusDetailsByThread == nil {
+		m.snapshot.StatusDetailsByThread = map[string]string{}
+	}
+	if m.snapshot.TokenUsageByThread == nil {
+		m.snapshot.TokenUsageByThread = map[string]TokenUsageSnapshot{}
+	}
 	if _, ok := m.snapshot.TimelinesByThread[threadID]; !ok {
 		m.snapshot.TimelinesByThread[threadID] = []TimelineItem{}
 	}
@@ -697,6 +1362,12 @@ func (m *RuntimeManager) ensureThreadLocked(threadID string) {
 	}
 	if _, ok := m.snapshot.Statuses[threadID]; !ok {
 		m.snapshot.Statuses[threadID] = "idle"
+	}
+	if _, ok := m.snapshot.StatusHeadersByThread[threadID]; !ok {
+		m.snapshot.StatusHeadersByThread[threadID] = "等待指示"
+	}
+	if _, ok := m.snapshot.StatusDetailsByThread[threadID]; !ok {
+		m.snapshot.StatusDetailsByThread[threadID] = ""
 	}
 	if _, ok := m.snapshot.AgentMetaByID[threadID]; !ok {
 		m.snapshot.AgentMetaByID[threadID] = AgentMeta{}
@@ -1267,6 +1938,15 @@ func normalizeThreadState(state string) string {
 	}
 }
 
+func isInterruptibleThreadState(state string) bool {
+	switch normalizeThreadState(state) {
+	case "starting", "thinking", "responding", "running", "editing", "waiting", "syncing":
+		return true
+	default:
+		return false
+	}
+}
+
 func extractFirstString(payload map[string]any, keys ...string) string {
 	for _, key := range keys {
 		value, ok := payload[key]
@@ -1278,6 +1958,280 @@ func extractFirstString(payload map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func extractNestedFirstString(payload map[string]any, paths ...[]string) string {
+	for _, path := range paths {
+		if len(path) == 0 {
+			continue
+		}
+		current := any(payload)
+		matched := true
+		for _, key := range path {
+			nextMap, ok := current.(map[string]any)
+			if !ok {
+				matched = false
+				break
+			}
+			next, ok := nextMap[key]
+			if !ok {
+				matched = false
+				break
+			}
+			current = next
+		}
+		if !matched {
+			continue
+		}
+		if text, ok := current.(string); ok {
+			trimmed := strings.TrimSpace(text)
+			if trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
+func extractFirstInt(payload map[string]any, keys ...string) (int, bool) {
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		if number, ok := extractExitCode(value); ok {
+			return number, true
+		}
+		if text, ok := value.(string); ok {
+			text = strings.TrimSpace(text)
+			if text == "" {
+				continue
+			}
+			if number, err := json.Number(text).Int64(); err == nil {
+				return int(number), true
+			}
+		}
+	}
+	return 0, false
+}
+
+func extractIntValue(value any) (int, bool) {
+	if number, ok := extractExitCode(value); ok {
+		return number, true
+	}
+	text, ok := value.(string)
+	if !ok {
+		return 0, false
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0, false
+	}
+	if number, err := json.Number(text).Int64(); err == nil {
+		return int(number), true
+	}
+	return 0, false
+}
+
+func extractNestedValue(payload map[string]any, path ...string) (any, bool) {
+	if payload == nil || len(path) == 0 {
+		return nil, false
+	}
+	current := any(payload)
+	for _, key := range path {
+		nextMap, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		next, ok := nextMap[key]
+		if !ok {
+			return nil, false
+		}
+		current = next
+	}
+	return current, true
+}
+
+func extractFirstIntByPaths(payload map[string]any, paths ...[]string) (int, bool) {
+	for _, path := range paths {
+		if len(path) == 0 {
+			continue
+		}
+		value, ok := extractNestedValue(payload, path...)
+		if !ok {
+			continue
+		}
+		if number, ok := extractIntValue(value); ok {
+			return number, true
+		}
+	}
+	return 0, false
+}
+
+func extractFirstIntDeep(payload map[string]any, keys ...string) (int, bool) {
+	if payload == nil {
+		return 0, false
+	}
+	if number, ok := extractFirstInt(payload, keys...); ok {
+		return number, true
+	}
+	for _, key := range []string{"msg", "data", "payload"} {
+		nested, ok := payload[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if number, ok := extractFirstInt(nested, keys...); ok {
+			return number, true
+		}
+	}
+	return 0, false
+}
+
+func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[string]any, ts time.Time) {
+	prev := m.snapshot.TokenUsageByThread[threadID]
+	next := prev
+	usedFromInfoTotal := false
+
+	if limit, ok := extractFirstIntByPaths(payload,
+		[]string{"tokenUsage", "modelContextWindow"},
+		[]string{"usage", "modelContextWindow"},
+		[]string{"info", "model_context_window"},
+		[]string{"info", "modelContextWindow"},
+	); ok && limit > 0 {
+		next.ContextWindowTokens = limit
+	} else if limit, ok := extractFirstIntDeep(payload, "context_window_tokens", "contextWindowTokens", "context_window", "model_context_window", "modelContextWindow", "max_input_tokens", "maxTokens", "limit_tokens", "token_limit"); ok && limit > 0 {
+		next.ContextWindowTokens = limit
+	}
+	limit := next.ContextWindowTokens
+
+	if total, ok := extractFirstIntByPaths(payload,
+		[]string{"tokenUsage", "total", "totalTokens"},
+		[]string{"tokenUsage", "total", "total_tokens"},
+		[]string{"usage", "total", "totalTokens"},
+		[]string{"usage", "total", "total_tokens"},
+	); ok {
+		next.UsedTokens = max(0, total)
+	} else if total, ok := extractFirstIntByPaths(payload,
+		[]string{"info", "last_token_usage", "total_tokens"},
+		[]string{"info", "lastTokenUsage", "totalTokens"},
+	); ok {
+		next.UsedTokens = max(0, total)
+	} else if total, ok := extractFirstIntByPaths(payload,
+		[]string{"info", "total_token_usage", "total_tokens"},
+		[]string{"info", "totalTokenUsage", "totalTokens"},
+	); ok {
+		next.UsedTokens = max(0, total)
+		usedFromInfoTotal = true
+		if limit > 0 && next.UsedTokens > limit {
+			fallbackUsed := prev.UsedTokens
+			if fallbackUsed < 0 || fallbackUsed > limit {
+				fallbackUsed = 0
+			}
+			if prev.UsedTokens > 0 && prev.UsedTokens <= limit {
+				next.UsedTokens = prev.UsedTokens
+			} else if lastTotal, ok := extractFirstIntByPaths(payload,
+				[]string{"info", "last_token_usage", "total_tokens"},
+				[]string{"info", "lastTokenUsage", "totalTokens"},
+			); ok && lastTotal > 0 && lastTotal <= limit {
+				next.UsedTokens = lastTotal
+			} else {
+				next.UsedTokens = fallbackUsed
+			}
+		}
+	} else if total, ok := extractFirstIntDeep(payload, "total_tokens", "totalTokens", "used_tokens", "usedTokens"); ok {
+		next.UsedTokens = max(0, total)
+	} else {
+		input, hasInput := extractFirstIntByPaths(payload,
+			[]string{"tokenUsage", "total", "inputTokens"},
+			[]string{"tokenUsage", "total", "input_tokens"},
+			[]string{"usage", "total", "inputTokens"},
+			[]string{"usage", "total", "input_tokens"},
+		)
+		if !hasInput {
+			input, hasInput = extractFirstIntByPaths(payload,
+				[]string{"info", "last_token_usage", "input_tokens"},
+				[]string{"info", "lastTokenUsage", "inputTokens"},
+			)
+		}
+		if !hasInput {
+			input, hasInput = extractFirstIntByPaths(payload,
+				[]string{"info", "total_token_usage", "input_tokens"},
+				[]string{"info", "totalTokenUsage", "inputTokens"},
+			)
+			if hasInput {
+				usedFromInfoTotal = true
+			}
+		}
+		if !hasInput {
+			input, hasInput = extractFirstIntDeep(payload, "input", "input_tokens", "inputTokens", "prompt_tokens")
+		}
+		output, hasOutput := extractFirstIntByPaths(payload,
+			[]string{"tokenUsage", "total", "outputTokens"},
+			[]string{"tokenUsage", "total", "output_tokens"},
+			[]string{"usage", "total", "outputTokens"},
+			[]string{"usage", "total", "output_tokens"},
+		)
+		if !hasOutput {
+			output, hasOutput = extractFirstIntByPaths(payload,
+				[]string{"info", "last_token_usage", "output_tokens"},
+				[]string{"info", "lastTokenUsage", "outputTokens"},
+			)
+		}
+		if !hasOutput {
+			output, hasOutput = extractFirstIntByPaths(payload,
+				[]string{"info", "total_token_usage", "output_tokens"},
+				[]string{"info", "totalTokenUsage", "outputTokens"},
+			)
+			if hasOutput {
+				usedFromInfoTotal = true
+			}
+		}
+		if !hasOutput {
+			output, hasOutput = extractFirstIntDeep(payload, "output", "output_tokens", "outputTokens", "completion_tokens")
+		}
+		if hasInput || hasOutput {
+			next.UsedTokens = max(0, input+output)
+		}
+	}
+
+	if usedFromInfoTotal && limit > 0 && next.UsedTokens > limit {
+		fallbackUsed := prev.UsedTokens
+		if fallbackUsed < 0 || fallbackUsed > limit {
+			fallbackUsed = 0
+		}
+		if lastTotal, ok := extractFirstIntByPaths(payload,
+			[]string{"info", "last_token_usage", "total_tokens"},
+			[]string{"info", "lastTokenUsage", "totalTokens"},
+		); ok && lastTotal > 0 && lastTotal <= limit {
+			next.UsedTokens = lastTotal
+		} else {
+			next.UsedTokens = fallbackUsed
+		}
+	}
+
+	if next.ContextWindowTokens > 0 && next.UsedTokens > next.ContextWindowTokens && prev.UsedTokens > 0 && prev.UsedTokens <= next.ContextWindowTokens {
+		next.UsedTokens = prev.UsedTokens
+	}
+
+	if next.ContextWindowTokens > 0 {
+		next.UsedPercent = (float64(next.UsedTokens) / float64(next.ContextWindowTokens)) * 100
+		if next.UsedPercent < 0 {
+			next.UsedPercent = 0
+		}
+		if next.UsedPercent > 100 {
+			next.UsedPercent = 100
+		}
+		next.LeftPercent = 100 - next.UsedPercent
+	} else {
+		next.UsedPercent = 0
+		next.LeftPercent = 0
+	}
+
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	next.UpdatedAt = ts.UTC().Format(time.RFC3339)
+	m.snapshot.TokenUsageByThread[threadID] = next
 }
 
 func normalizeFilesAny(value any) []string {
@@ -1367,8 +2321,12 @@ func cloneSnapshot(src RuntimeSnapshot) RuntimeSnapshot {
 	out := RuntimeSnapshot{
 		Threads:                 make([]ThreadSnapshot, 0, len(src.Threads)),
 		Statuses:                make(map[string]string, len(src.Statuses)),
+		InterruptibleByThread:   make(map[string]bool, len(src.Statuses)),
+		StatusHeadersByThread:   make(map[string]string, len(src.StatusHeadersByThread)),
+		StatusDetailsByThread:   make(map[string]string, len(src.StatusDetailsByThread)),
 		TimelinesByThread:       make(map[string][]TimelineItem, len(src.TimelinesByThread)),
 		DiffTextByThread:        make(map[string]string, len(src.DiffTextByThread)),
+		TokenUsageByThread:      make(map[string]TokenUsageSnapshot, len(src.TokenUsageByThread)),
 		WorkspaceRunsByKey:      make(map[string]map[string]any, len(src.WorkspaceRunsByKey)),
 		WorkspaceFeatureEnabled: nil,
 		WorkspaceLastError:      src.WorkspaceLastError,
@@ -1378,6 +2336,24 @@ func cloneSnapshot(src RuntimeSnapshot) RuntimeSnapshot {
 	out.Threads = append(out.Threads, src.Threads...)
 	for key, value := range src.Statuses {
 		out.Statuses[key] = value
+		out.InterruptibleByThread[key] = isInterruptibleThreadState(value)
+	}
+	for _, thread := range out.Threads {
+		threadID := strings.TrimSpace(thread.ID)
+		if threadID == "" {
+			continue
+		}
+		if _, ok := out.InterruptibleByThread[threadID]; ok {
+			continue
+		}
+		status := normalizeThreadState(out.Statuses[threadID])
+		out.InterruptibleByThread[threadID] = isInterruptibleThreadState(status)
+	}
+	for key, value := range src.StatusHeadersByThread {
+		out.StatusHeadersByThread[key] = value
+	}
+	for key, value := range src.StatusDetailsByThread {
+		out.StatusDetailsByThread[key] = value
 	}
 	for key, list := range src.TimelinesByThread {
 		copied := make([]TimelineItem, len(list))
@@ -1401,6 +2377,64 @@ func cloneSnapshot(src RuntimeSnapshot) RuntimeSnapshot {
 	}
 	for key, value := range src.DiffTextByThread {
 		out.DiffTextByThread[key] = value
+	}
+	for key, value := range src.TokenUsageByThread {
+		out.TokenUsageByThread[key] = value
+	}
+	for key, value := range src.WorkspaceRunsByKey {
+		out.WorkspaceRunsByKey[key] = copyMap(value)
+	}
+	if src.WorkspaceFeatureEnabled != nil {
+		v := *src.WorkspaceFeatureEnabled
+		out.WorkspaceFeatureEnabled = &v
+	}
+	for key, value := range src.AgentMetaByID {
+		out.AgentMetaByID[key] = value
+	}
+	return out
+}
+
+// cloneSnapshotLight is like cloneSnapshot but skips timelines and diffs (the heaviest fields).
+func cloneSnapshotLight(src RuntimeSnapshot) RuntimeSnapshot {
+	out := RuntimeSnapshot{
+		Threads:                 make([]ThreadSnapshot, 0, len(src.Threads)),
+		Statuses:                make(map[string]string, len(src.Statuses)),
+		InterruptibleByThread:   make(map[string]bool, len(src.Statuses)),
+		StatusHeadersByThread:   make(map[string]string, len(src.StatusHeadersByThread)),
+		StatusDetailsByThread:   make(map[string]string, len(src.StatusDetailsByThread)),
+		TimelinesByThread:       map[string][]TimelineItem{}, // 跳过: 由调用者按需获取
+		DiffTextByThread:        map[string]string{},         // 跳过: 由调用者按需获取
+		TokenUsageByThread:      make(map[string]TokenUsageSnapshot, len(src.TokenUsageByThread)),
+		WorkspaceRunsByKey:      make(map[string]map[string]any, len(src.WorkspaceRunsByKey)),
+		WorkspaceFeatureEnabled: nil,
+		WorkspaceLastError:      src.WorkspaceLastError,
+		AgentMetaByID:           make(map[string]AgentMeta, len(src.AgentMetaByID)),
+	}
+
+	out.Threads = append(out.Threads, src.Threads...)
+	for key, value := range src.Statuses {
+		out.Statuses[key] = value
+		out.InterruptibleByThread[key] = isInterruptibleThreadState(value)
+	}
+	for _, thread := range out.Threads {
+		threadID := strings.TrimSpace(thread.ID)
+		if threadID == "" {
+			continue
+		}
+		if _, ok := out.InterruptibleByThread[threadID]; ok {
+			continue
+		}
+		status := normalizeThreadState(out.Statuses[threadID])
+		out.InterruptibleByThread[threadID] = isInterruptibleThreadState(status)
+	}
+	for key, value := range src.StatusHeadersByThread {
+		out.StatusHeadersByThread[key] = value
+	}
+	for key, value := range src.StatusDetailsByThread {
+		out.StatusDetailsByThread[key] = value
+	}
+	for key, value := range src.TokenUsageByThread {
+		out.TokenUsageByThread[key] = value
 	}
 	for key, value := range src.WorkspaceRunsByKey {
 		out.WorkspaceRunsByKey[key] = copyMap(value)

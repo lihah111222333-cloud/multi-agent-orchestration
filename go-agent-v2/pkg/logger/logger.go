@@ -22,12 +22,26 @@ import (
 var (
 	defaultLogger = newLogger(false)
 	logFile       *os.File // 全局日志文件, Shutdown 时关闭
+
+	// utc8 固定 UTC+8 时区, 日志时间统一按此时区显示。
+	utc8 = time.FixedZone("UTC+8", 8*60*60)
 )
+
+// replaceTimeAttr 将 slog 输出的时间强制转为 UTC+8, 并格式化为易读字符串。
+func replaceTimeAttr(_ []string, a slog.Attr) slog.Attr {
+	if a.Key == slog.TimeKey {
+		if t, ok := a.Value.Any().(time.Time); ok {
+			a.Value = slog.StringValue(t.In(utc8).Format("2006-01-02 15:04:05"))
+		}
+	}
+	return a
+}
 
 func newLogger(development bool) *slog.Logger {
 	opts := &slog.HandlerOptions{
-		Level:     slog.LevelInfo,
-		AddSource: development,
+		Level:       slog.LevelInfo,
+		AddSource:   development,
+		ReplaceAttr: replaceTimeAttr,
 	}
 	var handler slog.Handler
 	if development {
@@ -65,7 +79,7 @@ func InitWithFile(logDir string) error {
 
 	// MultiWriter: stdout + file
 	multi := io.MultiWriter(os.Stdout, f)
-	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: replaceTimeAttr}
 	handler := slog.NewJSONHandler(multi, opts)
 	defaultLogger = slog.New(handler)
 	slog.SetDefault(defaultLogger)

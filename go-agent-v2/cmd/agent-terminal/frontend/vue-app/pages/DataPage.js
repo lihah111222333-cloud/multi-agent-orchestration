@@ -50,7 +50,7 @@ export const DataPage = {
           <h3>{{ emptyText }}</h3>
         </div>
         <div v-else class="data-list-vue">
-          <article v-for="(item, idx) in items" :key="idx" class="data-card-vue">
+          <article v-for="(item, idx) in items" :key="item.id || item[fields[0]?.key] || idx" class="data-card-vue">
             <div v-for="field in fields" :key="field.key" class="data-row-vue">
               <strong>{{ field.label }}</strong>
               <span>{{ item[field.key] ?? '-' }}</span>

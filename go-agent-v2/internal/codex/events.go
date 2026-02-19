@@ -11,6 +11,15 @@ type Event struct {
 	Type      string          `json:"type"`
 	Data      json.RawMessage `json:"data,omitempty"`
 	RequestID *int64          `json:"-"` // 非零 = codex 发起的 Server Request, 需要 JSON-RPC response。
+
+	// RespondFunc 允许在不依赖 proc 查找的情况下回复 codex server request。
+	// 由 readLoop/handleRPCEvent 在检测到 server request 时注入,
+	// 闭包捕获发送该请求的 client, 绕过 mgr.Get(agentID) 查找。
+	RespondFunc func(code int, message string) error `json:"-"`
+
+	// DenyFunc 允许在 proc==nil 时自动拒绝审批请求。
+	// 闭包捕获发送该事件的 client.Submit("no"), 绕过 mgr.Get(agentID) 查找。
+	DenyFunc func() error `json:"-"`
 }
 
 // ========================================

@@ -7,14 +7,18 @@ export const SidebarNav = {
     items: { type: Array, required: true },
   },
   emits: ['change'],
-  methods: {
-    onChange(target) {
+  setup(props, { emit }) {
+    function onChange(target) {
       logDebug('ui', 'sidebar.change', {
-        from: this.page,
+        from: props.page,
         to: target,
       });
-      this.$emit('change', target);
-    },
+      emit('change', target);
+    }
+
+    return {
+      onChange,
+    };
   },
   template: `
     <nav id="sidebar">

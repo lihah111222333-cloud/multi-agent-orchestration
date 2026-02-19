@@ -9,7 +9,7 @@ import (
 )
 
 func TestWaitForKnownPort_ContextCanceled(t *testing.T) {
-	client := NewClient(45678)
+	client := NewClient(45678, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -20,7 +20,7 @@ func TestWaitForKnownPort_ContextCanceled(t *testing.T) {
 }
 
 func TestDiscoverPort_ContextCanceled(t *testing.T) {
-	client := NewClient(0)
+	client := NewClient(0, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

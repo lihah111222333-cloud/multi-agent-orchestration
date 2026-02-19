@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multi-agent/go-agent-v2/pkg/util"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -69,7 +71,7 @@ func BuildMessageDedupKey(eventType, method string, metadata json.RawMessage) st
 		return ""
 	}
 
-	id := firstNonEmpty(
+	id := util.FirstNonEmpty(
 		lookupNestedString(payload, "turn", "id"),
 		lookupNestedString(payload, "msg", "turn_id"),
 		lookupNestedString(payload, "turn_id"),
@@ -122,16 +124,6 @@ func lookupNestedString(payload map[string]any, path ...string) string {
 		return ""
 	}
 	return strings.TrimSpace(s)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }
 
 // Insert 写入单条消息。

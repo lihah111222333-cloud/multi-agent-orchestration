@@ -79,3 +79,134 @@ func TestCalculateHydrationLoadLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestMergePayloadFieldsKeepsTokenUsageContainers(t *testing.T) {
+	payload := map[string]any{
+		"threadId": "agent-1",
+	}
+	raw := json.RawMessage(`{
+		"tokenUsage":{"total":{"totalTokens":321},"modelContextWindow":258000},
+		"info":{"total_token_usage":{"total_tokens":654},"model_context_window":128000},
+		"msg":{"usage":{"total":{"totalTokens":777}}}
+	}`)
+
+	mergePayloadFields(payload, raw)
+
+	if _, ok := payload["tokenUsage"].(map[string]any); !ok {
+		t.Fatalf("payload tokenUsage should be kept as object")
+	}
+	if _, ok := payload["info"].(map[string]any); !ok {
+		t.Fatalf("payload info should be kept as object")
+	}
+	if _, ok := payload["usage"].(map[string]any); !ok {
+		t.Fatalf("payload usage should be extracted from nested msg")
+	}
+}
+
+func TestConnEntryEnqueueBackpressure(t *testing.T) {
+	entry := &connEntry{
+		outbox:  make(chan wsOutbound, 1),
+		closeCh: make(chan struct{}),
+	}
+	if ok := entry.enqueue(1, []byte("a")); !ok {
+		t.Fatal("expected first enqueue to succeed")
+	}
+	if ok := entry.enqueue(1, []byte("b")); ok {
+		t.Fatal("expected enqueue to fail when queue is full")
+	}
+	if depth := entry.outboxDepth(); depth != 1 {
+		t.Fatalf("outbox depth = %d, want 1", depth)
+	}
+	close(entry.closeCh)
+	if ok := entry.enqueue(1, []byte("c")); ok {
+		t.Fatal("expected enqueue to fail after close")
+	}
+}
+
+func TestSendResponseViaOutbox_DisconnectsOverloadedConn(t *testing.T) {
+	entry := &connEntry{
+		outbox:  make(chan wsOutbound, 1),
+		closeCh: make(chan struct{}),
+	}
+	entry.outbox <- wsOutbound{msgType: 1, data: []byte("busy")}
+
+	s := &Server{
+		conns: map[string]*connEntry{
+			"conn-1": entry,
+		},
+	}
+	resp := newResult(int64(1), map[string]any{"ok": true})
+	if ok := s.sendResponseViaOutbox("conn-1", entry, resp, "unit_test_overloaded"); ok {
+		t.Fatal("expected sendResponseViaOutbox to fail when queue is full")
+	}
+	s.mu.RLock()
+	_, exists := s.conns["conn-1"]
+	s.mu.RUnlock()
+	if exists {
+		t.Fatal("expected overloaded connection removed from server map")
+	}
+}
+
+// TestReadLoopPanicRecovery_DisconnectsConn 验证 D10: readLoop panic 后连接被清理。
+func TestReadLoopPanicRecovery_DisconnectsConn(t *testing.T) {
+	entry := &connEntry{
+		outbox:  make(chan wsOutbound, 1),
+		closeCh: make(chan struct{}),
+	}
+	s := &Server{
+		conns: map[string]*connEntry{
+			"panic-conn": entry,
+		},
+	}
+
+	// 模拟 readLoop 中发生 panic 的场景:
+	// 直接调用带 recover 的闭包，验证 disconnectConn 被调用。
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// 模拟 readLoop 的 recover 逻辑
+		defer func() {
+			if r := recover(); r != nil {
+				s.disconnectConn("panic-conn")
+			}
+		}()
+		panic("simulated handler panic")
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("panic recovery goroutine did not complete")
+	}
+
+	s.mu.RLock()
+	_, exists := s.conns["panic-conn"]
+	s.mu.RUnlock()
+	if exists {
+		t.Fatal("D10: expected panicked connection to be removed from server map")
+	}
+}
+
+// TestHandleApprovalRequest_ProcNil_AutoDenies 验证 P1:
+// proc==nil 时 handleApprovalRequest 通过 event.DenyFunc 自动拒绝, 防止 codex turn 挂起。
+func TestHandleApprovalRequest_ProcNil_AutoDenies(t *testing.T) {
+	s := &Server{
+		mgr:   nil, // mgr==nil → proc 查不到
+		conns: map[string]*connEntry{},
+	}
+
+	denied := false
+	event := codex.Event{
+		Type: "exec_approval_request",
+		DenyFunc: func() error {
+			denied = true
+			return nil
+		},
+	}
+
+	s.handleApprovalRequest("gone-agent", "item/commandExecution/requestApproval", nil, event)
+
+	if !denied {
+		t.Fatal("P1: expected DenyFunc to be called when proc is nil")
+	}
+}

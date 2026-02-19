@@ -1,7 +1,7 @@
 // dashboard_methods.go — Dashboard JSON-RPC 方法 (§ 12)。
 //
 // 替代 cmd/agent-terminal/dashboard.go 中的 Wails 绑定。
-// 前端通过 App.CallAPI('dashboard/xxx', '{"limit":100}') 调用。
+// 前端通过 App.CallAPI('dashboard/xxx', { limit: 100 }) 调用。
 package apiserver
 
 import (

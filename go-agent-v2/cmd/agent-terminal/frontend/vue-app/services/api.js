@@ -41,6 +41,22 @@ function parseMaybeJSON(raw) {
   }
 }
 
+function normalizeRPCError(error) {
+  const rawMessage = (
+    (error && typeof error === 'object' && typeof error.message === 'string' ? error.message : '')
+    || String(error || '')
+  ).toLowerCase();
+  const overloaded = rawMessage.includes('code -32001') || rawMessage.includes('server overloaded');
+  if (!overloaded) {
+    return error;
+  }
+  const normalized = new Error('Server overloaded; retry later.');
+  normalized.code = -32001;
+  normalized.retryAfterMs = 500;
+  normalized.cause = error;
+  return normalized;
+}
+
 export function normalizeRuntimeEventEnvelope(evt) {
   if (!evt || typeof evt !== 'object') return {};
 
@@ -127,7 +143,7 @@ export async function callAPI(method, params = {}) {
     param_keys: Object.keys(payload),
   });
   try {
-    const raw = await callByID(METHOD_IDS.CALL_API, method, JSON.stringify(payload));
+    const raw = await callByID(METHOD_IDS.CALL_API, method, payload);
     const result = parseMaybeJSON(raw);
     logDebug('api', 'rpc.done', {
       req_id: reqId,
@@ -136,13 +152,14 @@ export async function callAPI(method, params = {}) {
     });
     return result;
   } catch (error) {
+    const normalizedError = normalizeRPCError(error);
     logWarn('api', 'rpc.failed', {
       req_id: reqId,
       method,
       duration_ms: Math.round(perfNow() - start),
-      error,
+      error: normalizedError,
     });
-    throw error;
+    throw normalizedError;
   }
 }
 

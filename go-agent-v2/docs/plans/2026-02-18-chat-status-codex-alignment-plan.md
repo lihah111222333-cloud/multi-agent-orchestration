@@ -2,7 +2,7 @@
 
 ## 1. 背景与目标
 
-当前 Chat 页“执行中”状态存在残留风险：时间线已无进行中项，但顶部/底部状态仍可能显示“执行中”。目标是将状态体验对齐 Codex 客户端：**基于生命周期派生状态**，并支持“工作中/等待指示/等待后台终端/MCP 启动中/推理标题覆盖”等一致表现。
+当前 Chat 页“执行中”状态存在残留风险：时间线已无进行中项，但顶部/底部状态仍可能显示“执行中”。目标是将状态体验对齐 Codex 客户端：**基于生命周期派生状态**，并支持“工作中/等待指示/等待后台终端/MCP 启动中/推理标题覆盖”等一致表现；同时增加 Context Window 的 token 使用率展示（如 `37% used / 97k / 258k`）。
 
 ## 2. 现状问题（Root Cause）
 
@@ -47,19 +47,26 @@
 - `fileEditDepth int`
 - `toolCallDepth int`
 - `collabDepth int`
-- `mcpStartupDepth int`
-- `terminalWaitDepth int`
+- `mcpStartupOverlay`（latch，非 depth）
+- `terminalWaitOverlay`（latch，非 depth）
 - `streamErrorText string`（可选）
 - `statusHeader string` / `statusDetails string`（可选）
 
 计数更新规则：
 
 - begin/start 事件 `+1`，end/complete 事件 `-1`，并 `max(0, depth)` 防止并发乱序击穿。
-- `turn_complete/task_complete/idle` 统一收敛：将 `turnDepth`、`commandDepth`、`fileEditDepth`、`toolCallDepth`、`approvalDepth` 清零（`mcpStartupDepth` 可按实际事件单独管理）。
+- `turn_complete/task_complete/idle` 统一收敛：将 `turnDepth`、`commandDepth`、`fileEditDepth`、`toolCallDepth`、`approvalDepth` 清零；overlay 状态按各自清理规则处理。
 - `approvalDepth` 清理条件明确为：
   - `exec_approval_request` / `file_change_approval_request`：`+1`
   - `exec_command_begin` / `patch_apply_begin`：若 `approvalDepth > 0` 则清零（表示审批已被处理并进入执行）
   - `turn_complete/task_complete/idle`：强制清零
+
+硬约束（事件不成对）：
+
+- `item/commandExecution/terminalInteraction` 与 `mcp_startup_update` 不走纯 `+1/-1` depth。
+- 两者统一走 `overlay/latch`：事件到达时置位并记录最新 payload；由显式事件清理。
+- `terminalWaitOverlay` 清理触发：`exec_command_output_delta`、`exec_command_end`、`turn_complete/task_complete/idle`（可加短 TTL 兜底）。
+- `mcpStartupOverlay` 清理触发：`mcp_startup_complete`（主清理）、`turn_complete/task_complete/idle`（兜底清理）。
 
 新增统一计算函数：
 
@@ -86,6 +93,7 @@
 - 补齐 Codex 对齐事件：
   - `item/commandExecution/terminalInteraction`（含 `exec_terminal_interaction`）→ 终端等待/交互覆盖源
   - `mcp_startup_update`（含 `codex/event/mcp_startup_update`）→ MCP 启动覆盖源
+- `dynamic_tool_call` 为单事件：不进入 `toolCallDepth`，仅更新 timeline/摘要；禁止产生未配对运行深度残留。
 - 保留 `turn_complete/task_complete/idle -> UIStatusIdle`。
 - 保留 `stream_error -> UIStatusError` 作为覆盖触发信号。
 
@@ -106,6 +114,35 @@
 
 - 若后端提供 `statusHeader`，优先展示 header；
 - 否则回退 `statusLabel(activeStatus)`。
+
+### 4.4 Token 使用率显示（新增硬需求）
+
+目标体验（对齐截图）：
+
+- Hover 提示显示：
+  - `Context window:`
+  - `X% used (Y% left)`
+  - `Used / Limit tokens used`（例如 `97k / 258k`）
+
+后端数据面（建议）：
+
+- 在 `RuntimeSnapshot` 增加 `tokenUsageByThread`，结构建议：
+  - `usedTokens`
+  - `contextWindowTokens`（limit）
+  - `usedPercent` / `leftPercent`（可由前端算）
+  - `updatedAt`
+- 事件来源：`token_count`（含 `thread/tokenUsage/updated`、`codex/event/token_count`）。
+- 解析策略：
+  - 已知字段优先（如 `input` + `output` 组成 `usedTokens`）。
+  - 若 payload 提供 context window limit（字段名兼容多别名）则更新 `contextWindowTokens`。
+  - 若 limit 暂缺，保留历史 limit；仍缺则仅展示 `usedTokens`，百分比与 left 隐藏（不误导）。
+
+前端展示面（建议）：
+
+- 在 `UnifiedChatPage` chat 状态区增加 token 指示器（紧邻状态点）。
+- 支持悬浮 tooltip；文案格式固定为三行（标题/百分比/绝对值）。
+- 数字格式使用 `k` 简写与千分位，避免长数字抖动。
+- `contextWindowTokens` 不可用时，降级展示 `XXk tokens used`（不显示伪百分比）。
 
 ## 5. 状态优先级定义（建议）
 
@@ -146,12 +183,21 @@
   - `stream_error` 覆盖后可在后续正常事件恢复。
   - `approvalDepth` 在 `exec_command_begin/patch_apply_begin/turn_complete` 的清理行为符合预期。
   - `ReplaceThreads()` 不回写覆盖已有派生状态（尤其 running 残留场景）。
+  - `terminalWaitOverlay` / `mcpStartupOverlay` 的置位与清理符合约束（含兜底清理）。
+  - `dynamic_tool_call` 不导致 `toolCallDepth` 增长残留。
+  - `token_count` 能更新 `tokenUsageByThread`；limit 缺失时不产出错误百分比。
 
 ### 7.2 前端测试
 
 - 新增/扩展 `cmd/agent-terminal/frontend/vue-app/stores/__tests__/...`
   - 构造 `activeStatus=running` 但 timeline 无 pending，断言不显示“执行中”。
   - 构造有 pending command/file/approval，断言显示对应优先标签。
+- 补充组件/逻辑级测试（核心落点在 `ChatTimeline`）：
+  - 方案 A：新增 `cmd/agent-terminal/frontend/vue-app/components/__tests__/ChatTimeline.status-presence.test.mjs`。
+  - 方案 B：将 `showAgentPresence/presenceLabel` 抽到 helper，再在 `services/__tests__` 做纯函数单测。
+- 增加 token 展示测试（`UnifiedChatPage` 或 helper）：
+  - 有 `used+limit` 时显示 `X% used` 与 `used/limit`。
+  - 仅有 `used` 无 `limit` 时走降级文案，不显示百分比。
 
 ## 8. 验收标准
 
@@ -159,6 +205,7 @@
 - turn 开始/结束行为稳定：开始进入工作态，结束回空闲态。
 - 审批、终端等待、MCP 启动、错误覆盖可正确显示且可恢复。
 - 与 Codex 的状态感知路径一致：**生命周期驱动 + 层级覆盖**。
+- token 使用率在会话进行中持续刷新，且在缺失 limit 时降级显示正确。
 
 ## 9. 风险与回滚
 

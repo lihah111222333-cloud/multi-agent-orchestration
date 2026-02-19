@@ -40,6 +40,76 @@ const callAPISampleEvery int64 = 30
 const callAPISlowThreshold = 1200 * time.Millisecond
 const bridgeNotifySampleEvery int64 = 120
 
+// extractThreadIDFromParams 从 params 中提取 threadId 用于日志关联。
+func extractThreadIDFromParams(params any) string {
+	switch p := params.(type) {
+	case nil:
+		return ""
+	case string:
+		return extractThreadIDFromJSON(p)
+	case []byte:
+		return extractThreadIDFromJSON(string(p))
+	case json.RawMessage:
+		return extractThreadIDFromJSON(string(p))
+	case map[string]any:
+		threadID, _ := p["threadId"].(string)
+		return strings.TrimSpace(threadID)
+	default:
+		data, err := json.Marshal(p)
+		if err != nil {
+			return ""
+		}
+		return extractThreadIDFromJSON(string(data))
+	}
+}
+
+func extractThreadIDFromJSON(paramsJSON string) string {
+	if paramsJSON == "" || paramsJSON == "{}" {
+		return ""
+	}
+	var p struct {
+		ThreadID string `json:"threadId"`
+	}
+	if json.Unmarshal([]byte(paramsJSON), &p) == nil {
+		return p.ThreadID
+	}
+	return ""
+}
+
+func normalizeCallAPIParams(params any) (string, error) {
+	switch p := params.(type) {
+	case nil:
+		return "{}", nil
+	case string:
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			return "{}", nil
+		}
+		return p, nil
+	case []byte:
+		trimmed := strings.TrimSpace(string(p))
+		if trimmed == "" {
+			return "{}", nil
+		}
+		return string(p), nil
+	case json.RawMessage:
+		trimmed := strings.TrimSpace(string(p))
+		if trimmed == "" {
+			return "{}", nil
+		}
+		return string(p), nil
+	default:
+		data, err := json.Marshal(p)
+		if err != nil {
+			return "", err
+		}
+		if len(data) == 0 {
+			return "{}", nil
+		}
+		return string(data), nil
+	}
+}
+
 var callAPIRequestSeq atomic.Int64
 var bridgeNotifySeq atomic.Int64
 
@@ -124,15 +194,21 @@ func (a *App) shutdown() {
 //
 // 前端使用:
 //
-//	const result = await window.go.main.App.CallAPI("thread/start", '{"model":"o4-mini"}')
-//	const dag = await window.go.main.App.CallAPI("resource_task_get_dag", '{"dag_id":"xxx"}')
+//	const result = await window.go.main.App.CallAPI("thread/start", { model: "o4-mini" })
+//	const dag = await window.go.main.App.CallAPI("resource_task_get_dag", { dag_id: "xxx" })
 //
 // 覆盖: 线程生命周期, 对话控制, 技能管理, 模型/配置, MCP, 命令执行, 日志查询 等。
-func (a *App) CallAPI(method, paramsJSON string) (resultJSON string, callErr error) {
+func (a *App) CallAPI(method string, params any) (result any, callErr error) {
 	start := time.Now()
 	reqID := callAPIRequestSeq.Add(1)
+	threadID := extractThreadIDFromParams(params)
+	paramsJSON, err := normalizeCallAPIParams(params)
+	if err != nil {
+		callErr = apperrors.Wrap(err, "App.CallAPI", "normalize params")
+		return nil, callErr
+	}
 	if shouldLogCallAPIBegin(method, reqID) {
-		logger.Info("CallAPI begin", logger.FieldReqID, reqID, logger.FieldMethod, method)
+		logger.Info("CallAPI begin", logger.FieldReqID, reqID, logger.FieldMethod, method, logger.FieldAgentID, threadID)
 	}
 	defer func() {
 		duration := time.Since(start)
@@ -140,6 +216,7 @@ func (a *App) CallAPI(method, paramsJSON string) (resultJSON string, callErr err
 			logger.Warn("CallAPI failed",
 				logger.FieldReqID, reqID,
 				logger.FieldMethod, method,
+				logger.FieldAgentID, threadID,
 				logger.FieldDurationMS, duration.Milliseconds(),
 				logger.FieldError, callErr)
 			return
@@ -149,31 +226,34 @@ func (a *App) CallAPI(method, paramsJSON string) (resultJSON string, callErr err
 				logger.Warn("CallAPI slow",
 					logger.FieldReqID, reqID,
 					logger.FieldMethod, method,
+					logger.FieldAgentID, threadID,
 					logger.FieldDurationMS, duration.Milliseconds())
 			} else {
 				logger.Info("CallAPI done",
 					logger.FieldReqID, reqID,
 					logger.FieldMethod, method,
+					logger.FieldAgentID, threadID,
 					logger.FieldDurationMS, duration.Milliseconds())
 			}
 		}
 	}()
 
 	// UI 辅助方法 (不经过 apiserver)
-	var result any
-	var err error
-
 	switch method {
 	case "ui/selectProjectDir":
-		result, err = a.handleUISelectProjectDir()
+		result, callErr = a.handleUISelectProjectDir()
 	case "ui/selectFiles":
-		result, err = a.handleUISelectFiles()
+		result, callErr = a.handleUISelectFiles()
 	case "ui/buildInfo":
-		result, err = a.handleUIBuildInfo()
+		result, callErr = a.handleUIBuildInfo()
 	case "ui/copyText":
-		result, err = a.handleUICopyText(paramsJSON)
+		result, callErr = a.handleUICopyText(paramsJSON)
 	default:
 		// 通用 JSON-RPC 调用
+		if a.srv == nil {
+			callErr = apperrors.Newf("App.CallAPI", "server not ready")
+			return nil, callErr
+		}
 		var params json.RawMessage
 		if paramsJSON != "" {
 			params = json.RawMessage(paramsJSON)
@@ -184,18 +264,10 @@ func (a *App) CallAPI(method, paramsJSON string) (resultJSON string, callErr err
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 
-		result, err = a.srv.InvokeMethod(ctx, method, params)
+		result, callErr = a.srv.InvokeMethod(ctx, method, params)
 	}
 
-	if err != nil {
-		return "", err
-	}
-
-	data, err := json.Marshal(result)
-	if err != nil {
-		return "", apperrors.Wrap(err, "App.CallAPI", "marshal result")
-	}
-	return string(data), nil
+	return result, callErr
 }
 
 func (a *App) handleUISelectProjectDir() (any, error) {
@@ -369,9 +441,9 @@ func (a *App) LaunchAgent(name, prompt, cwd string) (string, error) {
 				"prompt":   prompt,
 			})
 			if marshalErr != nil {
-				logger.Warn("turn/start marshal failed", logger.FieldError, marshalErr)
+				logger.Warn("turn/start marshal failed", logger.FieldAgentID, threadID, logger.FieldError, marshalErr)
 			} else if _, err := a.srv.InvokeMethod(context.Background(), "turn/start", turnParams); err != nil {
-				logger.Warn("turn/start invoke failed", logger.FieldError, err)
+				logger.Warn("turn/start invoke failed", logger.FieldAgentID, threadID, logger.FieldError, err)
 			}
 		}
 	}
@@ -463,14 +535,10 @@ func (a *App) ListAgents() []runner.AgentInfo {
 // GetGroup 返回当前窗口的分组名。
 func (a *App) GetGroup() string { return a.group }
 
-// GetBuildInfo 返回当前桌面应用构建信息(JSON字符串)。
-func (a *App) GetBuildInfo() string {
-	data, err := json.Marshal(currentBuildInfo())
-	if err != nil {
-		logger.Warn("GetBuildInfo: marshal failed", logger.FieldError, err)
-		return "{}"
-	}
-	return string(data)
+// GetBuildInfo 返回当前桌面应用构建信息。
+// Wails v3 自动将 Go struct 序列化为 JS object。
+func (a *App) GetBuildInfo() any {
+	return currentBuildInfo()
 }
 
 // ========================================
@@ -501,10 +569,10 @@ func (a *App) GetLSPDiagnostics(filePath string) (string, error) {
 //
 //	const status = await window.go.main.App.GetLSPStatus()
 //	// 返回: [{"Language":"go","Status":"running","Port":0}...]
-func (a *App) GetLSPStatus() (string, error) {
-	result, err := a.CallAPI("mcpServerStatus/list", "{}")
+func (a *App) GetLSPStatus() (any, error) {
+	result, err := a.srv.InvokeMethod(context.Background(), "mcpServerStatus/list", json.RawMessage("{}"))
 	if err != nil {
-		return "[]", nil
+		return []any{}, nil
 	}
 	return result, nil
 }
@@ -601,6 +669,7 @@ func (a *App) handleBridgeNotification(method string, params any) {
 			logger.Info("bridge notify emitted",
 				"notify_id", notifyID,
 				"method", method,
+				logger.FieldAgentID, "",
 				"channels", 1,
 				"duration_ms", time.Since(start).Milliseconds())
 		}
@@ -617,7 +686,7 @@ func (a *App) handleBridgeNotification(method string, params any) {
 		logger.Info("bridge notify emitted",
 			"notify_id", notifyID,
 			"method", method,
-			"thread_id", threadID,
+			logger.FieldAgentID, threadID,
 			"channels", 2,
 			"duration_ms", time.Since(start).Milliseconds())
 	}

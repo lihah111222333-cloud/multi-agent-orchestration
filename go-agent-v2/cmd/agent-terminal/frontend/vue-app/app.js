@@ -4,6 +4,8 @@ import { SidebarNav } from './components/SidebarNav.js';
 import { ProjectModal } from './components/ProjectModal.js';
 import { UnifiedChatPage } from './pages/UnifiedChatPage.js';
 import { DataPage } from './pages/DataPage.js';
+import { TasksPage } from './pages/TasksPage.js';
+import { CommandsPage } from './pages/CommandsPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { useProjectStore } from './stores/projects.js';
 import { useThreadStore } from './stores/threads.js';
@@ -28,6 +30,8 @@ export const AppRoot = {
     ProjectModal,
     UnifiedChatPage,
     DataPage,
+    TasksPage,
+    CommandsPage,
     SettingsPage,
   },
   setup() {
@@ -50,8 +54,8 @@ export const AppRoot = {
     });
 
     let refreshTimer = null;
-    let unsubscribeAgentEvent = () => {};
-    let unsubscribeBridgeEvent = () => {};
+    let unsubscribeAgentEvent = () => { };
+    let unsubscribeBridgeEvent = () => { };
 
     const agentsFields = Object.freeze([
       { key: 'agent_id', label: 'Agent' },
@@ -253,30 +257,13 @@ export const AppRoot = {
           empty-text="暂无 DAG"
         />
 
-        <section v-else-if="page === 'tasks'" id="page-tasks" class="page active">
-          <div class="panel-header">
-            <div class="ph-bar"></div>
-            <div class="ph-text"><h2>任务管理</h2></div>
-          </div>
-          <div class="sub-tabs">
-            <button class="sub-tab" :class="{ active: tasksSubTab === 'acks' }" @click="tasksSubTab = 'acks'">任务工单</button>
-            <button class="sub-tab" :class="{ active: tasksSubTab === 'traces' }" @click="tasksSubTab = 'traces'">执行追踪</button>
-          </div>
-          <div class="panel-body">
-            <div v-if="tasksItems.length === 0" class="empty-state">
-              <div class="es-icon">T</div>
-              <h3>暂无任务</h3>
-            </div>
-            <div v-else class="data-list-vue">
-              <article v-for="(item, idx) in tasksItems" :key="idx" class="data-card-vue">
-                <div v-for="field in tasksFields" :key="field.key" class="data-row-vue">
-                  <strong>{{ field.label }}</strong>
-                  <span>{{ item[field.key] ?? '-' }}</span>
-                </div>
-              </article>
-            </div>
-          </div>
-        </section>
+        <TasksPage
+          v-else-if="page === 'tasks'"
+          :tasks-sub-tab="tasksSubTab"
+          :items="tasksItems"
+          :fields="tasksFields"
+          @update:tasks-sub-tab="tasksSubTab = $event"
+        />
 
         <DataPage
           v-else-if="page === 'skills'"
@@ -288,55 +275,15 @@ export const AppRoot = {
           empty-text="暂无 Skill"
         />
 
-        <section v-else-if="page === 'commands'" id="page-commands" class="page active">
-          <div class="panel-header">
-            <div class="ph-bar"></div>
-            <div class="ph-text"><h2>命令卡 / 提示词</h2></div>
-          </div>
-          <div class="split-panel">
-            <div class="split-left">
-              <div class="section-header">COMMANDS</div>
-              <div class="panel-body">
-                <div v-if="dashboard.commandCards.length === 0" class="empty-state">
-                  <div class="es-icon">C</div>
-                  <h3>暂无命令卡</h3>
-                </div>
-                <div v-else class="data-list-vue">
-                  <article v-for="(item, idx) in dashboard.commandCards" :key="'cmd-' + idx" class="data-card-vue">
-                    <div v-for="field in commandFields" :key="field.key" class="data-row-vue">
-                      <strong>{{ field.label }}</strong>
-                      <span>{{ item[field.key] ?? '-' }}</span>
-                    </div>
-                    <div class="data-actions-vue">
-                      <button class="btn btn-ghost btn-xs" @click="runCommandCard(item)">发送到当前会话</button>
-                    </div>
-                  </article>
-                </div>
-              </div>
-            </div>
-            <div class="split-divider"></div>
-            <div class="split-right">
-              <div class="section-header">PROMPTS</div>
-              <div class="panel-body">
-                <div v-if="dashboard.prompts.length === 0" class="empty-state">
-                  <div class="es-icon">P</div>
-                  <h3>暂无提示词</h3>
-                </div>
-                <div v-else class="data-list-vue">
-                  <article v-for="(item, idx) in dashboard.prompts" :key="'prompt-' + idx" class="data-card-vue">
-                    <div v-for="field in promptFields" :key="field.key" class="data-row-vue">
-                      <strong>{{ field.label }}</strong>
-                      <span>{{ item[field.key] ?? '-' }}</span>
-                    </div>
-                    <div class="data-actions-vue">
-                      <button class="btn btn-ghost btn-xs" @click="runPromptTemplate(item)">发送到当前会话</button>
-                    </div>
-                  </article>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
+        <CommandsPage
+          v-else-if="page === 'commands'"
+          :command-cards="dashboard.commandCards"
+          :prompts="dashboard.prompts"
+          :command-fields="commandFields"
+          :prompt-fields="promptFields"
+          @run-command="runCommandCard"
+          @run-prompt="runPromptTemplate"
+        />
 
         <DataPage
           v-else-if="page === 'memory'"
@@ -351,7 +298,7 @@ export const AppRoot = {
         <SettingsPage
           v-else
           :build-info="buildInfo"
-          :refresh-build-info="refreshBuildInfo"
+          @refresh="refreshBuildInfo"
         />
       </main>
 

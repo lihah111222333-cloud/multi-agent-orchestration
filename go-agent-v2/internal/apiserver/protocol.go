@@ -54,6 +54,7 @@ const (
 	CodeMethodNotFound = -32601
 	CodeInvalidParams  = -32602
 	CodeInternalError  = -32603
+	CodeOverloaded     = -32001
 )
 
 // --- 便捷构造函数 ---

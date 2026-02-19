@@ -1,23 +1,25 @@
-import { watch } from '../../lib/vue.esm-browser.prod.js';
+import { watch, computed, ref } from '../../lib/vue.esm-browser.prod.js';
 import { logDebug } from '../services/log.js';
+
+const VISIBLE_WINDOW = 100;
 
 export const ChatTimeline = {
   name: 'ChatTimeline',
   props: {
     items: { type: Array, default: () => [] },
     activeStatus: { type: String, default: 'idle' },
+    activeStatusText: { type: String, default: '' },
   },
   setup(props) {
     let updateSeq = 0;
-    const presenceVisibleStatuses = new Set([
-      'starting',
-      'thinking',
-      'waiting',
-      'responding',
-      'running',
-      'editing',
-      'syncing',
-    ]);
+    const visibleCount = ref(VISIBLE_WINDOW);
+
+    // items 引用变化时重置窗口
+    watch(
+      () => props.items,
+      () => { visibleCount.value = VISIBLE_WINDOW; },
+    );
+
     watch(
       () => props.items.length,
       (next, prev) => {
@@ -33,19 +35,18 @@ export const ChatTimeline = {
       },
       { immediate: true },
     );
-    watch(
-      () => props.activeStatus,
-      (next, prev) => {
-        if (next === prev) return;
-        logDebug('ui', 'timeline.presence.status', {
-          previous: prev || '',
-          current: next || '',
-          visible: showAgentPresence(next, props.items) ? 1 : 0,
-        });
-      },
-      { immediate: true },
-    );
 
+    const visibleItems = computed(() => {
+      const all = props.items;
+      if (all.length <= visibleCount.value) return all;
+      return all.slice(all.length - visibleCount.value);
+    });
+
+    const hasMore = computed(() => props.items.length > visibleCount.value);
+
+    function showMore() {
+      visibleCount.value += VISIBLE_WINDOW;
+    }
     function roleLabel(item) {
       switch (item?.kind) {
         case 'user':
@@ -101,7 +102,13 @@ export const ChatTimeline = {
         || lower.startsWith('https://')
         || lower.startsWith('data:image/')
         || lower.startsWith('file://')) {
+        if (lower.startsWith('file://') && window.__WAILS_SHIM_DEBUG__) {
+          return '';
+        }
         return path;
+      }
+      if (window.__WAILS_SHIM_DEBUG__) {
+        return '';
       }
       return encodeURI(`file://${path}`);
     }
@@ -136,54 +143,20 @@ export const ChatTimeline = {
       return '';
     }
 
-    function hasPendingProcess(items) {
-      const list = Array.isArray(items) ? items : [];
-      for (let index = list.length - 1; index >= 0; index -= 1) {
-        const item = list[index];
-        if (!item || !item.kind) continue;
-        if (item.kind === 'thinking' && !item.done) return true;
-        if (item.kind === 'plan' && !item.done) return true;
-        if (item.kind === 'command' && item.status === 'running') return true;
-        if (item.kind === 'file' && item.status === 'editing') return true;
-        if (item.kind === 'approval' && item.status === 'pending') return true;
-      }
-      return false;
-    }
+    const sharedStatusText = computed(() => (props.activeStatusText || '').toString().trim());
 
-    function latestPendingLabel(items) {
-      const list = Array.isArray(items) ? items : [];
-      for (let index = list.length - 1; index >= 0; index -= 1) {
-        const item = list[index];
-        if (!item || !item.kind) continue;
-        if (item.kind === 'command' && item.status === 'running') return '执行中';
-        if (item.kind === 'file' && item.status === 'editing') return '修改中';
-        if (item.kind === 'approval' && item.status === 'pending') return '等待确认';
-        if (item.kind === 'plan' && !item.done) return '规划中';
-        if (item.kind === 'thinking' && !item.done) return '思考中';
-      }
-      return '';
-    }
+    const showAgentPresence = computed(() => {
+      const text = sharedStatusText.value;
+      if (!text || text === '未选择会话') return false;
+      return true;
+    });
 
-    function showAgentPresence(status, items = []) {
-      const value = (status || '').toString();
-      if (presenceVisibleStatuses.has(value)) return true;
-      return hasPendingProcess(items);
-    }
-
-    function presenceLabel(status, items = []) {
-      const value = (status || '').toString();
-      if (value === 'starting') return '启动中';
-      if (value === 'waiting') return '等待中';
-      if (value === 'responding') return '回复中';
-      if (value === 'running') return '执行中';
-      if (value === 'editing') return '修改中';
-      if (value === 'syncing') return '同步中';
-      const pending = latestPendingLabel(items);
-      if (pending) return pending;
-      return '思考中';
-    }
+    const presenceLabel = computed(() => sharedStatusText.value);
 
     return {
+      visibleItems,
+      hasMore,
+      showMore,
       roleLabel,
       stateLabel,
       attachmentType,
@@ -195,14 +168,19 @@ export const ChatTimeline = {
       avatarText,
       showAgentPresence,
       presenceLabel,
+      sharedStatusText,
     };
   },
   template: `
     <div class="chat-messages-vue">
       <div v-if="items.length === 0" class="chat-empty">暂无消息，先发送一句话试试。</div>
 
+      <div v-if="hasMore" class="chat-load-more">
+        <button class="chat-load-more-btn" @click="showMore">显示更早消息 ({{ items.length - visibleItems.length }} 条)</button>
+      </div>
+
       <article
-        v-for="item in items"
+        v-for="item in visibleItems"
         :key="item.id"
         class="chat-item"
         :class="['kind-' + item.kind, isDialog(item) ? 'dialog' : 'process', bubbleRole(item)]"
@@ -221,7 +199,7 @@ export const ChatTimeline = {
             <div v-if="(item.attachments || []).length > 0" class="chat-attachment-list">
               <span
                 v-for="(att, idx) in item.attachments"
-                :key="idx"
+                :key="(att.path || att.name || '') + '-' + idx"
                 class="chat-attachment-pill"
                 :class="{ 'has-image': Boolean(attachmentPreview(att)) }"
               >
@@ -276,12 +254,11 @@ export const ChatTimeline = {
           </template>
         </section>
       </article>
-
-      <div v-if="showAgentPresence(activeStatus, items)" class="chat-presence-row">
+      <div v-if="showAgentPresence" class="chat-presence-row">
         <div class="chat-item-avatar chat-item-avatar-presence">AI</div>
         <div class="chat-presence-pill">
           <span class="chat-presence-dot"></span>
-          <span>{{ presenceLabel(activeStatus, items) }}</span>
+          <span>{{ presenceLabel }}</span>
         </div>
       </div>
     </div>

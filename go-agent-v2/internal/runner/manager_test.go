@@ -4,6 +4,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ func (s *stubClient) SpawnAndConnect(_ context.Context, _, _, _ string, _ []code
 func (s *stubClient) Submit(_ string, _, _ []string, _ json.RawMessage) error { return nil }
 func (s *stubClient) SendCommand(_, _ string) error                           { return nil }
 func (s *stubClient) SendDynamicToolResult(_, _ string, _ *int64) error       { return nil }
+func (s *stubClient) RespondError(_ int64, _ int, _ string) error             { return nil }
 func (s *stubClient) ListThreads() ([]codex.ThreadInfo, error)                { return nil, nil }
 func (s *stubClient) ResumeThread(_ codex.ResumeThreadRequest) error          { return nil }
 func (s *stubClient) ForkThread(_ codex.ForkThreadRequest) (*codex.ForkThreadResponse, error) {
@@ -36,6 +38,33 @@ func (s *stubClient) ForkThread(_ codex.ForkThreadRequest) (*codex.ForkThreadRes
 func (s *stubClient) Shutdown() error { return nil }
 func (s *stubClient) Kill() error     { return nil }
 func (s *stubClient) Running() bool   { return true }
+
+type fakeLaunchClient struct {
+	port       int
+	threadID   string
+	spawnErr   error
+	spawnCalls atomic.Int32
+}
+
+func (f *fakeLaunchClient) GetPort() int                         { return f.port }
+func (f *fakeLaunchClient) GetThreadID() string                  { return f.threadID }
+func (f *fakeLaunchClient) SetEventHandler(_ codex.EventHandler) {}
+func (f *fakeLaunchClient) SpawnAndConnect(_ context.Context, _, _, _ string, _ []codex.DynamicTool) error {
+	f.spawnCalls.Add(1)
+	return f.spawnErr
+}
+func (f *fakeLaunchClient) Submit(_ string, _, _ []string, _ json.RawMessage) error { return nil }
+func (f *fakeLaunchClient) SendCommand(_, _ string) error                           { return nil }
+func (f *fakeLaunchClient) SendDynamicToolResult(_, _ string, _ *int64) error       { return nil }
+func (f *fakeLaunchClient) RespondError(_ int64, _ int, _ string) error             { return nil }
+func (f *fakeLaunchClient) ListThreads() ([]codex.ThreadInfo, error)                { return nil, nil }
+func (f *fakeLaunchClient) ResumeThread(_ codex.ResumeThreadRequest) error          { return nil }
+func (f *fakeLaunchClient) ForkThread(_ codex.ForkThreadRequest) (*codex.ForkThreadResponse, error) {
+	return nil, nil
+}
+func (f *fakeLaunchClient) Shutdown() error { return nil }
+func (f *fakeLaunchClient) Kill() error     { return nil }
+func (f *fakeLaunchClient) Running() bool   { return true }
 
 // ========================================
 // 状态转换测试
@@ -211,5 +240,88 @@ func TestList_ConcurrentWithHandleEvent(t *testing.T) {
 	// 验证回调确实执行了
 	if callbackCount.Load() == 0 {
 		t.Error("expected callbacks to fire during concurrent test")
+	}
+}
+
+func TestLaunch_FallbackToRESTWhenAppServerFails(t *testing.T) {
+	mgr := NewAgentManager()
+	appClient := &fakeLaunchClient{
+		spawnErr: errors.New("ws connect failed"),
+	}
+	restClient := &fakeLaunchClient{
+		threadID: "thread-rest",
+	}
+	mgr.appServerFactory = func(port int, agentID string) codex.CodexClient {
+		appClient.port = port
+		return appClient
+	}
+	mgr.restFactory = func(port int, agentID string) codex.CodexClient {
+		restClient.port = port
+		return restClient
+	}
+
+	var sawFallbackEvent atomic.Bool
+	mgr.SetOnEvent(func(_ string, event codex.Event) {
+		if event.Type == codex.EventBackgroundEvent {
+			sawFallbackEvent.Store(true)
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if err := mgr.Launch(ctx, "agent-fallback-ok", "Agent Fallback", "", ".", nil); err != nil {
+		t.Fatalf("Launch returned error: %v", err)
+	}
+	proc := mgr.Get("agent-fallback-ok")
+	if proc == nil {
+		t.Fatal("expected launched agent to exist")
+	}
+	if proc.Client != restClient {
+		t.Fatalf("expected REST fallback client to be active, got %T", proc.Client)
+	}
+	if appClient.spawnCalls.Load() != 1 {
+		t.Fatalf("app-server spawn calls = %d, want 1", appClient.spawnCalls.Load())
+	}
+	if restClient.spawnCalls.Load() != 1 {
+		t.Fatalf("rest spawn calls = %d, want 1", restClient.spawnCalls.Load())
+	}
+	if !sawFallbackEvent.Load() {
+		t.Fatal("expected background fallback event to be emitted")
+	}
+}
+
+func TestLaunch_FallbackFailureRemovesAgent(t *testing.T) {
+	mgr := NewAgentManager()
+	appClient := &fakeLaunchClient{
+		spawnErr: errors.New("ws connect failed"),
+	}
+	restClient := &fakeLaunchClient{
+		spawnErr: errors.New("http spawn failed"),
+	}
+	mgr.appServerFactory = func(port int, agentID string) codex.CodexClient {
+		appClient.port = port
+		return appClient
+	}
+	mgr.restFactory = func(port int, agentID string) codex.CodexClient {
+		restClient.port = port
+		return restClient
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	err := mgr.Launch(ctx, "agent-fallback-fail", "Agent Fallback Fail", "", ".", nil)
+	if err == nil {
+		t.Fatal("expected launch error when app-server and rest fallback both fail")
+	}
+	if mgr.Get("agent-fallback-fail") != nil {
+		t.Fatal("expected failed launch agent to be removed from manager")
+	}
+	if appClient.spawnCalls.Load() != 1 {
+		t.Fatalf("app-server spawn calls = %d, want 1", appClient.spawnCalls.Load())
+	}
+	if restClient.spawnCalls.Load() != 1 {
+		t.Fatalf("rest spawn calls = %d, want 1", restClient.spawnCalls.Load())
 	}
 }

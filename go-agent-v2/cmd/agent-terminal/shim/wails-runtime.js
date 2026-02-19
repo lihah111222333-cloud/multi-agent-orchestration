@@ -21,7 +21,7 @@ export const Call = {
             case METHOD_IDS.CALL_API:
                 return app.CallAPI(args[0], args[1]);
             case METHOD_IDS.GET_BUILD_INFO:
-                return app.GetBuildInfo ? app.GetBuildInfo() : '{}';
+                return app.GetBuildInfo ? app.GetBuildInfo() : {};
             case METHOD_IDS.GET_GROUP:
                 return app.GetGroup ? app.GetGroup() : '';
             case METHOD_IDS.SAVE_CLIPBOARD_IMAGE:

@@ -7,17 +7,23 @@ export const ProjectSelect = {
     options: { type: Array, default: () => [] },
   },
   emits: ['update:modelValue', 'add-project'],
-  methods: {
-    onProjectChange(value) {
+  setup(props, { emit }) {
+    function onProjectChange(value) {
       logDebug('ui', 'projectSelect.changed', {
         value: value || '.',
       });
-      this.$emit('update:modelValue', value);
-    },
-    onAddProject() {
+      emit('update:modelValue', value);
+    }
+
+    function onAddProject() {
       logDebug('ui', 'projectSelect.add.click', {});
-      this.$emit('add-project');
-    },
+      emit('add-project');
+    }
+
+    return {
+      onProjectChange,
+      onAddProject,
+    };
   },
   template: `
     <div class="project-select-wrap">

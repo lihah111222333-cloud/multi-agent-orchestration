@@ -21,10 +21,19 @@
 
         // Wails App bindings shim
         const AppShim = {
-            CallAPI: async function (method, paramsJSON) {
-                const params = paramsJSON ? JSON.parse(paramsJSON) : {};
-                const result = await rpcCall(method, params);
-                return result ? JSON.stringify(result) : '{}';
+            CallAPI: async function (method, params) {
+                let payload = {};
+                if (params && typeof params === 'object') {
+                    payload = params;
+                } else if (typeof params === 'string' && params.trim()) {
+                    try {
+                        payload = JSON.parse(params);
+                    } catch {
+                        payload = {};
+                    }
+                }
+                const result = await rpcCall(method, payload);
+                return result == null ? {} : result;
             },
             LaunchAgent: async function (name, prompt, cwd) {
                 const result = await rpcCall('thread/start', { model: '', cwd: cwd || '.' });
@@ -32,7 +41,7 @@
                     const input = [{ type: 'text', text: prompt }];
                     await rpcCall('turn/start', { threadId: result.thread.id, input: input });
                 }
-                return JSON.stringify(result);
+                return result == null ? {} : result;
             },
             SubmitInput: async function (agentId, prompt) {
                 const input = [{ type: 'text', text: prompt }];
@@ -69,17 +78,17 @@
             GetBuildInfo: async function () {
                 try {
                     const resp = await fetch('/build-info');
-                    if (!resp.ok) return '{}';
+                    if (!resp.ok) return {};
                     const data = await resp.json();
-                    return JSON.stringify(data || {});
+                    return data || {};
                 } catch (err) {
                     console.warn('[shim] GetBuildInfo failed:', err);
-                    return '{}';
+                    return {};
                 }
             },
             GetGroup: async function () { return ''; },
-            GetLSPStatus: async function () { return '[]'; },
-            GetLSPDiagnostics: async function () { return '{}'; },
+            GetLSPStatus: async function () { return []; },
+            GetLSPDiagnostics: async function () { return {}; },
             SaveClipboardImage: async function (base64) {
                 console.warn('[shim] SaveClipboardImage not available in debug mode');
                 return '';
@@ -149,6 +158,7 @@
         pollBridgeEvents();
 
         // 挂载到 window
+        window.__WAILS_SHIM_DEBUG__ = true;
         window.go = { main: { App: AppShim } };
         window.runtime = RuntimeShim;
 

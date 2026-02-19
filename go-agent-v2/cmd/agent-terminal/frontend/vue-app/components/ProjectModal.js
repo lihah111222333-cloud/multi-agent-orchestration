@@ -36,24 +36,23 @@ export const ProjectModal = {
     <div v-if="store.state.showModal" class="modal-overlay" @click.self="closeByMask">
       <div class="modal-box">
         <div class="modal-title">添加项目</div>
-        <div style="display:flex;gap:8px;align-items:center">
+        <div class="modal-input-row">
           <input
             v-model="store.state.modalPath"
-            class="modal-input"
+            class="modal-input modal-input-flex"
             type="text"
             placeholder="/Users/you/projects/my-app"
             spellcheck="false"
             autocomplete="off"
-            style="flex:1"
-            @keydown.enter="store.confirmModal()"
-            @keydown.esc="store.closeModal()"
+            @keydown.enter="onConfirm"
+            @keydown.esc="closeByMask"
           />
-          <button class="btn btn-secondary" style="flex-shrink:0;font-size:11px;padding:6px 10px" @click="onBrowse" :disabled="store.state.browsing">
+          <button class="btn btn-secondary modal-browse-btn" @click="onBrowse" :disabled="store.state.browsing">
             {{ store.state.browsing ? '打开中...' : '浏览...' }}
           </button>
         </div>
         <div class="modal-btns">
-          <button class="btn btn-ghost" @click="store.closeModal()">取消</button>
+          <button class="btn btn-ghost" @click="closeByMask">取消</button>
           <button class="btn btn-primary" @click="onConfirm" :disabled="!canConfirm">确定</button>
         </div>
       </div>

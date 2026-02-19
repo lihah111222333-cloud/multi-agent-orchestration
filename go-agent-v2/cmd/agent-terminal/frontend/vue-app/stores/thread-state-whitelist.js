@@ -2,16 +2,19 @@ const UI_LOCAL_STATE_KEYS = Object.freeze([
   'activeThreadId',
   'activeCmdThreadId',
   'mainAgentId',
-  'viewPrefs',
-  'loadingThreads',
-  'sending',
 ]);
 
 const RUNTIME_STATE_KEYS = Object.freeze([
   'threads',
   'statuses',
+  'interruptibleByThread',
+  'viewPrefsChat',
+  'viewPrefsCmd',
+  'statusHeadersByThread',
+  'statusDetailsByThread',
   'timelinesByThread',
   'diffTextByThread',
+  'tokenUsageByThread',
   'agentMetaById',
   'agentRuntimeById',
 ]);

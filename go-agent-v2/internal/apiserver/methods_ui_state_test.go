@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
@@ -115,6 +116,7 @@ func TestUIStateGetResolvesAndPersistsActivePreferences(t *testing.T) {
 		t.Fatalf("activeCmdThreadId = %#v, want worker-1", got)
 	}
 
+	time.Sleep(50 * time.Millisecond) // wait for async persist goroutines
 	persistedMain, _ := srv.prefManager.Get(ctx, "mainAgentId")
 	if persistedMain != "main-1" {
 		t.Fatalf("persisted mainAgentId = %#v, want main-1", persistedMain)
@@ -165,6 +167,7 @@ func TestUIStateGetResolvesToEmptyWhenNoThreads(t *testing.T) {
 		t.Fatalf("activeCmdThreadId = %#v, want empty", got)
 	}
 
+	time.Sleep(50 * time.Millisecond) // wait for async persist goroutines
 	persistedMain, _ := srv.prefManager.Get(ctx, "mainAgentId")
 	if persistedMain != "" {
 		t.Fatalf("persisted mainAgentId = %#v, want empty", persistedMain)

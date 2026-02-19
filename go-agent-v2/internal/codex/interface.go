@@ -25,6 +25,8 @@ type CodexClient interface {
 	SendCommand(cmd, args string) error
 	// SendDynamicToolResult 回传动态工具执行结果 (requestID = codex server request ID)。
 	SendDynamicToolResult(callID, output string, requestID *int64) error
+	// RespondError 向 codex 发送 JSON-RPC 错误响应 (server request 失败时避免 turn 挂起)。
+	RespondError(id int64, code int, message string) error
 
 	// ListThreads 获取线程列表。
 	ListThreads() ([]ThreadInfo, error)

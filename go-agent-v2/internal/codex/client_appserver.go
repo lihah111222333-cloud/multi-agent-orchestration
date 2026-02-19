@@ -80,6 +80,15 @@ type pendingCall struct {
 	result json.RawMessage
 	err    error
 	done   chan struct{}
+	once   sync.Once
+}
+
+func (p *pendingCall) resolve(result json.RawMessage, err error) {
+	p.once.Do(func() {
+		p.result = result
+		p.err = err
+		close(p.done)
+	})
 }
 
 // ========================================
@@ -93,6 +102,7 @@ type AppServerClient struct {
 	Port     int
 	Cmd      *exec.Cmd
 	ThreadID string
+	AgentID  string // 所属 Agent 标识, 用于日志关联
 
 	// ========================================
 	// 锁职责说明
@@ -115,18 +125,29 @@ type AppServerClient struct {
 	// JSON-RPC request tracking
 	nextID  atomic.Int64
 	pending sync.Map // id → *pendingCall
+
+	// 活跃 turn 跟踪: turn/started 存入, turn_complete/idle/error 清空。
+	activeTurnID atomic.Value // string
 }
 
 const appServerStartupProbeTimeout = 30 * time.Second
+const appServerWriteTimeout = 10 * time.Second
+const appServerReadIdleTimeout = 75 * time.Second
+const appServerPingInterval = 25 * time.Second
+const appServerInterruptTimeout = 30 * time.Second
+const appServerStreamMaxRetries = 3
+const appServerReconnectBaseDelay = 300 * time.Millisecond
+const appServerReconnectMaxDelay = 3 * time.Second
 
 // NewAppServerClient 创建 app-server 客户端。
-func NewAppServerClient(port int) *AppServerClient {
+func NewAppServerClient(port int, agentID string) *AppServerClient {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &AppServerClient{
-		Port:   port,
-		ctx:    ctx,
-		cancel: cancel,
-		wsDone: make(chan struct{}),
+		Port:    port,
+		AgentID: agentID,
+		ctx:     ctx,
+		cancel:  cancel,
+		wsDone:  make(chan struct{}),
 	}
 }
 
@@ -135,6 +156,9 @@ func (c *AppServerClient) GetPort() int { return c.Port }
 
 // GetThreadID 返回当前 thread ID。
 func (c *AppServerClient) GetThreadID() string { return c.ThreadID }
+
+// GetActiveTurnID 返回当前活跃 turn ID。
+func (c *AppServerClient) GetActiveTurnID() string { return c.getActiveTurnID() }
 
 // SetEventHandler 注册事件回调。
 func (c *AppServerClient) SetEventHandler(h EventHandler) {
@@ -187,7 +211,7 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", c.Port), 500*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
-			logger.Info("codex: app-server listening", logger.FieldPort, c.Port)
+			logger.Info("codex: app-server listening", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port)
 			return nil
 		}
 		time.Sleep(300 * time.Millisecond)
@@ -198,19 +222,194 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 
 // connectWS 连接 WebSocket 并启动 readLoop。
 func (c *AppServerClient) connectWS() error {
+	conn, err := c.dialWS(c.ctx)
+	if err != nil {
+		return apperrors.Wrap(err, "AppServerClient.connectWS", "ws connect")
+	}
+	c.replaceWSConn(conn)
+	util.SafeGo(func() { c.readLoop() })
+	util.SafeGo(func() { c.pingLoop(conn) })
+	return nil
+}
+
+func (c *AppServerClient) dialWS(ctx context.Context) (*websocket.Conn, error) {
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d", c.Port)
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 5 * time.Second,
 		NetDialContext:   (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 	}
 
-	conn, _, err := dialer.DialContext(c.ctx, wsURL, nil)
+	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
-		return apperrors.Wrap(err, "AppServerClient.connectWS", "ws connect")
+		return nil, err
 	}
+	if conn == nil {
+		return nil, apperrors.New("AppServerClient.dialWS", "dial returned nil websocket connection")
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(appServerReadIdleTimeout))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(appServerReadIdleTimeout))
+		return nil
+	})
+	return conn, nil
+}
+
+func (c *AppServerClient) currentWSConn() *websocket.Conn {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	return c.ws
+}
+
+func (c *AppServerClient) replaceWSConn(conn *websocket.Conn) {
+	if conn == nil {
+		return
+	}
+	c.wsMu.Lock()
+	prev := c.ws
 	c.ws = conn
-	util.SafeGo(func() { c.readLoop() })
-	return nil
+	c.wsMu.Unlock()
+	if prev != nil && prev != conn {
+		_ = prev.Close()
+	}
+}
+
+func appServerReconnectDelay(attempt int) time.Duration {
+	if attempt <= 1 {
+		return 0
+	}
+	delay := appServerReconnectBaseDelay
+	for i := 2; i < attempt; i++ {
+		delay *= 2
+		if delay >= appServerReconnectMaxDelay {
+			return appServerReconnectMaxDelay
+		}
+	}
+	if delay > appServerReconnectMaxDelay {
+		return appServerReconnectMaxDelay
+	}
+	return delay
+}
+
+func (c *AppServerClient) sleepWithContext(delay time.Duration) bool {
+	if delay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-c.ctx.Done():
+		return false
+	}
+}
+
+func (c *AppServerClient) emitBackgroundEvent(message string, status string, active bool, done bool, details map[string]any) {
+	c.handlerMu.RLock()
+	handler := c.handler
+	c.handlerMu.RUnlock()
+	if handler == nil {
+		return
+	}
+	payload := map[string]any{
+		"message": strings.TrimSpace(message),
+		"status":  strings.TrimSpace(status),
+		"active":  active,
+		"done":    done,
+	}
+	for key, value := range details {
+		payload[key] = value
+	}
+	data, _ := json.Marshal(payload)
+	handler(Event{Type: EventBackgroundEvent, Data: data})
+}
+
+func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
+	trigger = strings.TrimSpace(trigger)
+	activeTurnID := c.getActiveTurnID()
+	for attempt := 1; attempt <= appServerStreamMaxRetries; attempt++ {
+		if c.stopped.Load() {
+			return false
+		}
+		delay := appServerReconnectDelay(attempt)
+		if !c.sleepWithContext(delay) {
+			return false
+		}
+		c.emitBackgroundEvent(
+			"Reconnecting...",
+			"reconnecting",
+			true,
+			false,
+			map[string]any{
+				"phase":        "reconnect",
+				"trigger":      trigger,
+				"attempt":      attempt,
+				"max_retries":  appServerStreamMaxRetries,
+				"activeTurnId": activeTurnID,
+			},
+		)
+
+		conn, err := c.dialWS(c.ctx)
+		if err != nil {
+			retryErr := apperrors.Wrap(err, "AppServerClient.reconnectWS", "dial reconnect")
+			c.emitStreamError(retryErr, "reconnect", false)
+			logger.Warn("codex: ws reconnect attempt failed",
+				logger.FieldAgentID, c.AgentID,
+				"trigger", trigger,
+				"attempt", attempt,
+				"max_retries", appServerStreamMaxRetries,
+				"active_turn_id", activeTurnID,
+				logger.FieldError, retryErr,
+			)
+			continue
+		}
+
+		c.replaceWSConn(conn)
+		util.SafeGo(func() { c.pingLoop(conn) })
+		c.emitBackgroundEvent(
+			"Reconnected",
+			"completed",
+			false,
+			true,
+			map[string]any{
+				"phase":        "reconnect",
+				"trigger":      trigger,
+				"attempt":      attempt,
+				"max_retries":  appServerStreamMaxRetries,
+				"activeTurnId": activeTurnID,
+			},
+		)
+		logger.Info("codex: ws reconnected",
+			logger.FieldAgentID, c.AgentID,
+			"trigger", trigger,
+			"attempt", attempt,
+			"max_retries", appServerStreamMaxRetries,
+			"active_turn_id", activeTurnID,
+		)
+		return true
+	}
+
+	exhausted := map[string]any{
+		"phase":       "reconnect",
+		"trigger":     trigger,
+		"attempt":     appServerStreamMaxRetries,
+		"max_retries": appServerStreamMaxRetries,
+	}
+	if lastErr != nil {
+		exhausted["last_error"] = lastErr.Error()
+	}
+	if activeTurnID != "" {
+		exhausted["activeTurnId"] = activeTurnID
+	}
+	c.emitBackgroundEvent("Reconnect failed", "failed", false, true, exhausted)
+	logger.Warn("codex: ws reconnect exhausted",
+		logger.FieldAgentID, c.AgentID,
+		"trigger", trigger,
+		"max_retries", appServerStreamMaxRetries,
+		"active_turn_id", activeTurnID,
+		logger.FieldError, lastErr,
+	)
+	return false
 }
 
 // ========================================
@@ -267,6 +466,24 @@ func (c *AppServerClient) respond(id int64, result any) error {
 	return c.asWriteJSON(resp)
 }
 
+// RespondError 向 codex 发送 JSON-RPC 错误响应 (用于 server request 失败场景)。
+//
+// 当 codex 发送带 id 的 server request (如 dynamic_tool_call / approval) 时,
+// 我方必须回复 response; 若处理过程中遇到错误, 用此方法发 error response,
+// 避免 codex turn 永久挂起。
+func (c *AppServerClient) RespondError(id int64, code int, message string) error {
+	resp := struct {
+		JSONRPC string        `json:"jsonrpc"`
+		ID      int64         `json:"id"`
+		Error   *jsonRPCError `json:"error"`
+	}{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error:   &jsonRPCError{Code: code, Message: message},
+	}
+	return c.asWriteJSON(resp)
+}
+
 // ========================================
 // 协议方法
 // ========================================
@@ -278,6 +495,7 @@ func (c *AppServerClient) respond(id int64, result any) error {
 // 不声明此 capability 会导致 dynamicTools 被静默忽略。
 func (c *AppServerClient) Initialize() error {
 	logger.Info("codex: Initialize()",
+		logger.FieldAgentID, c.AgentID,
 		logger.FieldPort, c.Port,
 		"experimentalApi", true,
 	)
@@ -291,10 +509,11 @@ func (c *AppServerClient) Initialize() error {
 		},
 	}, 10*time.Second)
 	if err != nil {
-		logger.Error("codex: Initialize() FAILED", logger.FieldPort, c.Port, logger.FieldError, err)
+		logger.Error("codex: Initialize() FAILED", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldError, err)
 		return err
 	}
 	logger.Info("codex: Initialize() OK",
+		logger.FieldAgentID, c.AgentID,
 		logger.FieldPort, c.Port,
 		"server_caps", string(result),
 	)
@@ -315,6 +534,7 @@ func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicT
 		toolNames[i] = t.Name
 	}
 	logger.Info("codex: thread/start",
+		logger.FieldAgentID, c.AgentID,
 		logger.FieldPort, c.Port,
 		logger.FieldCwd, cwd,
 		"model", model,
@@ -328,7 +548,7 @@ func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicT
 		DynamicTools: dynamicTools,
 	}, 30*time.Second)
 	if err != nil {
-		logger.Error("codex: thread/start FAILED", logger.FieldPort, c.Port, logger.FieldError, err)
+		logger.Error("codex: thread/start FAILED", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldError, err)
 		return "", apperrors.Wrap(err, "AppServerClient.ThreadStart", "thread/start")
 	}
 
@@ -338,15 +558,16 @@ func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicT
 		} `json:"thread"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
-		logger.Error("codex: thread/start decode FAILED", logger.FieldPort, c.Port, logger.FieldRaw, string(result), logger.FieldError, err)
+		logger.Error("codex: thread/start decode FAILED", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldRaw, string(result), logger.FieldError, err)
 		return "", apperrors.Wrapf(err, "AppServerClient.ThreadStart", "thread/start decode (raw: %s)", result)
 	}
 	if resp.Thread.ID == "" {
-		logger.Error("codex: thread/start returned empty thread ID", logger.FieldPort, c.Port, logger.FieldRaw, string(result))
+		logger.Error("codex: thread/start returned empty thread ID", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldRaw, string(result))
 		return "", apperrors.Newf("AppServerClient.ThreadStart", "thread/start returned empty thread ID (raw: %s)", result)
 	}
 	c.ThreadID = resp.Thread.ID
 	logger.Info("codex: thread/start OK",
+		logger.FieldAgentID, c.AgentID,
 		logger.FieldPort, c.Port,
 		logger.FieldThreadID, c.ThreadID,
 		"dynamic_tools", len(dynamicTools),
@@ -432,17 +653,116 @@ func (c *AppServerClient) Submit(prompt string, images, files []string, outputSc
 		params["outputSchema"] = json.RawMessage(outputSchema)
 	}
 
-	_, err := c.call("turn/start", params, 10*time.Second)
-	return err
+	result, err := c.call("turn/start", params, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	if turnID := extractTurnIDFromEventData(result); turnID != "" {
+		c.setActiveTurnID(turnID)
+		logger.Debug("codex: active turn set from turn/start response",
+			logger.FieldAgentID, c.AgentID,
+			logger.FieldThreadID, c.ThreadID,
+			"turn_id", turnID,
+		)
+	} else {
+		logger.Warn("codex: turn/start response missing turn id",
+			logger.FieldAgentID, c.AgentID,
+			logger.FieldThreadID, c.ThreadID,
+			logger.FieldRaw, truncateBytes(result, 200),
+		)
+	}
+	return nil
 }
 
 // SendCommand 发送斜杠命令 (通知, 无需响应)。
 func (c *AppServerClient) SendCommand(cmd, args string) error {
+	trimmedCmd := strings.TrimSpace(cmd)
+	if trimmedCmd == CmdInterrupt {
+		threadID := strings.TrimSpace(c.ThreadID)
+		if threadID == "" {
+			return apperrors.New("AppServerClient.SendCommand", "interrupt requires active thread id")
+		}
+		turnID := strings.TrimSpace(c.getActiveTurnID())
+		if turnID != "" {
+			_, err := c.call("turn/interrupt", map[string]any{
+				"threadId": threadID,
+				"turnId":   turnID,
+			}, appServerInterruptTimeout)
+			if err == nil {
+				logger.Info("codex: turn/interrupt OK",
+					logger.FieldAgentID, c.AgentID,
+					logger.FieldThreadID, threadID,
+					"turn_id", turnID,
+				)
+				return nil
+			}
+			if !isMethodNotFoundRPCError(err) && !isInvalidParamsRPCError(err) {
+				logger.Warn("codex: turn/interrupt FAILED",
+					logger.FieldAgentID, c.AgentID,
+					logger.FieldThreadID, threadID,
+					"turn_id", turnID,
+					logger.FieldError, err,
+				)
+				return err
+			}
+			logger.Warn("codex: turn/interrupt unsupported, fallback to interruptConversation",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldThreadID, threadID,
+				"turn_id", turnID,
+				logger.FieldError, err,
+			)
+		} else {
+			logger.Warn("codex: missing active turn id for turn/interrupt, fallback to interruptConversation",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldThreadID, threadID,
+			)
+		}
+
+		_, err := c.call("interruptConversation", map[string]any{
+			"conversationId": threadID,
+		}, appServerInterruptTimeout)
+		if err == nil {
+			logger.Info("codex: interruptConversation OK",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldThreadID, threadID,
+			)
+			return nil
+		}
+		if !isMethodNotFoundRPCError(err) {
+			logger.Warn("codex: interruptConversation FAILED",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldThreadID, threadID,
+				logger.FieldError, err,
+			)
+			return err
+		}
+		logger.Warn("codex: interruptConversation unsupported, fallback to slash command",
+			logger.FieldAgentID, c.AgentID,
+			logger.FieldThreadID, threadID,
+			logger.FieldError, err,
+		)
+	}
 	return c.notify("command", map[string]any{
 		"threadId": c.ThreadID,
 		"command":  cmd,
 		"args":     args,
 	})
+}
+
+func isMethodNotFoundRPCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "method not found") || strings.Contains(text, "code -32601")
+}
+
+func isInvalidParamsRPCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "invalid params") || strings.Contains(text, "code -32602")
 }
 
 // SendDynamicToolResult 回传动态工具执行结果。
@@ -465,7 +785,7 @@ func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID
 
 	// 兜底: 无 requestID 时用 notification (不应发生)
 	logger.Warn("codex: SendDynamicToolResult without requestID, falling back to notification",
-		logger.FieldCallID, callID)
+		logger.FieldAgentID, c.AgentID, logger.FieldCallID, callID)
 	params := map[string]any{
 		"threadId": c.ThreadID,
 		"callId":   callID,
@@ -566,6 +886,7 @@ func (c *AppServerClient) readLoop() {
 			_ = c.ws.Close()
 		}
 		c.wsMu.Unlock()
+		c.failPendingCalls(apperrors.New("AppServerClient.readLoop", "connection closed"))
 
 		select {
 		case <-c.wsDone:
@@ -575,16 +896,34 @@ func (c *AppServerClient) readLoop() {
 	}()
 
 	for !c.stopped.Load() {
-		_, message, err := c.ws.ReadMessage()
+		conn := c.currentWSConn()
+		if conn == nil {
+			if c.stopped.Load() {
+				return
+			}
+			if !c.reconnectWS("ws_missing", apperrors.New("AppServerClient.readLoop", "ws not connected")) {
+				return
+			}
+			continue
+		}
+		_, message, err := conn.ReadMessage()
 		if err != nil {
+			readErr := apperrors.Wrap(err, "AppServerClient.readLoop", "read message")
+			c.failPendingCalls(readErr)
 			if !c.stopped.Load() {
-				c.handlerMu.RLock()
-				h := c.handler
-				c.handlerMu.RUnlock()
-				if h != nil {
-					errData, _ := json.Marshal(ErrorData{Message: err.Error()})
-					h(Event{Type: EventError, Data: errData})
-				}
+				c.emitStreamError(readErr, "read", isIdleTimeoutError(err))
+			}
+			logger.Warn("codex: readLoop read failed",
+				logger.FieldAgentID, c.AgentID,
+				"active_turn_id", c.getActiveTurnID(),
+				"idle_timeout", isIdleTimeoutError(err),
+				logger.FieldError, readErr,
+			)
+			if c.stopped.Load() {
+				return
+			}
+			if c.reconnectWS("read_error", readErr) {
+				continue
 			}
 			return
 		}
@@ -592,6 +931,7 @@ func (c *AppServerClient) readLoop() {
 		var msg jsonRPCMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			logger.Warn("codex: readLoop unparseable JSON-RPC message",
+				logger.FieldAgentID, c.AgentID,
 				logger.FieldError, err,
 				"raw_len", len(message),
 				"raw_prefix", truncateBytes(message, 200),
@@ -600,6 +940,7 @@ func (c *AppServerClient) readLoop() {
 		}
 		if dropped, preview, convID := shouldDropLegacyMirrorNotification(msg); dropped {
 			logger.Info("codex: dropped legacy mirror stream notification",
+				logger.FieldAgentID, c.AgentID,
 				logger.FieldMethod, msg.Method,
 				"conversation_id", convID,
 				"preview", preview,
@@ -618,6 +959,34 @@ func (c *AppServerClient) readLoop() {
 	}
 }
 
+func (c *AppServerClient) pingLoop(conn *websocket.Conn) {
+	ticker := time.NewTicker(appServerPingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-c.wsDone:
+			return
+		case <-ticker.C:
+			c.wsMu.Lock()
+			if c.ws != conn {
+				c.wsMu.Unlock()
+				return
+			}
+			err := c.ws.WriteControl(websocket.PingMessage, []byte("ping"), time.Now().Add(appServerWriteTimeout))
+			if err != nil {
+				_ = c.ws.Close()
+				c.ws = nil
+				c.wsMu.Unlock()
+				return
+			}
+			c.wsMu.Unlock()
+		}
+	}
+}
+
 func (c *AppServerClient) handleRPCResponse(msg jsonRPCMessage) bool {
 	if msg.ID == nil || msg.Method != "" {
 		return false
@@ -625,6 +994,7 @@ func (c *AppServerClient) handleRPCResponse(msg jsonRPCMessage) bool {
 	value, ok := c.pending.Load(*msg.ID)
 	if !ok {
 		logger.Warn("codex: orphan RPC response (no pending call)",
+			logger.FieldAgentID, c.AgentID,
 			logger.FieldID, *msg.ID,
 			"result_len", len(msg.Result),
 		)
@@ -632,23 +1002,26 @@ func (c *AppServerClient) handleRPCResponse(msg jsonRPCMessage) bool {
 	}
 	pc := value.(*pendingCall)
 	if msg.Error != nil {
-		pc.err = apperrors.Newf("AppServerClient.readLoop", "rpc error: %s (code %d)", msg.Error.Message, msg.Error.Code)
+		pc.resolve(nil, apperrors.Newf("AppServerClient.readLoop", "rpc error: %s (code %d)", msg.Error.Message, msg.Error.Code))
 		logger.Warn("codex: RPC error response",
+			logger.FieldAgentID, c.AgentID,
 			logger.FieldID, *msg.ID,
 			"code", msg.Error.Code,
 			"message", msg.Error.Message,
 		)
 	} else {
-		pc.result = msg.Result
+		pc.resolve(msg.Result, nil)
 	}
-	close(pc.done)
 	return true
 }
 
 func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 	event := c.jsonRPCToEvent(msg)
+	// DenyFunc: 审批事件 proc==nil 时自动拒绝, 闭包捕获当前 client。
+	event.DenyFunc = func() error { return c.Submit("no", nil, nil, nil) }
 	if event.Type == "" {
 		logger.Warn("codex: readLoop skipped message with empty event type",
+			logger.FieldAgentID, c.AgentID,
 			logger.FieldMethod, msg.Method,
 			"has_id", msg.ID != nil,
 			logger.FieldParamsLen, len(msg.Params),
@@ -657,17 +1030,26 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 	}
 	if msg.ID != nil && msg.Method != "" {
 		event.RequestID = msg.ID
+		reqID := *msg.ID
+		event.RespondFunc = func(code int, message string) error {
+			return c.RespondError(reqID, code, message)
+		}
 		logger.Debug("codex: server request received",
+			logger.FieldAgentID, c.AgentID,
 			logger.FieldID, *msg.ID,
 			logger.FieldMethod, msg.Method,
 			logger.FieldEventType, event.Type,
 		)
 	}
+	// 跟踪活跃 turn 生命周期
+	c.trackTurnLifecycle(event, msg.Method)
+
 	c.handlerMu.RLock()
 	handler := c.handler
 	c.handlerMu.RUnlock()
 	if handler == nil {
 		logger.Warn("codex: readLoop dropping event (no handler registered)",
+			logger.FieldAgentID, c.AgentID,
 			logger.FieldEventType, event.Type,
 			logger.FieldMethod, msg.Method,
 		)
@@ -675,6 +1057,133 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 	}
 	handler(event)
 	return event.Type == EventError || event.Type == EventShutdownComplete
+}
+
+// trackTurnLifecycle 从事件中提取并维护当前活跃 turnId。
+func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
+	method = strings.TrimSpace(method)
+	activeTurnID := c.getActiveTurnID()
+
+	switch event.Type {
+	case EventTurnStarted:
+		if turnID := extractTurnIDFromEventData(event.Data); turnID != "" {
+			c.setActiveTurnID(turnID)
+			logger.Debug("codex: active turn set",
+				logger.FieldAgentID, c.AgentID,
+				"turn_id", turnID,
+			)
+			return
+		}
+		logger.Warn("codex: turn started event missing turn id",
+			logger.FieldAgentID, c.AgentID,
+			logger.FieldMethod, method,
+			logger.FieldEventType, event.Type,
+			logger.FieldDataLen, len(event.Data),
+			"active_turn_id_before", activeTurnID,
+		)
+	case EventTurnComplete, "turn_aborted", EventIdle, EventError, EventShutdownComplete:
+		if activeTurnID != "" {
+			c.clearActiveTurnID()
+			logger.Debug("codex: active turn cleared",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldEventType, event.Type,
+				logger.FieldMethod, method,
+				"prev_turn_id", activeTurnID,
+			)
+		}
+	default:
+		if activeTurnID != "" && isTurnTailProgressEvent(event.Type, method) {
+			logger.Info("codex: active turn observed progress event without terminal yet",
+				logger.FieldAgentID, c.AgentID,
+				"active_turn_id", activeTurnID,
+				logger.FieldEventType, event.Type,
+				logger.FieldMethod, method,
+				logger.FieldDataLen, len(event.Data),
+			)
+		}
+	}
+}
+
+func isTurnTailProgressEvent(eventType, method string) bool {
+	eventKey := strings.ToLower(strings.TrimSpace(eventType))
+	methodKey := strings.ToLower(strings.TrimSpace(method))
+
+	switch methodKey {
+	case "turn/diff/updated", "turn/plan/updated", "codex/event/turn_diff", "codex/event/plan_delta", "codex/event/plan_update":
+		return true
+	}
+	switch eventKey {
+	case EventTurnDiff, EventPlanDelta, EventPlanUpdate:
+		return true
+	default:
+		return false
+	}
+}
+
+func extractTurnIDFromEventData(data json.RawMessage) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return ""
+	}
+	return extractTurnIDFromPayload(payload)
+}
+
+func extractTurnIDFromPayload(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	if id := trimmedStringValue(payload["turnId"]); id != "" {
+		return id
+	}
+	if id := trimmedStringValue(payload["turn_id"]); id != "" {
+		return id
+	}
+	if turn, ok := payload["turn"].(map[string]any); ok {
+		if id := trimmedStringValue(turn["id"]); id != "" {
+			return id
+		}
+		if id := trimmedStringValue(turn["turnId"]); id != "" {
+			return id
+		}
+	}
+	for _, key := range []string{"msg", "data", "payload"} {
+		nested, ok := payload[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if id := extractTurnIDFromPayload(nested); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func trimmedStringValue(value any) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func (c *AppServerClient) getActiveTurnID() string {
+	v := c.activeTurnID.Load()
+	if v == nil {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
+
+func (c *AppServerClient) setActiveTurnID(id string) {
+	c.activeTurnID.Store(id)
+}
+
+func (c *AppServerClient) clearActiveTurnID() {
+	c.activeTurnID.Store("")
 }
 
 // jsonRPCToEvent 将 JSON-RPC notification 转为 codex Event。
@@ -698,6 +1207,7 @@ var methodToEventMap = map[string]string{
 	"thread/tokenUsage/updated":                 EventTokenCount,
 	"turn/started":                              EventTurnStarted,
 	"turn/completed":                            EventTurnComplete,
+	"turn/aborted":                              "turn_aborted",
 	"turn/diff/updated":                         EventTurnDiff,
 	"turn/plan/updated":                         EventPlanUpdate,
 	"item/started":                              "item/started",
@@ -750,6 +1260,7 @@ var methodToEventMap = map[string]string{
 	// 生命周期
 	"agent/event/turn_started":         EventTurnStarted,
 	"agent/event/turn_completed":       EventTurnComplete,
+	"agent/event/turn_aborted":         "turn_aborted",
 	"agent/event/session_configured":   EventSessionConfigured,
 	"agent/event/mcp_startup_complete": EventMCPStartupComplete,
 	"agent/event/mcp_startup_update":   "agent/event/mcp_startup_update",
@@ -870,6 +1381,7 @@ func (c *AppServerClient) jsonRPCToEvent(msg jsonRPCMessage) Event {
 		// 未知方法 → 用 method 名作为 type (兼容) + 警告日志
 		eventType = msg.Method
 		logger.Warn("codex: unmapped JSON-RPC method → using raw method as event type",
+			logger.FieldAgentID, c.AgentID,
 			logger.FieldMethod, msg.Method,
 			logger.FieldParamsLen, len(msg.Params),
 		)
@@ -993,9 +1505,75 @@ func (c *AppServerClient) asWriteJSON(v any) error {
 	c.wsMu.Lock()
 	defer c.wsMu.Unlock()
 	if c.ws == nil {
-		return apperrors.New("AppServerClient.asWriteJSON", "ws not connected")
+		err := apperrors.New("AppServerClient.asWriteJSON", "ws not connected")
+		c.failPendingCalls(err)
+		return err
 	}
-	return c.ws.WriteJSON(v)
+	_ = c.ws.SetWriteDeadline(time.Now().Add(appServerWriteTimeout))
+	if err := c.ws.WriteJSON(v); err != nil {
+		writeErr := apperrors.Wrap(err, "AppServerClient.asWriteJSON", "ws write")
+		_ = c.ws.Close()
+		c.ws = nil
+		c.failPendingCalls(writeErr)
+		return writeErr
+	}
+	return nil
+}
+
+func (c *AppServerClient) failPendingCalls(err error) {
+	if err == nil {
+		err = apperrors.New("AppServerClient.failPendingCalls", "connection unavailable")
+	}
+	c.pending.Range(func(_, value any) bool {
+		if call, ok := value.(*pendingCall); ok {
+			call.resolve(nil, err)
+		}
+		return true
+	})
+}
+
+func (c *AppServerClient) emitStreamError(err error, phase string, idleTimeout bool) {
+	if err == nil {
+		return
+	}
+	c.handlerMu.RLock()
+	handler := c.handler
+	c.handlerMu.RUnlock()
+	if handler == nil {
+		return
+	}
+
+	payload := map[string]any{
+		"message":     err.Error(),
+		"phase":       strings.TrimSpace(phase),
+		"recoverable": true,
+	}
+	if c.AgentID != "" {
+		payload["agentId"] = c.AgentID
+	}
+	if c.Port > 0 {
+		payload["port"] = c.Port
+	}
+	if activeTurnID := c.getActiveTurnID(); activeTurnID != "" {
+		payload["activeTurnId"] = activeTurnID
+	}
+	if idleTimeout {
+		payload["reason"] = "idle_timeout"
+	}
+	data, _ := json.Marshal(payload)
+	handler(Event{Type: EventStreamError, Data: data})
+}
+
+func isIdleTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "i/o timeout") || strings.Contains(text, "read timeout")
 }
 
 // SpawnAndConnect 一键启动: spawn → ws connect → initialize → thread/start。
@@ -1021,6 +1599,7 @@ func (c *AppServerClient) SpawnAndConnect(ctx context.Context, prompt, cwd, mode
 	}
 
 	logger.Info("codex: app-server thread started",
+		logger.FieldAgentID, c.AgentID,
 		logger.FieldPort, c.Port,
 		logger.FieldThreadID, threadID,
 		"dynamic_tools", len(dynamicTools),
@@ -1033,20 +1612,35 @@ func (c *AppServerClient) Shutdown() error {
 	if c.stopped.Swap(true) {
 		return nil
 	}
-	if c.stderrCollector != nil {
-		_ = c.stderrCollector.Close()
-	}
 	c.cancel()
 
-	// 尝试发送 shutdown
+	// 尝试发送 shutdown 通知 (best-effort)
 	_ = c.notify("shutdown", nil)
+
+	// 主动关闭 ws 以立即中断 readLoop 的 ReadMessage 阻塞,
+	// 避免等待 75s 的 read idle deadline。
+	c.wsMu.Lock()
+	if c.ws != nil {
+		_ = c.ws.Close()
+	}
+	c.wsMu.Unlock()
 
 	select {
 	case <-c.wsDone:
 	case <-time.After(3 * time.Second):
 	}
 
-	return c.Kill()
+	if err := c.Kill(); err != nil {
+		return err
+	}
+
+	// stderrCollector.Close() 必须在 Kill() 之后:
+	// Close() 等待 scan goroutine 退出, 而 scan 阻塞在 pipe read 上。
+	// 只有子进程退出后, OS 关闭 pipe 的写端, scan 才能读到 EOF 并退出。
+	if c.stderrCollector != nil {
+		_ = c.stderrCollector.Close()
+	}
+	return nil
 }
 
 // Kill 强制终止子进程。
@@ -1058,19 +1652,30 @@ func (c *AppServerClient) Kill() error {
 	if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
 		return killErr
 	}
-	waitErr := c.Cmd.Wait()
-	if waitErr == nil {
+	// Cmd.Wait 可能因 pipe-copying goroutine 未退出而阻塞, 加超时保护。
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- c.Cmd.Wait() }()
+	select {
+	case waitErr := <-waitDone:
+		if waitErr == nil {
+			return nil
+		}
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) {
+			return nil
+		}
+		waitMsg := waitErr.Error()
+		if strings.Contains(waitMsg, "Wait was already called") || strings.Contains(waitMsg, "no child processes") {
+			return nil
+		}
+		return waitErr
+	case <-time.After(5 * time.Second):
+		logger.Warn("codex: Kill() Cmd.Wait timed out after 5s, abandoning",
+			logger.FieldAgentID, c.AgentID,
+			"pid", c.Cmd.Process.Pid,
+		)
 		return nil
 	}
-	var exitErr *exec.ExitError
-	if errors.As(waitErr, &exitErr) {
-		return nil
-	}
-	waitMsg := waitErr.Error()
-	if strings.Contains(waitMsg, "Wait was already called") || strings.Contains(waitMsg, "no child processes") {
-		return nil
-	}
-	return waitErr
 }
 
 // Running 返回是否在运行。

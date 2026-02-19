@@ -24,6 +24,7 @@ var eventMethodMap = map[string]string{
 	"token_count":         "thread/tokenUsage/updated",
 	"turn_started":        "turn/started",
 	"turn_complete":       "turn/completed",
+	"turn_aborted":        "turn/completed",
 	"idle":                "turn/completed",
 	"turn_diff":           "turn/diff/updated",
 	"turn_plan":           "turn/plan/updated",

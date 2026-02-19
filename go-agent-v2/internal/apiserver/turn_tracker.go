@@ -13,8 +13,8 @@ import (
 const defaultTurnWatchdogTimeout = 10 * time.Minute
 const defaultTrackedTurnSummaryTTL = 30 * time.Minute
 const trackedTurnSummaryCacheMaxEntries = 512
-const stallCheckInterval = 30 * time.Second
-const stallThreshold = 90 * time.Second
+const defaultStallThreshold = 480 * time.Second
+const defaultStallHeartbeat = 300 * time.Second
 
 type trackedTurn struct {
 	ID                   string
@@ -48,6 +48,12 @@ func (s *Server) ensureTurnTrackerLocked() {
 	}
 	if s.turnSummaryTTL <= 0 {
 		s.turnSummaryTTL = defaultTrackedTurnSummaryTTL
+	}
+	if s.stallThreshold <= 0 {
+		s.stallThreshold = defaultStallThreshold
+	}
+	if s.stallHeartbeat <= 0 {
+		s.stallHeartbeat = defaultStallHeartbeat
 	}
 }
 
@@ -121,7 +127,11 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 	// Start stall detection timer
 	stallThreadID := id
 	stallTurnID := tid
-	turn.stallTimer = time.AfterFunc(stallCheckInterval, func() {
+	stallInterval := s.stallThreshold / 3
+	if stallInterval < 10*time.Second {
+		stallInterval = 10 * time.Second
+	}
+	turn.stallTimer = time.AfterFunc(stallInterval, func() {
 		s.checkTurnStall(stallThreadID, stallTurnID)
 	})
 
@@ -646,8 +656,8 @@ func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time
 }
 
 // checkTurnStall is called periodically by the stall timer.
-// If no events have been received for stallThreshold (90s), it pushes an
-// alert and auto-interrupts the turn.
+// If no events have been received for the configured stall threshold, it pushes
+// an alert and auto-interrupts the turn.
 func (s *Server) checkTurnStall(threadID, turnID string) {
 	s.turnMu.Lock()
 	if s.activeTurns == nil {
@@ -661,11 +671,19 @@ func (s *Server) checkTurnStall(threadID, turnID string) {
 	}
 
 	silent := time.Since(turn.LastEventAt)
-	if silent < stallThreshold {
+	threshold := s.stallThreshold
+	if threshold <= 0 {
+		threshold = defaultStallThreshold
+	}
+	if silent < threshold {
 		// Not stalled yet — reschedule and check again.
-		remaining := stallCheckInterval
-		if remaining > stallThreshold-silent {
-			remaining = stallThreshold - silent + time.Second
+		interval := threshold / 3
+		if interval < 10*time.Second {
+			interval = 10 * time.Second
+		}
+		remaining := interval
+		if remaining > threshold-silent {
+			remaining = threshold - silent + time.Second
 		}
 		turn.stallTimer = time.AfterFunc(remaining, func() {
 			s.checkTurnStall(threadID, turnID)
@@ -686,7 +704,7 @@ func (s *Server) checkTurnStall(threadID, turnID string) {
 		logger.FieldThreadID, threadID,
 		"turn_id", turnID,
 		"silent_ms", silent.Milliseconds(),
-		"threshold_ms", stallThreshold.Milliseconds(),
+		"threshold_ms", threshold.Milliseconds(),
 	)
 
 	// Push alert to UI.

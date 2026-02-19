@@ -54,6 +54,10 @@ type Config struct {
 	ACPBusSingletonEnabled bool `env:"ACP_BUS_SINGLETON_ENABLED" default:"false"`
 	AgentDBExecuteEnabled  bool `env:"AGENT_DB_EXECUTE_ENABLED" default:"true"`
 
+	// Turn Tracker (stall 检测)
+	StallThresholdSec int `env:"STALL_THRESHOLD_SEC" default:"480" min:"30"` // 无事件多久(秒)触发 stall 自动中断
+	StallHeartbeatSec int `env:"STALL_HEARTBEAT_SEC" default:"300" min:"10"` // dynamic tool call / 审批等待时的保活心跳间隔(秒)
+
 	// 编排工作区 (双通道: 虚拟目录 + PG 状态)
 	OrchestrationWorkspaceRoot          string `env:"ORCHESTRATION_WORKSPACE_ROOT" default:".agent/workspaces"`
 	OrchestrationWorkspaceMaxFiles      int    `env:"ORCHESTRATION_WORKSPACE_MAX_FILES" default:"5000" min:"1"`

@@ -467,14 +467,16 @@ function applyRuntimeSnapshot(snapshot) {
     for (const [key, value] of Object.entries(data.timelinesByThread)) {
       const newItems = Array.isArray(value) ? value : [];
       const oldItems = state.timelinesByThread[key];
-      // 快速对比: 长度相同 + 最后一条 item 的 id 和 text 长度都相同 → 跳过
+      // 快速对比: 长度相同 + 最后一条 item 的 id/text长度/done 都相同 → 跳过
       if (
         oldItems &&
         oldItems.length === newItems.length &&
         oldItems.length > 0 &&
         oldItems[oldItems.length - 1]?.id === newItems[newItems.length - 1]?.id &&
         (oldItems[oldItems.length - 1]?.text || '').length ===
-        (newItems[newItems.length - 1]?.text || '').length
+        (newItems[newItems.length - 1]?.text || '').length &&
+        Boolean(oldItems[oldItems.length - 1]?.done) ===
+        Boolean(newItems[newItems.length - 1]?.done)
       ) {
         continue;
       }
@@ -533,19 +535,28 @@ function applyRuntimeSnapshot(snapshot) {
 async function syncRuntimeState() {
   if (runtimeSyncPromise) {
     runtimeSyncPending = true;
-    return runtimeSyncPromise;
+    // 等待当前请求完成; .finally() 的重试也会被 await
+    await runtimeSyncPromise;
+    // 如果重试已在进行中, 等待它 (确保拿到最新数据)
+    if (runtimeSyncPromise) {
+      return runtimeSyncPromise;
+    }
+    return;
   }
 
-  runtimeSyncPromise = callAPI('ui/state/get', { threadId: state.activeThreadId || '' })
-    .then((res) => {
+  runtimeSyncPromise = (async () => {
+    try {
+      const res = await callAPI('ui/state/get', { threadId: state.activeThreadId || '' });
       applyRuntimeSnapshot(res || {});
-    })
-    .finally(() => {
+    } finally {
       runtimeSyncPromise = null;
-      if (!runtimeSyncPending) return;
-      runtimeSyncPending = false;
-      syncRuntimeState().catch(() => { });
-    });
+      if (runtimeSyncPending) {
+        runtimeSyncPending = false;
+        // 直接 await 重试 — 不再 fire-and-forget
+        await syncRuntimeState().catch(() => { });
+      }
+    }
+  })();
   return runtimeSyncPromise;
 }
 
@@ -586,6 +597,15 @@ function handleBridgeEvent(evt) {
         logWarn('thread', 'state.sync.failed', { error, by_event: eventType });
       });
     }, debounceMs);
+  }
+
+  // turn 终态事件: 延迟 600ms 后强制最终同步 (兜底, 确保 UI 拿到完整数据)
+  if (eventType === 'turn/completed' || eventType === 'turn/aborted') {
+    setTimeout(() => {
+      syncRuntimeState().catch((error) => {
+        logWarn('thread', 'state.sync.turn-settle.failed', { error, by_event: eventType });
+      });
+    }, 600);
   }
 }
 
@@ -765,7 +785,8 @@ async function sendMessage(threadId, prompt, attachments = []) {
       droppedAttachmentCount += 1;
       continue;
     }
-    input.push({ type: 'fileContent', path });
+    const fileName = path.split(/[\\/]/).pop() || path;
+    input.push({ type: 'mention', name: fileName, path });
     fileCount += 1;
   }
 

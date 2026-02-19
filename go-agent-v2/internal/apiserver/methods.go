@@ -827,6 +827,18 @@ func skillInputText(name, content string) string {
 	return fmt.Sprintf("[skill:%s] %s", strings.TrimSpace(name), content)
 }
 
+func fileContentInputText(name, content string) string {
+	trimmedContent := strings.TrimSpace(content)
+	if trimmedContent == "" {
+		return ""
+	}
+	trimmedName := strings.TrimSpace(name)
+	if trimmedName == "" {
+		return trimmedContent
+	}
+	return fmt.Sprintf("[file:%s]\n%s", trimmedName, trimmedContent)
+}
+
 func collectInputSkillNames(inputs []UserInput) map[string]struct{} {
 	if len(inputs) == 0 {
 		return nil
@@ -2730,7 +2742,15 @@ func extractInputs(inputs []UserInput) (prompt string, images, files []string) {
 			if value := strings.TrimSpace(inp.Path); value != "" {
 				images = append(images, value)
 			}
-		case "filecontent", "mention", "file":
+		case "filecontent":
+			if value := strings.TrimSpace(inp.Path); value != "" {
+				files = append(files, value)
+				continue
+			}
+			if inline := fileContentInputText(inp.Name, inp.Content); inline != "" {
+				texts = append(texts, inline)
+			}
+		case "mention", "file":
 			if value := strings.TrimSpace(inp.Path); value != "" {
 				files = append(files, value)
 			}
@@ -2859,7 +2879,7 @@ func buildUserTimelineAttachmentsFromInputs(inputs []UserInput) []uistate.Timeli
 				Path:       imagePath,
 				PreviewURL: buildAttachmentPreviewURL(preview),
 			})
-		case "mention", "filecontent", "file":
+		case "mention", "file":
 			path := strings.TrimSpace(input.Path)
 			if path == "" {
 				continue
@@ -2868,6 +2888,27 @@ func buildUserTimelineAttachmentsFromInputs(inputs []UserInput) []uistate.Timeli
 				Kind: "file",
 				Name: buildAttachmentName(path),
 				Path: path,
+			})
+		case "filecontent":
+			path := strings.TrimSpace(input.Path)
+			if path != "" {
+				attachments = append(attachments, uistate.TimelineAttachment{
+					Kind: "file",
+					Name: buildAttachmentName(path),
+					Path: path,
+				})
+				continue
+			}
+			if strings.TrimSpace(input.Content) == "" {
+				continue
+			}
+			name := strings.TrimSpace(input.Name)
+			if name == "" {
+				name = "inline-file"
+			}
+			attachments = append(attachments, uistate.TimelineAttachment{
+				Kind: "file",
+				Name: name,
 			})
 		}
 	}
@@ -3160,6 +3201,7 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 	result := map[string]any{
 		"threads":               snapshot.Threads,
 		"statuses":              snapshot.Statuses,
+		"interruptibleByThread": snapshot.InterruptibleByThread,
 		"statusHeadersByThread": snapshot.StatusHeadersByThread,
 		"statusDetailsByThread": snapshot.StatusDetailsByThread,
 		"timelinesByThread":     timelinesByThread,

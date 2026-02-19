@@ -1,8 +1,11 @@
 package apiserver
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 
 func TestBuildUserTimelineAttachments(t *testing.T) {
@@ -111,5 +114,18 @@ func TestBuildUserTimelineAttachmentsFromInputs_FileContentWithoutPath(t *testin
 	}
 	if attachments[0].Path != "" {
 		t.Fatalf("attachments[0].Path = %q, want empty", attachments[0].Path)
+	}
+}
+
+func TestAppendLSPUsageHint(t *testing.T) {
+	srv := &Server{prefManager: uistate.NewPreferenceManager(nil)}
+	original := "请帮我分析这个 Go 文件"
+	got := srv.appendLSPUsageHint(context.Background(), original)
+
+	if !strings.Contains(got, original) {
+		t.Fatalf("prompt missing original text: %q", got)
+	}
+	if !strings.Contains(got, defaultLSPUsagePromptHint) {
+		t.Fatalf("prompt missing lsp hint: %q", got)
 	}
 }

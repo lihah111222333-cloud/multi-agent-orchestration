@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	goruntime "runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,12 @@ import (
 )
 
 var codexThreadIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+const (
+	defaultLSPUsagePromptHint = "已注入LSP工具。凡是源代码的分析、定位、修改与解释，必须调用lsp_open_file、lsp_hover、lsp_diagnostics；未使用上述工具前，不得基于猜测给出结论"
+	prefKeyLSPUsagePromptHint = "settings.lspUsagePromptHint"
+	maxLSPUsagePromptHintLen  = 4000
+)
 
 // registerMethods 注册所有 JSON-RPC 方法 (完整对标 APP-SERVER-PROTOCOL.md)。
 func (s *Server) registerMethods() {
@@ -87,6 +94,8 @@ func (s *Server) registerMethods() {
 	s.methods["config/read"] = s.configRead
 	s.methods["config/value/write"] = typedHandler(s.configValueWriteTyped)
 	s.methods["config/batchWrite"] = typedHandler(s.configBatchWriteTyped)
+	s.methods["config/lspPromptHint/read"] = s.configLSPPromptHintRead
+	s.methods["config/lspPromptHint/write"] = typedHandler(s.configLSPPromptHintWriteTyped)
 	s.methods["configRequirements/read"] = s.configRequirementsRead
 
 	// § 7. 账号 (5 methods)
@@ -900,6 +909,37 @@ func mergePromptText(prompt, extra string) string {
 	return prompt + "\n" + extra
 }
 
+func validateLSPUsagePromptHint(hint string) error {
+	if len(hint) > maxLSPUsagePromptHintLen {
+		return apperrors.Newf("Server.configLSPPromptHintWrite", "hint length exceeds %d", maxLSPUsagePromptHintLen)
+	}
+	return nil
+}
+
+func (s *Server) resolveLSPUsagePromptHint(ctx context.Context) string {
+	if s.prefManager == nil {
+		return defaultLSPUsagePromptHint
+	}
+	value, err := s.prefManager.Get(ctx, prefKeyLSPUsagePromptHint)
+	if err != nil {
+		logger.Warn("lsp hint: load preference failed", logger.FieldError, err)
+		return defaultLSPUsagePromptHint
+	}
+	hint := strings.TrimSpace(asString(value))
+	if hint == "" {
+		return defaultLSPUsagePromptHint
+	}
+	if err := validateLSPUsagePromptHint(hint); err != nil {
+		logger.Warn("lsp hint: invalid preference fallback to default", logger.FieldError, err)
+		return defaultLSPUsagePromptHint
+	}
+	return hint
+}
+
+func (s *Server) appendLSPUsageHint(ctx context.Context, prompt string) string {
+	return mergePromptText(prompt, s.resolveLSPUsagePromptHint(ctx))
+}
+
 func appendSkillPlaceholders(input []UserInput, skillNames []string) []UserInput {
 	if len(skillNames) == 0 {
 		return input
@@ -1163,6 +1203,7 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 	submitPrompt := mergePromptText(prompt, configuredSkillPrompt)
 	submitPrompt = mergePromptText(submitPrompt, selectedSkillPrompt)
 	submitPrompt = mergePromptText(submitPrompt, autoMatchedSkillPrompt)
+	submitPrompt = s.appendLSPUsageHint(ctx, submitPrompt)
 	logger.Info("turn/start: input prepared",
 		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 		"text_len", len(prompt),
@@ -1206,7 +1247,7 @@ type turnSteerParams struct {
 	ManualSkillSelection bool        `json:"manualSkillSelection,omitempty"`
 }
 
-func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, error) {
+func (s *Server) turnSteerTyped(ctx context.Context, p turnSteerParams) (any, error) {
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
 		selectedSkills, err := normalizeSkillNames(p.SelectedSkills)
 		if err != nil {
@@ -1223,6 +1264,7 @@ func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, erro
 		submitPrompt := mergePromptText(prompt, configuredSkillPrompt)
 		submitPrompt = mergePromptText(submitPrompt, selectedSkillPrompt)
 		submitPrompt = mergePromptText(submitPrompt, autoMatchedSkillPrompt)
+		submitPrompt = s.appendLSPUsageHint(ctx, submitPrompt)
 		if err := proc.Client.Submit(submitPrompt, images, files, nil); err != nil {
 			return nil, err
 		}
@@ -2050,6 +2092,36 @@ func (s *Server) configBatchWriteTyped(_ context.Context, p configBatchWritePara
 	return result, nil
 }
 
+func (s *Server) configLSPPromptHintRead(ctx context.Context, _ json.RawMessage) (any, error) {
+	return map[string]any{
+		"hint":        s.resolveLSPUsagePromptHint(ctx),
+		"defaultHint": defaultLSPUsagePromptHint,
+		"prefKey":     prefKeyLSPUsagePromptHint,
+	}, nil
+}
+
+type configLSPPromptHintWriteParams struct {
+	Hint string `json:"hint"`
+}
+
+func (s *Server) configLSPPromptHintWriteTyped(ctx context.Context, p configLSPPromptHintWriteParams) (any, error) {
+	if s.prefManager == nil {
+		return nil, apperrors.New("Server.configLSPPromptHintWrite", "preference manager not initialized")
+	}
+	normalized := strings.TrimSpace(p.Hint)
+	if err := validateLSPUsagePromptHint(normalized); err != nil {
+		return nil, err
+	}
+	if err := s.prefManager.Set(ctx, prefKeyLSPUsagePromptHint, normalized); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":           true,
+		"hint":         s.resolveLSPUsagePromptHint(ctx),
+		"usingDefault": normalized == "",
+	}, nil
+}
+
 func (s *Server) mcpServerStatusList(_ context.Context, _ json.RawMessage) (any, error) {
 	if s.lsp == nil {
 		return map[string]any{"servers": []map[string]any{}}, nil
@@ -2731,13 +2803,44 @@ func isHistoricalResumeCandidateError(err error) bool {
 		strings.Contains(msg, "failed to load rollout"),
 		strings.Contains(msg, "invalid thread id"),
 		strings.Contains(msg, "thread/resume returned empty thread id"),
-		strings.Contains(msg, "thread/resume returned empty response without fallback thread id"):
+		strings.Contains(msg, "thread/resume returned empty response without fallback thread id"),
+		strings.Contains(msg, "websocket: close 1006"),
+		strings.Contains(msg, "abnormal closure"):
 		return true
 	default:
 		return false
 	}
 }
 
+// isCodexProcessCrashError 判断错误是否为 codex 进程 crash (需要 re-spawn)。
+//
+// 与 isHistoricalResumeCandidateError 的区别:
+//   - candidateError: rollout 不可用但进程仍健在 → 直接尝试下一个候选
+//   - crashError: 进程已死 → 必须 Stop + Launch 新进程后才能继续
+func isCodexProcessCrashError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "websocket: close 1006") ||
+		strings.Contains(msg, "abnormal closure")
+}
+
+// buildSessionLostNotification 构建会话丢失降级通知 (method + payload)。
+//
+// 使用 ui/state/changed 以复用前端已有的事件监听，无需前端新增处理。
+func buildSessionLostNotification(agentID string, lastErr error) (string, map[string]any) {
+	detail := ""
+	if lastErr != nil {
+		detail = lastErr.Error()
+	}
+	return "ui/state/changed", map[string]any{
+		"source":   "session_lost_warning",
+		"agent_id": agentID,
+		"warning":  "会话历史已丢失 (codex session 文件不存在)，已自动回退到全新会话",
+		"detail":   detail,
+	}
+}
 func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd string) (*runner.AgentProcess, error) {
 	// D11: 总超时 45s，避免 Launch(30s)+Resume(30s) 串行导致前端 turn/start 永不回。
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -2807,26 +2910,58 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 				"resume_thread_id", resumeThreadID,
 				logger.FieldError, err,
 			)
+			// codex 进程 crash → 需要 re-spawn 新进程后才能继续
+			if isCodexProcessCrashError(err) {
+				_ = s.mgr.Stop(id)
+				if launchErr := s.mgr.Launch(ctx, id, id, "", launchCwd, dynamicTools); launchErr != nil {
+					logger.Warn("turn/start: re-spawn after crash failed, fallback to fresh session",
+						logger.FieldAgentID, id, logger.FieldThreadID, id,
+						logger.FieldError, launchErr,
+					)
+					break
+				}
+				if p := s.mgr.Get(id); p != nil {
+					proc = p
+				} else {
+					logger.Warn("turn/start: re-spawned proc not found, fallback to fresh session",
+						logger.FieldAgentID, id, logger.FieldThreadID, id,
+					)
+					break
+				}
+			}
 			continue
 		}
 
-		if stopErr := s.mgr.Stop(id); stopErr != nil {
-			logger.Warn("turn/start: auto-loaded thread stop after resume failed",
-				logger.FieldAgentID, id, logger.FieldThreadID, id,
-				logger.FieldError, stopErr,
-			)
-		}
-		return nil, apperrors.Wrapf(err, "Server.ensureThreadReady", "resume historical thread %s", id)
+		// 不可识别的错误也降级处理，不再卡死 agent
+		logger.Warn("turn/start: unrecognized resume error, fallback to fresh session",
+			logger.FieldAgentID, id, logger.FieldThreadID, id,
+			"resume_thread_id", resumeThreadID,
+			logger.FieldError, err,
+		)
+		break
 	}
 
-	if lastResumeErr != nil && !isHistoricalResumeCandidateError(lastResumeErr) {
-		if stopErr := s.mgr.Stop(id); stopErr != nil {
-			logger.Warn("turn/start: auto-loaded thread stop after resume failed",
-				logger.FieldAgentID, id, logger.FieldThreadID, id,
-				logger.FieldError, stopErr,
-			)
+	// 所有候选失败 → fallback 到 fresh session + 通知前端
+	if lastResumeErr != nil {
+		logger.Warn("turn/start: session history lost, continue with fresh session",
+			logger.FieldAgentID, id, logger.FieldThreadID, id,
+			"candidate_count", len(resumeCandidates),
+			"last_error", lastResumeErr,
+			logger.FieldCwd, launchCwd,
+		)
+		// 确保 proc 仍然可用 (可能在 crash 后 re-spawn 失败)
+		if proc == nil || s.mgr.Get(id) == nil {
+			_ = s.mgr.Stop(id)
+			if launchErr := s.mgr.Launch(ctx, id, id, "", launchCwd, dynamicTools); launchErr != nil {
+				return nil, apperrors.Wrapf(launchErr, "Server.ensureThreadReady", "final re-spawn thread %s", id)
+			}
+			proc = s.mgr.Get(id)
+			if proc == nil {
+				return nil, apperrors.Newf("Server.ensureThreadReady", "thread %s final re-spawn failed", id)
+			}
 		}
-		return nil, apperrors.Wrapf(lastResumeErr, "Server.ensureThreadReady", "resume historical thread %s", id)
+		s.broadcastNotification(buildSessionLostNotification(id, lastResumeErr))
+		return proc, nil
 	}
 
 	logger.Warn("turn/start: no available historical rollout, continue with fresh session",
@@ -2874,17 +3009,59 @@ func (s *Server) resolveThreadForSlashCommand(ctx context.Context, threadID stri
 }
 
 func (s *Server) sendSlashCommand(ctx context.Context, params json.RawMessage, command string) (any, error) {
+	start := time.Now()
 	var p threadIDParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, apperrors.Wrap(err, "Server.sendSlashCommand", "unmarshal params")
 	}
+	stateBefore := s.readThreadRuntimeState(p.ThreadID)
+	activeTrackedBefore := s.hasActiveTrackedTurn(p.ThreadID)
+	activeBefore := isInterruptActiveState(stateBefore)
+	logger.Info("slash/command: request",
+		logger.FieldAgentID, p.ThreadID,
+		logger.FieldThreadID, p.ThreadID,
+		logger.FieldCommand, command,
+		logger.FieldParamsLen, len(params),
+		"state_before", stateBefore,
+		"active_before", activeBefore,
+		"active_tracked_before", activeTrackedBefore,
+	)
+	if strings.EqualFold(strings.TrimSpace(command), "/compact") && (activeBefore || activeTrackedBefore) {
+		logger.Warn("thread/compact/start requested while turn active; compact may be ignored by codex",
+			logger.FieldAgentID, p.ThreadID,
+			logger.FieldThreadID, p.ThreadID,
+			"state_before", stateBefore,
+			"active_before", activeBefore,
+			"active_tracked_before", activeTrackedBefore,
+		)
+	}
 	proc, err := s.resolveThreadForSlashCommand(ctx, p.ThreadID)
 	if err != nil {
+		logger.Warn("slash/command: resolve thread failed",
+			logger.FieldAgentID, p.ThreadID,
+			logger.FieldThreadID, p.ThreadID,
+			logger.FieldCommand, command,
+			logger.FieldError, err,
+			logger.FieldDurationMS, time.Since(start).Milliseconds(),
+		)
 		return nil, err
 	}
 	if err := proc.Client.SendCommand(command, ""); err != nil {
+		logger.Warn("slash/command: send failed",
+			logger.FieldAgentID, p.ThreadID,
+			logger.FieldThreadID, p.ThreadID,
+			logger.FieldCommand, command,
+			logger.FieldError, err,
+			logger.FieldDurationMS, time.Since(start).Milliseconds(),
+		)
 		return nil, err
 	}
+	logger.Info("slash/command: sent",
+		logger.FieldAgentID, p.ThreadID,
+		logger.FieldThreadID, p.ThreadID,
+		logger.FieldCommand, command,
+		logger.FieldDurationMS, time.Since(start).Milliseconds(),
+	)
 	return map[string]any{}, nil
 }
 
@@ -3339,6 +3516,19 @@ func (s *Server) uiPreferencesSet(ctx context.Context, p uiPrefSetParams) (any, 
 			s.uiRuntime.SetMainAgent(asString(p.Value))
 		}
 	}
+	// stall 参数运行时热调
+	switch p.Key {
+	case "stallThresholdSec":
+		if sec := asPositiveInt(p.Value, 30); sec > 0 {
+			s.stallThreshold = time.Duration(sec) * time.Second
+			logger.Info("stall threshold updated via ui/preferences/set", "seconds", sec)
+		}
+	case "stallHeartbeatSec":
+		if sec := asPositiveInt(p.Value, 10); sec > 0 {
+			s.stallHeartbeat = time.Duration(sec) * time.Second
+			logger.Info("stall heartbeat updated via ui/preferences/set", "seconds", sec)
+		}
+	}
 	return map[string]any{"ok": true}, nil
 }
 
@@ -3468,6 +3658,33 @@ func asString(value any) string {
 	default:
 		return ""
 	}
+}
+
+// asPositiveInt 从 any 提取正整数，低于 minVal 返回 0。
+func asPositiveInt(value any, minVal int) int {
+	var n int
+	switch v := value.(type) {
+	case float64:
+		n = int(v)
+	case int:
+		n = v
+	case int64:
+		n = int(v)
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			n = int(i)
+		}
+	case string:
+		if i, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			n = i
+		}
+	default:
+		return 0
+	}
+	if n < minVal {
+		return 0
+	}
+	return n
 }
 
 func (s *Server) persistThreadAlias(ctx context.Context, threadID, alias string) error {

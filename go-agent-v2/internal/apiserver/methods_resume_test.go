@@ -121,6 +121,27 @@ func TestIsHistoricalResumeCandidateError(t *testing.T) {
 			err:  errors.New("websocket closed unexpectedly"),
 			want: false,
 		},
+		{
+			name: "websocket close 1006 crash",
+			err:  errors.New("AppServerClient.readLoop: read message: websocket: close 1006 (abnormal closure): unexpected EOF"),
+			want: true,
+		},
+		{
+			name: "abnormal closure only",
+			err:  errors.New("read: abnormal closure"),
+			want: true,
+		},
+		{
+			name: "unexpected eof in websocket context",
+			err:  errors.New("AppServerClient.readLoop: read message: websocket: close 1006 (abnormal closure): unexpected EOF"),
+			want: true,
+		},
+		// P0: standalone unexpected eof should NOT be candidate (could be transient I/O)
+		{
+			name: "standalone unexpected eof - not candidate",
+			err:  errors.New("readLoop: unexpected eof"),
+			want: false,
+		},
 	}
 
 	for _, tc := range cases {
@@ -130,6 +151,103 @@ func TestIsHistoricalResumeCandidateError(t *testing.T) {
 				t.Fatalf("isHistoricalResumeCandidateError(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestIsCodexProcessCrashError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "websocket close 1006",
+			err:  errors.New("websocket: close 1006 (abnormal closure): unexpected EOF"),
+			want: true,
+		},
+		{
+			name: "abnormal closure",
+			err:  errors.New("read: abnormal closure"),
+			want: true,
+		},
+		{
+			name: "unexpected eof in websocket context",
+			err:  errors.New("websocket: close 1006 (abnormal closure): unexpected EOF"),
+			want: true,
+		},
+		// P0: standalone unexpected eof should NOT be crash error
+		{
+			name: "standalone unexpected eof - not crash",
+			err:  errors.New("readLoop: unexpected eof"),
+			want: false,
+		},
+		{
+			name: "io.ErrUnexpectedEOF - not crash",
+			err:  errors.New("read response: unexpected EOF"),
+			want: false,
+		},
+		{
+			name: "no rollout - not a crash",
+			err:  errors.New("no rollout found for thread id abc"),
+			want: false,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isCodexProcessCrashError(tc.err)
+			if got != tc.want {
+				t.Fatalf("isCodexProcessCrashError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// ========================================
+// buildSessionLostNotification 测试 (TDD RED)
+// ========================================
+
+func TestBuildSessionLostNotification(t *testing.T) {
+	agentID := "thread-123"
+	lastErr := errors.New("websocket: close 1006 (abnormal closure)")
+
+	method, payload := buildSessionLostNotification(agentID, lastErr)
+
+	// Issue #3: 应使用 ui/state/changed 而非自定义 method
+	if method != "ui/state/changed" {
+		t.Fatalf("method = %q, want %q", method, "ui/state/changed")
+	}
+
+	// Issue #2: 应包含错误详情
+	detail, ok := payload["detail"].(string)
+	if !ok || detail == "" {
+		t.Fatalf("payload[detail] missing or empty: %v", payload)
+	}
+	if detail != lastErr.Error() {
+		t.Fatalf("payload[detail] = %q, want %q", detail, lastErr.Error())
+	}
+
+	// source 标识
+	source, _ := payload["source"].(string)
+	if source != "session_lost_warning" {
+		t.Fatalf("payload[source] = %q, want %q", source, "session_lost_warning")
+	}
+
+	// agent_id 存在
+	aid, _ := payload["agent_id"].(string)
+	if aid != agentID {
+		t.Fatalf("payload[agent_id] = %q, want %q", aid, agentID)
+	}
+
+	// warning 消息非空
+	warning, _ := payload["warning"].(string)
+	if warning == "" {
+		t.Fatal("payload[warning] is empty")
 	}
 }
 

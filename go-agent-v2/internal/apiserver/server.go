@@ -108,11 +108,19 @@ func (c *connEntry) writeLoop() error {
 }
 
 const (
-	maxConnections = 100      // 最大并发连接数
-	maxMessageSize = 4 << 20  // 4MB 消息大小限制
-	connOutboxSize = 256      // 单连接发送缓冲
-	connBacklogCut = 256 - 16 // 单连接过载水位
+	maxConnections    = 100      // 最大并发连接数
+	maxMessageSize    = 4 << 20  // 4MB 消息大小限制
+	connOutboxSize    = 256      // 单连接发送缓冲
+	connBacklogCut    = 256 - 16 // 单连接过载水位
+	uiStateThrottleMs = 200      // ui/state/changed 节流间隔 (ms)
 )
+
+// uiStateThrottleEntry 单个 thread/agent 的节流状态。
+type uiStateThrottleEntry struct {
+	lastEmit time.Time      // 上次实际发送时间
+	timer    *time.Timer    // trailing timer (保证最终一致)
+	pending  map[string]any // 最新 payload (合并)
+}
 
 // Server JSON-RPC WebSocket 服务器。
 type Server struct {
@@ -155,9 +163,11 @@ type Server struct {
 	taskAckStore     *store.TaskAckStore
 	taskTraceStore   *store.TaskTraceStore
 	skillSvc         *service.SkillService
+	skillsDir        string
 	workspaceMgr     *service.WorkspaceManager
 	prefManager      *uistate.PreferenceManager
 	uiRuntime        *uistate.RuntimeManager
+	threadAliasMu    sync.Mutex
 
 	// 连接管理 (支持多 IDE 同时连接)
 	mu     sync.RWMutex
@@ -200,6 +210,10 @@ type Server struct {
 	notifyHookMu sync.RWMutex
 	notifyHook   func(method string, params any)
 
+	// ui/state/changed 节流 (key = threadId or agent_id)
+	uiThrottleMu      sync.Mutex
+	uiThrottleEntries map[string]*uiStateThrottleEntry
+
 	upgrader websocket.Upgrader
 }
 
@@ -231,6 +245,7 @@ func New(deps Deps) *Server {
 		sseClients:          make(map[chan []byte]struct{}),
 		prefManager:         uistate.NewPreferenceManager(nil),
 		uiRuntime:           uistate.NewRuntimeManager(),
+		uiThrottleEntries:   make(map[string]*uiStateThrottleEntry),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: checkLocalOrigin,
 		},
@@ -276,10 +291,19 @@ func New(deps Deps) *Server {
 	if skillsDir == "" {
 		skillsDir = ".agent/skills"
 	}
+	s.skillsDir = skillsDir
 	s.skillSvc = service.NewSkillService(skillsDir)
 	s.registerMethods()
 	s.registerDynamicTools()
 	return s
+}
+
+func (s *Server) skillsDirectory() string {
+	dir := strings.TrimSpace(s.skillsDir)
+	if dir == "" {
+		return ".agent/skills"
+	}
+	return dir
 }
 
 // registerDynamicTools 注册所有动态工具处理函数。
@@ -412,7 +436,7 @@ func (s *Server) Notify(method string, params any) {
 		if aid, _ := payload["agent_id"].(string); aid != "" {
 			statePayload["agent_id"] = aid
 		}
-		s.broadcastNotification("ui/state/changed", statePayload)
+		s.throttledUIStateChanged(statePayload)
 	}
 }
 
@@ -432,6 +456,77 @@ func shouldEmitUIStateChanged(method string, payload map[string]any) bool {
 		return true
 	}
 	return false
+}
+
+// throttledUIStateChanged 节流发送 ui/state/changed。
+//
+// 同一 thread/agent 在 uiStateThrottleMs 内只发一次;
+// trailing timer 保证最后一个事件一定被发送。
+func (s *Server) throttledUIStateChanged(payload map[string]any) {
+	// 确定节流 key (threadId 优先, 其次 agent_id, 兜底 "_global")
+	key := "_global"
+	if tid, _ := payload["threadId"].(string); tid != "" {
+		key = tid
+	} else if aid, _ := payload["agent_id"].(string); aid != "" {
+		key = aid
+	}
+
+	now := time.Now()
+	interval := time.Duration(uiStateThrottleMs) * time.Millisecond
+
+	s.uiThrottleMu.Lock()
+	entry, ok := s.uiThrottleEntries[key]
+	if !ok {
+		entry = &uiStateThrottleEntry{}
+		s.uiThrottleEntries[key] = entry
+	}
+
+	// 保存最新 payload (合并/覆盖)
+	entry.pending = payload
+
+	// 节流窗口内: 只安排 trailing timer
+	if now.Sub(entry.lastEmit) < interval {
+		if entry.timer == nil {
+			entry.timer = time.AfterFunc(interval, func() {
+				s.flushUIStateChanged(key)
+			})
+		}
+		s.uiThrottleMu.Unlock()
+		return
+	}
+
+	// 节流窗口外: 立即发送
+	entry.lastEmit = now
+	pending := entry.pending
+	entry.pending = nil
+	// 取消 trailing timer (刚发了, 不需要了)
+	if entry.timer != nil {
+		entry.timer.Stop()
+		entry.timer = nil
+	}
+	s.uiThrottleMu.Unlock()
+
+	s.broadcastNotification("ui/state/changed", pending)
+}
+
+// flushUIStateChanged trailing timer 回调: 发送最后一个 pending payload。
+func (s *Server) flushUIStateChanged(key string) {
+	s.uiThrottleMu.Lock()
+	entry, ok := s.uiThrottleEntries[key]
+	if !ok || entry.pending == nil {
+		if ok {
+			entry.timer = nil
+		}
+		s.uiThrottleMu.Unlock()
+		return
+	}
+	entry.lastEmit = time.Now()
+	pending := entry.pending
+	entry.pending = nil
+	entry.timer = nil
+	s.uiThrottleMu.Unlock()
+
+	s.broadcastNotification("ui/state/changed", pending)
 }
 
 func (s *Server) broadcastNotification(method string, params any) {

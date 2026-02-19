@@ -349,15 +349,37 @@ func (m *RuntimeManager) TimelineStats() map[string]any {
 	}
 }
 
+// hasAccumulatedText returns true if the timeline item at the given index
+// exists and has non-empty Text (i.e. streaming deltas have been accumulated).
+func hasAccumulatedText(timeline []TimelineItem, index int) bool {
+	if index < 0 || index >= len(timeline) {
+		return false
+	}
+	return timeline[index].Text != ""
+}
+
 // HydrateHistory rebuilds thread timeline from stored messages.
-func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord) {
+// Returns false if skipped (e.g. thread is actively streaming).
+func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord) bool {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
-		return
+		return false
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// 若 thread 正在积累流式文本 (assistant/thinking delta 未完成),
+	// 跳过 hydration 以免清空已累积的 delta。
+	// 仅在 index 处的 item 已有非空 Text 时才视为"正在流式"。
+	// turn_started 会设置 thinkingIndex 但 item.Text 仍为空 — 此时 hydration 仍应执行。
+	if rt, ok := m.runtime[id]; ok {
+		timeline := m.snapshot.TimelinesByThread[id]
+		if hasAccumulatedText(timeline, rt.assistantIndex) ||
+			hasAccumulatedText(timeline, rt.thinkingIndex) {
+			return false
+		}
+	}
 
 	m.ensureThreadLocked(id)
 	m.snapshot.TimelinesByThread[id] = []TimelineItem{}
@@ -416,6 +438,7 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 		rt.backgroundLabel = ""
 		rt.backgroundDetails = ""
 	}
+	return true
 }
 
 // AppendHistory appends additional history records without resetting the timeline.
@@ -835,7 +858,7 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 		rt.collabDepth = max(0, rt.collabDepth-1)
 	}
 
-	if eventType == "token_count" || method == "thread/tokenUsage/updated" {
+	if eventType == "token_count" || eventType == "context_compacted" || method == "thread/tokenUsage/updated" || method == "thread/compacted" {
 		m.updateTokenUsageLocked(threadID, payload, ts)
 	}
 
@@ -849,6 +872,10 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 		rt.statusHeader = "工作中"
 	case UITypeTurnComplete:
 		m.clearTurnLifecycleLocked(threadID)
+		// mcp_startup_complete 为主清理信号，但历史/重连链路可能丢失 complete，
+		// turn 收敛时兜底清理，避免 “MCP 启动中” 状态残留。
+		rt.mcpStartupOverlay = false
+		rt.mcpStartupLabel = ""
 	case UITypeReasoningDelta:
 		if rt.turnDepth == 0 {
 			rt.turnDepth = 1
@@ -1046,11 +1073,19 @@ func isTerminalInteractionEvent(eventType, method string) bool {
 }
 
 func isMCPStartupUpdateEvent(eventType, method string) bool {
-	return eventType == "mcp_startup_update" || eventType == "codex/event/mcp_startup_update" || strings.EqualFold(method, "codex/event/mcp_startup_update")
+	return eventType == "mcp_startup_update" ||
+		eventType == "codex/event/mcp_startup_update" ||
+		eventType == "agent/event/mcp_startup_update" ||
+		strings.EqualFold(method, "codex/event/mcp_startup_update") ||
+		strings.EqualFold(method, "agent/event/mcp_startup_update")
 }
 
 func isMCPStartupCompleteEvent(eventType, method string) bool {
-	return eventType == "mcp_startup_complete" || eventType == "codex/event/mcp_startup_complete" || strings.EqualFold(method, "codex/event/mcp_startup_complete")
+	return eventType == "mcp_startup_complete" ||
+		eventType == "codex/event/mcp_startup_complete" ||
+		eventType == "agent/event/mcp_startup_complete" ||
+		strings.EqualFold(method, "codex/event/mcp_startup_complete") ||
+		strings.EqualFold(method, "agent/event/mcp_startup_complete")
 }
 
 func isTerminalWaitPayload(payload map[string]any) bool {

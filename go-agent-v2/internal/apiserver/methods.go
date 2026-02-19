@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -70,8 +71,11 @@ func (s *Server) registerMethods() {
 
 	// § 5. Skills / Apps (5 methods)
 	s.methods["skills/list"] = s.skillsList
+	s.methods["skills/local/read"] = typedHandler(s.skillsLocalReadTyped)
+	s.methods["skills/local/importDir"] = typedHandler(s.skillsLocalImportDirTyped)
 	s.methods["skills/remote/read"] = typedHandler(s.skillsRemoteReadTyped)
 	s.methods["skills/remote/write"] = typedHandler(s.skillsRemoteWriteTyped)
+	s.methods["skills/config/read"] = typedHandler(s.skillsConfigReadTyped)
 	s.methods["skills/config/write"] = typedHandler(s.skillsConfigWriteTyped)
 	s.methods["app/list"] = s.appList
 
@@ -305,20 +309,54 @@ type threadNameSetParams struct {
 	Name     string `json:"name"`
 }
 
-func (s *Server) threadNameSetTyped(_ context.Context, p threadNameSetParams) (any, error) {
-	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		if err := proc.Client.SendCommand("/rename", p.Name); err != nil {
+func (s *Server) threadNameSetTyped(ctx context.Context, p threadNameSetParams) (any, error) {
+	threadID := strings.TrimSpace(p.ThreadID)
+	if threadID == "" {
+		return nil, apperrors.New("Server.threadNameSet", "threadId is required")
+	}
+	requestedName := strings.TrimSpace(p.Name)
+	persistedAlias := requestedName
+	if persistedAlias == threadID {
+		persistedAlias = ""
+	}
+	renameTarget := requestedName
+	if renameTarget == "" {
+		renameTarget = threadID
+	}
+
+	var proc *runner.AgentProcess
+	if s.mgr != nil {
+		proc = s.mgr.Get(threadID)
+	}
+	existsInRuntime := false
+	if s.uiRuntime != nil {
+		existsInRuntime = hasThread(s.uiRuntime.SnapshotLight().Threads, threadID)
+	}
+	if proc == nil && !existsInRuntime && !s.threadExistsInHistory(ctx, threadID) {
+		return nil, apperrors.Newf("Server.threadNameSet", "thread %s not found", threadID)
+	}
+
+	if proc != nil && renameTarget != "" {
+		if err := proc.Client.SendCommand("/rename", renameTarget); err != nil {
 			return nil, apperrors.Wrap(err, "Server.threadNameSet", "send rename command")
 		}
-		if s.uiRuntime != nil {
-			s.uiRuntime.SetThreadName(p.ThreadID, p.Name)
-		}
-		return map[string]any{}, nil
-	})
+	}
+
+	if s.uiRuntime != nil {
+		s.uiRuntime.SetThreadName(threadID, persistedAlias)
+	}
+	if err := s.persistThreadAlias(ctx, threadID, persistedAlias); err != nil {
+		logger.Warn("thread/name/set: persist alias failed",
+			logger.FieldThreadID, threadID,
+			logger.FieldError, err,
+		)
+		return nil, apperrors.Wrap(err, "Server.threadNameSet", "persist thread alias")
+	}
+	return map[string]any{}, nil
 }
 
-func (s *Server) threadCompact(_ context.Context, params json.RawMessage) (any, error) {
-	return s.sendSlashCommand(params, "/compact")
+func (s *Server) threadCompact(ctx context.Context, params json.RawMessage) (any, error) {
+	return s.sendSlashCommand(ctx, params, "/compact")
 }
 
 // threadRollbackParams thread/rollback 请求参数。
@@ -387,7 +425,10 @@ func buildThreadSnapshotsFromListItems(items []threadListItem) []uistate.ThreadS
 }
 
 func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error) {
-	agents := s.mgr.List()
+	agents := []runner.AgentInfo{}
+	if s.mgr != nil {
+		agents = s.mgr.List()
+	}
 
 	threads := make([]threadListItem, 0, len(agents)+32)
 	seen := make(map[string]struct{}, len(agents)+32)
@@ -429,6 +470,7 @@ func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error)
 			}
 		}
 	}
+	applyThreadAliases(threads, s.loadThreadAliases(ctx))
 	if s.uiRuntime != nil {
 		s.uiRuntime.ReplaceThreads(buildThreadSnapshotsFromListItems(threads))
 	}
@@ -443,7 +485,10 @@ type threadLoadedListResponse struct {
 
 func (s *Server) threadLoadedList(ctx context.Context, _ json.RawMessage) (any, error) {
 	// 历史线程也视为可选会话：前端可直接选择，首次 turn/start 时自动补加载。
-	agents := s.mgr.List()
+	agents := []runner.AgentInfo{}
+	if s.mgr != nil {
+		agents = s.mgr.List()
+	}
 	threads := make([]threadListItem, 0, len(agents)+32)
 	seen := make(map[string]struct{}, len(agents)+32)
 
@@ -483,6 +528,7 @@ func (s *Server) threadLoadedList(ctx context.Context, _ json.RawMessage) (any, 
 			}
 		}
 	}
+	applyThreadAliases(threads, s.loadThreadAliases(ctx))
 
 	return threadLoadedListResponse{Threads: threads}, nil
 }
@@ -575,22 +621,25 @@ func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams
 	// 第一页立即返回, 剩余页后台流式加载 + 通知
 	if s.uiRuntime != nil && p.Before == 0 {
 		firstRecords := msgsToRecords(msgs)
-		s.uiRuntime.HydrateHistory(p.ThreadID, firstRecords)
+		hydrated := s.uiRuntime.HydrateHistory(p.ThreadID, firstRecords)
 		logger.Debug("thread/messages: first page hydrated",
 			logger.FieldAgentID, p.ThreadID,
 			"first_page_count", len(msgs),
 			"total", total,
+			"hydrated", hydrated,
 		)
 
-		hydrateLimit := calculateHydrationLoadLimit(len(msgs), total)
-		if hydrateLimit > len(msgs) {
-			threadID := p.ThreadID
-			util.SafeGo(func() { s.streamRemainingHistory(threadID, msgs, hydrateLimit) })
+		if hydrated {
+			hydrateLimit := calculateHydrationLoadLimit(len(msgs), total)
+			if hydrateLimit > len(msgs) {
+				threadID := p.ThreadID
+				util.SafeGo(func() { s.streamRemainingHistory(threadID, msgs, hydrateLimit) })
+			}
 		}
 	} else if s.uiRuntime != nil {
 		// 翻页请求: 直接 hydrate 当前页
 		records := msgsToRecords(msgs)
-		s.uiRuntime.HydrateHistory(p.ThreadID, records)
+		_ = s.uiRuntime.HydrateHistory(p.ThreadID, records)
 	}
 
 	return map[string]any{
@@ -774,6 +823,176 @@ func resolveClientActiveTurnID(client codex.CodexClient) string {
 	return strings.TrimSpace(reader.GetActiveTurnID())
 }
 
+func skillInputText(name, content string) string {
+	return fmt.Sprintf("[skill:%s] %s", strings.TrimSpace(name), content)
+}
+
+func collectInputSkillNames(inputs []UserInput) map[string]struct{} {
+	if len(inputs) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		if !strings.EqualFold(strings.TrimSpace(input.Type), "skill") {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(input.Name))
+		if name == "" {
+			continue
+		}
+		set[name] = struct{}{}
+	}
+	return set
+}
+
+func collectSkillNameSet(raw []string) map[string]struct{} {
+	if len(raw) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(raw))
+	for _, item := range raw {
+		name := strings.ToLower(strings.TrimSpace(item))
+		if name == "" {
+			continue
+		}
+		set[name] = struct{}{}
+	}
+	return set
+}
+
+func mergeSkillNameSets(dst map[string]struct{}, src map[string]struct{}) map[string]struct{} {
+	if len(src) == 0 {
+		return dst
+	}
+	if dst == nil {
+		dst = make(map[string]struct{}, len(src))
+	}
+	for key := range src {
+		dst[key] = struct{}{}
+	}
+	return dst
+}
+
+func mergePromptText(prompt, extra string) string {
+	trimmedExtra := strings.TrimSpace(extra)
+	if trimmedExtra == "" {
+		return prompt
+	}
+	trimmedPrompt := strings.TrimSpace(prompt)
+	if trimmedPrompt == "" {
+		return extra
+	}
+	return prompt + "\n" + extra
+}
+
+func (s *Server) buildConfiguredSkillPrompt(agentID string, input []UserInput) (string, int) {
+	if s.skillSvc == nil {
+		return "", 0
+	}
+	configured := s.GetAgentSkills(agentID)
+	if len(configured) == 0 {
+		return "", 0
+	}
+
+	inputSkillSet := collectInputSkillNames(input)
+	texts := make([]string, 0, len(configured))
+	for _, name := range configured {
+		normalizedName := strings.TrimSpace(name)
+		if normalizedName == "" {
+			continue
+		}
+		if _, exists := inputSkillSet[strings.ToLower(normalizedName)]; exists {
+			continue
+		}
+		content, err := s.skillSvc.ReadSkillContent(normalizedName)
+		if err != nil {
+			logger.Warn("turn/start: configured skill unavailable, skip",
+				logger.FieldAgentID, agentID, logger.FieldThreadID, agentID,
+				logger.FieldSkill, normalizedName,
+				logger.FieldError, err,
+			)
+			continue
+		}
+		texts = append(texts, skillInputText(normalizedName, content))
+	}
+	if len(texts) == 0 {
+		return "", 0
+	}
+	return strings.Join(texts, "\n"), len(texts)
+}
+
+func lowerContainsAny(text string, candidates []string) bool {
+	if text == "" || len(candidates) == 0 {
+		return false
+	}
+	for _, raw := range candidates {
+		candidate := strings.ToLower(strings.TrimSpace(raw))
+		if candidate == "" {
+			continue
+		}
+		if strings.Contains(text, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) buildAutoMatchedSkillPrompt(agentID, prompt string, input []UserInput) (string, int) {
+	if s.skillSvc == nil {
+		return "", 0
+	}
+	normalizedPrompt := strings.ToLower(strings.TrimSpace(prompt))
+	if normalizedPrompt == "" {
+		return "", 0
+	}
+	allSkills, err := s.skillSvc.ListSkills()
+	if err != nil {
+		logger.Warn("turn/start: list skills for auto-match failed",
+			logger.FieldAgentID, agentID, logger.FieldThreadID, agentID,
+			logger.FieldError, err,
+		)
+		return "", 0
+	}
+	if len(allSkills) == 0 {
+		return "", 0
+	}
+
+	skipSet := collectInputSkillNames(input)
+	skipSet = mergeSkillNameSets(skipSet, collectSkillNameSet(s.GetAgentSkills(agentID)))
+
+	texts := make([]string, 0, len(allSkills))
+	for _, skill := range allSkills {
+		skillName := strings.TrimSpace(skill.Name)
+		if skillName == "" {
+			continue
+		}
+		if _, exists := skipSet[strings.ToLower(skillName)]; exists {
+			continue
+		}
+
+		triggered := lowerContainsAny(normalizedPrompt, skill.ForceWords) ||
+			lowerContainsAny(normalizedPrompt, skill.TriggerWords)
+		if !triggered {
+			continue
+		}
+
+		content, readErr := s.skillSvc.ReadSkillContent(skillName)
+		if readErr != nil {
+			logger.Warn("turn/start: auto-matched skill unavailable, skip",
+				logger.FieldAgentID, agentID, logger.FieldThreadID, agentID,
+				logger.FieldSkill, skillName,
+				logger.FieldError, readErr,
+			)
+			continue
+		}
+		texts = append(texts, skillInputText(skillName, content))
+	}
+	if len(texts) == 0 {
+		return "", 0
+	}
+	return strings.Join(texts, "\n"), len(texts)
+}
+
 func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, error) {
 	proc, err := s.ensureThreadReadyForTurn(ctx, p.ThreadID, p.Cwd)
 	if err != nil {
@@ -781,13 +1000,19 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 	}
 
 	prompt, images, files := extractInputs(p.Input)
+	configuredSkillPrompt, configuredSkillCount := s.buildConfiguredSkillPrompt(p.ThreadID, p.Input)
+	autoMatchedSkillPrompt, autoMatchedSkillCount := s.buildAutoMatchedSkillPrompt(p.ThreadID, prompt, p.Input)
+	submitPrompt := mergePromptText(prompt, configuredSkillPrompt)
+	submitPrompt = mergePromptText(submitPrompt, autoMatchedSkillPrompt)
 	logger.Info("turn/start: input prepared",
 		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 		"text_len", len(prompt),
 		"images", len(images),
 		"files", len(files),
+		"configured_skills", configuredSkillCount,
+		"auto_matched_skills", autoMatchedSkillCount,
 	)
-	if err := proc.Client.Submit(prompt, images, files, p.OutputSchema); err != nil {
+	if err := proc.Client.Submit(submitPrompt, images, files, p.OutputSchema); err != nil {
 		return nil, apperrors.Wrap(err, "Server.turnStart", "submit prompt")
 	}
 	if s.uiRuntime != nil {
@@ -821,7 +1046,11 @@ type turnSteerParams struct {
 func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, error) {
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
 		prompt, images, files := extractInputs(p.Input)
-		if err := proc.Client.Submit(prompt, images, files, nil); err != nil {
+		configuredSkillPrompt, _ := s.buildConfiguredSkillPrompt(p.ThreadID, p.Input)
+		autoMatchedSkillPrompt, _ := s.buildAutoMatchedSkillPrompt(p.ThreadID, prompt, p.Input)
+		submitPrompt := mergePromptText(prompt, configuredSkillPrompt)
+		submitPrompt = mergePromptText(submitPrompt, autoMatchedSkillPrompt)
+		if err := proc.Client.Submit(submitPrompt, images, files, nil); err != nil {
 			return nil, err
 		}
 		return map[string]any{}, nil
@@ -1123,13 +1352,45 @@ func fuzzyMatch(text, pattern string) bool {
 	return pi == len(pattern)
 }
 
+func normalizeSkillName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", apperrors.New("normalizeSkillName", "skill name is required")
+	}
+	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		return "", apperrors.Newf("normalizeSkillName", "invalid skill name %q", raw)
+	}
+	return name, nil
+}
+
+func normalizeSkillNames(rawNames []string) ([]string, error) {
+	if len(rawNames) == 0 {
+		return []string{}, nil
+	}
+	names := make([]string, 0, len(rawNames))
+	seen := make(map[string]struct{}, len(rawNames))
+	for _, raw := range rawNames {
+		name, err := normalizeSkillName(raw)
+		if err != nil {
+			return nil, err
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
 // ========================================
 // skills, apps, model, config, mcp
 // ========================================
 
 func (s *Server) skillsList(_ context.Context, _ json.RawMessage) (any, error) {
 	var skills []map[string]string
-	skillsDir := filepath.Join(".", ".agent", "skills")
+	skillsDir := s.skillsDirectory()
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
 		return map[string]any{"skills": skills}, nil
@@ -1144,6 +1405,384 @@ func (s *Server) skillsList(_ context.Context, _ json.RawMessage) (any, error) {
 
 func (s *Server) appList(_ context.Context, _ json.RawMessage) (any, error) {
 	return map[string]any{"apps": []any{}}, nil
+}
+
+type skillsLocalReadParams struct {
+	Path string `json:"path"`
+}
+
+const (
+	maxSkillImportFiles          = 1000
+	maxSkillImportSingleFileSize = 4 << 20  // 4MB
+	maxSkillImportTotalFileSize  = 20 << 20 // 20MB
+)
+
+type skillsLocalImportDirParams struct {
+	Path  string   `json:"path"`
+	Paths []string `json:"paths,omitempty"`
+	Name  string   `json:"name,omitempty"`
+}
+
+type skillImportStats struct {
+	Files int
+	Bytes int64
+}
+
+type skillImportFailure struct {
+	Source string `json:"source"`
+	Error  string `json:"error"`
+}
+
+type skillImportResult struct {
+	Name      string `json:"name"`
+	Dir       string `json:"dir"`
+	SkillFile string `json:"skill_file"`
+	Source    string `json:"source"`
+	Files     int    `json:"files"`
+	Bytes     int64  `json:"bytes"`
+}
+
+func skillImportDirName(rawName, sourceDir string) (string, error) {
+	name := strings.TrimSpace(rawName)
+	if name != "" {
+		return normalizeSkillName(name)
+	}
+	candidate := strings.TrimSpace(strings.TrimRight(sourceDir, `/\`))
+	if candidate == "" {
+		return "", apperrors.New("skillImportDirName", "source directory is required")
+	}
+	base := filepath.Base(candidate)
+	return normalizeSkillName(base)
+}
+
+func ensureSourceSkillFile(sourceDir string) (string, error) {
+	path := filepath.Join(sourceDir, "SKILL.md")
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", apperrors.Newf("ensureSourceSkillFile", "SKILL.md is a directory: %s", path)
+	}
+	return path, nil
+}
+
+func copyRegularFile(srcPath, dstPath string, mode fs.FileMode) error {
+	srcFile, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+	if mode == 0 {
+		mode = 0o644
+	}
+	dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(dstFile, srcFile)
+	closeErr := dstFile.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+func copySkillDirectory(sourceDir, targetDir string) (skillImportStats, error) {
+	stats := skillImportStats{}
+	err := filepath.WalkDir(sourceDir, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(sourceDir, currentPath)
+		if err != nil {
+			return err
+		}
+		relative = filepath.Clean(relative)
+		if relative == "." {
+			return os.MkdirAll(targetDir, 0o755)
+		}
+		if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return apperrors.Newf("copySkillDirectory", "path escapes source dir: %s", currentPath)
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return apperrors.Newf("copySkillDirectory", "symlink is not allowed: %s", relative)
+		}
+		if entry.IsDir() && strings.EqualFold(entry.Name(), ".git") {
+			return filepath.SkipDir
+		}
+		destinationPath := filepath.Join(targetDir, relative)
+		if entry.IsDir() {
+			return os.MkdirAll(destinationPath, 0o755)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		if info.Size() > maxSkillImportSingleFileSize {
+			return apperrors.Newf(
+				"copySkillDirectory",
+				"file too large: %s (%d bytes, limit %d bytes)",
+				relative,
+				info.Size(),
+				maxSkillImportSingleFileSize,
+			)
+		}
+		stats.Files++
+		if stats.Files > maxSkillImportFiles {
+			return apperrors.Newf("copySkillDirectory", "too many files: limit %d", maxSkillImportFiles)
+		}
+		stats.Bytes += info.Size()
+		if stats.Bytes > maxSkillImportTotalFileSize {
+			return apperrors.Newf(
+				"copySkillDirectory",
+				"skill package too large: %d bytes (limit %d bytes)",
+				stats.Bytes,
+				maxSkillImportTotalFileSize,
+			)
+		}
+		if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
+			return err
+		}
+		return copyRegularFile(currentPath, destinationPath, info.Mode().Perm())
+	})
+	return stats, err
+}
+
+func collectSkillImportSources(path string, paths []string) []string {
+	candidates := make([]string, 0, len(paths)+1)
+	if strings.TrimSpace(path) != "" {
+		candidates = append(candidates, path)
+	}
+	candidates = append(candidates, paths...)
+
+	out := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, raw := range candidates {
+		source := strings.TrimSpace(raw)
+		if source == "" {
+			continue
+		}
+		abs, err := filepath.Abs(source)
+		if err == nil {
+			source = abs
+		}
+		key := strings.ToLower(filepath.Clean(source))
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, source)
+	}
+	return out
+}
+
+func (s *Server) importSingleSkillDirectory(sourceDir, name string) (skillImportResult, error) {
+	info, err := os.Stat(sourceDir)
+	if err != nil {
+		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "stat source dir")
+	}
+	if !info.IsDir() {
+		return skillImportResult{}, apperrors.Newf("Server.importSingleSkillDirectory", "path is not a directory: %s", sourceDir)
+	}
+	if _, err := ensureSourceSkillFile(sourceDir); err != nil {
+		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "missing SKILL.md in source directory")
+	}
+
+	skillName, err := skillImportDirName(name, sourceDir)
+	if err != nil {
+		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "resolve skill name")
+	}
+	skillsRoot := s.skillsDirectory()
+	targetRoot := filepath.Join(skillsRoot, skillName)
+	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
+		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "mkdir skills root")
+	}
+
+	tmpRoot := filepath.Join(skillsRoot, fmt.Sprintf(".%s.import-%d", skillName, time.Now().UnixNano()))
+	if err := os.RemoveAll(tmpRoot); err != nil {
+		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "clean temp skill dir")
+	}
+	defer func() {
+		_ = os.RemoveAll(tmpRoot)
+	}()
+
+	stats, err := copySkillDirectory(sourceDir, tmpRoot)
+	if err != nil {
+		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "copy skill directory")
+	}
+	skillFilePath := filepath.Join(tmpRoot, "SKILL.md")
+	if _, err := os.Stat(skillFilePath); err != nil {
+		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "copied package missing SKILL.md")
+	}
+
+	backupRoot := filepath.Join(skillsRoot, fmt.Sprintf(".%s.backup-%d", skillName, time.Now().UnixNano()))
+	backupCreated := false
+	if _, err := os.Stat(targetRoot); err == nil {
+		if err := os.Rename(targetRoot, backupRoot); err != nil {
+			return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "backup existing skill dir")
+		}
+		backupCreated = true
+	} else if !os.IsNotExist(err) {
+		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "stat existing skill dir")
+	}
+	if err := os.Rename(tmpRoot, targetRoot); err != nil {
+		if backupCreated {
+			_ = os.Rename(backupRoot, targetRoot)
+		}
+		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "activate imported skill dir")
+	}
+	if backupCreated {
+		_ = os.RemoveAll(backupRoot)
+	}
+	skillFilePath = filepath.Join(targetRoot, "SKILL.md")
+
+	logger.Info("skills/local/importDir: imported",
+		logger.FieldSkill, skillName,
+		logger.FieldPath, sourceDir,
+		"files", stats.Files,
+		"bytes", stats.Bytes,
+	)
+	return skillImportResult{
+		Name:      skillName,
+		Dir:       targetRoot,
+		SkillFile: skillFilePath,
+		Source:    sourceDir,
+		Files:     stats.Files,
+		Bytes:     stats.Bytes,
+	}, nil
+}
+
+func (s *Server) skillsLocalReadTyped(_ context.Context, p skillsLocalReadParams) (any, error) {
+	path := strings.TrimSpace(p.Path)
+	if path == "" {
+		return nil, apperrors.New("Server.skillsLocalRead", "path is required")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsLocalRead", "stat file")
+	}
+	if info.IsDir() {
+		return nil, apperrors.Newf("Server.skillsLocalRead", "path is directory: %s", path)
+	}
+	const maxSkillLocalReadBytes = 1 << 20 // 1MB
+	if info.Size() > maxSkillLocalReadBytes {
+		return nil, apperrors.Newf("Server.skillsLocalRead", "file too large: %d bytes", info.Size())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsLocalRead", "read file")
+	}
+	return map[string]any{
+		"skill": map[string]string{
+			"path":    path,
+			"content": string(data),
+		},
+	}, nil
+}
+
+func (s *Server) skillsLocalImportDirTyped(_ context.Context, p skillsLocalImportDirParams) (any, error) {
+	sources := collectSkillImportSources(p.Path, p.Paths)
+	if len(sources) == 0 {
+		return nil, apperrors.New("Server.skillsLocalImportDir", "path or paths is required")
+	}
+
+	if len(sources) == 1 {
+		result, err := s.importSingleSkillDirectory(sources[0], p.Name)
+		if err != nil {
+			return nil, apperrors.Wrap(err, "Server.skillsLocalImportDir", "import directory")
+		}
+		skillPayload := map[string]any{
+			"name":       result.Name,
+			"dir":        result.Dir,
+			"skill_file": result.SkillFile,
+			"source":     result.Source,
+			"files":      result.Files,
+			"bytes":      result.Bytes,
+		}
+		return map[string]any{
+			"ok": true,
+			"summary": map[string]int{
+				"requested": 1,
+				"imported":  1,
+				"failed":    0,
+			},
+			"skill":    skillPayload,
+			"skills":   []map[string]any{skillPayload},
+			"failures": []map[string]string{},
+		}, nil
+	}
+
+	if strings.TrimSpace(p.Name) != "" {
+		return nil, apperrors.New("Server.skillsLocalImportDir", "name is only supported for single directory import")
+	}
+
+	results := make([]skillImportResult, 0, len(sources))
+	failures := make([]skillImportFailure, 0)
+	seenNames := make(map[string]string, len(sources))
+
+	for _, source := range sources {
+		skillName, nameErr := skillImportDirName("", source)
+		if nameErr != nil {
+			failures = append(failures, skillImportFailure{
+				Source: source,
+				Error:  nameErr.Error(),
+			})
+			continue
+		}
+		nameKey := strings.ToLower(skillName)
+		if previousSource, exists := seenNames[nameKey]; exists {
+			failures = append(failures, skillImportFailure{
+				Source: source,
+				Error:  fmt.Sprintf("duplicate skill name %q with source %s", skillName, previousSource),
+			})
+			continue
+		}
+		seenNames[nameKey] = source
+
+		result, err := s.importSingleSkillDirectory(source, "")
+		if err != nil {
+			failures = append(failures, skillImportFailure{
+				Source: source,
+				Error:  err.Error(),
+			})
+			continue
+		}
+		results = append(results, result)
+	}
+
+	skillsPayload := make([]map[string]any, 0, len(results))
+	for _, result := range results {
+		skillsPayload = append(skillsPayload, map[string]any{
+			"name":       result.Name,
+			"dir":        result.Dir,
+			"skill_file": result.SkillFile,
+			"source":     result.Source,
+			"files":      result.Files,
+			"bytes":      result.Bytes,
+		})
+	}
+	failuresPayload := make([]map[string]string, 0, len(failures))
+	for _, failure := range failures {
+		failuresPayload = append(failuresPayload, map[string]string{
+			"source": failure.Source,
+			"error":  failure.Error,
+		})
+	}
+
+	return map[string]any{
+		"ok": len(failures) == 0,
+		"summary": map[string]int{
+			"requested": len(sources),
+			"imported":  len(results),
+			"failed":    len(failures),
+		},
+		"skills":   skillsPayload,
+		"failures": failuresPayload,
+	}, nil
 }
 
 func (s *Server) modelList(_ context.Context, _ json.RawMessage) (any, error) {
@@ -1319,25 +1958,49 @@ type skillsConfigWriteParams struct {
 	Skills  []string `json:"skills"`
 }
 
+type skillsConfigReadParams struct {
+	AgentID string `json:"agent_id"`
+}
+
+func (s *Server) skillsConfigReadTyped(_ context.Context, p skillsConfigReadParams) (any, error) {
+	agentID := strings.TrimSpace(p.AgentID)
+	if agentID == "" {
+		return nil, apperrors.New("Server.skillsConfigRead", "agent_id is required")
+	}
+	return map[string]any{
+		"agent_id": agentID,
+		"skills":   s.GetAgentSkills(agentID),
+	}, nil
+}
+
 func (s *Server) skillsConfigWriteTyped(_ context.Context, p skillsConfigWriteParams) (any, error) {
 	// 模式 2: 为指定 agent/session 配置技能列表
-	if p.AgentID != "" && len(p.Skills) > 0 {
+	if p.AgentID != "" {
+		normalizedSkills, err := normalizeSkillNames(p.Skills)
+		if err != nil {
+			return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "normalize skills")
+		}
 		s.skillsMu.Lock()
-		s.agentSkills[p.AgentID] = p.Skills
+		if len(normalizedSkills) == 0 {
+			delete(s.agentSkills, p.AgentID)
+		} else {
+			s.agentSkills[p.AgentID] = normalizedSkills
+		}
 		s.skillsMu.Unlock()
 		logger.Info("skills/config/write: agent skills configured",
-			logger.FieldAgentID, p.AgentID, "skills", p.Skills)
-		return map[string]any{"ok": true, "agent_id": p.AgentID, "skills": p.Skills}, nil
+			logger.FieldAgentID, p.AgentID, "skills", normalizedSkills)
+		return map[string]any{"ok": true, "agent_id": p.AgentID, "skills": normalizedSkills}, nil
 	}
 
 	// 模式 1: 写 SKILL.md 文件
-	if p.Name == "" {
+	if strings.TrimSpace(p.Name) == "" {
 		return nil, apperrors.New("Server.skillsConfigWrite", "name or agent_id is required")
 	}
-	if strings.ContainsAny(p.Name, "/\\") || strings.Contains(p.Name, "..") {
-		return nil, apperrors.Newf("Server.skillsConfigWrite", "invalid skill name %q", p.Name)
+	skillName, err := normalizeSkillName(p.Name)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "normalize skill name")
 	}
-	dir := filepath.Join(".", ".agent", "skills", p.Name)
+	dir := filepath.Join(s.skillsDirectory(), skillName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "mkdir")
 	}
@@ -1345,7 +2008,7 @@ func (s *Server) skillsConfigWriteTyped(_ context.Context, p skillsConfigWritePa
 	if err := os.WriteFile(path, []byte(p.Content), 0o644); err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "write SKILL.md")
 	}
-	logger.Info("skills/config/write: saved", logger.FieldSkill, p.Name, logger.FieldBytes, len(p.Content))
+	logger.Info("skills/config/write: saved", logger.FieldSkill, skillName, logger.FieldBytes, len(p.Content))
 	return map[string]any{"ok": true, "path": path}, nil
 }
 
@@ -1353,7 +2016,13 @@ func (s *Server) skillsConfigWriteTyped(_ context.Context, p skillsConfigWritePa
 func (s *Server) GetAgentSkills(agentID string) []string {
 	s.skillsMu.RLock()
 	defer s.skillsMu.RUnlock()
-	return s.agentSkills[agentID]
+	values := s.agentSkills[agentID]
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
 }
 
 // ========================================
@@ -1954,17 +2623,54 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 }
 
 // sendSlashCommand 通用斜杠命令发送 (compact, interrupt 等)。
-func (s *Server) sendSlashCommand(params json.RawMessage, command string) (any, error) {
+func resolveSlashCommandThread(
+	ctx context.Context,
+	threadID string,
+	getProc func(string) *runner.AgentProcess,
+	ensureReady func(context.Context, string, string) (*runner.AgentProcess, error),
+) (*runner.AgentProcess, error) {
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return nil, apperrors.New("Server.sendSlashCommand", "threadId is required")
+	}
+	if getProc != nil {
+		if proc := getProc(id); proc != nil {
+			return proc, nil
+		}
+	}
+	if ensureReady == nil {
+		return nil, apperrors.Newf("Server.sendSlashCommand", "thread %s not found", id)
+	}
+	proc, err := ensureReady(ctx, id, "")
+	if err != nil {
+		return nil, err
+	}
+	if proc == nil {
+		return nil, apperrors.Newf("Server.sendSlashCommand", "thread %s not found", id)
+	}
+	return proc, nil
+}
+
+func (s *Server) resolveThreadForSlashCommand(ctx context.Context, threadID string) (*runner.AgentProcess, error) {
+	if s == nil || s.mgr == nil {
+		return nil, apperrors.New("Server.sendSlashCommand", "thread manager is not initialized")
+	}
+	return resolveSlashCommandThread(ctx, threadID, s.mgr.Get, s.ensureThreadReadyForTurn)
+}
+
+func (s *Server) sendSlashCommand(ctx context.Context, params json.RawMessage, command string) (any, error) {
 	var p threadIDParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, apperrors.Wrap(err, "Server.sendSlashCommand", "unmarshal params")
 	}
-	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		if err := proc.Client.SendCommand(command, ""); err != nil {
-			return nil, err
-		}
-		return map[string]any{}, nil
-	})
+	proc, err := s.resolveThreadForSlashCommand(ctx, p.ThreadID)
+	if err != nil {
+		return nil, err
+	}
+	if err := proc.Client.SendCommand(command, ""); err != nil {
+		return nil, err
+	}
+	return map[string]any{}, nil
 }
 
 // sendSlashCommandWithArgs 带参数的斜杠命令。
@@ -2029,7 +2735,7 @@ func extractInputs(inputs []UserInput) (prompt string, images, files []string) {
 				files = append(files, value)
 			}
 		case "skill":
-			texts = append(texts, fmt.Sprintf("[skill:%s] %s", inp.Name, inp.Content))
+			texts = append(texts, skillInputText(inp.Name, inp.Content))
 		}
 	}
 	prompt = strings.Join(texts, "\n")
@@ -2173,8 +2879,8 @@ func buildUserTimelineAttachmentsFromInputs(inputs []UserInput) []uistate.Timeli
 // ========================================
 
 // threadBgTerminalsClean 清理后台终端 (experimental)。
-func (s *Server) threadBgTerminalsClean(_ context.Context, params json.RawMessage) (any, error) {
-	return s.sendSlashCommand(params, "/clean")
+func (s *Server) threadBgTerminalsClean(ctx context.Context, params json.RawMessage) (any, error) {
+	return s.sendSlashCommand(ctx, params, "/clean")
 }
 
 // skillsRemoteReadParams skills/remote/read 请求参数。
@@ -2192,6 +2898,15 @@ func (s *Server) skillsRemoteReadTyped(_ context.Context, p skillsRemoteReadPara
 		return nil, apperrors.Wrap(err, "Server.skillsRemoteRead", "fetch remote skill")
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		return nil, apperrors.Newf(
+			"Server.skillsRemoteRead",
+			"fetch remote skill failed status=%d body=%s",
+			resp.StatusCode,
+			strings.TrimSpace(string(body)),
+		)
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsRemoteRead", "read response body")
@@ -2209,7 +2924,11 @@ type skillsRemoteWriteParams struct {
 
 // skillsRemoteWriteTyped 写入远程 Skill 到本地。
 func (s *Server) skillsRemoteWriteTyped(_ context.Context, p skillsRemoteWriteParams) (any, error) {
-	skillsDir := filepath.Join(".", ".agent", "skills", p.Name)
+	skillName, err := normalizeSkillName(p.Name)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "normalize skill name")
+	}
+	skillsDir := filepath.Join(s.skillsDirectory(), skillName)
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -2264,8 +2983,8 @@ func boolToStatus(ok bool) string {
 // ========================================
 
 // threadUndo 撤销上一步 (/undo)。
-func (s *Server) threadUndo(_ context.Context, params json.RawMessage) (any, error) {
-	return s.sendSlashCommand(params, "/undo")
+func (s *Server) threadUndo(ctx context.Context, params json.RawMessage) (any, error) {
+	return s.sendSlashCommand(ctx, params, "/undo")
 }
 
 // threadModelSet 切换模型 (/model <name>)。
@@ -2284,13 +3003,13 @@ func (s *Server) threadApprovals(_ context.Context, params json.RawMessage) (any
 }
 
 // threadMCPList 列出 MCP 工具 (/mcp)。
-func (s *Server) threadMCPList(_ context.Context, params json.RawMessage) (any, error) {
-	return s.sendSlashCommand(params, "/mcp")
+func (s *Server) threadMCPList(ctx context.Context, params json.RawMessage) (any, error) {
+	return s.sendSlashCommand(ctx, params, "/mcp")
 }
 
 // threadSkillsList 列出 Skills (/skills)。
-func (s *Server) threadSkillsList(_ context.Context, params json.RawMessage) (any, error) {
-	return s.sendSlashCommand(params, "/skills")
+func (s *Server) threadSkillsList(ctx context.Context, params json.RawMessage) (any, error) {
+	return s.sendSlashCommand(ctx, params, "/skills")
 }
 
 // threadDebugMemory 调试记忆 (/debug-m-drop 或 /debug-m-update)。
@@ -2350,6 +3069,8 @@ func (s *Server) logFilters(ctx context.Context, _ json.RawMessage) (any, error)
 // UI State (Preferences)
 // ========================================
 
+const prefThreadAliases = "threads.aliases"
+
 type uiPrefGetParams struct {
 	Key string `json:"key"`
 }
@@ -2393,11 +3114,13 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 			prefs = loaded
 		}
 	}
+	applyThreadAliasesSnapshot(&snapshot, loadThreadAliasesFromPrefs(prefs))
 
 	resolvedMain := resolveMainAgentPreference(snapshot, prefs)
 	if resolvedMain != asString(prefs["mainAgentId"]) {
 		s.uiRuntime.SetMainAgent(resolvedMain)
 		snapshot = s.uiRuntime.SnapshotLight()
+		applyThreadAliasesSnapshot(&snapshot, loadThreadAliasesFromPrefs(prefs))
 		pm := s.prefManager
 		prev := prefs["mainAgentId"]
 		util.SafeGo(func() { persistResolvedUIPreference(context.Background(), pm, "mainAgentId", resolvedMain, prev) })
@@ -2480,6 +3203,9 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 	if value, ok := prefs["viewPrefs.cmd"]; ok {
 		result["viewPrefs.cmd"] = value
 	}
+	if value, ok := prefs["threadPins.chat"]; ok {
+		result["threadPins.chat"] = value
+	}
 
 	return result, nil
 }
@@ -2492,6 +3218,133 @@ func asString(value any) string {
 		return v.String()
 	default:
 		return ""
+	}
+}
+
+func (s *Server) persistThreadAlias(ctx context.Context, threadID, alias string) error {
+	s.threadAliasMu.Lock()
+	defer s.threadAliasMu.Unlock()
+	return persistThreadAliasPreference(ctx, s.prefManager, threadID, alias)
+}
+
+func persistThreadAliasPreference(ctx context.Context, manager *uistate.PreferenceManager, threadID, alias string) error {
+	if manager == nil {
+		return nil
+	}
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return nil
+	}
+
+	value, err := manager.Get(ctx, prefThreadAliases)
+	if err != nil {
+		return err
+	}
+	aliases := normalizeThreadAliases(value)
+	nextAlias := strings.TrimSpace(alias)
+	if nextAlias == "" || nextAlias == id {
+		delete(aliases, id)
+	} else {
+		aliases[id] = nextAlias
+	}
+	return manager.Set(ctx, prefThreadAliases, aliases)
+}
+
+func (s *Server) loadThreadAliases(ctx context.Context) map[string]string {
+	if s.prefManager == nil {
+		return map[string]string{}
+	}
+	value, err := s.prefManager.Get(ctx, prefThreadAliases)
+	if err != nil {
+		logger.Warn("thread aliases: load preference failed", logger.FieldError, err)
+		return map[string]string{}
+	}
+	return normalizeThreadAliases(value)
+}
+
+func loadThreadAliasesFromPrefs(prefs map[string]any) map[string]string {
+	if prefs == nil {
+		return map[string]string{}
+	}
+	return normalizeThreadAliases(prefs[prefThreadAliases])
+}
+
+func normalizeThreadAliases(value any) map[string]string {
+	aliases := map[string]string{}
+	addAlias := func(threadID string, alias any) {
+		id := strings.TrimSpace(threadID)
+		if id == "" {
+			return
+		}
+		name := strings.TrimSpace(asString(alias))
+		if name == "" || name == id {
+			return
+		}
+		aliases[id] = name
+	}
+
+	switch typed := value.(type) {
+	case map[string]string:
+		for threadID, alias := range typed {
+			addAlias(threadID, alias)
+		}
+	case map[string]any:
+		for threadID, alias := range typed {
+			addAlias(threadID, alias)
+		}
+	case string:
+		decoded := map[string]any{}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(typed)), &decoded); err == nil {
+			for threadID, alias := range decoded {
+				addAlias(threadID, alias)
+			}
+		}
+	case json.RawMessage:
+		decoded := map[string]any{}
+		if err := json.Unmarshal(typed, &decoded); err == nil {
+			for threadID, alias := range decoded {
+				addAlias(threadID, alias)
+			}
+		}
+	}
+
+	return aliases
+}
+
+func applyThreadAliases(threads []threadListItem, aliases map[string]string) {
+	if len(threads) == 0 || len(aliases) == 0 {
+		return
+	}
+	for i := range threads {
+		id := strings.TrimSpace(threads[i].ID)
+		if id == "" {
+			continue
+		}
+		alias := strings.TrimSpace(aliases[id])
+		if alias == "" {
+			continue
+		}
+		threads[i].Name = alias
+	}
+}
+
+func applyThreadAliasesSnapshot(snapshot *uistate.RuntimeSnapshot, aliases map[string]string) {
+	if snapshot == nil || len(snapshot.Threads) == 0 || len(aliases) == 0 {
+		return
+	}
+	for i := range snapshot.Threads {
+		id := strings.TrimSpace(snapshot.Threads[i].ID)
+		if id == "" {
+			continue
+		}
+		alias := strings.TrimSpace(aliases[id])
+		if alias == "" {
+			continue
+		}
+		snapshot.Threads[i].Name = alias
+		meta := snapshot.AgentMetaByID[id]
+		meta.Alias = alias
+		snapshot.AgentMetaByID[id] = meta
 	}
 }
 

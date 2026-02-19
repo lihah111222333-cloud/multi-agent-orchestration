@@ -22,12 +22,16 @@ const PREF_ACTIVE_CMD_THREAD_ID = 'activeCmdThreadId';
 const PREF_MAIN_AGENT_ID = 'mainAgentId';
 const PREF_VIEW_CHAT = 'viewPrefs.chat';
 const PREF_VIEW_CMD = 'viewPrefs.cmd';
+const PREF_PINNED_THREADS_CHAT = 'threadPins.chat';
 
 const state = reactive({
   activeThreadId: '',
   activeCmdThreadId: '',
   mainAgentId: '',
+  pinnedThreadAtById: {},
 });
+
+const compactPendingByThread = reactive({});
 
 const runtimeRootState = reactive({
   threads: [],
@@ -66,12 +70,80 @@ logInfo('thread', 'state.whitelist.applied', {
 let runtimeSyncPromise = null;
 let runtimeSyncPending = false;
 const preferenceWriteQueueByKey = new Map();
+const threadOrderIndexById = new Map();
+let threadOrderSeq = 0;
+
+function ensureThreadOrderIndex(threadId) {
+  const id = (threadId || '').toString().trim();
+  if (!id) return Number.MAX_SAFE_INTEGER;
+  const existing = threadOrderIndexById.get(id);
+  if (Number.isFinite(existing)) return existing;
+  const created = threadOrderSeq;
+  threadOrderSeq += 1;
+  threadOrderIndexById.set(id, created);
+  return created;
+}
+
+function sortThreadsByStableFirstSeen(threads) {
+  if (!Array.isArray(threads) || threads.length <= 1) {
+    return Array.isArray(threads) ? threads : [];
+  }
+  return threads
+    .map((item, index) => ({
+      item,
+      index,
+      stableOrder: ensureThreadOrderIndex(item?.id),
+    }))
+    .sort((left, right) => {
+      if (left.stableOrder !== right.stableOrder) {
+        return left.stableOrder - right.stableOrder;
+      }
+      return left.index - right.index;
+    })
+    .map((entry) => entry.item);
+}
 
 function perfNow() {
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
     return performance.now();
   }
   return Date.now();
+}
+
+function waitMs(ms) {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, Math.max(0, Number(ms) || 0));
+  });
+}
+
+function tokenUsageSignature(threadId) {
+  const usage = state.tokenUsageByThread?.[threadId];
+  if (!usage || typeof usage !== 'object') return '';
+  const used = Number(usage.usedTokens);
+  const limit = Number(usage.contextWindowTokens);
+  const percent = Number(usage.usedPercent);
+  return [
+    Number.isFinite(used) ? Math.round(used) : '',
+    Number.isFinite(limit) ? Math.round(limit) : '',
+    Number.isFinite(percent) ? percent.toFixed(3) : '',
+  ].join('|');
+}
+
+async function waitCompactTokenUsageRefresh(threadId, baselineSignature) {
+  const checkpoints = [180, 420, 900, 1600, 2600];
+  for (const delay of checkpoints) {
+    await waitMs(delay);
+    try {
+      await syncRuntimeState();
+    } catch {
+      // ignore: keep waiting until timeout checkpoints exhausted
+    }
+    const nextSignature = tokenUsageSignature(threadId);
+    if (nextSignature && nextSignature !== baselineSignature) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function persistRemote(prefKey, value) {
@@ -264,7 +336,7 @@ function getThreadsByMode(mode) {
       mainAgentId: state.mainAgentId,
     });
   }
-  return deriveChatAgents({ threads: state.threads });
+  return sortChatThreadsByPinned(deriveChatAgents({ threads: state.threads }));
 }
 
 function getCurrentThreadId(mode) {
@@ -286,6 +358,46 @@ function normalizeThread(item) {
     name: item?.name || item?.id || '',
     state: normalizeStatus(item?.state || 'idle'),
   };
+}
+
+function normalizePinnedThreadMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  const next = {};
+  for (const [rawID, rawTime] of Object.entries(value)) {
+    const id = (rawID || '').toString().trim();
+    if (!id) continue;
+    const ts = Number(rawTime);
+    if (!Number.isFinite(ts) || ts <= 0) continue;
+    next[id] = Math.round(ts);
+  }
+  return next;
+}
+
+function sortChatThreadsByPinned(threads) {
+  const list = Array.isArray(threads) ? threads.slice() : [];
+  if (list.length <= 1) return list;
+  const indexByID = new Map();
+  for (let i = 0; i < list.length; i += 1) {
+    indexByID.set((list[i]?.id || '').toString(), i);
+  }
+  list.sort((left, right) => {
+    const leftID = (left?.id || '').toString();
+    const rightID = (right?.id || '').toString();
+    const leftPinnedAt = Number(state.pinnedThreadAtById?.[leftID]);
+    const rightPinnedAt = Number(state.pinnedThreadAtById?.[rightID]);
+    const leftPinned = Number.isFinite(leftPinnedAt) && leftPinnedAt > 0;
+    const rightPinned = Number.isFinite(rightPinnedAt) && rightPinnedAt > 0;
+    if (leftPinned !== rightPinned) {
+      return leftPinned ? -1 : 1;
+    }
+    if (leftPinned && rightPinned && leftPinnedAt !== rightPinnedAt) {
+      return rightPinnedAt - leftPinnedAt;
+    }
+    return (indexByID.get(leftID) ?? 0) - (indexByID.get(rightID) ?? 0);
+  });
+  return list;
 }
 
 
@@ -314,10 +426,11 @@ function mergeObjectMap(target, source) {
 function applyRuntimeSnapshot(snapshot) {
   const data = snapshot && typeof snapshot === 'object' ? snapshot : {};
 
-  // --- threads: 只在列表长度或 ID 变化时替换 ---
-  const nextThreads = Array.isArray(data.threads)
+  // --- threads: 首次出现顺序固定，且仅在 ID 集变化时替换 ---
+  const unorderedThreads = Array.isArray(data.threads)
     ? data.threads.map(normalizeThread)
     : [];
+  const nextThreads = sortThreadsByStableFirstSeen(unorderedThreads);
   const oldIds = state.threads.map((t) => t.id).join(',');
   const newIds = nextThreads.map((t) => t.id).join(',');
   if (oldIds !== newIds) {
@@ -354,12 +467,14 @@ function applyRuntimeSnapshot(snapshot) {
     for (const [key, value] of Object.entries(data.timelinesByThread)) {
       const newItems = Array.isArray(value) ? value : [];
       const oldItems = state.timelinesByThread[key];
-      // 快速对比: 长度相同 + 最后一条 item 的 id/content 相同 → 跳过
+      // 快速对比: 长度相同 + 最后一条 item 的 id 和 text 长度都相同 → 跳过
       if (
         oldItems &&
         oldItems.length === newItems.length &&
         oldItems.length > 0 &&
-        oldItems[oldItems.length - 1]?.id === newItems[newItems.length - 1]?.id
+        oldItems[oldItems.length - 1]?.id === newItems[newItems.length - 1]?.id &&
+        (oldItems[oldItems.length - 1]?.text || '').length ===
+        (newItems[newItems.length - 1]?.text || '').length
       ) {
         continue;
       }
@@ -404,6 +519,13 @@ function applyRuntimeSnapshot(snapshot) {
     const next = (data[PREF_MAIN_AGENT_ID] || '').toString();
     if (state.mainAgentId !== next) state.mainAgentId = next;
   }
+  if (Object.prototype.hasOwnProperty.call(data, PREF_PINNED_THREADS_CHAT)) {
+    const pinnedMap = normalizePinnedThreadMap(data[PREF_PINNED_THREADS_CHAT]);
+    for (const id of Object.keys(pinnedMap)) {
+      ensureThreadOrderIndex(id);
+    }
+    state.pinnedThreadAtById = pinnedMap;
+  }
   state.viewPrefsChat = normalizeChatPrefs(data[PREF_VIEW_CHAT]);
   state.viewPrefsCmd = normalizeCmdPrefs(data[PREF_VIEW_CMD]);
 }
@@ -432,17 +554,38 @@ function handleAgentEvent() {
 }
 
 let _syncDebounceTimer = 0;
+let _syncThrottleLastRun = 0;
+const SYNC_THROTTLE_MS = 500;
 
 function handleBridgeEvent(evt) {
   const eventType = (evt?.type || evt?.method || '').toString();
-  if (eventType === 'ui/state/changed' || eventType === 'thread/messages/page') {
-    // 防抖: 合并短时间内的多次触发, 避免事件风暴导致 UI 卡顿
+  if (
+    eventType === 'ui/state/changed'
+    || eventType === 'thread/messages/page'
+    || eventType === 'thread/compacted'
+    || eventType === 'thread/tokenUsage/updated'
+  ) {
+    const debounceMs = (eventType === 'thread/compacted' || eventType === 'thread/tokenUsage/updated')
+      ? 80
+      : 200;
+
+    // Throttle: 每 500ms 至少同步一次 (避免连续事件期间永远同步不到)
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - _syncThrottleLastRun >= SYNC_THROTTLE_MS) {
+      _syncThrottleLastRun = now;
+      syncRuntimeState().catch((error) => {
+        logWarn('thread', 'state.sync.throttle.failed', { error, by_event: eventType });
+      });
+    }
+
+    // Trailing debounce: 事件风暴结束后做最终同步
     clearTimeout(_syncDebounceTimer);
     _syncDebounceTimer = setTimeout(() => {
+      _syncThrottleLastRun = typeof performance !== 'undefined' ? performance.now() : Date.now();
       syncRuntimeState().catch((error) => {
         logWarn('thread', 'state.sync.failed', { error, by_event: eventType });
       });
-    }, 200);
+    }, debounceMs);
   }
 }
 
@@ -665,15 +808,22 @@ async function sendMessage(threadId, prompt, attachments = []) {
 async function compactThread(threadId) {
   const id = (threadId || '').toString().trim();
   if (!id) return;
+  if (compactPendingByThread[id]) return;
   const start = perfNow();
+  const baselineSignature = tokenUsageSignature(id);
+  compactPendingByThread[id] = true;
   logInfo('thread', 'compact.start', {
     thread_id: id,
+    token_usage_sig_before: baselineSignature,
   });
   try {
     await callAPI('thread/compact/start', { threadId: id });
     await syncRuntimeState();
+    const refreshed = await waitCompactTokenUsageRefresh(id, baselineSignature);
     logInfo('thread', 'compact.done', {
       thread_id: id,
+      token_usage_refreshed: refreshed,
+      token_usage_sig_after: tokenUsageSignature(id),
       duration_ms: Math.round(perfNow() - start),
     });
   } catch (error) {
@@ -683,6 +833,8 @@ async function compactThread(threadId) {
       duration_ms: Math.round(perfNow() - start),
     });
     throw error;
+  } finally {
+    delete compactPendingByThread[id];
   }
 }
 
@@ -747,6 +899,43 @@ function getThreadTokenUsage(threadId) {
   return value;
 }
 
+function getThreadCompacting(threadId) {
+  if (!threadId) return false;
+  return Boolean(compactPendingByThread[threadId]);
+}
+
+function getThreadPinnedAt(threadId) {
+  const id = (threadId || '').toString().trim();
+  if (!id) return 0;
+  const value = Number(state.pinnedThreadAtById?.[id]);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return value;
+}
+
+function setThreadPinned(threadId, pinned) {
+  const id = (threadId || '').toString().trim();
+  if (!id) return;
+  ensureThreadOrderIndex(id);
+  const next = { ...(state.pinnedThreadAtById || {}) };
+  if (pinned) {
+    next[id] = Date.now();
+  } else {
+    delete next[id];
+  }
+  state.pinnedThreadAtById = next;
+  persistPreferenceAndSync(PREF_PINNED_THREADS_CHAT, next, {
+    thread_id: id,
+    pinned: Boolean(pinned),
+  });
+}
+
+function toggleThreadPin(threadId) {
+  const id = (threadId || '').toString().trim();
+  if (!id) return;
+  const currentPinned = getThreadPinnedAt(id) > 0;
+  setThreadPinned(id, !currentPinned);
+}
+
 function promptRenameThread(threadId) {
   const id = (threadId || '').toString();
   if (!id) return;
@@ -779,6 +968,7 @@ export function useThreadStore() {
 
     saveActiveCmdThread,
     setMainAgent,
+    renameThread,
     promptRenameThread,
     getLayout,
     setLayout,
@@ -795,6 +985,10 @@ export function useThreadStore() {
     getThreadStatusHeader,
     getThreadStatusDetails,
     getThreadTokenUsage,
+    getThreadCompacting,
+    getThreadPinnedAt,
+    setThreadPinned,
+    toggleThreadPin,
     displayName,
   };
 }

@@ -523,6 +523,47 @@ func TestTokenUsageUpdatesFromThreadTokenUsageShape(t *testing.T) {
 	}
 }
 
+func TestTokenUsageUpdatesFromContextCompactedShape(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-token-compact"
+
+	seed := NormalizeEvent(
+		"token_count",
+		"thread/tokenUsage/updated",
+		mustRawJSON(`{"tokenUsage":{"total":{"totalTokens":242200},"modelContextWindow":258400}}`),
+	)
+	mgr.ApplyAgentEvent(threadID, seed, map[string]any{
+		"tokenUsage": map[string]any{
+			"total": map[string]any{
+				"totalTokens": 242200,
+			},
+			"modelContextWindow": 258400,
+		},
+	})
+
+	compacted := NormalizeEvent(
+		"context_compacted",
+		"thread/compacted",
+		mustRawJSON(`{"tokenUsage":{"total":{"totalTokens":91000},"modelContextWindow":258400}}`),
+	)
+	mgr.ApplyAgentEvent(threadID, compacted, map[string]any{
+		"tokenUsage": map[string]any{
+			"total": map[string]any{
+				"totalTokens": 91000,
+			},
+			"modelContextWindow": 258400,
+		},
+	})
+
+	usage := mgr.Snapshot().TokenUsageByThread[threadID]
+	if usage.UsedTokens != 91000 {
+		t.Fatalf("used tokens after context compacted = %d, want 91000", usage.UsedTokens)
+	}
+	if usage.ContextWindowTokens != 258400 {
+		t.Fatalf("context window tokens after context compacted = %d, want 258400", usage.ContextWindowTokens)
+	}
+}
+
 func TestTokenUsageUpdatesFromTokenCountInfoShape(t *testing.T) {
 	mgr := NewRuntimeManager()
 	threadID := "thread-token-info"
@@ -784,7 +825,7 @@ func TestBackgroundOverlaySetAndClear(t *testing.T) {
 	}
 }
 
-func TestMCPStartupPersistsAcrossTurnLifecycle(t *testing.T) {
+func TestMCPStartupClearsOnTurnCompleteFallback(t *testing.T) {
 	mgr := NewRuntimeManager()
 	threadID := "thread-mcp-lifecycle"
 
@@ -808,17 +849,31 @@ func TestMCPStartupPersistsAcrossTurnLifecycle(t *testing.T) {
 	turnComplete := NormalizeEvent("turn_complete", "", nil)
 	mgr.ApplyAgentEvent(threadID, turnComplete, map[string]any{})
 	snapshot := mgr.Snapshot()
+	if got := snapshot.Statuses[threadID]; got != "idle" {
+		t.Fatalf("status after turn_complete fallback clear = %q, want idle", got)
+	}
+	if header := snapshot.StatusHeadersByThread[threadID]; strings.Contains(header, "MCP 启动中") {
+		t.Fatalf("header after turn_complete fallback clear = %q, want not contain MCP 启动中", header)
+	}
+}
+
+func TestMCPStartupUpdateAcceptsAgentEventAlias(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-mcp-alias"
+
+	mcpUpdate := NormalizeEvent(
+		"agent/event/mcp_startup_update",
+		"agent/event/mcp_startup_update",
+		mustRawJSON(`{"server":"filesystem"}`),
+	)
+	mgr.ApplyAgentEvent(threadID, mcpUpdate, map[string]any{"server": "filesystem"})
+
+	snapshot := mgr.Snapshot()
 	if got := snapshot.Statuses[threadID]; got != "syncing" {
-		t.Fatalf("status after turn_complete with MCP active = %q, want syncing", got)
+		t.Fatalf("status after agent/event/mcp_startup_update = %q, want syncing", got)
 	}
 	if header := snapshot.StatusHeadersByThread[threadID]; !strings.Contains(header, "MCP 启动中") {
-		t.Fatalf("header after turn_complete with MCP active = %q, want contain MCP 启动中", header)
-	}
-
-	mcpComplete := NormalizeEvent("mcp_startup_complete", "", nil)
-	mgr.ApplyAgentEvent(threadID, mcpComplete, map[string]any{})
-	if got := mgr.Snapshot().Statuses[threadID]; got != "idle" {
-		t.Fatalf("status after mcp_startup_complete = %q, want idle", got)
+		t.Fatalf("header after agent/event/mcp_startup_update = %q, want contain MCP 启动中", header)
 	}
 }
 
@@ -933,5 +988,95 @@ func TestAppendHistory_EmptyRecordsNoOp(t *testing.T) {
 	timeline := mgr.Snapshot().TimelinesByThread[threadID]
 	if len(timeline) != 1 {
 		t.Fatalf("timeline len = %d, want 1 (unchanged)", len(timeline))
+	}
+}
+
+// ── HydrateHistory 流式保护 ─────────────────────────────────
+
+func TestHydrateHistory_SkipsWhenStreamingActive(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-hydrate-streaming"
+
+	// 模拟流式输出: TurnStarted → AssistantDelta 累积文本
+	turnStart := NormalizeEvent("turn_started", "", nil)
+	mgr.ApplyAgentEvent(threadID, turnStart, map[string]any{})
+
+	delta := NormalizeEvent("agent_message_delta", "", mustRawJSON(`{"delta":"hello world"}`))
+	mgr.ApplyAgentEvent(threadID, delta, map[string]any{"delta": "hello world"})
+
+	// 确认 timeline 有流式文本
+	timeline := mgr.ThreadTimeline(threadID)
+	if len(timeline) == 0 {
+		t.Fatal("timeline should have streaming items before hydration")
+	}
+	var streamingText string
+	for _, item := range timeline {
+		if item.Kind == "assistant" {
+			streamingText = item.Text
+		}
+	}
+	if streamingText != "hello world" {
+		t.Fatalf("streaming text = %q, want 'hello world'", streamingText)
+	}
+
+	// HydrateHistory 应该跳过 (返回 false), 不覆盖流式文本
+	hydrated := mgr.HydrateHistory(threadID, []HistoryRecord{
+		{ID: 1, Role: "user", Content: "stale old message"},
+	})
+	if hydrated {
+		t.Fatal("HydrateHistory should return false when streaming is active")
+	}
+
+	// 验证 timeline 保持不变: 流式文本完整
+	timelineAfter := mgr.ThreadTimeline(threadID)
+	var textAfter string
+	for _, item := range timelineAfter {
+		if item.Kind == "assistant" {
+			textAfter = item.Text
+		}
+	}
+	if textAfter != "hello world" {
+		t.Fatalf("streaming text after HydrateHistory = %q, want 'hello world' (should not be overwritten)", textAfter)
+	}
+}
+
+func TestHydrateHistory_ProceedsWhenIdle(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-hydrate-idle"
+
+	// Thread 空闲, HydrateHistory 应该正常执行并返回 true
+	hydrated := mgr.HydrateHistory(threadID, []HistoryRecord{
+		{ID: 1, Role: "user", Content: "hello"},
+	})
+	if !hydrated {
+		t.Fatal("HydrateHistory should return true when thread is idle")
+	}
+
+	timeline := mgr.ThreadTimeline(threadID)
+	if len(timeline) != 1 {
+		t.Fatalf("timeline len = %d, want 1", len(timeline))
+	}
+	if timeline[0].Kind != "user" {
+		t.Fatalf("timeline[0].Kind = %q, want user", timeline[0].Kind)
+	}
+}
+
+func TestHydrateHistory_SkipsWhenThinkingActive(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-hydrate-thinking"
+
+	// 模拟思考中: TurnStarted → ReasoningDelta
+	turnStart := NormalizeEvent("turn_started", "", nil)
+	mgr.ApplyAgentEvent(threadID, turnStart, map[string]any{})
+
+	reasoning := NormalizeEvent("agent_reasoning_delta", "", mustRawJSON(`{"delta":"分析中..."}`))
+	mgr.ApplyAgentEvent(threadID, reasoning, map[string]any{"delta": "分析中..."})
+
+	// HydrateHistory 应该跳过
+	hydrated := mgr.HydrateHistory(threadID, []HistoryRecord{
+		{ID: 1, Role: "user", Content: "stale"},
+	})
+	if hydrated {
+		t.Fatal("HydrateHistory should return false when thinking is active")
 	}
 }

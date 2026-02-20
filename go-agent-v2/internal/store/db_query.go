@@ -8,7 +8,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
@@ -47,30 +46,4 @@ func (s *DBQueryStore) Query(ctx context.Context, sqlText string, limit int) ([]
 		results = append(results, row)
 	}
 	return results, rows.Err()
-}
-
-// Execute 执行变更语句 (对应 Python db_execute)。
-// 使用 ValidateExecuteQuery 确保安全 (白名单 + 危险模式检测 + 单语句)。
-// 在事务中执行 + SET LOCAL statement_timeout 防止无限 SQL。
-func (s *DBQueryStore) Execute(ctx context.Context, sqlText string) (int64, error) {
-	if err := ValidateExecuteQuery(sqlText); err != nil {
-		return 0, err
-	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return 0, pkgerr.Wrap(err, "DBQuery.Execute", "begin tx")
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, "SET LOCAL statement_timeout = '5s'"); err != nil {
-		return 0, pkgerr.Wrap(err, "DBQuery.Execute", "set timeout")
-	}
-	tag, err := tx.Exec(ctx, sqlText)
-	if err != nil {
-		return 0, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, pkgerr.Wrap(err, "DBQuery.Execute", "commit")
-	}
-	return tag.RowsAffected(), nil
 }

@@ -43,8 +43,3 @@ func (s *BusLogStore) List(ctx context.Context, category, severity, keyword stri
 	}
 	return collectRows[BusException](rows)
 }
-
-// ListFilterValues 返回去重筛选值。
-func (s *BusLogStore) ListFilterValues(ctx context.Context) (map[string][]string, error) {
-	return DistinctMap(ctx, s.pool, "bus_exception_logs", "category", "severity")
-}

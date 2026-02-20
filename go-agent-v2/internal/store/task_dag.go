@@ -6,7 +6,6 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 // TaskDAGStore 任务 DAG 存储。
@@ -64,19 +63,6 @@ func (s *TaskDAGStore) GetDAGDetail(ctx context.Context, dagKey string) (*TaskDA
 	}
 	nodes, err := s.ListNodes(ctx, dagKey)
 	return dag, nodes, err
-}
-
-// DeleteDAGs 批量删除 DAG (级联删除节点, 对应 Python delete_task_dags)。
-func (s *TaskDAGStore) DeleteDAGs(ctx context.Context, dagKeys []string) (int64, error) {
-	// 先删节点
-	if _, err := s.pool.Exec(ctx, "DELETE FROM task_dag_nodes WHERE dag_key = ANY($1::text[])", dagKeys); err != nil {
-		logger.Warn("store: cascade delete nodes failed", "dag_keys", dagKeys, logger.FieldError, err)
-	}
-	tag, err := s.pool.Exec(ctx, "DELETE FROM task_dags WHERE dag_key = ANY($1::text[])", dagKeys)
-	if err != nil {
-		return 0, err
-	}
-	return tag.RowsAffected(), nil
 }
 
 // SaveNode 创建或更新节点 (对应 Python save_dag_node)。

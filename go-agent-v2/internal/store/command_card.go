@@ -99,23 +99,3 @@ func (s *CommandCardStore) SetEnabled(ctx context.Context, cardKey string, enabl
 func (s *CommandCardStore) Delete(ctx context.Context, cardKey string) error {
 	return DeleteByKey(ctx, s.pool, "command_cards", "card_key", cardKey)
 }
-
-// DeleteBatch 批量删除 (对应 Python delete_command_cards)。
-func (s *CommandCardStore) DeleteBatch(ctx context.Context, cardKeys []string) (int64, error) {
-	return DeleteBatchByKeys(ctx, s.pool, "command_cards", "card_key", cardKeys)
-}
-
-// ListVersions 查询历史版本。
-func (s *CommandCardStore) ListVersions(ctx context.Context, cardKey string, limit int) ([]CommandCardVersion, error) {
-	q := NewQueryBuilder().Eq("card_key", cardKey)
-	sql, params := q.Build(
-		`SELECT id, card_key, title, description, command_template, args_schema,
-			risk_level, enabled, created_by, updated_by, source_updated_at, created_at
-		 FROM command_card_versions`,
-		"created_at DESC", limit)
-	rows, err := s.pool.Query(ctx, sql, params...)
-	if err != nil {
-		return nil, err
-	}
-	return collectRows[CommandCardVersion](rows)
-}

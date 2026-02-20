@@ -75,17 +75,3 @@ func (s *SystemLogStore) ListV2(ctx context.Context, p ListParams) ([]SystemLog,
 func (s *SystemLogStore) ListFilterValues(ctx context.Context) (map[string][]string, error) {
 	return DistinctMap(ctx, s.pool, "system_logs", "level", "logger", "source", "component", "event_type", "tool_name")
 }
-
-// CleanupSystemLogs 删除超过 retentionDays 天的系统日志，返回删除行数。
-func (s *SystemLogStore) CleanupSystemLogs(ctx context.Context, retentionDays int) (int, error) {
-	if retentionDays <= 0 {
-		retentionDays = 30
-	}
-	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM system_logs WHERE ts < NOW() - make_interval(days => $1)`,
-		retentionDays)
-	if err != nil {
-		return 0, err
-	}
-	return int(tag.RowsAffected()), nil
-}

@@ -1,5 +1,6 @@
 import { watch, computed, ref } from '../../lib/vue.esm-browser.prod.js';
 import { logDebug } from '../services/log.js';
+import { renderAssistantMarkdown } from '../utils/assistant-markdown.js';
 
 const VISIBLE_WINDOW = 100;
 
@@ -15,6 +16,7 @@ export const ChatTimeline = {
   setup(props) {
     let updateSeq = 0;
     const visibleCount = ref(VISIBLE_WINDOW);
+    const assistantMarkdownCache = new Map();
 
     // items 引用变化时重置窗口
     watch(
@@ -145,6 +147,21 @@ export const ChatTimeline = {
       return '';
     }
 
+    function renderAssistantBody(text) {
+      const key = (text || '').toString();
+      if (!key) return '';
+      if (assistantMarkdownCache.has(key)) {
+        return assistantMarkdownCache.get(key) || '';
+      }
+      const html = renderAssistantMarkdown(key);
+      assistantMarkdownCache.set(key, html);
+      if (assistantMarkdownCache.size > 280) {
+        const first = assistantMarkdownCache.keys().next().value;
+        assistantMarkdownCache.delete(first);
+      }
+      return html;
+    }
+
     const sharedStatusText = computed(() => (props.activeStatusText || '').toString().trim());
 
     const showAgentPresence = computed(() => {
@@ -169,6 +186,7 @@ export const ChatTimeline = {
       isDialog,
       hasAvatar,
       avatarText,
+      renderAssistantBody,
       showAgentPresence,
       presenceLabel,
       sharedStatusText,
@@ -199,7 +217,12 @@ export const ChatTimeline = {
               <span class="chat-item-spacer"></span>
               <time class="chat-item-time">{{ formatTime(item.ts) }}</time>
             </header>
-            <pre class="chat-item-body">{{ item.text }}</pre>
+            <div
+              v-if="item.kind === 'assistant'"
+              class="chat-item-body chat-item-markdown"
+              v-html="renderAssistantBody(item.text)"
+            ></div>
+            <pre v-else class="chat-item-body chat-item-plain">{{ item.text }}</pre>
             <div v-if="(item.attachments || []).length > 0" class="chat-attachment-list">
               <span
                 v-for="(att, idx) in item.attachments"

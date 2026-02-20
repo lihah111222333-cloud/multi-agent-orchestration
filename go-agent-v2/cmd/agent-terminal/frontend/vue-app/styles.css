@@ -1895,12 +1895,149 @@ a,
 
 .chat-item-body {
   margin: 0;
-  white-space: pre-wrap;
   font-family: inherit;
   font-size: 13px;
   color: var(--text);
-  line-height: 1.6;
+  line-height: 1.64;
   word-break: break-word;
+}
+
+.chat-item-plain {
+  white-space: pre-wrap;
+}
+
+.chat-item-markdown {
+  white-space: normal;
+  display: block;
+}
+
+.chat-item-markdown > * {
+  margin: 0;
+}
+
+.chat-item-markdown > * + * {
+  margin-top: 10px;
+}
+
+.chat-item-markdown h1,
+.chat-item-markdown h2,
+.chat-item-markdown h3,
+.chat-item-markdown h4 {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1.45;
+}
+
+.chat-item-markdown h1 {
+  font-size: 16px;
+}
+
+.chat-item-markdown h2 {
+  font-size: 15px;
+}
+
+.chat-item-markdown h3,
+.chat-item-markdown h4 {
+  font-size: 14px;
+}
+
+.chat-item-markdown ul,
+.chat-item-markdown ol {
+  padding-left: 1.2em;
+}
+
+.chat-item-markdown li {
+  line-height: 1.62;
+}
+
+.chat-item-markdown li + li {
+  margin-top: 5px;
+}
+
+.chat-item-markdown li::marker {
+  color: rgba(186, 230, 253, 0.72);
+}
+
+.chat-item-markdown strong {
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.chat-item-markdown em {
+  font-style: italic;
+  color: #e2e8f0;
+}
+
+.chat-item-markdown .chat-md-link {
+  color: #7dd3fc;
+  text-decoration: underline;
+  text-decoration-color: rgba(125, 211, 252, 0.78);
+  text-underline-offset: 2px;
+  transition: color 180ms ease, text-decoration-color 180ms ease;
+}
+
+.chat-item-markdown .chat-md-link:hover {
+  color: #bae6fd;
+  text-decoration-color: rgba(186, 230, 253, 0.95);
+}
+
+.chat-item-markdown .chat-md-inline-code {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 5px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(2, 6, 23, 0.45);
+  color: #e2e8f0;
+  font-family: "SF Mono", "Menlo", monospace;
+  font-size: 0.92em;
+  line-height: 1.5;
+  vertical-align: baseline;
+}
+
+.chat-item-markdown .chat-md-code {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(2, 6, 23, 0.58);
+  overflow-x: auto;
+  white-space: pre;
+  position: relative;
+}
+
+.chat-item-markdown .chat-md-code code {
+  display: block;
+  color: #e2e8f0;
+  font-family: "SF Mono", "Menlo", monospace;
+  font-size: 12px;
+  line-height: 1.52;
+}
+
+.chat-item-markdown .chat-md-code-lang {
+  position: absolute;
+  right: 8px;
+  top: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(15, 23, 42, 0.8);
+  color: rgba(226, 232, 240, 0.88);
+  font-size: 9px;
+  font-family: "SF Mono", "Menlo", monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.chat-item-markdown .chat-md-quote {
+  padding-left: 10px;
+  border-left: 2px solid rgba(125, 211, 252, 0.5);
+  color: #dbeafe;
+  opacity: 0.94;
+}
+
+.chat-item-markdown .chat-md-divider {
+  border: none;
+  border-top: 1px solid rgba(148, 163, 184, 0.34);
 }
 
 .chat-item-code {

@@ -2,9 +2,9 @@
 //
 // Python 函数对应:
 //
-//	_strip_sql_literals  → StripSQLLiterals
-//	_validate_single_statement → ValidateSingleStatement
-//	_first_sql_keyword → FirstSQLKeyword
+//	_strip_sql_literals  → stripSQLLiterals
+//	_validate_single_statement → validateSingleStatement
+//	_first_sql_keyword → firstSQLKeyword
 //	_validate_read_only_query → ValidateReadOnlyQuery
 //	_validate_execute_query → ValidateExecuteQuery
 package store
@@ -42,14 +42,14 @@ var (
 	reSemicolon = regexp.MustCompile(`;\s*$`)
 )
 
-// StripSQLLiterals 去除 SQL 字符串字面量 (对应 Python _strip_sql_literals)。
+// stripSQLLiterals 去除 SQL 字符串字面量 (对应 Python _strip_sql_literals)。
 // 避免在内容 'DROP TABLE' 上误报。
-func StripSQLLiterals(sql string) string {
+func stripSQLLiterals(sql string) string {
 	return reLiteral.ReplaceAllString(sql, "''")
 }
 
-// ValidateSingleStatement 验证只包含单条 SQL (对应 Python _validate_single_statement)。
-func ValidateSingleStatement(sql string) error {
+// validateSingleStatement 验证只包含单条 SQL (对应 Python _validate_single_statement)。
+func validateSingleStatement(sql string) error {
 	// 去除末尾分号后，若还有分号则为多语句
 	trimmed := strings.TrimSpace(sql)
 	trimmed = reSemicolon.ReplaceAllString(trimmed, "")
@@ -59,8 +59,8 @@ func ValidateSingleStatement(sql string) error {
 	return nil
 }
 
-// FirstSQLKeyword 提取 SQL 首关键词 (对应 Python _first_sql_keyword)。
-func FirstSQLKeyword(sql string) string {
+// firstSQLKeyword 提取 SQL 首关键词 (对应 Python _first_sql_keyword)。
+func firstSQLKeyword(sql string) string {
 	if m := reFirstKeyword.FindStringSubmatch(sql); len(m) == 2 {
 		return strings.ToUpper(m[1])
 	}
@@ -70,10 +70,10 @@ func FirstSQLKeyword(sql string) string {
 // ValidateReadOnlyQuery 验证只读查询 (对应 Python _validate_read_only_query)。
 // 先去除字面量再检测写入关键词和危险函数。
 func ValidateReadOnlyQuery(sql string) error {
-	if err := ValidateSingleStatement(sql); err != nil {
+	if err := validateSingleStatement(sql); err != nil {
 		return err
 	}
-	stripped := StripSQLLiterals(sql)
+	stripped := stripSQLLiterals(sql)
 	if reWriteKeywords.MatchString(stripped) {
 		return ErrReadOnlyViolation
 	}
@@ -86,14 +86,14 @@ func ValidateReadOnlyQuery(sql string) error {
 // ValidateExecuteQuery 验证执行语句 (对应 Python _validate_execute_query)。
 // 白名单首关键词 + 危险模式检测。
 func ValidateExecuteQuery(sql string) error {
-	if err := ValidateSingleStatement(sql); err != nil {
+	if err := validateSingleStatement(sql); err != nil {
 		return err
 	}
-	keyword := FirstSQLKeyword(sql)
+	keyword := firstSQLKeyword(sql)
 	if !executeWhitelist[keyword] {
 		return ErrDangerousSQL
 	}
-	stripped := StripSQLLiterals(sql)
+	stripped := stripSQLLiterals(sql)
 	if reDangerousExec.MatchString(stripped) {
 		return ErrDangerousSQL
 	}

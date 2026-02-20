@@ -8,14 +8,14 @@ import (
 // ValidateSingleStatement
 // ────────────────────────────────────────────────────
 
-func TestValidateSingleStatement_AcceptsSingle(t *testing.T) {
-	if err := ValidateSingleStatement("SELECT 1"); err != nil {
+func TestvalidateSingleStatement_AcceptsSingle(t *testing.T) {
+	if err := validateSingleStatement("SELECT 1"); err != nil {
 		t.Fatalf("expected nil, got %v", err)
 	}
 }
 
-func TestValidateSingleStatement_RejectsMulti(t *testing.T) {
-	if err := ValidateSingleStatement("SELECT 1; DROP TABLE foo"); err == nil {
+func TestvalidateSingleStatement_RejectsMulti(t *testing.T) {
+	if err := validateSingleStatement("SELECT 1; DROP TABLE foo"); err == nil {
 		t.Fatal("expected error for multi-statement SQL")
 	}
 }
@@ -132,7 +132,7 @@ func TestValidateReadOnlyQuery_AllowsNormalFunctions(t *testing.T) {
 // ────────────────────────────────────────────────────
 
 func TestStripSQLLiterals_RemovesStrings(t *testing.T) {
-	got := StripSQLLiterals("SELECT * WHERE name = 'DELETE'")
+	got := stripSQLLiterals("SELECT * WHERE name = 'DELETE'")
 	//  'DELETE' should be stripped so it doesn't trigger write check
 	if ValidateReadOnlyQuery("SELECT * WHERE name = 'DELETE'") != nil {
 		t.Fatal("string literal 'DELETE' should not trigger write keyword detection")

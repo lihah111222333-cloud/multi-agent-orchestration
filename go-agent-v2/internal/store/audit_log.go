@@ -39,8 +39,3 @@ func (s *AuditLogStore) List(ctx context.Context, eventType, action, actor, keyw
 	}
 	return collectRows[AuditEvent](rows)
 }
-
-// ListFilterValues 返回去重筛选值。
-func (s *AuditLogStore) ListFilterValues(ctx context.Context) (map[string][]string, error) {
-	return DistinctMap(ctx, s.pool, "audit_events", "event_type", "action", "result", "actor")
-}

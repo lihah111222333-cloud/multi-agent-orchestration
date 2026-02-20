@@ -54,7 +54,11 @@ func main() {
 		migrationsDir = "migrations"
 	}
 	if err := database.Migrate(ctx, dbPool, migrationsDir); err != nil {
-		logger.Warnw("migration failed (non-fatal)", logger.FieldError, err)
+		if cfg.MigrationNonFatal {
+			logger.Warnw("migration failed (non-fatal by config)", logger.FieldError, err, logger.FieldPath, migrationsDir)
+		} else {
+			logger.Fatal("migration failed", logger.FieldError, err, logger.FieldPath, migrationsDir)
+		}
 	}
 
 	// JSON-RPC Server

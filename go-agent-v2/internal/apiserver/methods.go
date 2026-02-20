@@ -440,6 +440,78 @@ func buildThreadSnapshotsFromListItems(items []threadListItem) []uistate.ThreadS
 	return snapshots
 }
 
+func appendBindingThreads(threads []threadListItem, seen map[string]struct{}, bindings []store.AgentCodexBinding) []threadListItem {
+	for _, item := range bindings {
+		agentID := strings.TrimSpace(item.AgentID)
+		if agentID == "" {
+			continue
+		}
+		if _, ok := seen[agentID]; ok {
+			continue
+		}
+		threads = append(threads, threadListItem{
+			ID:    agentID,
+			Name:  agentID,
+			State: "idle",
+		})
+		seen[agentID] = struct{}{}
+	}
+	return threads
+}
+
+func appendAgentStatusThreads(threads []threadListItem, seen map[string]struct{}, items []store.AgentStatus) []threadListItem {
+	for _, item := range items {
+		agentID := strings.TrimSpace(item.AgentID)
+		if agentID == "" {
+			continue
+		}
+		if _, ok := seen[agentID]; ok {
+			continue
+		}
+		name := strings.TrimSpace(item.AgentName)
+		if name == "" {
+			name = agentID
+		}
+		// 来自 agent_status 的“历史兜底线程”并非当前运行实例，
+		// 重启后 UI 应展示为等待指令，而不是沿用旧的 running/stuck 状态。
+		state := "idle"
+		threads = append(threads, threadListItem{
+			ID:    agentID,
+			Name:  name,
+			State: state,
+		})
+		seen[agentID] = struct{}{}
+	}
+	return threads
+}
+
+func (s *Server) appendThreadHistoryFromStores(ctx context.Context, threads []threadListItem, seen map[string]struct{}, methodName string) []threadListItem {
+	// DB 历史兜底 #1: agent_codex_binding (Codex 会话绑定)
+	if s.bindingStore != nil {
+		dbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		bindings, err := s.bindingStore.ListAll(dbCtx)
+		cancel()
+		if err != nil {
+			logger.Warn(methodName+": load history threads from agent_codex_binding failed", logger.FieldError, err)
+		} else {
+			threads = appendBindingThreads(threads, seen, bindings)
+		}
+	}
+
+	// DB 历史兜底 #2: agent_status (补充 agent 名称与兜底状态)
+	if s.agentStatusStore != nil {
+		dbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		statusItems, err := s.agentStatusStore.List(dbCtx, "")
+		cancel()
+		if err != nil {
+			logger.Warn(methodName+": load history threads from agent_status failed", logger.FieldError, err)
+		} else {
+			threads = appendAgentStatusThreads(threads, seen, statusItems)
+		}
+	}
+	return threads
+}
+
 func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error) {
 	agents := []runner.AgentInfo{}
 	if s.mgr != nil {
@@ -461,31 +533,7 @@ func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error)
 		seen[a.ID] = struct{}{}
 	}
 
-	// DB 历史兜底: 重启后 mgr 为空时, 仍可从 agent_messages 恢复会话列表。
-	if s.msgStore != nil {
-		dbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-
-		historyThreads, err := s.msgStore.ListDistinctAgentIDs(dbCtx, 0)
-		if err != nil {
-			logger.Warn("thread/list: load history threads failed", logger.FieldError, err)
-		} else {
-			for _, t := range historyThreads {
-				if t.AgentID == "" {
-					continue
-				}
-				if _, ok := seen[t.AgentID]; ok {
-					continue
-				}
-				threads = append(threads, threadListItem{
-					ID:    t.AgentID,
-					Name:  t.AgentID,
-					State: "idle",
-				})
-				seen[t.AgentID] = struct{}{}
-			}
-		}
-	}
+	threads = s.appendThreadHistoryFromStores(ctx, threads, seen, "thread/list")
 	applyThreadAliases(threads, s.loadThreadAliases(ctx))
 	if s.uiRuntime != nil {
 		s.uiRuntime.ReplaceThreads(buildThreadSnapshotsFromListItems(threads))
@@ -520,30 +568,7 @@ func (s *Server) threadLoadedList(ctx context.Context, _ json.RawMessage) (any, 
 		seen[a.ID] = struct{}{}
 	}
 
-	if s.msgStore != nil {
-		dbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-
-		historyThreads, err := s.msgStore.ListDistinctAgentIDs(dbCtx, 0)
-		if err != nil {
-			logger.Warn("thread/loaded/list: load history threads failed", logger.FieldError, err)
-		} else {
-			for _, t := range historyThreads {
-				if t.AgentID == "" {
-					continue
-				}
-				if _, ok := seen[t.AgentID]; ok {
-					continue
-				}
-				threads = append(threads, threadListItem{
-					ID:    t.AgentID,
-					Name:  t.AgentID,
-					State: "idle",
-				})
-				seen[t.AgentID] = struct{}{}
-			}
-		}
-	}
+	threads = s.appendThreadHistoryFromStores(ctx, threads, seen, "thread/loaded/list")
 	applyThreadAliases(threads, s.loadThreadAliases(ctx))
 
 	return threadLoadedListResponse{Threads: threads}, nil
@@ -625,24 +650,15 @@ func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams
 		return nil, apperrors.New("Server.threadMessages", "threadId is required")
 	}
 
-	if s.msgStore == nil {
-		return map[string]any{"messages": []any{}, "total": 0}, nil
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	msgs, err := s.msgStore.ListByAgent(ctx, p.ThreadID, p.Limit, p.Before)
+	allMsgs, err := s.loadAllThreadMessagesFromCodexRollout(ctx, p.ThreadID)
 	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.threadMessages", "list messages by agent")
+		return nil, apperrors.Wrap(err, "Server.threadMessages", "load codex rollout messages")
 	}
-	total, totalErr := s.msgStore.CountByAgent(ctx, p.ThreadID)
-	if totalErr != nil {
-		logger.Warn("thread/messages: count messages failed",
-			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-			logger.FieldError, totalErr,
-		)
-	}
+	total := int64(len(allMsgs))
+	msgs := paginateRolloutMessages(allMsgs, p.Limit, p.Before)
 
 	// 第一页立即返回, 剩余页后台流式加载 + 通知
 	if s.uiRuntime != nil && p.Before == 0 {
@@ -659,7 +675,9 @@ func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams
 			hydrateLimit := calculateHydrationLoadLimit(len(msgs), total)
 			if hydrateLimit > len(msgs) {
 				threadID := p.ThreadID
-				util.SafeGo(func() { s.streamRemainingHistory(threadID, msgs, hydrateLimit) })
+				allCopy := append([]threadHistoryMessage(nil), allMsgs...)
+				firstCopy := append([]threadHistoryMessage(nil), msgs...)
+				util.SafeGo(func() { s.streamRemainingHistory(threadID, allCopy, firstCopy, hydrateLimit) })
 			}
 		}
 	} else if s.uiRuntime != nil {
@@ -677,8 +695,8 @@ func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams
 // streamRemainingHistory 后台分页加载剩余历史, 加载完后通过 AppendHistory 追加到 timeline。
 //
 // firstPage 已通过 HydrateHistory 加载, 此处只加载后续页并追加。
-func (s *Server) streamRemainingHistory(threadID string, firstPage []store.AgentMessage, limit int) {
-	if s.msgStore == nil || limit <= 0 {
+func (s *Server) streamRemainingHistory(threadID string, all []threadHistoryMessage, firstPage []threadHistoryMessage, limit int) {
+	if s.uiRuntime == nil || len(all) == 0 || limit <= 0 || limit <= len(firstPage) {
 		return
 	}
 
@@ -688,24 +706,13 @@ func (s *Server) streamRemainingHistory(threadID string, firstPage []store.Agent
 	}
 
 	// 只累积后续页 (不含 firstPage)
-	remaining := make([]store.AgentMessage, 0, limit-len(firstPage))
+	remaining := make([]threadHistoryMessage, 0, limit-len(firstPage))
 	pageNum := 1
 	loaded := len(firstPage)
 
 	for loaded < limit {
 		batchLimit := min(threadMessageHydrationPageSize, limit-loaded)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		batch, err := s.msgStore.ListByAgent(ctx, threadID, batchLimit, before)
-		cancel()
-		if err != nil {
-			logger.Warn("thread/messages: stream page load failed",
-				logger.FieldAgentID, threadID,
-				logger.FieldError, err,
-				"page", pageNum,
-				"loaded", loaded,
-			)
-			break
-		}
+		batch := paginateRolloutMessages(all, batchLimit, before)
 		if len(batch) == 0 {
 			break
 		}
@@ -743,7 +750,7 @@ func (s *Server) streamRemainingHistory(threadID string, firstPage []store.Agent
 }
 
 // msgsToRecords 将消息列表转为 hydration 记录。
-func msgsToRecords(msgs []store.AgentMessage) []uistate.HistoryRecord {
+func msgsToRecords(msgs []threadHistoryMessage) []uistate.HistoryRecord {
 	records := make([]uistate.HistoryRecord, 0, len(msgs))
 	for _, msg := range msgs {
 		records = append(records, uistate.HistoryRecord{
@@ -757,6 +764,17 @@ func msgsToRecords(msgs []store.AgentMessage) []uistate.HistoryRecord {
 		})
 	}
 	return records
+}
+
+type threadHistoryMessage struct {
+	ID        int64           `json:"id"`
+	AgentID   string          `json:"agentId"`
+	Role      string          `json:"role"`
+	EventType string          `json:"eventType"`
+	Method    string          `json:"method"`
+	Content   string          `json:"content"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt time.Time       `json:"createdAt"`
 }
 
 func calculateHydrationLoadLimit(initialCount int, total int64) int {
@@ -773,31 +791,142 @@ func calculateHydrationLoadLimit(initialCount int, total int64) int {
 	return limit
 }
 
-func (s *Server) loadHistoryForHydration(ctx context.Context, threadID string, limit int) ([]store.AgentMessage, error) {
-	if s.msgStore == nil || limit <= 0 {
-		return []store.AgentMessage{}, nil
+func parseRolloutTimestamp(raw string) time.Time {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return ts
+	}
+	if ts, err := time.Parse(time.RFC3339, value); err == nil {
+		return ts
+	}
+	return time.Time{}
+}
+
+func (s *Server) resolveRolloutHistorySource(ctx context.Context, threadID string) (codexThreadID string, rolloutPath string) {
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return "", ""
 	}
 
-	result := make([]store.AgentMessage, 0, min(limit, threadMessageHydrationPageSize))
-	before := int64(0)
+	if proc := s.mgr.Get(id); proc != nil && proc.Client != nil {
+		candidate := normalizeCodexThreadID(proc.Client.GetThreadID())
+		if candidate != "" {
+			return candidate, ""
+		}
+	}
 
-	for len(result) < limit {
-		batchLimit := min(threadMessageHydrationPageSize, limit-len(result))
-		batch, err := s.msgStore.ListByAgent(ctx, threadID, batchLimit, before)
+	if s.bindingStore != nil {
+		dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		binding, err := s.bindingStore.FindByAgentID(dbCtx, id)
+		cancel()
+		if err == nil && binding != nil {
+			candidate := normalizeCodexThreadID(binding.CodexThreadID)
+			if candidate != "" {
+				return candidate, strings.TrimSpace(binding.RolloutPath)
+			}
+		}
+	}
+
+	if s.agentStatusStore != nil {
+		dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		status, err := s.agentStatusStore.Get(dbCtx, id)
+		cancel()
+		if err == nil && status != nil {
+			candidate := normalizeCodexThreadID(status.SessionID)
+			if candidate != "" {
+				return candidate, ""
+			}
+		}
+	}
+
+	if candidate := normalizeCodexThreadID(id); candidate != "" {
+		return candidate, ""
+	}
+	return "", ""
+}
+
+func paginateRolloutMessages(all []threadHistoryMessage, limit int, before int64) []threadHistoryMessage {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	if len(all) == 0 {
+		return []threadHistoryMessage{}
+	}
+
+	page := make([]threadHistoryMessage, 0, min(limit, len(all)))
+	for idx := len(all) - 1; idx >= 0; idx-- {
+		item := all[idx]
+		if before > 0 && item.ID >= before {
+			continue
+		}
+		page = append(page, item)
+		if len(page) >= limit {
+			break
+		}
+	}
+	return page
+}
+
+func (s *Server) loadAllThreadMessagesFromCodexRollout(ctx context.Context, threadID string) ([]threadHistoryMessage, error) {
+	codexThreadID, rolloutPath := s.resolveRolloutHistorySource(ctx, threadID)
+	codexThreadID = normalizeCodexThreadID(codexThreadID)
+	if codexThreadID == "" {
+		return []threadHistoryMessage{}, nil
+	}
+
+	path := strings.TrimSpace(rolloutPath)
+	if path == "" {
+		resolvedPath, err := codex.FindRolloutPath(codexThreadID)
 		if err != nil {
-			return nil, err
+			return []threadHistoryMessage{}, nil
 		}
-		if len(batch) == 0 {
-			break
-		}
-		result = append(result, batch...)
-		if len(batch) < batchLimit {
-			break
-		}
-		before = batch[len(batch)-1].ID
+		path = resolvedPath
+	}
+	if path == "" {
+		return []threadHistoryMessage{}, nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return []threadHistoryMessage{}, nil
 	}
 
-	return result, nil
+	rolloutMsgs, err := codex.ReadRolloutMessages(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(rolloutMsgs) == 0 {
+		return []threadHistoryMessage{}, nil
+	}
+
+	all := make([]threadHistoryMessage, 0, len(rolloutMsgs))
+	for i, item := range rolloutMsgs {
+		role := strings.ToLower(strings.TrimSpace(item.Role))
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		createdAt := parseRolloutTimestamp(item.Timestamp)
+		eventType := ""
+		if role == "assistant" {
+			eventType = codex.EventAgentMessage
+		}
+		all = append(all, threadHistoryMessage{
+			ID:        int64(i + 1),
+			AgentID:   threadID,
+			Role:      role,
+			EventType: eventType,
+			Method:    "",
+			Content:   item.Content,
+			Metadata:  nil,
+			CreatedAt: createdAt,
+		})
+	}
+	if len(all) == 0 {
+		return []threadHistoryMessage{}, nil
+	}
+
+	return all, nil
 }
 
 // ========================================
@@ -1251,9 +1380,6 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 		}
 		s.uiRuntime.AppendUserMessage(p.ThreadID, prompt, attachments)
 	}
-
-	// 持久化用户消息
-	util.SafeGo(func() { s.PersistUserMessage(p.ThreadID, prompt, p.Input) })
 
 	resolvedTurnID := resolveClientActiveTurnID(proc.Client)
 	if resolvedTurnID == "" {
@@ -2535,26 +2661,43 @@ func (s *Server) withThread(threadID string, fn func(*runner.AgentProcess) (any,
 }
 
 func (s *Server) threadExistsInHistory(ctx context.Context, threadID string) bool {
-	if s.msgStore == nil {
-		return false
-	}
 	id := strings.TrimSpace(threadID)
 	if id == "" {
 		return false
 	}
-
-	dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	count, err := s.msgStore.CountByAgent(dbCtx, id)
-	if err != nil {
-		logger.Warn("turn/start: check thread history failed",
-			logger.FieldAgentID, id, logger.FieldThreadID, id,
-			logger.FieldError, err,
-		)
-		return false
+	if isLikelyCodexThreadID(id) {
+		return true
 	}
-	return count > 0
+
+	if s.bindingStore != nil {
+		dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		binding, err := s.bindingStore.FindByAgentID(dbCtx, id)
+		cancel()
+		if err != nil {
+			logger.Warn("turn/start: check thread history from agent_codex_binding failed",
+				logger.FieldAgentID, id, logger.FieldThreadID, id,
+				logger.FieldError, err,
+			)
+		} else if binding != nil {
+			return true
+		}
+	}
+
+	if s.agentStatusStore != nil {
+		dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		status, err := s.agentStatusStore.Get(dbCtx, id)
+		cancel()
+		if err != nil {
+			logger.Warn("turn/start: check thread history from agent_status failed",
+				logger.FieldAgentID, id, logger.FieldThreadID, id,
+				logger.FieldError, err,
+			)
+		} else if status != nil {
+			return true
+		}
+	}
+
+	return false
 }
 
 func isLikelyCodexThreadID(raw string) bool {
@@ -2566,74 +2709,16 @@ func isLikelyCodexThreadID(raw string) bool {
 	return codexThreadIDPattern.MatchString(id)
 }
 
-func metadataThreadID(raw json.RawMessage) string {
-	if len(raw) == 0 {
+func normalizeCodexThreadID(raw string) string {
+	id := strings.TrimSpace(raw)
+	if id == "" {
 		return ""
 	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil {
+	id = strings.TrimPrefix(strings.ToLower(id), "urn:uuid:")
+	if !codexThreadIDPattern.MatchString(id) {
 		return ""
 	}
-
-	candidates := []string{
-		nestedString(payload, "thread", "id"),
-		nestedString(payload, "threadId"),
-		nestedString(payload, "thread_id"),
-		nestedString(payload, "conversationId"),
-		nestedString(payload, "conversation_id"),
-		nestedString(payload, "sessionId"),
-		nestedString(payload, "session_id"),
-	}
-	for _, candidate := range candidates {
-		if isLikelyCodexThreadID(candidate) {
-			return strings.TrimSpace(candidate)
-		}
-	}
-	return ""
-}
-
-func nestedString(root map[string]any, path ...string) string {
-	if len(path) == 0 {
-		return ""
-	}
-	var current any = root
-	for _, key := range path {
-		obj, ok := current.(map[string]any)
-		if !ok {
-			return ""
-		}
-		next, ok := obj[key]
-		if !ok {
-			return ""
-		}
-		current = next
-	}
-	value, ok := current.(string)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(value)
-}
-
-func isMeaningfulSessionMessage(msg store.AgentMessage) bool {
-	role := strings.ToLower(strings.TrimSpace(msg.Role))
-	if role == "user" || role == "assistant" {
-		return true
-	}
-
-	eventType := strings.ToLower(strings.TrimSpace(msg.EventType))
-	method := strings.ToLower(strings.TrimSpace(msg.Method))
-	switch {
-	case eventType == codex.EventTurnComplete,
-		eventType == codex.EventAgentMessage,
-		eventType == codex.EventAgentMessageDelta,
-		eventType == codex.EventAgentMessageCompleted,
-		method == "turn/completed",
-		method == "item/agentmessage/delta":
-		return true
-	}
-	return false
+	return id
 }
 
 func appendUniqueThreadID(dst []string, seen map[string]struct{}, candidate string) []string {
@@ -2737,70 +2822,6 @@ func previewResumeCandidates(candidates []string, max int) []string {
 	return preview
 }
 
-func resolveResumeThreadIDsFromMessages(messages []store.AgentMessage) []string {
-	type sessionCandidate struct {
-		threadID   string
-		meaningful bool
-	}
-
-	sessions := make([]sessionCandidate, 0, 8)
-	current := sessionCandidate{}
-	flush := func() {
-		if current.threadID == "" {
-			return
-		}
-		sessions = append(sessions, current)
-	}
-
-	// ListByAgent 返回倒序；这里改为时间正序遍历。
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if strings.EqualFold(msg.EventType, codex.EventSessionConfigured) || strings.EqualFold(msg.Method, "thread/started") {
-			flush()
-			current = sessionCandidate{
-				threadID: metadataThreadID(msg.Metadata),
-			}
-			continue
-		}
-		if current.threadID == "" {
-			continue
-		}
-		if isMeaningfulSessionMessage(msg) {
-			current.meaningful = true
-		}
-	}
-	flush()
-
-	result := make([]string, 0, len(sessions)+2)
-	seen := map[string]struct{}{}
-	for i := len(sessions) - 1; i >= 0; i-- {
-		if sessions[i].meaningful {
-			result = appendUniqueThreadID(result, seen, sessions[i].threadID)
-		}
-	}
-	for i := len(sessions) - 1; i >= 0; i-- {
-		if !sessions[i].meaningful {
-			result = appendUniqueThreadID(result, seen, sessions[i].threadID)
-		}
-	}
-
-	// 回退：无明确会话边界时，直接扫描任意 metadata 中的可用线程 ID。
-	for _, msg := range messages {
-		if tid := metadataThreadID(msg.Metadata); tid != "" {
-			result = appendUniqueThreadID(result, seen, tid)
-		}
-	}
-	return result
-}
-
-func resolveResumeThreadIDFromMessages(messages []store.AgentMessage) string {
-	ids := resolveResumeThreadIDsFromMessages(messages)
-	if len(ids) == 0 {
-		return ""
-	}
-	return ids[0]
-}
-
 func (s *Server) resolveHistoricalCodexThreadID(ctx context.Context, agentID string) string {
 	ids := s.resolveHistoricalCodexThreadIDs(ctx, agentID)
 	if len(ids) == 0 {
@@ -2810,29 +2831,45 @@ func (s *Server) resolveHistoricalCodexThreadID(ctx context.Context, agentID str
 }
 
 func (s *Server) resolveHistoricalCodexThreadIDs(ctx context.Context, agentID string) []string {
-	if s.msgStore == nil {
-		return nil
-	}
 	id := strings.TrimSpace(agentID)
 	if id == "" {
 		return nil
 	}
 
-	dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
+	ids := make([]string, 0, 2)
+	seen := map[string]struct{}{}
+	ids = appendUniqueThreadID(ids, seen, id)
 
-	msgs, err := s.msgStore.ListByAgent(dbCtx, id, 500, 0)
-	if err != nil {
-		logger.Warn("turn/start: resolve historical codex thread id failed",
-			logger.FieldAgentID, id, logger.FieldThreadID, id,
-			logger.FieldError, err,
-		)
-		return nil
+	if s.bindingStore != nil {
+		dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		binding, err := s.bindingStore.FindByAgentID(dbCtx, id)
+		cancel()
+		if err != nil {
+			logger.Warn("turn/start: resolve codex thread id from binding failed",
+				logger.FieldAgentID, id, logger.FieldThreadID, id,
+				logger.FieldError, err,
+			)
+		} else if binding != nil {
+			ids = appendUniqueThreadID(ids, seen, binding.CodexThreadID)
+		}
 	}
-	ids := resolveResumeThreadIDsFromMessages(msgs)
+
+	if s.agentStatusStore != nil {
+		dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		status, err := s.agentStatusStore.Get(dbCtx, id)
+		cancel()
+		if err != nil {
+			logger.Warn("turn/start: resolve codex thread id from agent_status failed",
+				logger.FieldAgentID, id, logger.FieldThreadID, id,
+				logger.FieldError, err,
+			)
+		} else if status != nil {
+			ids = appendUniqueThreadID(ids, seen, status.SessionID)
+		}
+	}
+
 	logger.Info("turn/start: historical resume candidates",
 		logger.FieldAgentID, id, logger.FieldThreadID, id,
-		"history_message_count", len(msgs),
 		"candidate_count", len(ids),
 		"candidates", previewResumeCandidates(ids, 4),
 	)
@@ -2926,7 +2963,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 		}
 	}
 
-	// Fallback: 如果 DB 无绑定, 从历史消息扫描 (兼容旧数据)。
+	// Fallback: 如果 DB 无绑定, 仅尝试将输入 threadId 作为 codexThreadId 使用。
 	if len(resumeCandidates) == 0 {
 		if isLikelyCodexThreadID(id) {
 			resumeCandidates = append(resumeCandidates, id)

@@ -1153,6 +1153,53 @@ func TestAppendHistory_AccumulatesRecords(t *testing.T) {
 	}
 }
 
+func TestHydrateHistory_AssistantDoneBackfillsContent(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-hydrate-assistant-backfill"
+
+	hydrated := mgr.HydrateHistory(threadID, []HistoryRecord{
+		{ID: 1, Role: "user", Content: "你好"},
+		{ID: 2, Role: "assistant", EventType: "agent_message", Content: "你好，我在。"},
+	})
+	if !hydrated {
+		t.Fatal("HydrateHistory should return true when idle")
+	}
+
+	timeline := mgr.ThreadTimeline(threadID)
+	if len(timeline) != 2 {
+		t.Fatalf("timeline len = %d, want 2", len(timeline))
+	}
+	if timeline[1].Kind != "assistant" {
+		t.Fatalf("timeline[1].Kind = %q, want assistant", timeline[1].Kind)
+	}
+	if timeline[1].Text != "你好，我在。" {
+		t.Fatalf("timeline[1].Text = %q, want 你好，我在。", timeline[1].Text)
+	}
+}
+
+func TestAssistantDone_DoesNotDuplicateExistingDelta(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-assistant-done-no-dup"
+
+	delta := NormalizeEvent("agent_message_delta", "", mustRawJSON(`{"delta":"hello world"}`))
+	mgr.ApplyAgentEvent(threadID, delta, map[string]any{"delta": "hello world"})
+
+	done := NormalizeEvent("agent_message", "", mustRawJSON(`{"text":"hello world"}`))
+	mgr.ApplyAgentEvent(threadID, done, map[string]any{"text": "hello world"})
+
+	timeline := mgr.ThreadTimeline(threadID)
+	if len(timeline) == 0 {
+		t.Fatal("timeline should contain assistant message")
+	}
+	last := timeline[len(timeline)-1]
+	if last.Kind != "assistant" {
+		t.Fatalf("last.Kind = %q, want assistant", last.Kind)
+	}
+	if last.Text != "hello world" {
+		t.Fatalf("last.Text = %q, want hello world", last.Text)
+	}
+}
+
 func TestAppendHistory_EmptyRecordsNoOp(t *testing.T) {
 	mgr := NewRuntimeManager()
 	threadID := "thread-append-empty"

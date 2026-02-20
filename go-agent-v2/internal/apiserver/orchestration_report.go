@@ -50,6 +50,11 @@ func (s *Server) rememberOrchestrationReportRequest(senderID, workerID string) {
 		s.orchestrationPendingReports[target] = waiters
 	}
 	waiters[requester] = now
+	logger.Info("orchestration: report waiter registered",
+		"worker", target,
+		"requester", requester,
+		"waiter_count", len(waiters),
+	)
 }
 
 func (s *Server) maybeAutoReportOrchestrationCompletion(agentID, eventType, method string, payload map[string]any) {
@@ -114,6 +119,10 @@ func (s *Server) takeOrchestrationReportRequesters(workerID string) []string {
 		}
 	}
 	sort.Strings(requesters)
+	logger.Info("orchestration: report waiters drained",
+		"worker", target,
+		"requester_count", len(requesters),
+	)
 	return requesters
 }
 

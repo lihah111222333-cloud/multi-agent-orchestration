@@ -41,14 +41,10 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Split by statement if needed, or run as whole block
-		// For simplicity, running as whole block.
-		// Note: pgx Exec handles multiple statements in one string
 		_, err = conn.Exec(ctx, string(content))
 		if err != nil {
-			// Some errors might be acceptable if idempotent, but let's log
 			fmt.Fprintf(os.Stderr, "Error applying %s: %v\n", file, err)
-			// Decide whether to continue or exit. Proceeding for now as some might fail if already exist and not perfectly idempotent
+			os.Exit(1)
 		} else {
 			fmt.Printf("Applied %s\n", file)
 		}

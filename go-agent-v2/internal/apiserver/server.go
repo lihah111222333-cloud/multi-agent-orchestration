@@ -146,9 +146,6 @@ type Server struct {
 	// submitAgentMessage 统一消息下发入口，便于测试替换。
 	submitAgentMessage func(agentID, prompt string, images, files []string) error
 
-	// 消息持久化
-	msgStore *store.AgentMessageStore
-
 	// 资源 Store (编排工具依赖)
 	dagStore          *store.TaskDAGStore
 	cmdStore          *store.CommandCardStore
@@ -236,7 +233,7 @@ type Deps struct {
 	Manager   *runner.AgentManager
 	LSP       *lsp.Manager
 	Config    *config.Config
-	DB        *pgxpool.Pool // 必需: 消息持久化 + 资源工具
+	DB        *pgxpool.Pool // 必需: 资源工具
 	SkillsDir string        // .agent/skills 目录路径 (可选, 默认 ".agent/skills")
 }
 
@@ -275,7 +272,6 @@ func New(deps Deps) *Server {
 	}
 	if deps.DB != nil {
 		s.prefManager = uistate.NewPreferenceManager(store.NewUIPreferenceStore(deps.DB))
-		s.msgStore = store.NewAgentMessageStore(deps.DB)
 		s.dagStore = store.NewTaskDAGStore(deps.DB)
 		s.cmdStore = store.NewCommandCardStore(deps.DB)
 		s.promptStore = store.NewPromptTemplateStore(deps.DB)
@@ -308,7 +304,7 @@ func New(deps Deps) *Server {
 				logger.Info("app-server: workspace manager enabled", logger.FieldRoot, workspaceMgr.RootDir())
 			}
 		}
-		logger.Info("app-server: message persistence + resource tools + dashboard enabled")
+		logger.Info("app-server: resource tools + dashboard enabled")
 	}
 	// Skills service (filesystem, no DB required)
 	skillsDir := deps.SkillsDir
@@ -433,12 +429,15 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	// 优雅关闭: 给活跃连接 5 秒完成处理
 	util.SafeGo(func() {
 		<-ctx.Done()
+		logger.Info("app-server: shutdown trigger", "ctx_err", ctx.Err())
 		logger.Info("app-server: shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			logger.Warn("app-server: shutdown error", logger.FieldError, err)
+			return
 		}
+		logger.Info("app-server: shutdown completed")
 	})
 
 	logger.Info("app-server: listening", logger.FieldAddr, host)
@@ -1111,7 +1110,7 @@ func mergePayloadFromMap(payload map[string]any, data map[string]any) {
 // walkNestedJSON 遍历 msg/data/payload 嵌套层, 对每个解析出的 map[string]any 调用 fn。
 //
 // 统一处理四种嵌套类型: map[string]any / string / json.RawMessage / []byte。
-// mergePayloadFields 和 extractEventContent 共用此逻辑。
+// mergePayloadFields 使用此逻辑。
 func walkNestedJSON(m map[string]any, fn func(map[string]any)) {
 	for _, key := range []string{"msg", "data", "payload"} {
 		v, ok := m[key]
@@ -1325,7 +1324,6 @@ func (s *Server) enrichFileChangePayload(threadID, eventType, method string, pay
 //
 // 普通事件: 广播为通知 (无需客户端回复)。
 // 审批事件: 发送 Server→Client 请求, 等待客户端回复, 回传 codex (§ 二)。
-// 持久化: 异步写入 agent_messages 表 (不阻塞广播)。
 func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 	return func(event codex.Event) {
 		method := mapEventToMethod(event.Type)
@@ -1342,11 +1340,6 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 			logger.FieldThreadID, threadID,
 			logger.FieldEventType, event.Type,
 		)
-
-		// 异步持久化 (不阻塞通知广播)
-		if s.msgStore != nil {
-			util.SafeGo(func() { s.persistMessage(agentID, event, method) })
-		}
 
 		// 构建通知参数: threadId 始终在顶层以便前端路由
 		payload := map[string]any{
@@ -1447,166 +1440,6 @@ func extractFirstString(payload map[string]any, keys ...string) string {
 		}
 	}
 	return ""
-}
-
-// persistMessage 异步写入消息到 agent_messages 表。
-//
-// 分类规则:
-//
-//	agent_message_delta / agent_message → role=assistant
-//	exec_*/patch_*/mcp_*/dynamic_tool_call → role=tool
-//	turn_started → role=user (但 content 需从 turn/start params 提取, 此处记空)
-//	其他 → role=system
-func (s *Server) persistMessage(agentID string, event codex.Event, method string) {
-	role := classifyEventRole(event.Type)
-	content := extractEventContent(event)
-	dedupKey := store.BuildMessageDedupKey(event.Type, method, event.Data)
-
-	msg := &store.AgentMessage{
-		AgentID:   agentID,
-		Role:      role,
-		EventType: event.Type,
-		Method:    method,
-		Content:   content,
-		DedupKey:  dedupKey,
-		Metadata:  event.Data,
-	}
-
-	ctx, cancel := toolCtx()
-	defer cancel()
-
-	if err := s.msgStore.Insert(ctx, msg); err != nil {
-		logger.Warn("app-server: persist message failed",
-			logger.FieldAgentID, agentID,
-			logger.FieldEventType, event.Type,
-			logger.FieldError, err,
-		)
-	}
-}
-
-// PersistUserMessage 持久化用户消息 (从 turn/start 调用)。
-func (s *Server) PersistUserMessage(agentID, prompt string, input []UserInput) {
-	if s.msgStore == nil {
-		return
-	}
-
-	var metadata json.RawMessage
-	if len(input) > 0 {
-		raw, err := json.Marshal(map[string]any{
-			"input": input,
-		})
-		if err != nil {
-			logger.Warn("app-server: persist user message metadata marshal failed",
-				logger.FieldAgentID, agentID,
-				logger.FieldError, err,
-			)
-		} else {
-			metadata = raw
-		}
-	}
-
-	msg := &store.AgentMessage{
-		AgentID:   agentID,
-		Role:      "user",
-		EventType: "user_message",
-		Method:    "turn/start",
-		Content:   prompt,
-		Metadata:  metadata,
-	}
-
-	ctx, cancel := toolCtx()
-	defer cancel()
-
-	if err := s.msgStore.Insert(ctx, msg); err != nil {
-		logger.Warn("app-server: persist user message failed",
-			logger.FieldAgentID, agentID,
-			logger.FieldError, err,
-		)
-	}
-}
-
-func (s *Server) persistSyntheticMessage(agentID, role, eventType, method, content string, metadata any) error {
-	if s.msgStore == nil {
-		return nil
-	}
-
-	var raw json.RawMessage
-	if metadata != nil {
-		data, err := json.Marshal(metadata)
-		if err != nil {
-			return err
-		}
-		raw = data
-	}
-
-	msg := &store.AgentMessage{
-		AgentID:   agentID,
-		Role:      role,
-		EventType: eventType,
-		Method:    method,
-		Content:   content,
-		DedupKey:  store.BuildMessageDedupKey(eventType, method, raw),
-		Metadata:  raw,
-	}
-
-	ctx, cancel := toolCtx()
-	defer cancel()
-	return s.msgStore.Insert(ctx, msg)
-}
-
-// classifyEventRole 按事件类型归类消息角色。
-func classifyEventRole(eventType string) string {
-	t := strings.ToLower(eventType)
-
-	switch {
-	case strings.Contains(t, "agent_message"), strings.Contains(t, "agentmessage"):
-		return "assistant"
-	case strings.Contains(t, "reasoning"):
-		return "assistant"
-	case strings.Contains(t, "exec_"), strings.Contains(t, "patch_"),
-		strings.Contains(t, "mcp_"), strings.Contains(t, "dynamic_tool"),
-		strings.Contains(t, "commandexecution"), strings.Contains(t, "filechange"),
-		strings.Contains(t, "dynamictool"), strings.Contains(t, "tool/call"):
-		return "tool"
-	case t == "turn_started", t == "turn/started", t == "user_message", t == "item/usermessage":
-		return "user"
-	default:
-		return "system"
-	}
-}
-
-// extractEventContent 从事件数据提取文本内容。
-func extractEventContent(event codex.Event) string {
-	if len(event.Data) == 0 {
-		return ""
-	}
-	var m map[string]any
-	if err := json.Unmarshal(event.Data, &m); err != nil {
-		return ""
-	}
-
-	extract := func(src map[string]any) string {
-		for _, key := range []string{"delta", "content", "message", "command", "diff", "text", "summary", "output"} {
-			if v, ok := src[key]; ok {
-				if s, ok := v.(string); ok && s != "" {
-					return s
-				}
-			}
-		}
-		return ""
-	}
-
-	if s := extract(m); s != "" {
-		return s
-	}
-
-	var result string
-	walkNestedJSON(m, func(nested map[string]any) {
-		if result == "" {
-			result = extract(nested)
-		}
-	})
-	return result
 }
 
 // handleApprovalRequest 处理审批事件: Server→Client 请求 → 等回复 → 回传 codex。
@@ -1888,17 +1721,6 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 	// 广播到前端 — 让 UI 可以显示 LSP 调用
 	notifyPayload := buildToolNotifyPayload(agentID, call, argMap, filePath, success, count, elapsed, result)
 	s.Notify("dynamic-tool/called", notifyPayload)
-
-	// 持久化可观测事件, 便于重启后回放工具调用链路。
-	if s.msgStore != nil {
-		content := result
-		if content == "" {
-			content = call.Tool
-		}
-		if err := s.persistSyntheticMessage(agentID, "tool", "dynamic-tool/called", "dynamic-tool/called", content, notifyPayload); err != nil {
-			logger.Warn("app-server: persist dynamic-tool event failed", logger.FieldAgentID, agentID, logger.FieldToolName, call.Tool, logger.FieldError, err)
-		}
-	}
 
 	// 回传结果: 使用 event.RequestID 发送 JSON-RPC response (codex 发的是 server request)
 	if err := proc.Client.SendDynamicToolResult(call.CallID, result, event.RequestID); err != nil {

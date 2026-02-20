@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -113,6 +114,43 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	var shutdownReason atomic.Value
+	shutdownReason.Store("unknown")
+	recordShutdownReason := func(reason string) {
+		if strings.TrimSpace(reason) == "" {
+			return
+		}
+		current, _ := shutdownReason.Load().(string)
+		if strings.TrimSpace(current) == "" || current == "unknown" {
+			shutdownReason.Store(reason)
+		}
+	}
+	cancelWithReason := func(reason string) {
+		recordShutdownReason(reason)
+		cancel()
+	}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
+	util.SafeGo(func() {
+		cancelSent := false
+		for sig := range sigCh {
+			if sig == nil {
+				continue
+			}
+			recordShutdownReason("os_signal:" + sig.String())
+			logger.Warn("shutdown trigger: OS signal received", "signal", sig.String(), "cancel_sent", cancelSent)
+			if !cancelSent {
+				cancel()
+				cancelSent = true
+			}
+		}
+	})
+	util.SafeGo(func() {
+		<-ctx.Done()
+		reason, _ := shutdownReason.Load().(string)
+		logger.Warn("shutdown trigger: root context canceled", "reason", reason, "ctx_err", ctx.Err())
+	})
 
 	// 加载配置 + 数据库
 	cfg := config.Load()
@@ -191,11 +229,17 @@ func main() {
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
 		ShouldQuit: func() bool {
+			logger.Info("quit: request received",
+				"force_allowed", quitForceAllowed.Load(),
+				"overlay_shown", quitOverlayShown.Load(),
+				"trace", callerTrace(3, 8),
+			)
 			if quitForceAllowed.Load() {
 				logger.Info("quit: allowing shutdown")
 				return true
 			}
 			if !quitOverlayShown.CompareAndSwap(false, true) {
+				logger.Info("quit: request ignored while overlay pending")
 				return false
 			}
 			logger.Info("quit: showing exit overlay before shutdown", "delay_ms", 320)
@@ -208,20 +252,27 @@ func main() {
 			util.SafeGo(func() {
 				time.Sleep(320 * time.Millisecond)
 				quitForceAllowed.Store(true)
+				logger.Info("quit: grace delay elapsed, invoking Quit()")
 				if appSvc.wailsApp != nil {
 					appSvc.wailsApp.Quit()
+				} else {
+					logger.Warn("quit: wails app is nil during forced Quit()")
 				}
 			})
 			return false
 		},
 		OnShutdown: func() {
-			cancel() // 停止 apiserver
+			recordShutdownReason("wails_on_shutdown")
+			reason, _ := shutdownReason.Load().(string)
+			logger.Warn("on-shutdown: begin", "reason", reason, "active_agents", len(mgr.List()))
+			cancelWithReason("wails_on_shutdown")
 			appSvc.shutdown()
 			logger.ShutdownDBHandler()
 			logger.ShutdownFileHandler()
 			if pool != nil {
 				pool.Close()
 			}
+			logger.Warn("on-shutdown: completed", "reason", reason)
 		},
 	})
 
@@ -245,6 +296,8 @@ func main() {
 	if err := app.Run(); err != nil {
 		logger.Error("wails app failed", logger.FieldError, err)
 	}
+	reason, _ := shutdownReason.Load().(string)
+	logger.Warn("wails app exited", "reason", reason)
 }
 
 type lspRootSetupper interface {
@@ -261,4 +314,31 @@ func setupAppServerLSPRoot(server lspRootSetupper) {
 		return
 	}
 	server.SetupLSP(cwd)
+}
+
+func callerTrace(skip, maxFrames int) string {
+	if maxFrames <= 0 {
+		return ""
+	}
+	pcs := make([]uintptr, maxFrames)
+	n := runtime.Callers(skip, pcs)
+	if n == 0 {
+		return ""
+	}
+	frames := runtime.CallersFrames(pcs[:n])
+	parts := make([]string, 0, maxFrames)
+	for len(parts) < maxFrames {
+		frame, more := frames.Next()
+		fn := strings.TrimSpace(frame.Function)
+		if fn != "" {
+			if idx := strings.LastIndex(fn, "/"); idx >= 0 {
+				fn = fn[idx+1:]
+			}
+			parts = append(parts, fmt.Sprintf("%s:%d", fn, frame.Line))
+		}
+		if !more {
+			break
+		}
+	}
+	return strings.Join(parts, " <- ")
 }

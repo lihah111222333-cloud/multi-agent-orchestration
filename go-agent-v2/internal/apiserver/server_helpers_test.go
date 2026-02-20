@@ -59,29 +59,6 @@ func TestBuildToolNotifyPayload(t *testing.T) {
 	}
 }
 
-func TestCalculateHydrationLoadLimit(t *testing.T) {
-	tests := []struct {
-		name         string
-		initialCount int
-		total        int64
-		want         int
-	}{
-		{name: "keep initial", initialCount: 300, total: 120, want: 300},
-		{name: "use total", initialCount: 300, total: 800, want: 800},
-		{name: "cap max", initialCount: 300, total: 99999, want: threadMessageHydrationMaxRecords},
-		{name: "negative initial", initialCount: -1, total: 10, want: 10},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := calculateHydrationLoadLimit(tc.initialCount, tc.total)
-			if got != tc.want {
-				t.Fatalf("calculateHydrationLoadLimit(%d,%d)=%d, want %d", tc.initialCount, tc.total, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestMergePayloadFieldsKeepsTokenUsageContainers(t *testing.T) {
 	payload := map[string]any{
 		"threadId": "agent-1",

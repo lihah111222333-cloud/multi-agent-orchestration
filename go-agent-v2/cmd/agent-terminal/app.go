@@ -125,6 +125,12 @@ func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) er
 }
 
 func (a *App) shutdown() {
+	start := time.Now()
+	activeAgents := 0
+	if a.mgr != nil {
+		activeAgents = len(a.mgr.List())
+	}
+	logger.Warn("shutdown: begin", "active_agents", activeAgents)
 	done := make(chan struct{})
 	util.SafeGo(func() {
 		a.mgr.StopAll()
@@ -132,11 +138,12 @@ func (a *App) shutdown() {
 	})
 	select {
 	case <-done:
-		logger.Info("shutdown: all agents stopped gracefully")
+		logger.Info("shutdown: all agents stopped gracefully", logger.FieldDurationMS, time.Since(start).Milliseconds())
 	case <-time.After(5 * time.Second):
-		logger.Warn("shutdown: StopAll timed out, forcing KillAll")
+		logger.Warn("shutdown: StopAll timed out, forcing KillAll", logger.FieldDurationMS, time.Since(start).Milliseconds())
 		a.mgr.KillAll()
 	}
+	logger.Warn("shutdown: end", logger.FieldDurationMS, time.Since(start).Milliseconds())
 }
 
 // ========================================

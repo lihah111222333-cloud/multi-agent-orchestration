@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
@@ -104,7 +105,11 @@ func (s *Server) orchestrationSendMessageFrom(senderID string, args json.RawMess
 	}
 	s.rememberOrchestrationReportRequest(senderID, p.AgentID)
 
-	logger.Info("orchestration: message sent", "to", p.AgentID, logger.FieldLen, len(p.Message))
+	logger.Info("orchestration: message sent",
+		"from", strings.TrimSpace(senderID),
+		"to", p.AgentID,
+		logger.FieldLen, len(p.Message),
+	)
 	return toolJSON(map[string]any{"success": true, "agent_id": p.AgentID})
 }
 

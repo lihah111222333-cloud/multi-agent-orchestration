@@ -1356,6 +1356,18 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 			logger.FieldEventType, event.Type,
 		)
 	}
+	conversationID := extractConversationIDFromEventParams(msg.Params)
+	boundThreadID := strings.TrimSpace(c.ThreadID)
+	if conversationID != "" && boundThreadID != "" && !strings.EqualFold(conversationID, boundThreadID) {
+		logger.Warn("codex: incoming event conversation mismatch",
+			logger.FieldAgentID, c.AgentID,
+			logger.FieldMethod, msg.Method,
+			logger.FieldEventType, event.Type,
+			logger.FieldThreadID, boundThreadID,
+			"conversation_id", conversationID,
+			"active_turn_id", c.getActiveTurnID(),
+		)
+	}
 	// 跟踪活跃 turn 生命周期
 	c.trackTurnLifecycle(event, msg.Method)
 
@@ -1851,6 +1863,28 @@ func shouldDropLegacyMirrorNotification(msg jsonRPCMessage) (bool, string, strin
 		return false, "", ""
 	}
 	return true, preview, conversationID
+}
+
+func extractConversationIDFromEventParams(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+		return ""
+	}
+	if value := trimmedStringValue(payload["conversationId"]); value != "" {
+		return value
+	}
+	if value := trimmedStringValue(payload["conversation_id"]); value != "" {
+		return value
+	}
+	if thread, ok := payload["thread"].(map[string]any); ok {
+		if value := trimmedStringValue(thread["id"]); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func isLegacyMirrorEnvelope(method string, payload map[string]any) bool {

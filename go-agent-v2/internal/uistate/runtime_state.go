@@ -1521,7 +1521,23 @@ func handleAssistantDeltaEvent(m *RuntimeManager, threadID string, fields resolv
 	m.appendAssistantLocked(threadID, fields.text, ts)
 }
 
-func handleAssistantDoneEvent(m *RuntimeManager, threadID string, _ resolvedFields, _ map[string]any, _ time.Time) {
+func handleAssistantDoneEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
+	if strings.TrimSpace(fields.text) != "" {
+		rt := m.runtime[threadID]
+		shouldBackfill := false
+		if rt == nil || rt.assistantIndex < 0 {
+			shouldBackfill = true
+		} else {
+			timeline := m.timelineLocked(threadID)
+			idx := rt.assistantIndex
+			if idx >= 0 && idx < len(timeline) && strings.TrimSpace(timeline[idx].Text) == "" {
+				shouldBackfill = true
+			}
+		}
+		if shouldBackfill {
+			m.appendAssistantLocked(threadID, fields.text, ts)
+		}
+	}
 	m.finishAssistantLocked(threadID)
 }
 

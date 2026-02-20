@@ -62,13 +62,11 @@ thread/* handler + thread alias + slash 命令(thread 相关) + resume/history �
 **辅助:**
 - `buildThreadSnapshots`, `buildThreadSnapshotsFromListItems`
 - `streamRemainingHistory`, `msgsToRecords`
-- `calculateHydrationLoadLimit`, `loadHistoryForHydration`
+- `calculateHydrationLoadLimit`, `loadAllThreadMessagesFromCodexRollout`
 - `resolveHistoricalCodexThreadID`, `resolveHistoricalCodexThreadIDs`
 - `isHistoricalResumeCandidateError`, `threadExistsInHistory`
-- `isLikelyCodexThreadID`, `metadataThreadID`, `nestedString`
-- `isMeaningfulSessionMessage`, `appendUniqueThreadID`
+- `isLikelyCodexThreadID`, `appendUniqueThreadID`
 - `buildResumeCandidates`, `tryResumeCandidates`
-- `resolveResumeThreadIDsFromMessages`, `resolveResumeThreadIDFromMessages`
 
 **Thread alias:**
 - `persistThreadAlias`, `persistThreadAliasPreference`
@@ -179,11 +177,10 @@ JSON-RPC 分发 + HTTP debug 端点。
 
 ### 任务 6: 提取 `event_processing.go` (~500行)
 
-事件持久化 + payload 解析 + LSP 工具。
+事件转发 + payload 解析 + LSP 工具。
 
-**持久化:**
-- `AgentEventHandler`, `persistMessage`, `PersistUserMessage`
-- `persistSyntheticMessage`, `classifyEventRole`, `extractEventContent`
+**事件转发:**
+- `AgentEventHandler`
 - `handleApprovalRequest`
 
 **Payload:**

@@ -27,3 +27,50 @@ func TestPathToURI_EncodesSpecialChars(t *testing.T) {
 		t.Fatalf("uri %q should encode #", uri)
 	}
 }
+
+func TestStopAll_ContextRenewed(t *testing.T) {
+	m := NewManager(nil)
+	m.StopAll()
+	// StopAll 后 context 应该被重建，不应该是已取消状态
+	if m.ctx.Err() != nil {
+		t.Fatal("context should be renewed after StopAll, got:", m.ctx.Err())
+	}
+}
+
+func TestReload_ContextRenewed(t *testing.T) {
+	m := NewManager(nil)
+	m.Reload()
+	if m.ctx.Err() != nil {
+		t.Fatal("context should be valid after Reload, got:", m.ctx.Err())
+	}
+}
+
+func TestNewManager_DefaultConfigs(t *testing.T) {
+	m := NewManager(nil)
+	if len(m.configs) == 0 {
+		t.Fatal("expected default configs to be loaded")
+	}
+	cfg, ok := m.configs["go"]
+	if !ok {
+		t.Fatal("expected 'go' extension in configs")
+	}
+	if cfg.Language != "go" {
+		t.Fatalf("got language %q, want 'go'", cfg.Language)
+	}
+}
+
+func TestManager_OpenFileUnsupportedExt(t *testing.T) {
+	m := NewManager(nil)
+	if err := m.OpenFile("/tmp/test.xyz", "content"); err != nil {
+		t.Fatalf("expected nil for unsupported ext, got: %v", err)
+	}
+}
+
+func TestStopAll_ThenReload_Works(t *testing.T) {
+	m := NewManager(nil)
+	m.StopAll()
+	m.Reload()
+	if m.ctx.Err() != nil {
+		t.Fatal("context should be valid after StopAll+Reload")
+	}
+}

@@ -21,6 +21,9 @@ const nodeCols = `id, dag_key, node_key, title, node_type, assigned_to,
 	depends_on, status, command_ref, config, result,
 	started_at, finished_at, created_at, updated_at`
 
+// DAG 默认状态。
+const defaultDAGStatus = "draft"
+
 // SaveDAG 创建或更新 DAG 主表 (对应 Python save_task_dag)。
 func (s *TaskDAGStore) SaveDAG(ctx context.Context, d *TaskDAG) (*TaskDAG, error) {
 	metaJSON := mustMarshalJSON(d.Metadata)
@@ -31,7 +34,7 @@ func (s *TaskDAGStore) SaveDAG(ctx context.Context, d *TaskDAG) (*TaskDAG, error
 		   title=EXCLUDED.title, description=EXCLUDED.description, status=EXCLUDED.status,
 		   created_by=EXCLUDED.created_by, metadata=EXCLUDED.metadata, updated_at=NOW()
 		 RETURNING `+dagCols,
-		d.DagKey, d.Title, d.Description, defaultStr(d.Status, "draft"), d.CreatedBy, string(metaJSON))
+		d.DagKey, d.Title, d.Description, defaultStr(d.Status, defaultDAGStatus), d.CreatedBy, string(metaJSON))
 	if err != nil {
 		return nil, err
 	}

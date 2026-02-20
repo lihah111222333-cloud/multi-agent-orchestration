@@ -49,6 +49,9 @@ var dangerousPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)wget[^\n|]*\|\s*(?:bash|sh)(?:\s|$)`),
 }
 
+// placeholderRe 匹配占位符 {name} 格式 — 仅字母/数字/下划线，排除 JSON 等内容。
+var placeholderRe = regexp.MustCompile(`\{([a-zA-Z_]\w*)\}`)
+
 // run 表列名常量。
 const runCols = `id, card_key, requested_by, params, rendered_command, risk_level,
 	status, requires_review, interaction_id, output, error, exit_code,
@@ -121,9 +124,9 @@ func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, param
 	dp := detectDangerous(rendered)
 	needsReview := approvalRequiredRisks[riskLevel] || dp != ""
 
-	status := "ready"
+	status := RunStatusReady
 	if needsReview {
-		status = "pending_review"
+		status = RunStatusPendingReview
 	}
 
 	// 写入 DB
@@ -190,19 +193,19 @@ func (e *CommandCardExecutor) Review(ctx context.Context, runID int, decision, r
 		return &ReviewResult{OK: false, Message: fmt.Sprintf("run 不存在: %d", runID)}, nil
 	}
 
-	if run.Status != "pending_review" {
+	if run.Status != RunStatusPendingReview {
 		return &ReviewResult{OK: false, Run: run,
 			Message: fmt.Sprintf("run 当前状态 (%s) 不允许审批，需 pending_review", run.Status)}, nil
 	}
 
 	decision = strings.ToLower(strings.TrimSpace(decision))
-	if decision != "approved" && decision != "rejected" {
+	if decision != DecisionApproved && decision != DecisionRejected {
 		return &ReviewResult{OK: false, Message: "decision 必须是 approved/rejected"}, nil
 	}
 
-	nextStatus := "rejected"
-	if decision == "approved" {
-		nextStatus = "ready"
+	nextStatus := RunStatusRejected
+	if decision == DecisionApproved {
+		nextStatus = RunStatusReady
 	}
 
 	rows, err := e.pool.Query(ctx,
@@ -259,7 +262,7 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 	if run == nil {
 		return &ExecResult{OK: false, Message: fmt.Sprintf("run 不存在: %d", runID), ExitCode: -1}, nil
 	}
-	if run.Status != "ready" {
+	if run.Status != RunStatusReady {
 		return &ExecResult{OK: false, Run: run, ExitCode: -1,
 			Message: fmt.Sprintf("run 当前状态 (%s) 不可执行，需 ready", run.Status)}, nil
 	}
@@ -270,13 +273,8 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 	}
 
 	// 标记 running
-	if _, err := e.pool.Exec(ctx, "UPDATE command_card_runs SET status='running', updated_at=NOW() WHERE id=$1", runID); err != nil {
+	if _, err := e.pool.Exec(ctx, "UPDATE command_card_runs SET status=$2, updated_at=NOW() WHERE id=$1", runID, RunStatusRunning); err != nil {
 		logger.Warn("executor: mark running failed", logger.FieldRunID, runID, logger.FieldError, err)
-	}
-
-	timeout := util.ClampInt(timeoutSec, minTimeoutSec, maxTimeoutSec)
-	if timeout == 0 {
-		timeout = defaultTimeoutSec
 	}
 
 	logger.Infow("executor: executing command",
@@ -287,16 +285,16 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 			}
 			return command
 		}(),
-		"timeout_sec", timeout,
+		"timeout_sec", timeoutSec,
 		"actor", actor,
 	)
 
-	output, exitCode, execErr := runShellCommand(ctx, command, timeout)
+	output, exitCode, execErr := runShellCommand(ctx, command, timeoutSec)
 
-	status := "success"
+	status := RunStatusSuccess
 	errText := ""
 	if exitCode != 0 {
-		status = "failed"
+		status = RunStatusFailed
 		if execErr != nil {
 			errText = execErr.Error()
 		}
@@ -343,10 +341,10 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 }
 
 func runShellCommand(ctx context.Context, command string, timeoutSec int) (output string, exitCode int, err error) {
-	timeout := util.ClampInt(timeoutSec, minTimeoutSec, maxTimeoutSec)
-	if timeout == 0 {
-		timeout = defaultTimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = defaultTimeoutSec
 	}
+	timeout := util.ClampInt(timeoutSec, minTimeoutSec, maxTimeoutSec)
 	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
@@ -512,12 +510,9 @@ func renderTemplate(tmpl string, params map[string]string) (string, error) {
 		escaped := shellQuote(v)
 		result = strings.ReplaceAll(result, placeholder, escaped)
 	}
-	// 检查未替换的占位符
-	if idx := strings.Index(result, "{"); idx >= 0 {
-		end := strings.Index(result[idx:], "}")
-		if end > 0 {
-			return "", pkgerr.Newf("CommandCard.renderTemplate", "命令模板缺少参数: %s", result[idx:idx+end+1])
-		}
+	// 检查未替换的占位符 — 只匹配 {identifier} 格式，避免 JSON 等内容误报
+	if match := placeholderRe.FindString(result); match != "" {
+		return "", pkgerr.Newf("CommandCard.renderTemplate", "命令模板缺少参数: %s", match)
 	}
 	return result, nil
 }

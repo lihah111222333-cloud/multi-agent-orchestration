@@ -20,6 +20,9 @@ const interactionCols = `id, thread_id, parent_id, sender, receiver, msg_type, s
 	requires_review, reviewed_by, review_note, reviewed_at,
 	payload, created_at, updated_at`
 
+// 交互记录默认状态。
+const defaultInteractionStatus = "pending"
+
 // Create 创建交互记录 (对应 Python create_interaction)。
 func (s *InteractionStore) Create(ctx context.Context, i *Interaction) (*Interaction, error) {
 	payloadJSON := mustMarshalJSON(i.Payload)
@@ -29,7 +32,7 @@ func (s *InteractionStore) Create(ctx context.Context, i *Interaction) (*Interac
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW())
 		 RETURNING `+interactionCols,
 		i.ThreadID, i.ParentID, i.Sender, i.Receiver, i.MsgType,
-		defaultStr(i.Status, "pending"), i.RequiresReview, string(payloadJSON))
+		defaultStr(i.Status, defaultInteractionStatus), i.RequiresReview, string(payloadJSON))
 	if err != nil {
 		return nil, err
 	}

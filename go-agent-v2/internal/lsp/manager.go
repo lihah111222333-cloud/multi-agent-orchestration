@@ -228,6 +228,8 @@ func (m *Manager) StopAll() {
 		_ = client.Stop()
 		delete(m.clients, lang)
 	}
+	// 重建 context — 与 Reload 保持一致，使 Manager 在 StopAll 后仍可复用
+	m.ctx, m.cancel = context.WithCancel(context.Background())
 }
 
 // Reload 重载所有语言服务器 (先关闭, 下次使用时自动重启)。

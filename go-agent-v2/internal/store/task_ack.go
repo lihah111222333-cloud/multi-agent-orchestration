@@ -105,8 +105,3 @@ func (s *TaskAckStore) UpdateStatus(ctx context.Context, ackKey, status string, 
 	}
 	return collectOne[TaskAck](rows)
 }
-
-// DeleteBatch 批量删除 (对应 Python delete_task_acks)。
-func (s *TaskAckStore) DeleteBatch(ctx context.Context, ackKeys []string) (int64, error) {
-	return DeleteBatchByKeys(ctx, s.pool, "task_acks", "ack_key", ackKeys)
-}

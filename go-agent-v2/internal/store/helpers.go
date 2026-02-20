@@ -49,9 +49,6 @@ type BaseStore struct{ pool *pgxpool.Pool }
 // NewBaseStore 创建 BaseStore。
 func NewBaseStore(pool *pgxpool.Pool) BaseStore { return BaseStore{pool: pool} }
 
-// Pool 返回连接池 (供子 store 使用)。
-func (b BaseStore) Pool() *pgxpool.Pool { return b.pool }
-
 // ========================================
 // QueryBuilder — 动态 WHERE 子句构造
 // ========================================
@@ -74,14 +71,6 @@ func (q *QueryBuilder) Eq(col, val string) *QueryBuilder {
 	if val == "" {
 		return q
 	}
-	q.n++
-	q.where = append(q.where, fmt.Sprintf("%s = $%d", col, q.n))
-	q.params = append(q.params, val)
-	return q
-}
-
-// EqInt 添加整型等值条件。
-func (q *QueryBuilder) EqInt(col string, val int) *QueryBuilder {
 	q.n++
 	q.where = append(q.where, fmt.Sprintf("%s = $%d", col, q.n))
 	q.params = append(q.params, val)
@@ -119,19 +108,6 @@ func (q *QueryBuilder) Build(baseSql, orderBy string, limit int) (string, []any)
 	sql += fmt.Sprintf(" LIMIT $%d", q.n)
 	q.params = append(q.params, limit)
 	return sql, q.params
-}
-
-// Params 返回当前参数列表 (用于 INSERT 等非 Build 场景)。
-func (q *QueryBuilder) Params() []any {
-	return q.params
-}
-
-// WhereClause 仅返回 WHERE 子句 (含前导 " WHERE ")，空条件返回空字符串。
-func (q *QueryBuilder) WhereClause() string {
-	if len(q.where) == 0 {
-		return ""
-	}
-	return " WHERE " + strings.Join(q.where, " AND ")
 }
 
 // ========================================
@@ -221,18 +197,6 @@ func DeleteByKey(ctx context.Context, pool *pgxpool.Pool, table, keyCol, keyVal 
 		pgx.Identifier{keyCol}.Sanitize())
 	_, err := pool.Exec(ctx, sql, keyVal)
 	return err
-}
-
-// DeleteBatchByKeys 按主键批量删除。
-func DeleteBatchByKeys(ctx context.Context, pool *pgxpool.Pool, table, keyCol string, keys []string) (int64, error) {
-	sql := fmt.Sprintf("DELETE FROM %s WHERE %s = ANY($1::text[])",
-		pgx.Identifier{table}.Sanitize(),
-		pgx.Identifier{keyCol}.Sanitize())
-	tag, err := pool.Exec(ctx, sql, keys)
-	if err != nil {
-		return 0, err
-	}
-	return tag.RowsAffected(), nil
 }
 
 // SetEnabledByKey 启用/禁用记录。

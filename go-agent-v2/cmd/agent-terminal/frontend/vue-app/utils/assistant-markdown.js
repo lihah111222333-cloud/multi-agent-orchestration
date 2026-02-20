@@ -4,6 +4,9 @@ const RAW_URL_RE = /https?:\/\/[^\s<]+/gi;
 const BOLD_RE = /\*\*([^*]+)\*\*/g;
 const ITALIC_RE = /(^|[\s(（\["'])\*([^*\n]+)\*(?=[\s).，。！？、\]"']|$)/g;
 const HR_RE = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
+const CODE_REF_COLON_RE = /^(.+):(\d+)(?::(\d+))?$/;
+const CODE_REF_HASH_RE = /^(.+)#L(\d+)(?:C(\d+))?$/i;
+const PLAIN_CODE_REF_RE = /(?:[A-Za-z]:)?[A-Za-z0-9_./-]+\.[A-Za-z0-9_+-]+(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)/g;
 
 function escapeHtml(value) {
   return (value || '')
@@ -69,17 +72,64 @@ function stripTrailingPunctuation(url) {
   return { url: text, tail };
 }
 
+function parseCodeReference(raw) {
+  const source = (raw || '').toString().trim();
+  if (!source || /\s/.test(source)) return null;
+
+  let matched = source.match(CODE_REF_HASH_RE);
+  if (matched) {
+    const path = (matched[1] || '').trim();
+    const line = Number(matched[2] || 0);
+    const column = Number(matched[3] || 0);
+    if (!path || !Number.isFinite(line) || line <= 0) return null;
+    return {
+      path,
+      line,
+      column: Number.isFinite(column) && column > 0 ? column : 1,
+    };
+  }
+
+  matched = source.match(CODE_REF_COLON_RE);
+  if (!matched) return null;
+  const path = (matched[1] || '').trim();
+  const line = Number(matched[2] || 0);
+  const column = Number(matched[3] || 0);
+  if (!path || !Number.isFinite(line) || line <= 0) return null;
+  if (!/[./\\]/.test(path) && !/^[a-zA-Z]:/.test(path)) return null;
+  return {
+    path,
+    line,
+    column: Number.isFinite(column) && column > 0 ? column : 1,
+  };
+}
+
+function renderCodeReference(ref, label) {
+  const text = (label || '').toString().trim();
+  if (!text) return '';
+  return `<a class="chat-md-code-ref" href="#" data-file-path="${escapeHtml(ref.path)}" data-line="${ref.line}" data-column="${ref.column}"><code class="chat-md-inline-code">${escapeHtml(text)}</code></a>`;
+}
+
 function renderInlineLine(raw) {
   const source = (raw || '').toString();
   if (!source) return '';
 
   const codeTokens = [];
   const linkTokens = [];
-  let text = source.replace(INLINE_CODE_RE, (_, code) => stashToken(
-    codeTokens,
-    'CODE',
-    `<code class="chat-md-inline-code">${escapeHtml(code)}</code>`,
-  ));
+  let text = source.replace(INLINE_CODE_RE, (_, code) => {
+    const codeRef = parseCodeReference(code);
+    if (codeRef) {
+      return stashToken(
+        codeTokens,
+        'CODE',
+        renderCodeReference(codeRef, code),
+      );
+    }
+    return stashToken(
+      codeTokens,
+      'CODE',
+      `<code class="chat-md-inline-code">${escapeHtml(code)}</code>`,
+    );
+  });
 
   text = text.replace(MARKDOWN_LINK_RE, (_, label, href) => {
     const safeHref = normalizeHref(href);
@@ -94,6 +144,12 @@ function renderInlineLine(raw) {
   });
 
   text = escapeHtml(text);
+
+  text = text.replace(PLAIN_CODE_REF_RE, (candidate) => {
+    const codeRef = parseCodeReference(candidate);
+    if (!codeRef) return candidate;
+    return renderCodeReference(codeRef, candidate);
+  });
 
   text = text.replace(RAW_URL_RE, (rawUrl) => {
     const { url, tail } = stripTrailingPunctuation(rawUrl);

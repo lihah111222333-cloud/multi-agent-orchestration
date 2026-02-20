@@ -1,4 +1,4 @@
-.PHONY: build run test vet clean protocol-sync-check
+.PHONY: build run test vet clean protocol-sync-check ui-cover-build ui-cover-run ui-cover-report app-cover-build app-cover-run app-cover-report
 
 build:
 	go build ./...
@@ -27,3 +27,21 @@ clean:
 
 fmt:
 	goimports -w .
+
+ui-cover-build:
+	./scripts/ui-coverage.sh build
+
+ui-cover-run:
+	./scripts/ui-coverage.sh run --debug
+
+ui-cover-report:
+	./scripts/ui-coverage.sh report
+
+app-cover-build:
+	TARGET=app-server ./scripts/ui-coverage.sh build
+
+app-cover-run:
+	TARGET=app-server ./scripts/ui-coverage.sh run --listen ws://127.0.0.1:4500
+
+app-cover-report:
+	TARGET=app-server ./scripts/ui-coverage.sh report

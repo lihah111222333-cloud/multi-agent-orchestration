@@ -54,6 +54,8 @@ type Config struct {
 	ACPBusSingletonEnabled bool `env:"ACP_BUS_SINGLETON_ENABLED" default:"false"`
 	AgentDBExecuteEnabled  bool `env:"AGENT_DB_EXECUTE_ENABLED" default:"true"`
 	MigrationNonFatal      bool `env:"MIGRATION_NON_FATAL" default:"false"`
+	// 52个高置信未触发 JSON-RPC 方法下线开关（true=下线，false=回滚恢复）
+	DisableOffline52Methods bool `env:"DISABLE_OFFLINE_52_METHODS" default:"true"`
 
 	// Turn Tracker (stall 检测)
 	StallThresholdSec int `env:"STALL_THRESHOLD_SEC" default:"480" min:"30"` // 无事件多久(秒)触发 stall 自动中断

@@ -5,10 +5,15 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/multi-agent/go-agent-v2/internal/config"
 )
 
 func TestRegisterMethods_AccountLoginCancelBoundToConcreteHandler(t *testing.T) {
-	srv := &Server{methods: make(map[string]Handler)}
+	srv := &Server{
+		cfg:     &config.Config{DisableOffline52Methods: false},
+		methods: make(map[string]Handler),
+	}
 	srv.registerMethods()
 
 	handler, ok := srv.methods["account/login/cancel"]

@@ -9,6 +9,7 @@ import {
 import { ProjectSelect } from '../components/ProjectSelect.js';
 import { ChatTimeline } from '../components/ChatTimeline.js';
 import { DiffPanel } from '../components/DiffPanel.js';
+import { CodeInspectPanel } from '../components/CodeInspectPanel.js';
 import { ComposerBar } from '../components/ComposerBar.js';
 import { ActivityPanel } from '../components/ActivityPanel.js';
 import { normalizeStatus } from '../services/status.js';
@@ -68,6 +69,7 @@ export const UnifiedChatPage = {
     ProjectSelect,
     ChatTimeline,
     DiffPanel,
+    CodeInspectPanel,
     ComposerBar,
     ActivityPanel,
   },
@@ -96,6 +98,7 @@ export const UnifiedChatPage = {
     const editingAlias = ref('');
     const renamingThreadId = ref('');
     const renameInputRefByThread = new Map();
+    const activeCodeReference = ref(null);
 
     const isCmd = computed(() => props.mode === 'cmd');
     const modeKey = computed(() => (isCmd.value ? 'cmd' : 'chat'));
@@ -162,7 +165,6 @@ export const UnifiedChatPage = {
     const activeTimeline = computed(() => props.threadStore.getThreadTimeline(selectedThreadId.value));
     const activeDiffText = computed(() => props.threadStore.getThreadDiff(selectedThreadId.value));
     const activeStatus = computed(() => normalizeStatus(props.threadStore.getThreadStatus(selectedThreadId.value)));
-    const dismissedPlanKeyByThread = ref({});
     function isThreadInterruptible(threadId) {
       if (!threadId) return false;
       if (typeof props.threadStore.getThreadInterruptible !== 'function') return false;
@@ -202,6 +204,37 @@ export const UnifiedChatPage = {
     const activeAlerts = computed(() => {
       if (typeof props.threadStore.getThreadAlerts !== 'function') return [];
       return props.threadStore.getThreadAlerts(selectedThreadId.value);
+    });
+    const activeCommandRecords = computed(() => {
+      const timeline = Array.isArray(activeTimeline.value) ? activeTimeline.value : [];
+      if (timeline.length === 0) return [];
+      const records = [];
+      for (let index = timeline.length - 1; index >= 0; index -= 1) {
+        const item = timeline[index];
+        if (item?.kind !== 'command') continue;
+        const id = (item.id || `cmd-${index}-${item.ts || ''}`).toString();
+        const status = (item.status || '').toString().trim().toLowerCase();
+        const exitCodeNum = Number(item.exitCode);
+        const hasExitCode = Number.isFinite(exitCodeNum);
+        const command = (item.command || '').toString().trim();
+        const outputRaw = (item.output || '').toString();
+        const maxOutputChars = 4000;
+        const outputTruncated = outputRaw.length > maxOutputChars;
+        const output = outputTruncated
+          ? `${outputRaw.slice(0, maxOutputChars)}\n…(已截断 ${outputRaw.length - maxOutputChars} 字符)`
+          : outputRaw;
+        records.push({
+          id,
+          ts: (item.ts || '').toString(),
+          status: status || 'completed',
+          exitCode: hasExitCode ? exitCodeNum : null,
+          command,
+          output,
+          outputTruncated,
+        });
+        if (records.length >= 8) break;
+      }
+      return records.reverse();
     });
     const isStatusTimerModalPaused = computed(() => Boolean(props.projectStore?.state?.showModal));
     const statusSinceByThread = ref({});
@@ -248,6 +281,12 @@ export const UnifiedChatPage = {
     });
 
     const showWorkspace = computed(() => true);
+    const activeProjectPath = computed(() => (props.projectStore?.state?.active || '.').toString());
+    const projectPathList = computed(() => (
+      Array.isArray(props.projectStore?.state?.projects)
+        ? props.projectStore.state.projects
+        : []
+    ));
     const chatComposerShellStyle = computed(() => {
       if (isCmd.value) return {};
       const ratio = Math.max(30, Math.min(75, Math.round(Number(splitRatio.value) || 60)));
@@ -255,55 +294,26 @@ export const UnifiedChatPage = {
         width: `calc(${ratio}% - 6px)`,
       };
     });
-    const latestPlanItem = computed(() => {
-      if (isCmd.value) return null;
-      const list = activeTimeline.value || [];
-      for (let index = list.length - 1; index >= 0; index -= 1) {
-        const item = list[index];
-        if (item?.kind !== 'plan') continue;
-        const text = (item.text || '').toString().trim();
-        if (!text) continue;
-        return item;
-      }
-      return null;
-    });
-    function resolvePlanItemKey(item) {
-      if (!item || typeof item !== 'object') return '';
-      const id = (item.id || '').toString().trim();
-      if (id) return `id:${id}`;
-      const timestamp = (item.ts || '').toString().trim();
-      const done = item.done ? '1' : '0';
-      const text = (item.text || '').toString().trim();
-      if (!text) return '';
-      if (timestamp) return `ts:${timestamp}|done:${done}|${text}`;
-      return `done:${done}|${text}`;
+    function closeCodeInspect() {
+      activeCodeReference.value = null;
     }
-    const activePinnedPlan = computed(() => {
-      const threadId = (selectedThreadId.value || '').toString().trim();
-      if (!threadId) return null;
-      const item = latestPlanItem.value;
-      if (!item) return null;
-      const key = resolvePlanItemKey(item);
-      if (!key) return null;
-      const dismissedKey = (dismissedPlanKeyByThread.value?.[threadId] || '').toString();
-      if (dismissedKey && dismissedKey === key) return null;
-      const text = (item.text || '').toString().trim();
-      if (!text) return null;
-      return {
-        key,
-        threadId,
-        done: Boolean(item.done),
-        statusText: item.done ? '完成' : '进行中',
-        text,
+
+    function openCodeReference(payload) {
+      const filePath = (payload?.filePath || '').toString().trim();
+      const line = Number(payload?.line || 0);
+      const column = Number(payload?.column || 0);
+      if (!filePath || !Number.isFinite(line) || line <= 0) return;
+      activeCodeReference.value = {
+        filePath,
+        line,
+        column: Number.isFinite(column) && column > 0 ? column : 1,
+        token: Date.now(),
       };
-    });
-    function dismissPinnedPlan() {
-      const plan = activePinnedPlan.value;
-      if (!plan) return;
-      dismissedPlanKeyByThread.value = {
-        ...dismissedPlanKeyByThread.value,
-        [plan.threadId]: plan.key,
-      };
+      logInfo('ui', 'chat.codeRef.open', {
+        file_path: filePath,
+        line,
+        column,
+      });
     }
 
     function resolveChatScroller() {
@@ -659,7 +669,10 @@ export const UnifiedChatPage = {
 
     watch(
       () => selectedThreadId.value,
-      async (id) => {
+      async (id, prevID) => {
+        if (id !== prevID) {
+          closeCodeInspect();
+        }
         if (!id) return;
         shouldAutoScroll.value = true;
         try {
@@ -1220,6 +1233,7 @@ export const UnifiedChatPage = {
       chatThreadCards,
       activeTimeline,
       activeDiffText,
+      activeCodeReference,
       activeStatus,
       activeStatusHeader,
       activeStatusDetails,
@@ -1236,8 +1250,9 @@ export const UnifiedChatPage = {
       splitRatio,
       showOverview,
       showWorkspace,
+      activeProjectPath,
+      projectPathList,
       chatComposerShellStyle,
-      activePinnedPlan,
       stats,
       recentThreads,
       cmdCards,
@@ -1255,6 +1270,7 @@ export const UnifiedChatPage = {
       workspaceRef,
       activeActivityStats,
       activeAlerts,
+      activeCommandRecords,
       selectThread,
       launchOne,
       send,
@@ -1269,6 +1285,8 @@ export const UnifiedChatPage = {
       copySelectedThreadId,
       timelinePreview,
       diffPreview,
+      openCodeReference,
+      closeCodeInspect,
       onResizeStart,
       refreshAll,
       stopSelected,
@@ -1287,7 +1305,6 @@ export const UnifiedChatPage = {
       cancelInlineRename,
       handleInlineRenameBlur,
       getDisplayName,
-      dismissPinnedPlan,
     };
   },
   template: `
@@ -1504,24 +1521,6 @@ export const UnifiedChatPage = {
           <div v-if="showWorkspace" class="workspace-area">
             <div ref="workspaceRef" id="agent-workspace" class="chat-workspace with-diff">
               <div id="chat-panel" class="chat-panel-only" :style="{ flex: '0 0 ' + splitRatio + '%' }">
-                <aside
-                  v-if="activePinnedPlan"
-                  class="chat-plan-pin"
-                  :class="{ done: activePinnedPlan.done }"
-                  :title="activePinnedPlan.statusText"
-                >
-                  <header class="chat-plan-pin-head">
-                    <span class="chat-plan-pin-role">计划</span>
-                    <span class="chat-plan-pin-status">{{ activePinnedPlan.statusText }}</span>
-                    <button
-                      type="button"
-                      class="chat-plan-pin-close"
-                      aria-label="关闭计划标签"
-                      @click="dismissPinnedPlan"
-                    >×</button>
-                  </header>
-                  <pre class="chat-plan-pin-body">{{ activePinnedPlan.text }}</pre>
-                </aside>
                 <div v-if="noActiveThread" class="chat-messages-vue">
                   <div class="diff-empty">选择或启动一个 Agent 开始对话</div>
                 </div>
@@ -1531,17 +1530,25 @@ export const UnifiedChatPage = {
                   :active-status="activeStatus"
                   :active-status-text="displayStatusText"
                   :active-status-meta="activeStatusMeta"
-                  :pinned-plan-visible="Boolean(activePinnedPlan)"
+                  @open-code-ref="openCodeReference"
                 />
               </div>
 
               <div class="panel-resizer" :class="{dragging}" @mousedown="onResizeStart"></div>
 
               <div class="workspace-right-col" :style="{ flex: '0 0 ' + (100 - splitRatio) + '%' }">
-                <DiffPanel :diff-text="activeDiffText" />
+                <CodeInspectPanel
+                  v-if="activeCodeReference"
+                  :reference="activeCodeReference"
+                  :active-project="activeProjectPath"
+                  :project-list="projectPathList"
+                  @close="closeCodeInspect"
+                />
+                <DiffPanel v-else :diff-text="activeDiffText" />
                 <ActivityPanel
                   :stats="activeActivityStats"
                   :alerts="activeAlerts"
+                  :command-records="activeCommandRecords"
                 />
               </div>
             </div>

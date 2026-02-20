@@ -8,13 +8,13 @@ import (
 // ValidateSingleStatement
 // ────────────────────────────────────────────────────
 
-func TestvalidateSingleStatement_AcceptsSingle(t *testing.T) {
+func TestValidateSingleStatement_AcceptsSingle(t *testing.T) {
 	if err := validateSingleStatement("SELECT 1"); err != nil {
 		t.Fatalf("expected nil, got %v", err)
 	}
 }
 
-func TestvalidateSingleStatement_RejectsMulti(t *testing.T) {
+func TestValidateSingleStatement_RejectsMulti(t *testing.T) {
 	if err := validateSingleStatement("SELECT 1; DROP TABLE foo"); err == nil {
 		t.Fatal("expected error for multi-statement SQL")
 	}

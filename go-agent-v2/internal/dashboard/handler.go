@@ -395,10 +395,6 @@ func badRequest(c *gin.Context, code, message string) {
 	c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": code, "message": message}})
 }
 
-func notFound(c *gin.Context, message string) {
-	c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": "not_found", "message": message}})
-}
-
 func serverError(c *gin.Context, err error) {
 	logger.FromContext(c.Request.Context()).Error("internal error", logger.Any(logger.FieldError, err))
 	c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": "internal_error", "message": "服务器内部错误"}})

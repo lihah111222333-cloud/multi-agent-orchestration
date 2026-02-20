@@ -31,8 +31,6 @@ import (
 type TransportMode string
 
 const (
-	// TransportWS WebSocket 全双工 (已弃用, 仅保留常量兼容)。
-	TransportWS TransportMode = "ws"
 	// TransportSSE POST+SSE 降级 (已弃用, 仅保留常量兼容)。
 	TransportSSE TransportMode = "sse"
 )

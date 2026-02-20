@@ -1,1 +1,0 @@
-/Users/mima0000/Desktop/wj/wjboot-v2/gmini.md

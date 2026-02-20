@@ -14,24 +14,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-// dashLimitParams 通用分页参数。
-type dashLimitParams struct {
-	Limit int `json:"limit"`
-}
-
-func parseDashLimit(params json.RawMessage, defaultLimit int) int {
-	var p dashLimitParams
-	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
-			logger.Warn("dashboard: unmarshal limit params", logger.FieldError, err)
-		}
-	}
-	if p.Limit <= 0 || p.Limit > 2000 {
-		return defaultLimit
-	}
-	return p.Limit
-}
-
 func dashCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 10*time.Second)
 }

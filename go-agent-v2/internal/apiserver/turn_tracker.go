@@ -676,66 +676,84 @@ func (s *Server) checkTurnStall(threadID, turnID string) {
 	if threshold <= 0 {
 		threshold = defaultStallThreshold
 	}
+
+	// Not stalled yet — reschedule and check again.
 	if silent < threshold {
-		// Not stalled yet — reschedule and check again.
-		interval := threshold / 3
-		if interval < 10*time.Second {
-			interval = 10 * time.Second
-		}
-		remaining := interval
-		if remaining > threshold-silent {
-			remaining = threshold - silent + time.Second
-		}
-		turn.stallTimer = time.AfterFunc(remaining, func() {
-			s.checkTurnStall(threadID, turnID)
-		})
+		s.rescheduleStallCheck(turn, threadID, turnID, silent, threshold)
 		s.turnMu.Unlock()
 		return
 	}
 
-	// Stall detected.
+	// Already auto-interrupted — nothing to do.
 	if turn.stallAutoInterrupted {
 		s.turnMu.Unlock()
 		return
 	}
 
 	// Grace period: first detection → warn + reschedule 30s.
-	// Second detection (after grace period) → actually interrupt.
-	const stallGracePeriod = 30 * time.Second
 	if !turn.stallGraceStarted {
 		turn.stallGraceStarted = true
 		s.turnMu.Unlock()
-
-		logger.Warn("turn tracker: thinking stall detected — grace period started",
-			logger.FieldThreadID, threadID,
-			"turn_id", turnID,
-			"silent_ms", silent.Milliseconds(),
-			"threshold_ms", threshold.Milliseconds(),
-			"grace_period_ms", stallGracePeriod.Milliseconds(),
-		)
-
-		// Push "thinking slow" warning to UI.
-		if s.uiRuntime != nil {
-			s.uiRuntime.PushAlert(threadID, "stall_warning",
-				fmt.Sprintf("思考已 %ds 未响应，将在 %ds 后自动中断",
-					int(silent.Seconds()), int(stallGracePeriod.Seconds())))
-		}
-
-		// Re-lock to schedule grace period timer.
-		s.turnMu.Lock()
-		turn, ok = s.activeTurns[threadID]
-		if ok && turn != nil && turn.ID == turnID {
-			turn.stallTimer = time.AfterFunc(stallGracePeriod, func() {
-				s.checkTurnStall(threadID, turnID)
-			})
-		}
-		s.turnMu.Unlock()
+		s.handleStallGracePeriod(threadID, turnID, silent, threshold)
 		return
 	}
 
+	// Second detection (after grace period) → actually interrupt.
 	turn.stallAutoInterrupted = true
 	s.turnMu.Unlock()
+	s.executeStallAutoInterrupt(threadID, turnID, silent, threshold)
+}
 
+// rescheduleStallCheck schedules the next stall check timer.
+// Must be called with s.turnMu held.
+func (s *Server) rescheduleStallCheck(turn *trackedTurn, threadID, turnID string, silent, threshold time.Duration) {
+	interval := threshold / 3
+	if interval < 10*time.Second {
+		interval = 10 * time.Second
+	}
+	remaining := interval
+	if remaining > threshold-silent {
+		remaining = threshold - silent + time.Second
+	}
+	turn.stallTimer = time.AfterFunc(remaining, func() {
+		s.checkTurnStall(threadID, turnID)
+	})
+}
+
+// handleStallGracePeriod begins the grace period on first stall detection:
+// logs a warning, pushes a UI alert, and schedules a final check after the grace period.
+// Must be called with s.turnMu released.
+func (s *Server) handleStallGracePeriod(threadID, turnID string, silent, threshold time.Duration) {
+	const stallGracePeriod = 30 * time.Second
+
+	logger.Warn("turn tracker: thinking stall detected — grace period started",
+		logger.FieldThreadID, threadID,
+		"turn_id", turnID,
+		"silent_ms", silent.Milliseconds(),
+		"threshold_ms", threshold.Milliseconds(),
+		"grace_period_ms", stallGracePeriod.Milliseconds(),
+	)
+
+	if s.uiRuntime != nil {
+		s.uiRuntime.PushAlert(threadID, "stall_warning",
+			fmt.Sprintf("思考已 %ds 未响应，将在 %ds 后自动中断",
+				int(silent.Seconds()), int(stallGracePeriod.Seconds())))
+	}
+
+	// Re-lock to schedule grace period timer.
+	s.turnMu.Lock()
+	turn, ok := s.activeTurns[threadID]
+	if ok && turn != nil && turn.ID == turnID {
+		turn.stallTimer = time.AfterFunc(stallGracePeriod, func() {
+			s.checkTurnStall(threadID, turnID)
+		})
+	}
+	s.turnMu.Unlock()
+}
+
+// executeStallAutoInterrupt performs the actual auto-interrupt after the grace period expires.
+// Must be called with s.turnMu released and turn.stallAutoInterrupted already set.
+func (s *Server) executeStallAutoInterrupt(threadID, turnID string, silent, threshold time.Duration) {
 	logger.Warn("turn tracker: thinking stall detected — auto interrupting",
 		logger.FieldThreadID, threadID,
 		"turn_id", turnID,
@@ -743,7 +761,6 @@ func (s *Server) checkTurnStall(threadID, turnID string) {
 		"threshold_ms", threshold.Milliseconds(),
 	)
 
-	// Push alert to UI.
 	if s.uiRuntime != nil {
 		s.uiRuntime.PushAlert(threadID, "stall",
 			fmt.Sprintf("思考超时 %ds 未响应，自动中断", int(silent.Seconds())))

@@ -1200,6 +1200,59 @@ func TestAssistantDone_DoesNotDuplicateExistingDelta(t *testing.T) {
 	}
 }
 
+func TestAssistantDelta_AfterCommandStartsNewTimelineItem(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-assistant-split-after-command"
+
+	first := NormalizeEvent("agent_message_delta", "", mustRawJSON(`{"delta":"先说一句。","uiText":"先说一句。"}`))
+	mgr.ApplyAgentEvent(threadID, first, map[string]any{"delta": "先说一句。"})
+
+	cmdStart := NormalizeEvent("exec_command_begin", "", mustRawJSON(`{"command":"echo hi","uiCommand":"echo hi"}`))
+	mgr.ApplyAgentEvent(threadID, cmdStart, map[string]any{"command": "echo hi"})
+
+	second := NormalizeEvent("agent_message_delta", "", mustRawJSON(`{"delta":"再补总结。","uiText":"再补总结。"}`))
+	mgr.ApplyAgentEvent(threadID, second, map[string]any{"delta": "再补总结。"})
+
+	timeline := mgr.ThreadTimeline(threadID)
+	if len(timeline) != 3 {
+		t.Fatalf("timeline len = %d, want 3", len(timeline))
+	}
+	if timeline[0].Kind != "assistant" || timeline[0].Text != "先说一句。" {
+		t.Fatalf("timeline[0] = (%q, %q), want (assistant, 先说一句。)", timeline[0].Kind, timeline[0].Text)
+	}
+	if timeline[1].Kind != "command" {
+		t.Fatalf("timeline[1].Kind = %q, want command", timeline[1].Kind)
+	}
+	if timeline[2].Kind != "assistant" || timeline[2].Text != "再补总结。" {
+		t.Fatalf("timeline[2] = (%q, %q), want (assistant, 再补总结。)", timeline[2].Kind, timeline[2].Text)
+	}
+}
+
+func TestAssistantDone_AfterCommandBackfillsAtTail(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-assistant-done-tail-backfill"
+
+	first := NormalizeEvent("agent_message_delta", "", mustRawJSON(`{"delta":"先说一句。","uiText":"先说一句。"}`))
+	mgr.ApplyAgentEvent(threadID, first, map[string]any{"delta": "先说一句。"})
+
+	cmdStart := NormalizeEvent("exec_command_begin", "", mustRawJSON(`{"command":"echo hi","uiCommand":"echo hi"}`))
+	mgr.ApplyAgentEvent(threadID, cmdStart, map[string]any{"command": "echo hi"})
+
+	done := NormalizeEvent("agent_message", "", mustRawJSON(`{"text":"先说一句。再补总结。","uiText":"先说一句。再补总结。"}`))
+	mgr.ApplyAgentEvent(threadID, done, map[string]any{"text": "先说一句。再补总结。"})
+
+	timeline := mgr.ThreadTimeline(threadID)
+	if len(timeline) != 3 {
+		t.Fatalf("timeline len = %d, want 3", len(timeline))
+	}
+	if timeline[2].Kind != "assistant" {
+		t.Fatalf("timeline[2].Kind = %q, want assistant", timeline[2].Kind)
+	}
+	if timeline[2].Text != "再补总结。" {
+		t.Fatalf("timeline[2].Text = %q, want 再补总结。", timeline[2].Text)
+	}
+}
+
 func TestAppendHistory_EmptyRecordsNoOp(t *testing.T) {
 	mgr := NewRuntimeManager()
 	threadID := "thread-append-empty"

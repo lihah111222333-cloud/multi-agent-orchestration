@@ -152,6 +152,12 @@ func (s *Server) registerMethods() {
 	// § 15. Debug (运行时诊断)
 	s.methods["debug/runtime"] = s.debugRuntime
 	s.methods["debug/gc"] = s.debugForceGC
+
+	if s.cfg == nil || s.cfg.DisableOffline52Methods {
+		for _, method := range offline52MethodList() {
+			delete(s.methods, method)
+		}
+	}
 }
 
 // ========================================

@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/coverage"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -105,116 +106,48 @@ func main() {
 
 	apiAddr := "127.0.0.1:4500"
 	apiBaseURL := "http://127.0.0.1:4500"
-	debugUIPort := debugPort
 
 	title := "Agent Orchestrator"
 	if *group != "" {
 		title = fmt.Sprintf("Agent Orchestrator — %s", *group)
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	// ─── 上下文 & 优雅关停 ───
+	ctx, cancel, shutdownReason, cancelWithReason, signalCleanup := setupShutdownSignals()
 	defer cancel()
-	var shutdownReason atomic.Value
-	shutdownReason.Store("unknown")
-	recordShutdownReason := func(reason string) {
-		if strings.TrimSpace(reason) == "" {
-			return
-		}
-		current, _ := shutdownReason.Load().(string)
-		if strings.TrimSpace(current) == "" || current == "unknown" {
-			shutdownReason.Store(reason)
-		}
-	}
-	cancelWithReason := func(reason string) {
-		recordShutdownReason(reason)
-		cancel()
-	}
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
-	defer signal.Stop(sigCh)
-	util.SafeGo(func() {
-		cancelSent := false
-		for sig := range sigCh {
-			if sig == nil {
-				continue
-			}
-			recordShutdownReason("os_signal:" + sig.String())
-			logger.Warn("shutdown trigger: OS signal received", "signal", sig.String(), "cancel_sent", cancelSent)
-			if !cancelSent {
-				cancel()
-				cancelSent = true
-			}
-		}
-	})
-	util.SafeGo(func() {
-		<-ctx.Done()
-		reason, _ := shutdownReason.Load().(string)
-		logger.Warn("shutdown trigger: root context canceled", "reason", reason, "ctx_err", ctx.Err())
-	})
+	defer signalCleanup()
 
-	// 加载配置 + 数据库
+	// ─── 数据库 ───
 	cfg := config.Load()
+	pool := setupDatabase(ctx, cfg)
 
-	// DB 连接池 (database.NewPool 返回 *pgxpool.Pool)
-	var pool *pgxpool.Pool
-	if cfg.PostgresConnStr != "" {
-		p, err := database.NewPool(ctx, cfg)
-		if err != nil {
-			logger.Warn("DB not available, dashboard pages will be empty", logger.FieldError, err)
-		} else {
-			// 自动执行 DB 迁移
-			if mErr := database.Migrate(ctx, p, "./migrations"); mErr != nil {
-				logger.Warn("DB migration failed (non-fatal)", logger.FieldError, mErr)
-			}
-			logger.AttachDBHandler(p)
-			pool = p
-		}
-	} else {
-		logger.Info("no POSTGRES_CONNECTION_STRING, dashboard pages disabled")
-	}
+	// ─── 内嵌 apiserver ───
+	appSrv, mgr := setupAppServer(ctx, cfg, pool, apiAddr)
 
-	// ─── 内嵌 apiserver (统一工具注入 + JSON-RPC) ───
-	mgr := runner.NewAgentManager()
-	runner.CleanOrphanedProcesses()
-	lspMgr := lsp.NewManager(nil)
-
-	deps := apiserver.Deps{
-		Manager:   mgr,
-		LSP:       lspMgr,
-		Config:    cfg,
-		DB:        pool,
-		SkillsDir: ".agent/skills",
-	}
-	appSrv := apiserver.New(deps)
-	setupAppServerLSPRoot(appSrv)
-
-	util.SafeGo(func() {
-		if err := appSrv.ListenAndServe(ctx, apiAddr); err != nil {
-			logger.Error("apiserver failed", logger.FieldError, err)
-		}
-	})
-
-	// ─── 调试模式: HTTP 静态文件 + Wails Shim ───
-	// 统一事件分发: 仅走 apiserver 标准化通知链路。
-	// codex raw event -> apiserver.Notify(method,payload) -> WebSocket/SSE + Wails bridge
-	mgr.SetOnEvent(func(agentID string, event codex.Event) {
-		appSrv.AgentEventHandler(agentID)(event)
-	})
-
-	// ─── 调试模式: 同时启动 debug HTTP 服务 + Wails 桌面窗口 ───
+	// ─── 调试模式 ───
 	if *debug {
-		startDebugServer(ctx, debugUIPort, apiBaseURL)
+		startDebugServer(ctx, debugPort, apiBaseURL)
 		logger.Info("debug mode: web UI + desktop app",
-			logger.FieldURL, fmt.Sprintf("http://localhost:%d", debugUIPort),
+			logger.FieldURL, fmt.Sprintf("http://localhost:%d", debugPort),
 			"api_url", apiBaseURL)
 	}
 
 	// ─── Wails App ───
 	appSvc := NewApp(*group, *n, appSrv, mgr)
-	// 统一通过 App 桥接转发，避免 debug 模式重复 publish 同一事件。
 	appSrv.SetNotifyHook(appSvc.handleBridgeNotification)
 	var quitOverlayShown atomic.Bool
 	var quitForceAllowed atomic.Bool
+	var coverageFlushed atomic.Bool
+	flushCoverage := func(reason string) {
+		if !coverageFlushed.CompareAndSwap(false, true) {
+			return
+		}
+		flushCoverageCounters(reason)
+	}
+	util.SafeGo(func() {
+		<-ctx.Done()
+		flushCoverage("root_context_done")
+	})
 
 	app := application.New(application.Options{
 		Name: "Agent Orchestrator",
@@ -262,11 +195,11 @@ func main() {
 			return false
 		},
 		OnShutdown: func() {
-			recordShutdownReason("wails_on_shutdown")
+			cancelWithReason("wails_on_shutdown")
 			reason, _ := shutdownReason.Load().(string)
 			logger.Warn("on-shutdown: begin", "reason", reason, "active_agents", len(mgr.List()))
-			cancelWithReason("wails_on_shutdown")
 			appSvc.shutdown()
+			flushCoverage("wails_on_shutdown")
 			logger.ShutdownDBHandler()
 			logger.ShutdownFileHandler()
 			if pool != nil {
@@ -296,8 +229,119 @@ func main() {
 	if err := app.Run(); err != nil {
 		logger.Error("wails app failed", logger.FieldError, err)
 	}
+	flushCoverage("app_run_return")
 	reason, _ := shutdownReason.Load().(string)
 	logger.Warn("wails app exited", "reason", reason)
+}
+
+func flushCoverageCounters(reason string) {
+	dir := strings.TrimSpace(os.Getenv("GOCOVERDIR"))
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		logger.Warn("coverage: ensure dir failed", "reason", reason, logger.FieldPath, dir, logger.FieldError, err)
+		return
+	}
+	if err := coverage.WriteCountersDir(dir); err != nil {
+		logger.Warn("coverage: write counters failed", "reason", reason, logger.FieldPath, dir, logger.FieldError, err)
+		return
+	}
+	logger.Info("coverage: counters flushed", "reason", reason, logger.FieldPath, dir)
+}
+
+// setupShutdownSignals 初始化上下文 + 优雅关停信号处理。
+func setupShutdownSignals() (ctx context.Context, cancel context.CancelFunc, shutdownReason *atomic.Value, cancelWithReason func(string), cleanup func()) {
+	ctx, cancel = signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	shutdownReason = &atomic.Value{}
+	shutdownReason.Store("unknown")
+
+	recordShutdownReason := func(reason string) {
+		if strings.TrimSpace(reason) == "" {
+			return
+		}
+		current, _ := shutdownReason.Load().(string)
+		if strings.TrimSpace(current) == "" || current == "unknown" {
+			shutdownReason.Store(reason)
+		}
+	}
+	cancelWithReason = func(reason string) {
+		recordShutdownReason(reason)
+		cancel()
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
+	util.SafeGo(func() {
+		cancelSent := false
+		for sig := range sigCh {
+			if sig == nil {
+				continue
+			}
+			recordShutdownReason("os_signal:" + sig.String())
+			logger.Warn("shutdown trigger: OS signal received", "signal", sig.String(), "cancel_sent", cancelSent)
+			if !cancelSent {
+				cancel()
+				cancelSent = true
+			}
+		}
+	})
+	util.SafeGo(func() {
+		<-ctx.Done()
+		reason, _ := shutdownReason.Load().(string)
+		logger.Warn("shutdown trigger: root context canceled", "reason", reason, "ctx_err", ctx.Err())
+	})
+
+	cleanup = func() { signal.Stop(sigCh) }
+	return ctx, cancel, shutdownReason, cancelWithReason, cleanup
+}
+
+// setupDatabase 初始化 PostgreSQL 连接池 + 自动迁移。
+func setupDatabase(ctx context.Context, cfg *config.Config) *pgxpool.Pool {
+	if cfg.PostgresConnStr == "" {
+		logger.Info("no POSTGRES_CONNECTION_STRING, dashboard pages disabled")
+		return nil
+	}
+	pool, err := database.NewPool(ctx, cfg)
+	if err != nil {
+		logger.Warn("DB not available, dashboard pages will be empty", logger.FieldError, err)
+		return nil
+	}
+	if mErr := database.Migrate(ctx, pool, "./migrations"); mErr != nil {
+		logger.Warn("DB migration failed (non-fatal)", logger.FieldError, mErr)
+	}
+	logger.AttachDBHandler(pool)
+	return pool
+}
+
+// setupAppServer 创建 apiserver + runner manager 并启动监听。
+func setupAppServer(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, addr string) (*apiserver.Server, *runner.AgentManager) {
+	mgr := runner.NewAgentManager()
+	runner.CleanOrphanedProcesses()
+	lspMgr := lsp.NewManager(nil)
+
+	deps := apiserver.Deps{
+		Manager:   mgr,
+		LSP:       lspMgr,
+		Config:    cfg,
+		DB:        pool,
+		SkillsDir: ".agent/skills",
+	}
+	appSrv := apiserver.New(deps)
+	setupAppServerLSPRoot(appSrv)
+
+	util.SafeGo(func() {
+		if err := appSrv.ListenAndServe(ctx, addr); err != nil {
+			logger.Error("apiserver failed", logger.FieldError, err)
+		}
+	})
+
+	// 统一事件分发: codex raw event -> apiserver.Notify(method,payload) -> WebSocket/SSE + Wails bridge
+	mgr.SetOnEvent(func(agentID string, event codex.Event) {
+		appSrv.AgentEventHandler(agentID)(event)
+	})
+
+	return appSrv, mgr
 }
 
 type lspRootSetupper interface {

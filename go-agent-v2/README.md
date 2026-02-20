@@ -32,8 +32,11 @@ make run
 | `POSTGRES_CONNECTION_STRING` | PG 连接串 | — |
 | `LOG_LEVEL` | 日志级别 | `INFO` |
 | `LLM_MODEL` | 模型名称 | `gpt-4o` |
+| `DISABLE_OFFLINE_52_METHODS` | 下线 52 个低频 RPC 入口（`1`=下线，`0`=回滚恢复） | `1` |
 
 完整列表见 `internal/config/config.go`。
+
+回滚方式：将 `DISABLE_OFFLINE_52_METHODS=0` 后重启服务，即可恢复这 52 个入口注册。
 
 ## Make Targets
 
@@ -45,6 +48,55 @@ make run
 | `make test-e2e` | 运行 E2E 测试 (需先启动 app-server) |
 | `make vet` | 静态分析 |
 | `make fmt` | 格式化代码 |
+| `make ui-cover-build` | 构建带覆盖率插桩的 `agent-terminal` |
+| `make ui-cover-run` | 启动插桩 UI（默认 `--debug`） |
+| `make ui-cover-report` | 生成触发/未触发方法清单 |
+
+## 业务流触发方法审查（覆盖率）
+
+用于“手工跑一轮真实业务流后，区分被触发/未触发方法”：
+
+### 1) UI 路径（agent-terminal）
+
+```bash
+# 1) 构建带覆盖率插桩的 UI 二进制
+make ui-cover-build
+
+# 2) 启动 UI（会写入 .tmp/ui-cover）
+make ui-cover-run
+# 手工执行一轮 UI 功能后退出程序
+
+# 3) 生成报告
+make ui-cover-report
+```
+
+输出文件：
+
+- `.tmp/ui-cover-summary.txt`：完整函数覆盖率汇总
+- `.tmp/ui-triggered.txt`：覆盖率 > 0%（本次 UI 流程触发）
+- `.tmp/ui-untriggered.txt`：覆盖率 = 0%（本次 UI 流程未触发）
+
+### 2) API 路径（app-server）
+
+```bash
+# 1) 构建带覆盖率插桩的 app-server
+TARGET=app-server scripts/ui-coverage.sh build
+
+# 2) 启动 app-server（会写入 .tmp/app-cover）
+TARGET=app-server scripts/ui-coverage.sh run --listen ws://127.0.0.1:4500
+# 手工执行一轮业务（桌面端、rpc-test、或你的真实客户端）
+
+# 3) 生成报告
+TARGET=app-server scripts/ui-coverage.sh report
+```
+
+输出文件：
+
+- `.tmp/app-cover-summary.txt`：完整函数覆盖率汇总
+- `.tmp/app-triggered.txt`：覆盖率 > 0%（本次业务流触发）
+- `.tmp/app-untriggered.txt`：覆盖率 = 0%（本次业务流未触发）
+
+说明：`未触发` 代表“本次采样路径未覆盖”，不等于“可直接删除”，建议结合多场景采样与调用链确认再判定是否废弃。
 
 ## 架构概述
 

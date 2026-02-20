@@ -1,0 +1,15 @@
+github.com/multi-agent/go-agent-v2/cmd/agent-terminal/build_info.go:24:			readGoBuildVCS				88.9%
+github.com/multi-agent/go-agent-v2/cmd/agent-terminal/build_info.go:43:			shortCommit				75.0%
+github.com/multi-agent/go-agent-v2/cmd/agent-terminal/build_info.go:56:			currentBuildInfo			100.0%
+github.com/multi-agent/go-agent-v2/cmd/agent-terminal/build_info.go:63:			computeBuildInfo			87.0%
+github.com/multi-agent/go-agent-v2/cmd/agent-terminal/main.go:47:			loadEnvFile				82.1%
+github.com/multi-agent/go-agent-v2/cmd/agent-terminal/main.go:86:			main					19.7%
+github.com/multi-agent/go-agent-v2/internal/codex/client_appserver.go:133:		appServerReadIdleTimeoutFromEnv		37.5%
+github.com/multi-agent/go-agent-v2/internal/codex/client_appserver.go:149:		appServerStreamMaxRetriesFromEnv	30.0%
+github.com/multi-agent/go-agent-v2/pkg/logger/logger.go:149:				Info					100.0%
+github.com/multi-agent/go-agent-v2/pkg/logger/logger.go:38:				init					100.0%
+github.com/multi-agent/go-agent-v2/pkg/logger/logger.go:41:				getLogger				100.0%
+github.com/multi-agent/go-agent-v2/pkg/logger/logger.go:44:				storeLogger				100.0%
+github.com/multi-agent/go-agent-v2/pkg/logger/logger.go:50:				replaceTimeAttr				100.0%
+github.com/multi-agent/go-agent-v2/pkg/logger/logger.go:59:				newLogger				83.3%
+github.com/multi-agent/go-agent-v2/pkg/logger/logger.go:84:				InitWithFile				78.9%

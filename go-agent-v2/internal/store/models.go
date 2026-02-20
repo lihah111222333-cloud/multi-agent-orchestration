@@ -410,19 +410,3 @@ type CommandCardRun struct {
 	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt       time.Time  `db:"updated_at" json:"updated_at"`
 }
-
-// ========================================
-// Codex 记忆
-// ========================================
-
-// CodexMemory 表示 codex_memory 表中的一条记忆记录。
-type CodexMemory struct {
-	ID         int64     `db:"id" json:"id"`
-	AgentID    string    `db:"agent_id" json:"agent_id"`
-	ThreadID   string    `db:"thread_id" json:"thread_id"`
-	MemoryType string    `db:"memory_type" json:"memory_type"` // fact | preference | instruction
-	Content    string    `db:"content" json:"content"`
-	Source     string    `db:"source" json:"source"` // auto | manual | /debug-m-update
-	CreatedAt  time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
-}

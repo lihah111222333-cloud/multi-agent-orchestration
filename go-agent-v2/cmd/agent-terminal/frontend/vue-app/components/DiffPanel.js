@@ -6,11 +6,13 @@ export const DiffPanel = {
   name: 'DiffPanel',
   props: {
     diffText: { type: String, default: '' },
+    mediaPreview: { type: Object, default: null },
     focusFile: { type: String, default: '' },
     focusLine: { type: Number, default: 0 },
   },
   setup(props) {
     const panelRef = ref(null);
+    const lightboxOpen = ref(false);
     const files = computed(() => parseUnifiedDiff(props.diffText));
     const fileCountText = computed(() => `${files.value.length} file${files.value.length === 1 ? '' : 's'}`);
     const totals = computed(() => files.value.reduce(
@@ -22,6 +24,31 @@ export const DiffPanel = {
       },
       { add: 0, del: 0 },
     ));
+    const hasMediaPreview = computed(() => {
+      const src = (props.mediaPreview?.src || '').toString().trim();
+      const fullSrc = (props.mediaPreview?.fullSrc || '').toString().trim();
+      return Boolean(src || fullSrc);
+    });
+    const mediaThumbSrc = computed(() => {
+      const src = (props.mediaPreview?.src || '').toString().trim();
+      return src || (props.mediaPreview?.fullSrc || '').toString().trim();
+    });
+    const mediaFullSrc = computed(() => {
+      const full = (props.mediaPreview?.fullSrc || '').toString().trim();
+      return full || (props.mediaPreview?.src || '').toString().trim();
+    });
+    const mediaPath = computed(() => (props.mediaPreview?.path || '').toString().trim());
+    const mediaType = computed(() => (props.mediaPreview?.mediaType || '').toString().trim());
+    const mediaBytes = computed(() => {
+      const size = Number(props.mediaPreview?.sizeBytes);
+      return Number.isFinite(size) && size > 0 ? Math.floor(size) : 0;
+    });
+    const mediaMeta = computed(() => {
+      const parts = [];
+      if (mediaType.value) parts.push(mediaType.value);
+      if (mediaBytes.value > 0) parts.push(formatBytes(mediaBytes.value));
+      return parts.join(' · ');
+    });
 
     const normalizedFocusFile = computed(() => normalizePath(props.focusFile));
     const normalizedFocusLine = computed(() => {
@@ -42,8 +69,17 @@ export const DiffPanel = {
     );
 
     watch(
-      () => [props.focusFile, props.focusLine, props.diffText],
+      () => props.mediaPreview,
       () => {
+        lightboxOpen.value = false;
+      },
+      { deep: true },
+    );
+
+    watch(
+      () => [props.focusFile, props.focusLine, props.diffText, hasMediaPreview.value],
+      () => {
+        if (hasMediaPreview.value) return;
         const requestedPath = (props.focusFile || '').toString().trim();
         const requestedLine = Number(props.focusLine);
         if (requestedPath || (Number.isFinite(requestedLine) && requestedLine > 0)) {
@@ -105,6 +141,7 @@ export const DiffPanel = {
     }
 
     async function syncFocus() {
+      if (hasMediaPreview.value) return;
       if (!panelRef.value) {
         logWarn('ui', 'chat.diff.panel.focus.no_panel', {
           focus_file: normalizedFocusFile.value,
@@ -161,15 +198,44 @@ export const DiffPanel = {
       return ' ';
     }
 
+    function formatBytes(value) {
+      const size = Number(value);
+      if (!Number.isFinite(size) || size <= 0) return '';
+      if (size >= 1024 * 1024) {
+        return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+      }
+      if (size >= 1024) {
+        return `${(size / 1024).toFixed(1)} KB`;
+      }
+      return `${size} B`;
+    }
+
+    function openLightbox() {
+      if (!mediaFullSrc.value) return;
+      lightboxOpen.value = true;
+    }
+
+    function closeLightbox() {
+      lightboxOpen.value = false;
+    }
+
     return {
       panelRef,
       files,
       fileCountText,
       totals,
+      hasMediaPreview,
+      mediaThumbSrc,
+      mediaFullSrc,
+      mediaPath,
+      mediaMeta,
+      lightboxOpen,
       diffStats,
       linePrefix,
       isFocusedFile,
       isFocusedLine,
+      openLightbox,
+      closeLightbox,
     };
   },
   template: `
@@ -186,9 +252,20 @@ export const DiffPanel = {
       </div>
 
       <div id="diff-content">
-        <div v-if="files.length === 0" class="diff-empty">暂无代码变更</div>
+        <div v-if="hasMediaPreview" class="diff-media-card">
+          <button class="diff-media-thumb-btn" type="button" @click="openLightbox" :title="mediaPath || '点击放大预览'" aria-label="放大图片预览">
+            <img class="diff-media-thumb" :src="mediaThumbSrc" :alt="mediaPath || 'image preview'" />
+          </button>
+          <div class="diff-media-caption">
+            <div class="diff-media-path" :title="mediaPath">{{ mediaPath || 'image' }}</div>
+            <div v-if="mediaMeta" class="diff-media-meta">{{ mediaMeta }}</div>
+          </div>
+        </div>
+
+        <div v-if="files.length === 0 && !hasMediaPreview" class="diff-empty">暂无代码变更</div>
 
         <div
+          v-if="!hasMediaPreview"
           v-for="file in files"
           :key="file.filename"
           class="diff-file-group"
@@ -216,6 +293,14 @@ export const DiffPanel = {
               <span class="diff-line-prefix">{{ linePrefix(line.type) }}</span>
               <span class="diff-line-content">{{ line.text }}</span>
             </div>
+          </div>
+        </div>
+
+        <div v-if="hasMediaPreview && lightboxOpen" class="diff-media-lightbox" @click.self="closeLightbox">
+          <div class="diff-media-lightbox-inner">
+            <button class="diff-media-lightbox-close" type="button" @click="closeLightbox" aria-label="关闭预览">×</button>
+            <img class="diff-media-full" :src="mediaFullSrc" :alt="mediaPath || 'image preview'" />
+            <div class="diff-media-lightbox-path" :title="mediaPath">{{ mediaPath || 'image' }}</div>
           </div>
         </div>
       </div>

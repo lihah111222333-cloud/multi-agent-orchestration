@@ -497,6 +497,7 @@ func (s *Server) skillsMatchPreviewTyped(_ context.Context, p skillsMatchPreview
 	threadID := resolveSkillMatchPreviewThreadID(p)
 	matches := s.collectAutoMatchedSkillMatches(threadID, p.Text, p.Input, autoSkillMatchOptions{
 		IncludeConfiguredExplicit: true,
+		IncludeConfiguredForce:    true,
 	})
 	items := make([]skillsMatchPreviewItem, 0, len(matches))
 	for _, match := range matches {

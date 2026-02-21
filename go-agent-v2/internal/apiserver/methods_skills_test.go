@@ -394,6 +394,110 @@ backend guide`)
 	}
 }
 
+func TestClassifyAutoSkillMatchForcePrecedesExplicit(t *testing.T) {
+	normalized := strings.ToLower("请按@后端规范实现接口")
+	matchedBy, matchedTerms := classifyAutoSkillMatch(normalized, "后端", []string{"@后端"}, nil)
+	if matchedBy != "force" {
+		t.Fatalf("matchedBy=%q, want=force", matchedBy)
+	}
+	if !reflect.DeepEqual(matchedTerms, []string{"@后端"}) {
+		t.Fatalf("matchedTerms=%v, want=[@后端]", matchedTerms)
+	}
+}
+
+func TestBuildAutoMatchedSkillPromptIncludesConfiguredForceInstruction(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("后端", `---
+summary: "backend-summary"
+force_words: ["@后端"]
+---
+# backend
+FULL BACKEND DETAIL SHOULD NOT INJECT`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+		agentSkills: map[string][]string{
+			"thread-1": {"后端"},
+		},
+	}
+
+	prompt, count := srv.buildAutoMatchedSkillPrompt("thread-1", "请按@后端实现", nil)
+	if count != 1 {
+		t.Fatalf("auto matched skill count=%d, want=1", count)
+	}
+	if !strings.Contains(prompt, "[skill:后端]") {
+		t.Fatalf("expected backend skill in auto matched prompt, got=%q", prompt)
+	}
+	if !strings.Contains(prompt, "强制触发词: @后端") {
+		t.Fatalf("expected force instruction, got=%q", prompt)
+	}
+	if !strings.Contains(prompt, "执行要求: 本轮必须遵循该技能。") {
+		t.Fatalf("expected mandatory instruction, got=%q", prompt)
+	}
+	if strings.Contains(prompt, "FULL BACKEND DETAIL SHOULD NOT INJECT") {
+		t.Fatalf("full skill body should not be injected, got=%q", prompt)
+	}
+}
+
+func TestBuildForcedOrExplicitMatchedSkillPromptSkipsTriggerWhenManual(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("后端", `---
+summary: "backend-summary"
+---
+# backend
+FULL BACKEND DETAIL SHOULD NOT INJECT`)
+	writeSkill("api-helper", `---
+description: API helper
+trigger_words: [api]
+---
+api helper`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+		agentSkills: map[string][]string{
+			"thread-1": {"后端"},
+		},
+	}
+
+	prompt, count := srv.buildForcedOrExplicitMatchedSkillPrompt("thread-1", "请按@后端实现 api", nil)
+	if count != 1 {
+		t.Fatalf("manual auto matched skill count=%d, want=1", count)
+	}
+	if !strings.Contains(prompt, "[skill:后端]") {
+		t.Fatalf("expected explicit @skill to be included, got=%q", prompt)
+	}
+	if strings.Contains(prompt, "[skill:api-helper]") {
+		t.Fatalf("trigger-only skill should be skipped in manual mode, got=%q", prompt)
+	}
+	if strings.Contains(prompt, "FULL BACKEND DETAIL SHOULD NOT INJECT") {
+		t.Fatalf("full skill body should not be injected, got=%q", prompt)
+	}
+}
+
 func TestSkillsMatchPreviewTypedReturnsReasonAndTerms(t *testing.T) {
 	tmp := t.TempDir()
 	writeSkill := func(name, content string) {
@@ -503,6 +607,59 @@ backend guide`)
 	}
 	if matches[0].MatchedBy != "explicit" {
 		t.Fatalf("match[0].MatchedBy=%q, want=explicit", matches[0].MatchedBy)
+	}
+	if !reflect.DeepEqual(matches[0].MatchedTerms, []string{"@后端"}) {
+		t.Fatalf("match[0].MatchedTerms=%v, want=[@后端]", matches[0].MatchedTerms)
+	}
+}
+
+func TestSkillsMatchPreviewTypedIncludesConfiguredForceSkill(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("后端", `---
+description: Go后端规范
+force_words: ["@后端"]
+---
+backend guide`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+		agentSkills: map[string][]string{
+			"thread-1": {"后端"},
+		},
+	}
+
+	raw, err := srv.skillsMatchPreviewTyped(context.Background(), skillsMatchPreviewParams{
+		ThreadID: "thread-1",
+		Text:     "请按@后端实现",
+	})
+	if err != nil {
+		t.Fatalf("skillsMatchPreviewTyped error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	matches, ok := resp["matches"].([]skillsMatchPreviewItem)
+	if !ok {
+		t.Fatalf("matches type=%T, want=[]skillsMatchPreviewItem", resp["matches"])
+	}
+	if len(matches) != 1 {
+		t.Fatalf("len(matches)=%d, want=1", len(matches))
+	}
+	if matches[0].Name != "后端" {
+		t.Fatalf("match[0].Name=%q, want=后端", matches[0].Name)
+	}
+	if matches[0].MatchedBy != "force" {
+		t.Fatalf("match[0].MatchedBy=%q, want=force", matches[0].MatchedBy)
 	}
 	if !reflect.DeepEqual(matches[0].MatchedTerms, []string{"@后端"}) {
 		t.Fatalf("match[0].MatchedTerms=%v, want=[@后端]", matches[0].MatchedTerms)

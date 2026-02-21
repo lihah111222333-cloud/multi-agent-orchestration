@@ -303,6 +303,7 @@ type autoMatchedSkillMatch struct {
 
 type autoSkillMatchOptions struct {
 	IncludeConfiguredExplicit bool
+	IncludeConfiguredForce    bool
 }
 
 func explicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords []string) []string {
@@ -346,19 +347,34 @@ func explicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords 
 }
 
 func classifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
-	explicitTerms := explicitSkillMentionTerms(normalizedPrompt, skillName, triggerWords)
-	if len(explicitTerms) > 0 {
-		return "explicit", explicitTerms
-	}
 	forceTerms := lowerMatchedTerms(normalizedPrompt, forceWords)
 	if len(forceTerms) > 0 {
 		return "force", forceTerms
+	}
+	explicitTerms := explicitSkillMentionTerms(normalizedPrompt, skillName, triggerWords)
+	if len(explicitTerms) > 0 {
+		return "explicit", explicitTerms
 	}
 	triggerTerms := lowerMatchedTerms(normalizedPrompt, triggerWords)
 	if len(triggerTerms) > 0 {
 		return "trigger", triggerTerms
 	}
 	return "", nil
+}
+
+func forceMatchedSkillInstruction(matchedTerms []string) string {
+	terms := make([]string, 0, len(matchedTerms))
+	for _, raw := range matchedTerms {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		terms = append(terms, trimmed)
+	}
+	if len(terms) == 0 {
+		return "执行要求: 本轮必须遵循该技能。"
+	}
+	return fmt.Sprintf("强制触发词: %s\n执行要求: 本轮必须遵循该技能。", strings.Join(terms, ", "))
 }
 
 func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []UserInput, options autoSkillMatchOptions) []autoMatchedSkillMatch {
@@ -399,7 +415,14 @@ func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []
 			continue
 		}
 		if _, configured := configuredSet[skillNameLower]; configured {
-			if !(options.IncludeConfiguredExplicit && matchedBy == "explicit") {
+			includeConfigured := false
+			switch matchedBy {
+			case "explicit":
+				includeConfigured = options.IncludeConfiguredExplicit
+			case "force":
+				includeConfigured = options.IncludeConfiguredForce
+			}
+			if !includeConfigured {
 				continue
 			}
 		}
@@ -413,16 +436,51 @@ func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []
 }
 
 func (s *Server) buildAutoMatchedSkillPrompt(agentID, prompt string, input []UserInput) (string, int) {
-	matches := s.collectAutoMatchedSkillMatches(agentID, prompt, input, autoSkillMatchOptions{})
+	matches := s.collectAutoMatchedSkillMatches(agentID, prompt, input, autoSkillMatchOptions{
+		IncludeConfiguredForce: true,
+	})
+	return s.renderAutoMatchedSkillPrompt(agentID, matches)
+}
+
+func (s *Server) buildForcedOrExplicitMatchedSkillPrompt(agentID, prompt string, input []UserInput) (string, int) {
+	matches := s.collectAutoMatchedSkillMatches(agentID, prompt, input, autoSkillMatchOptions{
+		IncludeConfiguredExplicit: true,
+		IncludeConfiguredForce:    true,
+	})
+	if len(matches) == 0 {
+		return "", 0
+	}
+	filtered := make([]autoMatchedSkillMatch, 0, len(matches))
+	for _, match := range matches {
+		switch match.MatchedBy {
+		case "force", "explicit":
+			filtered = append(filtered, match)
+		}
+	}
+	return s.renderAutoMatchedSkillPrompt(agentID, filtered)
+}
+
+func (s *Server) renderAutoMatchedSkillPrompt(agentID string, matches []autoMatchedSkillMatch) (string, int) {
 	if len(matches) == 0 {
 		return "", 0
 	}
 
+	configuredSet := collectSkillNameSet(s.GetAgentSkills(agentID))
 	texts := make([]string, 0, len(matches))
 	for _, match := range matches {
 		skillName := strings.TrimSpace(match.Name)
 		if skillName == "" {
 			continue
+		}
+		forceInstruction := ""
+		if match.MatchedBy == "force" {
+			forceInstruction = forceMatchedSkillInstruction(match.MatchedTerms)
+		}
+		if forceInstruction != "" {
+			if _, configured := configuredSet[strings.ToLower(skillName)]; configured {
+				texts = append(texts, skillInputText(skillName, forceInstruction))
+				continue
+			}
 		}
 		content, readErr := s.skillSvc.ReadSkillDigestContent(skillName)
 		if readErr != nil {
@@ -432,6 +490,9 @@ func (s *Server) buildAutoMatchedSkillPrompt(agentID, prompt string, input []Use
 				logger.FieldError, readErr,
 			)
 			continue
+		}
+		if forceInstruction != "" {
+			content = mergePromptText(forceInstruction, content)
 		}
 		texts = append(texts, skillInputText(skillName, content))
 	}
@@ -469,7 +530,9 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 	selectedSkillPrompt, selectedSkillCount := s.buildSelectedSkillPrompt(selectedSkills, p.Input)
 	autoMatchedSkillPrompt := ""
 	autoMatchedSkillCount := 0
-	if !p.ManualSkillSelection {
+	if p.ManualSkillSelection {
+		autoMatchedSkillPrompt, autoMatchedSkillCount = s.buildForcedOrExplicitMatchedSkillPrompt(p.ThreadID, prompt, matchingInput)
+	} else {
 		autoMatchedSkillPrompt, autoMatchedSkillCount = s.buildAutoMatchedSkillPrompt(p.ThreadID, prompt, matchingInput)
 	}
 	submitPrompt := mergePromptText(prompt, configuredSkillPrompt)
@@ -529,7 +592,9 @@ func (s *Server) turnSteerTyped(ctx context.Context, p turnSteerParams) (any, er
 		configuredSkillPrompt, _ := s.buildConfiguredSkillPrompt(p.ThreadID, matchingInput)
 		selectedSkillPrompt, _ := s.buildSelectedSkillPrompt(selectedSkills, p.Input)
 		autoMatchedSkillPrompt := ""
-		if !p.ManualSkillSelection {
+		if p.ManualSkillSelection {
+			autoMatchedSkillPrompt, _ = s.buildForcedOrExplicitMatchedSkillPrompt(p.ThreadID, prompt, matchingInput)
+		} else {
 			autoMatchedSkillPrompt, _ = s.buildAutoMatchedSkillPrompt(p.ThreadID, prompt, matchingInput)
 		}
 		submitPrompt := mergePromptText(prompt, configuredSkillPrompt)

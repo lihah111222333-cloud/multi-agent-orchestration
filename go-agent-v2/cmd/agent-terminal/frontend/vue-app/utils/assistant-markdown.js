@@ -4,8 +4,11 @@ const RAW_URL_RE = /https?:\/\/[^\s<]+/gi;
 const BOLD_RE = /\*\*([^*]+)\*\*/g;
 const ITALIC_RE = /(^|[\s(（\["'])\*([^*\n]+)\*(?=[\s).，。！？、\]"']|$)/g;
 const HR_RE = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
-const FILE_REF_RE = /^(?<path>(?:[a-zA-Z]:[\\/])?[^#:\n][^#\n]*?)(?::(?<line>\d+)(?::(?<column>\d+))?|#L(?<line2>\d+)(?:C(?<column2>\d+))?)$/;
+const FILE_REF_RE = /^(?<path>(?:[a-zA-Z]:[\\/])?[^#:\n][^#\n]*?)(?::(?<line>\d+)(?::(?<column>\d+))?(?:[-–](?<endLine>\d+)(?::(?<endColumn>\d+))?)?|#L(?<line2>\d+)(?:C(?<column2>\d+))?(?:-L(?<endLine2>\d+)(?:C(?<endColumn2>\d+))?)?)$/;
 const INLINE_FILE_REF_RE = /(^|[\s(（\["'])([^\s<>()]+(?::\d+(?::\d+)?|#L\d+(?:C\d+)?))(?=$|[\s).，。！？、\]"'])/g;
+const TABLE_DELIMITER_CELL_RE = /^:?-{2,}:?$/;
+const TABLE_DELIMITER_ROW_RE = /^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*(?:\s*:?-{2,}:?\s*)?\|?\s*$/;
+const CALLOUT_RE = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i;
 
 function escapeHtml(value) {
   return (value || '')
@@ -89,21 +92,62 @@ export function parseInlineFileReference(rawText) {
   const lineRaw = match.groups.line || match.groups.line2 || '';
   const line = Number(lineRaw);
   if (!Number.isFinite(line) || line <= 0) return null;
+
   const columnRaw = match.groups.column || match.groups.column2 || '';
   const column = Number.isFinite(Number(columnRaw)) && Number(columnRaw) > 0 ? Number(columnRaw) : 0;
+  const endLineRaw = match.groups.endLine || match.groups.endLine2 || '';
+  const endColumnRaw = match.groups.endColumn || match.groups.endColumn2 || '';
+  const endLine = Number.isFinite(Number(endLineRaw)) && Number(endLineRaw) > 0 ? Number(endLineRaw) : 0;
+  const endColumn = Number.isFinite(Number(endColumnRaw)) && Number(endColumnRaw) > 0 ? Number(endColumnRaw) : 0;
 
   return {
     path: pathRaw,
     line,
     column,
+    endLine,
+    endColumn,
   };
 }
 
+function formatFileRefLocation(ref) {
+  const line = Number(ref?.line) || 0;
+  const column = Number(ref?.column) || 0;
+  const endLine = Number(ref?.endLine) || 0;
+  const endColumn = Number(ref?.endColumn) || 0;
+  const parts = [];
+  if (line > 0) {
+    if (endLine > 0 && endLine !== line) {
+      parts.push(`lines ${line}-${endLine}`);
+    } else {
+      parts.push(`line ${line}`);
+    }
+  }
+  if (column > 0 || endColumn > 0) {
+    if (column > 0 && endColumn > 0 && endColumn !== column) {
+      parts.push(`columns ${column}-${endColumn}`);
+    } else if (column > 0) {
+      parts.push(`column ${column}`);
+    } else if (endColumn > 0) {
+      parts.push(`column ${endColumn}`);
+    }
+  }
+  return parts.join(', ');
+}
+
+function formatFileRefLabel(ref) {
+  const fullPath = (ref?.path || '').toString().trim();
+  const filename = fullPath.split(/[\\/]/).filter(Boolean).pop() || fullPath;
+  const location = formatFileRefLocation(ref);
+  return location ? `${filename} (${location})` : filename;
+}
+
 function renderFileRefCode(rawRef, parsedFileRef) {
-  const lineText = parsedFileRef.column > 0
-    ? `${parsedFileRef.line}:${parsedFileRef.column}`
-    : `${parsedFileRef.line}`;
-  return `<code class="chat-md-inline-code is-file-ref" data-file-path="${escapeHtml(parsedFileRef.path)}" data-file-line="${parsedFileRef.line}" data-file-column="${parsedFileRef.column}" title="定位 ${escapeHtml(parsedFileRef.path)}:${lineText}">${escapeHtml(rawRef)}</code>`;
+  const location = formatFileRefLocation(parsedFileRef);
+  const titleText = location
+    ? `${parsedFileRef.path} (${location})`
+    : `${parsedFileRef.path}`;
+  const label = formatFileRefLabel(parsedFileRef) || rawRef;
+  return `<code class="chat-md-inline-code chat-md-file-ref is-file-ref" data-file-path="${escapeHtml(parsedFileRef.path)}" data-file-line="${parsedFileRef.line}" data-file-column="${parsedFileRef.column}" title="定位 ${escapeHtml(titleText)}">${escapeHtml(label)}</code>`;
 }
 
 function renderInlineLine(raw) {
@@ -182,6 +226,23 @@ function renderList(type, items) {
 function renderBlockQuote(lines) {
   const valid = lines.filter((line) => (line || '').trim().length > 0);
   if (valid.length === 0) return '';
+  const first = (valid[0] || '').trim();
+  const callout = first.match(CALLOUT_RE);
+  if (callout) {
+    const type = callout[1].toLowerCase();
+    const titleMap = {
+      note: 'NOTE',
+      tip: 'TIP',
+      important: 'IMPORTANT',
+      warning: 'WARNING',
+      caution: 'CAUTION',
+    };
+    const bodyLines = valid.slice(1);
+    const body = bodyLines.length > 0
+      ? `<div class="chat-md-callout-body">${bodyLines.map((line) => renderInlineLine(line)).join('<br>')}</div>`
+      : '';
+    return `<blockquote class="chat-md-quote chat-md-callout chat-md-callout-${type}"><div class="chat-md-callout-title">${titleMap[type] || type.toUpperCase()}</div>${body}</blockquote>`;
+  }
   return `<blockquote class="chat-md-quote">${valid.map((line) => renderInlineLine(line)).join('<br>')}</blockquote>`;
 }
 
@@ -192,9 +253,49 @@ function renderCodeBlock(codeLines, language = '') {
   return `<pre class="chat-md-code">${langLabel}<code>${content}</code></pre>`;
 }
 
+function parseTableRow(line) {
+  let text = (line || '').trim();
+  if (text.startsWith('|')) text = text.slice(1);
+  if (text.endsWith('|')) text = text.slice(0, -1);
+  return text.split('|').map((cell) => cell.trim());
+}
+
+function parseTableAlignments(delimiterLine) {
+  return parseTableRow(delimiterLine).map((cell) => {
+    if (!TABLE_DELIMITER_CELL_RE.test(cell)) return '';
+    const starts = cell.startsWith(':');
+    const ends = cell.endsWith(':');
+    if (starts && ends) return 'center';
+    if (ends) return 'right';
+    return 'left';
+  });
+}
+
+function isTableDelimiterLine(line) {
+  return TABLE_DELIMITER_ROW_RE.test((line || '').trim());
+}
+
+function renderTable(headers, aligns, rows) {
+  if (!Array.isArray(headers) || headers.length === 0) return '';
+  const th = headers.map((cell, index) => {
+    const align = aligns[index] || 'left';
+    return `<th data-align="${align}">${renderInlineLine(cell)}</th>`;
+  }).join('');
+  const tbody = rows.map((row) => {
+    const cells = headers.map((_, index) => {
+      const align = aligns[index] || 'left';
+      const value = row[index] || '';
+      return `<td data-align="${align}">${renderInlineLine(value)}</td>`;
+    }).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+  return `<div class="chat-md-table-wrap"><table class="chat-md-table"><thead><tr>${th}</tr></thead><tbody>${tbody}</tbody></table></div>`;
+}
+
 function parseMarkdownBlocks(rawText) {
-  const text = (rawText || '').toString().replace(/\r\n?/g, '\n');
+  let text = (rawText || '').toString().replace(/\r\n?/g, '\n');
   if (!text.trim()) return '';
+  text = text.replace(/^---\n[\s\S]*?\n---\s*\n?/, '');
 
   const lines = text.split('\n');
   const html = [];
@@ -263,6 +364,28 @@ function parseMarkdownBlocks(rawText) {
       flushList();
       const level = heading[1].length;
       html.push(`<h${level}>${renderInlineLine(heading[2].trim())}</h${level}>`);
+      continue;
+    }
+
+    const maybeTableHeader = line.includes('|');
+    const delimiterLine = lines[index + 1] || '';
+    if (maybeTableHeader && isTableDelimiterLine(delimiterLine)) {
+      flushParagraph();
+      flushQuote();
+      flushList();
+      const headers = parseTableRow(line);
+      const aligns = parseTableAlignments(delimiterLine);
+      const rows = [];
+      index += 2;
+      while (index < lines.length) {
+        const rowLine = lines[index];
+        const rowTrimmed = (rowLine || '').trim();
+        if (!rowTrimmed || !rowLine.includes('|')) break;
+        rows.push(parseTableRow(rowLine));
+        index += 1;
+      }
+      html.push(renderTable(headers, aligns, rows));
+      index -= 1;
       continue;
     }
 

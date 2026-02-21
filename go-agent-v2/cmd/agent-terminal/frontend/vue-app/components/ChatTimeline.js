@@ -177,7 +177,7 @@ export const ChatTimeline = {
     function onAssistantBodyClick(event) {
       const target = event?.target;
       if (!target || typeof target.closest !== 'function') return;
-      const refNode = target.closest('.chat-md-inline-code.is-file-ref');
+      const refNode = target.closest('.chat-md-inline-code.is-file-ref, .chat-md-file-ref');
       if (!refNode) return;
       const path = (refNode.getAttribute('data-file-path') || '').toString().trim();
       const line = Number(refNode.getAttribute('data-file-line') || 0);
@@ -271,12 +271,13 @@ export const ChatTimeline = {
               <time class="chat-item-time">{{ formatTime(item.ts) }}</time>
             </header>
             <template v-if="item.kind === 'assistant'">
+              <pre class="chat-item-body chat-item-source">{{ item.text }}</pre>
               <div v-if="!itemHasSpec(item.text)"
-                class="chat-item-body chat-item-markdown codex-markdown-root"
+                class="chat-item-body chat-item-markdown chat-item-rendered codex-markdown-root"
                 v-html="renderAssistantBody(item.text)"
                 @click="onAssistantBodyClick"
               ></div>
-              <div v-else class="chat-item-body chat-item-markdown codex-markdown-root jr-mixed" @click="onAssistantBodyClick">
+              <div v-else class="chat-item-body chat-item-markdown chat-item-rendered codex-markdown-root jr-mixed" @click="onAssistantBodyClick">
                 <template v-for="(part, pIdx) in splitBySpec(item.text)" :key="pIdx">
                   <div v-if="part.type === 'text'" v-html="renderAssistantBody(part.content)"></div>
                   <JsonRenderer v-else-if="part.spec" :spec="part.spec" />

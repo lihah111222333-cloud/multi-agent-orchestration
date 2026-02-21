@@ -49,7 +49,7 @@ func ReadRolloutMessages(rolloutPath string) ([]RolloutMessage, error) {
 
 	var messages []RolloutMessage
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), 100*1024*1024) // 100 MB max — rollout 行可能含 base64 图片或大 diff
 
 	for scanner.Scan() {
 		var line rolloutLine

@@ -1135,6 +1135,7 @@ a,
 }
 
 .unified-chat-page .workspace-bottom-row {
+  --activity-panel-fixed-height: 124px;
   display: flex;
   align-items: stretch;
   min-width: 0;
@@ -1148,17 +1149,21 @@ a,
 .unified-chat-page .workspace-bottom-side {
   flex: 1;
   min-width: 0;
-  min-height: 0;
+  min-height: var(--activity-panel-fixed-height);
+  height: var(--activity-panel-fixed-height);
+  max-height: var(--activity-panel-fixed-height);
   display: flex;
   align-items: stretch;
   border-left: 1px solid var(--border);
+  overflow: hidden;
 }
 
 .unified-chat-page .workspace-bottom-side .activity-panel {
   width: 100%;
-  flex: 1;
-  min-height: 0;
-  height: auto;
+  flex: none;
+  min-height: 100%;
+  height: 100%;
+  max-height: 100%;
 }
 
 .cmd-card-panel {

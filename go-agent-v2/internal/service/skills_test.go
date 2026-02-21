@@ -18,6 +18,7 @@ func TestListSkillsParsesMetadata(t *testing.T) {
 	}
 	content := `---
 description: "backend skill"
+summary: "用于后端实现与代码审查的摘要"
 trigger_words: [go, api]
 force_words:
   - test
@@ -39,6 +40,9 @@ force_words:
 	got := skills[0]
 	if got.Description != "backend skill" {
 		t.Fatalf("description=%q", got.Description)
+	}
+	if got.Summary != "用于后端实现与代码审查的摘要" {
+		t.Fatalf("summary=%q", got.Summary)
 	}
 	if !reflect.DeepEqual(got.TriggerWords, []string{"go", "api"}) {
 		t.Fatalf("trigger_words=%v", got.TriggerWords)
@@ -75,9 +79,159 @@ aliases:
 		t.Fatalf("len(skills)=%d, want=1", len(skills))
 	}
 	got := skills[0]
+	if got.Summary != "grpc skill" {
+		t.Fatalf("summary=%q, want=%q", got.Summary, "grpc skill")
+	}
 	wantWords := []string{"gRPC", "protobuf", "微服务", "@gRPC", "@grpc-service"}
 	if !reflect.DeepEqual(got.TriggerWords, wantWords) {
 		t.Fatalf("trigger_words=%v, want=%v", got.TriggerWords, wantWords)
+	}
+}
+
+func TestReadSkillDigestContentUsesSummaryAndSectionTitles(t *testing.T) {
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "swagger")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := `---
+description: "swagger helper"
+summary: "仅注入摘要，不注入全文。"
+---
+# Swagger 文档规范
+
+## 何时使用
+
+这里是正文细节，不应被全文注入。
+
+## 常见陷阱
+
+更多正文内容。`
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	svc := NewSkillService(tmp)
+	digest, err := svc.ReadSkillDigestContent("swagger")
+	if err != nil {
+		t.Fatalf("ReadSkillDigestContent error: %v", err)
+	}
+	if !strings.Contains(digest, "摘要: 仅注入摘要，不注入全文。") {
+		t.Fatalf("digest=%q", digest)
+	}
+	if !strings.Contains(digest, "可选段落: Swagger 文档规范 (SKILL.md:5) | 何时使用 (SKILL.md:7) | 常见陷阱 (SKILL.md:11)") {
+		t.Fatalf("digest sections=%q", digest)
+	}
+	if strings.Contains(digest, "这里是正文细节，不应被全文注入。") {
+		t.Fatalf("digest should not include full body, got=%q", digest)
+	}
+}
+
+func TestReadSkillDigestIncludesSectionRefs(t *testing.T) {
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "brand")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := `---
+summary: "品牌摘要"
+---
+# 品牌设计规范
+## 第一部分：色彩系统
+## 第二部分：字体系统
+`
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	svc := NewSkillService(tmp)
+	digest, err := svc.ReadSkillDigest("brand")
+	if err != nil {
+		t.Fatalf("ReadSkillDigest error: %v", err)
+	}
+	if len(digest.SectionRefs) != 3 {
+		t.Fatalf("section refs len=%d, want=3", len(digest.SectionRefs))
+	}
+	if digest.SectionRefs[0].File != "SKILL.md" || digest.SectionRefs[0].Line != 4 {
+		t.Fatalf("section ref[0]=%+v, want file SKILL.md line 4", digest.SectionRefs[0])
+	}
+}
+
+func TestSummarizeSkillContentSourcePriority(t *testing.T) {
+	contentWithSummary := `---
+description: "desc text"
+summary: "frontmatter summary"
+---
+# Title
+Body`
+	summary, source := SummarizeSkillContent(contentWithSummary)
+	if summary != "frontmatter summary" {
+		t.Fatalf("summary=%q", summary)
+	}
+	if source != "frontmatter" {
+		t.Fatalf("source=%q, want=frontmatter", source)
+	}
+
+	contentWithDescriptionOnly := `---
+description: "only description"
+---
+# Title
+Body`
+	summary, source = SummarizeSkillContent(contentWithDescriptionOnly)
+	if summary != "only description" {
+		t.Fatalf("summary=%q", summary)
+	}
+	if source != "description" {
+		t.Fatalf("source=%q, want=description", source)
+	}
+}
+
+func TestUpsertSkillSummaryFrontmatterUpdatesExistingSummary(t *testing.T) {
+	content := `---
+name: "backend"
+description: "backend helper"
+summary: "old summary"
+---
+# Backend
+Body`
+	updated := UpsertSkillSummaryFrontmatter(content, "new summary")
+	if strings.Contains(updated, `summary: "old summary"`) {
+		t.Fatalf("old summary should be removed, got=%q", updated)
+	}
+	if !strings.Contains(updated, `summary: "new summary"`) {
+		t.Fatalf("new summary missing, got=%q", updated)
+	}
+	if !strings.Contains(updated, "# Backend\nBody") {
+		t.Fatalf("body should be preserved, got=%q", updated)
+	}
+}
+
+func TestUpsertSkillSummaryFrontmatterAddsHeaderWhenMissing(t *testing.T) {
+	content := "# Skill\nBody"
+	updated := UpsertSkillSummaryFrontmatter(content, "generated summary")
+	if !strings.HasPrefix(updated, "---\nsummary: \"generated summary\"\n---\n\n") {
+		t.Fatalf("should prepend frontmatter summary, got=%q", updated)
+	}
+	if !strings.Contains(updated, "# Skill\nBody") {
+		t.Fatalf("body should remain, got=%q", updated)
+	}
+}
+
+func TestUpsertSkillSummaryFrontmatterClearsSummary(t *testing.T) {
+	content := `---
+summary: "old summary"
+---
+# Skill
+Body`
+	updated := UpsertSkillSummaryFrontmatter(content, "")
+	if strings.Contains(strings.ToLower(updated), "summary:") {
+		t.Fatalf("summary should be removed when empty, got=%q", updated)
+	}
+	if strings.HasPrefix(updated, "---\n") {
+		t.Fatalf("frontmatter should be removed when only summary existed, got=%q", updated)
+	}
+	if !strings.HasPrefix(updated, "# Skill") {
+		t.Fatalf("body should remain as markdown body, got=%q", updated)
 	}
 }
 

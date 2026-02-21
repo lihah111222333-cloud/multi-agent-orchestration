@@ -43,11 +43,12 @@ func (c *AppServerClient) Initialize() error {
 type asThreadStartParams struct {
 	Cwd          string        `json:"cwd,omitempty"`
 	Model        string        `json:"model,omitempty"`
+	Instructions string        `json:"instructions,omitempty"`
 	DynamicTools []DynamicTool `json:"dynamicTools,omitempty"` // camelCase as required by app-server
 }
 
 // ThreadStart 创建 thread (app-server JSON-RPC)。
-func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicTool) (string, error) {
+func (c *AppServerClient) ThreadStart(cwd, model, instructions string, dynamicTools []DynamicTool) (string, error) {
 	toolNames := make([]string, len(dynamicTools))
 	for i, t := range dynamicTools {
 		toolNames[i] = t.Name
@@ -57,6 +58,7 @@ func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicT
 		logger.FieldPort, c.Port,
 		logger.FieldCwd, cwd,
 		"model", model,
+		"has_instructions", instructions != "",
 		"dynamic_tools_count", len(dynamicTools),
 		"dynamic_tools", toolNames,
 	)
@@ -64,6 +66,7 @@ func (c *AppServerClient) ThreadStart(cwd, model string, dynamicTools []DynamicT
 	result, err := c.call("thread/start", asThreadStartParams{
 		Cwd:          cwd,
 		Model:        model,
+		Instructions: instructions,
 		DynamicTools: dynamicTools,
 	}, 30*time.Second)
 	if err != nil {

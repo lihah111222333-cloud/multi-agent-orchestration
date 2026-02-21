@@ -78,7 +78,7 @@ func TestE2E_TurnAbortBehavior(t *testing.T) {
 	}
 	t.Logf("spawning codex app-server... cwd=%s port=%d", projectRoot, port)
 
-	err = client.SpawnAndConnect(ctx, "", projectRoot, "", nil)
+	err = client.SpawnAndConnect(ctx, "", projectRoot, "", "", nil)
 	if err != nil {
 		t.Fatalf("SpawnAndConnect failed: %v", err)
 	}

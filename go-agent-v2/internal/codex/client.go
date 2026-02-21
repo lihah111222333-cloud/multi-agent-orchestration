@@ -443,7 +443,7 @@ func (c *Client) RespondError(id int64, code int, message string) error {
 // ========================================
 
 // SpawnAndConnect 一键启动: spawn 进程 → 创建线程 (纯 REST, 无 socket 连接)。
-func (c *Client) SpawnAndConnect(ctx context.Context, prompt, cwd, model string, dynamicTools []DynamicTool) error {
+func (c *Client) SpawnAndConnect(ctx context.Context, prompt, cwd, model, instructions string, dynamicTools []DynamicTool) error {
 	if err := c.Spawn(ctx); err != nil {
 		return err
 	}

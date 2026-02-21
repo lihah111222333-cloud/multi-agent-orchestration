@@ -17,7 +17,7 @@ type CodexClient interface {
 	// SetEventHandler 注册事件回调。
 	SetEventHandler(h EventHandler)
 	// SpawnAndConnect 一键启动: spawn → 连接 → 创建 thread。
-	SpawnAndConnect(ctx context.Context, prompt, cwd, model string, dynamicTools []DynamicTool) error
+	SpawnAndConnect(ctx context.Context, prompt, cwd, model, instructions string, dynamicTools []DynamicTool) error
 
 	// Submit 发送用户 prompt (可附带 outputSchema 约束输出格式)。
 	Submit(prompt string, images, files []string, outputSchema json.RawMessage) error

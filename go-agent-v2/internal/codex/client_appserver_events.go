@@ -929,7 +929,7 @@ func isIdleTimeoutError(err error) bool {
 }
 
 // SpawnAndConnect 一键启动: spawn → ws connect → initialize → thread/start。
-func (c *AppServerClient) SpawnAndConnect(ctx context.Context, prompt, cwd, model string, dynamicTools []DynamicTool) error {
+func (c *AppServerClient) SpawnAndConnect(ctx context.Context, prompt, cwd, model, instructions string, dynamicTools []DynamicTool) error {
 	if err := c.Spawn(ctx); err != nil {
 		return err
 	}
@@ -944,7 +944,7 @@ func (c *AppServerClient) SpawnAndConnect(ctx context.Context, prompt, cwd, mode
 		return apperrors.Wrap(err, "AppServerClient.SpawnAndConnect", "initialize")
 	}
 
-	threadID, err := c.ThreadStart(cwd, model, dynamicTools)
+	threadID, err := c.ThreadStart(cwd, model, instructions, dynamicTools)
 	if err != nil {
 		_ = c.Kill()
 		return err

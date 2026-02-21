@@ -150,6 +150,9 @@ type Server struct {
 	uiThrottleMu      sync.Mutex
 	uiThrottleEntries map[string]*uiStateThrottleEntry
 
+	// 审批去重: 防止同一 agentID+method 并发双重处理
+	approvalInFlight sync.Map // key: "agentID:method"
+
 	upgrader websocket.Upgrader
 }
 

@@ -54,6 +54,15 @@ func extractFirstString(payload map[string]any, keys ...string) string {
 //  2. broadcastNotification 推送审批请求 (→ notifyHook → Wails Event → 前端)
 //  3. 等待前端 CallAPI("approval/respond") → ResolvePendingRequest 写入 channel
 func (s *Server) handleApprovalRequest(agentID, method string, payload map[string]any, event codex.Event) {
+	// 去重: 同一 agentID+method 正在处理中 → 跳过重复调用
+	inflightKey := agentID + ":" + method
+	if _, loaded := s.approvalInFlight.LoadOrStore(inflightKey, struct{}{}); loaded {
+		logger.Debug("app-server: approval dedup — skipping duplicate in-flight request",
+			logger.FieldAgentID, agentID, logger.FieldMethod, method)
+		return
+	}
+	defer s.approvalInFlight.Delete(inflightKey)
+
 	// 心跳: 防止 stall 检测在等待审批期间误杀
 	heartbeatDone := make(chan struct{})
 	defer close(heartbeatDone)

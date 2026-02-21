@@ -193,9 +193,36 @@ func (s *Server) threadUnarchiveTyped(ctx context.Context, p threadIDParams) (an
 	if threadID == "" {
 		return nil, apperrors.New("Server.threadUnarchive", "threadId is required")
 	}
-	restoreNotice, err := inspectThreadArchiveForRestore(threadID)
+	archivedMap, err := s.loadThreadArchiveMap(ctx)
 	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.threadUnarchive", "inspect archive integrity")
+		return nil, apperrors.Wrap(err, "Server.threadUnarchive", "load archive state")
+	}
+	_, wasArchived := archivedMap[threadID]
+
+	restoreNotice := threadArchiveRestoreNotice{
+		Modified:      false,
+		ManifestPath:  "",
+		ModifiedFiles: []string{},
+	}
+	restoredFiles := []string{}
+	skippedRestoreFiles := []string{}
+	if wasArchived {
+		restoreNotice, err = inspectThreadArchiveForRestore(threadID)
+		if err != nil {
+			logger.Error("thread/unarchive: inspect archive integrity failed",
+				logger.FieldThreadID, threadID,
+				logger.FieldError, err,
+			)
+		}
+		restoredFiles, skippedRestoreFiles, err = restoreThreadArchiveSources(threadID)
+		if err != nil {
+			logger.Error("thread/unarchive: restore archived codex artifacts failed",
+				logger.FieldThreadID, threadID,
+				logger.FieldError, err,
+			)
+			restoredFiles = []string{}
+			skippedRestoreFiles = []string{}
+		}
 	}
 	if err := s.removeThreadArchivedState(ctx, threadID); err != nil {
 		return nil, apperrors.Wrap(err, "Server.threadUnarchive", "persist archive state")
@@ -204,9 +231,14 @@ func (s *Server) threadUnarchiveTyped(ctx context.Context, p threadIDParams) (an
 		"ok":       true,
 		"threadId": threadID,
 	}
+	if len(restoredFiles) > 0 {
+		result["restoredFiles"] = restoredFiles
+	}
+	if len(skippedRestoreFiles) > 0 {
+		result["restoreSkippedFiles"] = skippedRestoreFiles
+	}
 	if restoreNotice.Modified {
 		result["archiveModified"] = true
-		result["warning"] = restoreNotice.Warning
 		result["manifestPath"] = restoreNotice.ManifestPath
 		result["modifiedFiles"] = restoreNotice.ModifiedFiles
 	}
@@ -1035,7 +1067,7 @@ func (s *Server) archiveThreadArtifacts(ctx context.Context, threadID string) (t
 			return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "resolve archive target")
 		}
 		if err := copyFile(srcPath, targetPath); err != nil {
-			logger.Warn("thread/archive: copy artifact failed",
+			logger.Error("thread/archive: copy artifact failed",
 				logger.FieldThreadID, id,
 				"source_path", srcPath,
 				"target_path", targetPath,
@@ -1079,6 +1111,7 @@ func (s *Server) archiveThreadArtifacts(ctx context.Context, threadID string) (t
 			)
 		}
 	}
+	pruneArchivedCodexSourceFiles(id, manifest.Files, manifest.ArchiveDir)
 	return manifest, nil
 }
 
@@ -1305,6 +1338,51 @@ func copyFile(srcPath, targetPath string) error {
 	return os.Rename(tmpPath, targetPath)
 }
 
+func copyFileOverwrite(srcPath, targetPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+
+	info, err := src.Stat()
+	if err != nil {
+		return err
+	}
+	mode := info.Mode().Perm()
+	if mode == 0 {
+		mode = 0o644
+	}
+
+	targetDir := filepath.Dir(targetPath)
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return err
+	}
+	tmpFile, err := os.CreateTemp(targetDir, "."+filepath.Base(targetPath)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	if _, err := io.Copy(tmpFile, src); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
 func fileSHA256(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -1319,9 +1397,303 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
+func pruneArchivedCodexSourceFiles(threadID string, files []threadArchiveFile, archiveDir string) {
+	if len(files) == 0 {
+		return
+	}
+	codexRoot, err := resolveCodexRootDir()
+	if err != nil {
+		logger.Error("thread/archive: resolve codex root failed",
+			logger.FieldThreadID, threadID,
+			logger.FieldError, err,
+		)
+		return
+	}
+
+	archiveRoot := strings.TrimSpace(archiveDir)
+	seen := make(map[string]struct{}, len(files))
+	deleted := 0
+	for _, meta := range files {
+		srcPath := strings.TrimSpace(meta.SourcePath)
+		if srcPath == "" {
+			continue
+		}
+		if _, ok := seen[srcPath]; ok {
+			continue
+		}
+		seen[srcPath] = struct{}{}
+
+		withinCodex, err := pathWithinRoot(codexRoot, srcPath)
+		if err != nil || !withinCodex {
+			continue
+		}
+		if archiveRoot != "" {
+			if withinArchive, err := pathWithinRoot(archiveRoot, srcPath); err == nil && withinArchive {
+				continue
+			}
+		}
+
+		info, err := os.Stat(srcPath)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				logger.Error("thread/archive: stat source artifact failed",
+					logger.FieldThreadID, threadID,
+					"source_path", srcPath,
+					logger.FieldError, err,
+				)
+			}
+			continue
+		}
+		if info.IsDir() {
+			continue
+		}
+
+		expectedSHA256 := strings.TrimSpace(meta.SHA256)
+		if expectedSHA256 == "" {
+			continue
+		}
+		sourceSHA256, err := fileSHA256(srcPath)
+		if err != nil {
+			logger.Error("thread/archive: source artifact checksum failed",
+				logger.FieldThreadID, threadID,
+				"source_path", srcPath,
+				logger.FieldError, err,
+			)
+			continue
+		}
+		if !strings.EqualFold(expectedSHA256, sourceSHA256) {
+			logger.Error("thread/archive: source artifact changed after backup, skip delete",
+				logger.FieldThreadID, threadID,
+				"source_path", srcPath,
+				"expected_sha256", expectedSHA256,
+				"actual_sha256", sourceSHA256,
+			)
+			continue
+		}
+
+		if err := os.Remove(srcPath); err != nil {
+			logger.Error("thread/archive: remove source artifact failed",
+				logger.FieldThreadID, threadID,
+				"source_path", srcPath,
+				logger.FieldError, err,
+			)
+			continue
+		}
+		deleted++
+		removeEmptyCodexParentDirs(filepath.Dir(srcPath), codexRoot)
+	}
+
+	if deleted > 0 {
+		logger.Info("thread/archive: pruned codex source artifacts",
+			logger.FieldThreadID, threadID,
+			"deleted_count", deleted,
+		)
+	}
+}
+
+func resolveCodexRootDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", apperrors.Wrap(err, "resolveCodexRootDir", "resolve user home")
+	}
+	homeDir = strings.TrimSpace(homeDir)
+	if homeDir == "" {
+		return "", apperrors.New("resolveCodexRootDir", "user home is empty")
+	}
+	return filepath.Join(homeDir, ".codex"), nil
+}
+
+func removeEmptyCodexParentDirs(startDir string, codexRoot string) {
+	current := strings.TrimSpace(startDir)
+	root := strings.TrimSpace(codexRoot)
+	if current == "" || root == "" {
+		return
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return
+	}
+	for current != "" {
+		currentAbs, err := filepath.Abs(current)
+		if err != nil {
+			return
+		}
+		if currentAbs == rootAbs {
+			return
+		}
+		withinRoot, err := pathWithinRoot(rootAbs, currentAbs)
+		if err != nil || !withinRoot {
+			return
+		}
+		entries, err := os.ReadDir(currentAbs)
+		if err != nil || len(entries) > 0 {
+			return
+		}
+		if err := os.Remove(currentAbs); err != nil {
+			return
+		}
+		parent := filepath.Dir(currentAbs)
+		if parent == currentAbs {
+			return
+		}
+		current = parent
+	}
+}
+
+func restoreThreadArchiveSources(threadID string) ([]string, []string, error) {
+	restored := []string{}
+	skipped := []string{}
+
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return restored, skipped, nil
+	}
+	rootDir, err := resolveThreadArchiveRootDir()
+	if err != nil {
+		return nil, nil, apperrors.Wrap(err, "restoreThreadArchiveSources", "resolve archive root")
+	}
+	safeThreadID, err := sanitizeArchiveNameStrict(id)
+	if err != nil {
+		return nil, nil, apperrors.Wrap(err, "restoreThreadArchiveSources", "sanitize thread id")
+	}
+	threadDir := filepath.Join(rootDir, safeThreadID)
+	manifestPath, err := findLatestThreadArchiveManifestPath(threadDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return restored, skipped, nil
+		}
+		return nil, nil, apperrors.Wrap(err, "restoreThreadArchiveSources", "find latest manifest")
+	}
+	manifest, err := readThreadArchiveManifest(manifestPath)
+	if err != nil {
+		return nil, nil, apperrors.Wrap(err, "restoreThreadArchiveSources", "read manifest")
+	}
+	codexRoot, err := resolveCodexRootDir()
+	if err != nil {
+		return nil, nil, apperrors.Wrap(err, "restoreThreadArchiveSources", "resolve codex root")
+	}
+
+	restoredSet := map[string]struct{}{}
+	skippedSet := map[string]struct{}{}
+	appendSkipped := func(sourcePath string, archivedPath string, reason string, skipErr error) {
+		value := strings.TrimSpace(sourcePath)
+		if value == "" {
+			return
+		}
+		if skipErr != nil {
+			logger.Error("thread/unarchive: restore artifact skipped",
+				logger.FieldThreadID, id,
+				"source_path", value,
+				"archived_path", strings.TrimSpace(archivedPath),
+				"reason", reason,
+				logger.FieldError, skipErr,
+			)
+		} else {
+			logger.Error("thread/unarchive: restore artifact skipped",
+				logger.FieldThreadID, id,
+				"source_path", value,
+				"archived_path", strings.TrimSpace(archivedPath),
+				"reason", reason,
+			)
+		}
+		if _, ok := skippedSet[value]; ok {
+			return
+		}
+		skippedSet[value] = struct{}{}
+		skipped = append(skipped, value)
+	}
+
+	for _, meta := range manifest.Files {
+		srcPath := strings.TrimSpace(meta.SourcePath)
+		if srcPath == "" {
+			continue
+		}
+		withinCodex, err := pathWithinRoot(codexRoot, srcPath)
+		if err != nil {
+			appendSkipped(srcPath, "", "validate source path scope", err)
+			continue
+		}
+		if !withinCodex {
+			appendSkipped(srcPath, "", "source path is outside codex root", nil)
+			continue
+		}
+
+		archivedPath := strings.TrimSpace(meta.ArchivedPath)
+		if archivedPath == "" {
+			appendSkipped(srcPath, "", "archived path is empty", nil)
+			continue
+		}
+		if !filepath.IsAbs(archivedPath) && strings.TrimSpace(manifest.ArchiveDir) != "" {
+			archivedPath = filepath.Join(strings.TrimSpace(manifest.ArchiveDir), archivedPath)
+		}
+		if strings.TrimSpace(manifest.ArchiveDir) != "" {
+			withinArchive, err := pathWithinRoot(manifest.ArchiveDir, archivedPath)
+			if err != nil {
+				appendSkipped(srcPath, archivedPath, "validate archived path scope", err)
+				continue
+			}
+			if !withinArchive {
+				appendSkipped(srcPath, archivedPath, "archived path is outside archive root", nil)
+				continue
+			}
+		}
+
+		info, err := os.Stat(archivedPath)
+		if err != nil {
+			appendSkipped(srcPath, archivedPath, "stat archived file", err)
+			continue
+		}
+		if info.IsDir() {
+			appendSkipped(srcPath, archivedPath, "archived path is a directory", nil)
+			continue
+		}
+
+		expectedSHA256 := strings.TrimSpace(meta.SHA256)
+		if expectedSHA256 != "" {
+			actualArchiveSHA256, err := fileSHA256(archivedPath)
+			if err != nil {
+				appendSkipped(srcPath, archivedPath, "compute archived checksum", err)
+				continue
+			}
+			if !strings.EqualFold(expectedSHA256, actualArchiveSHA256) {
+				appendSkipped(srcPath, archivedPath, "archived checksum mismatch", nil)
+				continue
+			}
+		}
+
+		if err := os.MkdirAll(filepath.Dir(srcPath), 0o755); err != nil {
+			appendSkipped(srcPath, archivedPath, "ensure source parent dir", err)
+			continue
+		}
+		if err := copyFileOverwrite(archivedPath, srcPath); err != nil {
+			appendSkipped(srcPath, archivedPath, "restore file to source path", err)
+			continue
+		}
+		if expectedSHA256 != "" {
+			actualSourceSHA256, err := fileSHA256(srcPath)
+			if err != nil {
+				_ = os.Remove(srcPath)
+				appendSkipped(srcPath, archivedPath, "compute restored source checksum", err)
+				continue
+			}
+			if !strings.EqualFold(expectedSHA256, actualSourceSHA256) {
+				_ = os.Remove(srcPath)
+				appendSkipped(srcPath, archivedPath, "restored source checksum mismatch", nil)
+				continue
+			}
+		}
+		if _, ok := restoredSet[srcPath]; !ok {
+			restoredSet[srcPath] = struct{}{}
+			restored = append(restored, srcPath)
+		}
+	}
+	sort.Strings(restored)
+	sort.Strings(skipped)
+	return restored, skipped, nil
+}
+
 type threadArchiveRestoreNotice struct {
 	Modified      bool
-	Warning       string
 	ManifestPath  string
 	ModifiedFiles []string
 }
@@ -1334,7 +1706,6 @@ type manifestPathCandidate struct {
 func inspectThreadArchiveForRestore(threadID string) (threadArchiveRestoreNotice, error) {
 	notice := threadArchiveRestoreNotice{
 		Modified:      false,
-		Warning:       "",
 		ManifestPath:  "",
 		ModifiedFiles: []string{},
 	}
@@ -1401,7 +1772,6 @@ func inspectThreadArchiveForRestore(threadID string) (threadArchiveRestoreNotice
 		sort.Strings(modified)
 		notice.Modified = true
 		notice.ModifiedFiles = modified
-		notice.Warning = fmt.Sprintf("检测到 %d 个归档文件在归档后被修改，恢复对话可能与归档时不一致。", len(modified))
 	}
 	return notice, nil
 }

@@ -2,6 +2,8 @@ package apiserver
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ const (
 	defaultCodeOpenContextLines = 90
 	maxCodeOpenContextLines     = 180
 	maxCodeOpenFileBytes        = 64 << 20 // 64MB
+	binaryProbeBytes            = 8 << 10  // 8KB
 )
 
 type uiCodeOpenParams struct {
@@ -201,6 +204,95 @@ func buildCodeSnippet(lines []string, startLine, endLine int) []map[string]any {
 	return snippet
 }
 
+func looksLikeBinaryContent(content []byte) bool {
+	if len(content) == 0 {
+		return false
+	}
+	sample := content
+	if len(sample) > binaryProbeBytes {
+		sample = sample[:binaryProbeBytes]
+	}
+	nonTextBytes := 0
+	for _, b := range sample {
+		switch b {
+		case 0:
+			return true
+		case '\n', '\r', '\t':
+			continue
+		}
+		if b < 0x20 || b == 0x7f {
+			nonTextBytes++
+		}
+	}
+	// 宽松阈值，避免将 UTF-8 文本误判为二进制。
+	return nonTextBytes*100 >= len(sample)*15
+}
+
+func detectMediaType(path string, content []byte) string {
+	// 优先按扩展名判断（SVG 等格式被 http.DetectContentType 误判为 text/plain）。
+	if byExt := mediaTypeByExtension(path); byExt != "" {
+		return byExt
+	}
+	if len(content) > 0 {
+		sniff := content
+		if len(sniff) > 512 {
+			sniff = sniff[:512]
+		}
+		detected := strings.TrimSpace(http.DetectContentType(sniff))
+		if detected != "" && detected != "application/octet-stream" {
+			return detected
+		}
+	}
+	return "application/octet-stream"
+}
+
+func mediaTypeByExtension(path string) string {
+	switch strings.ToLower(strings.TrimSpace(filepath.Ext(path))) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".svg":
+		return "image/svg+xml"
+	case ".bmp":
+		return "image/bmp"
+	case ".ico":
+		return "image/x-icon"
+	default:
+		return ""
+	}
+}
+
+func isImagePreviewExtension(path string) bool {
+	switch strings.ToLower(strings.TrimPrefix(strings.TrimSpace(filepath.Ext(path)), ".")) {
+	case "png", "jpg", "jpeg", "svg":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveCodeOpenRelativePath(resolvedPath, project string, projects []string) string {
+	relativePath := resolvedPath
+	for _, root := range normalizeProjectRoots(project, projects) {
+		rel, relErr := filepath.Rel(root, resolvedPath)
+		if relErr != nil {
+			continue
+		}
+		rel = filepath.Clean(rel)
+		if rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		relativePath = filepath.ToSlash(rel)
+		break
+	}
+	return relativePath
+}
+
 func fileLanguageByPath(path string) string {
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
 	if ext == "" {
@@ -292,6 +384,81 @@ func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, er
 		)
 		return nil, apperrors.Wrap(err, "Server.uiCodeOpen", "read file")
 	}
+	relativePath := resolveCodeOpenRelativePath(resolvedPath, p.Project, p.Projects)
+	if isImagePreviewExtension(resolvedPath) {
+		mediaType := detectMediaType(resolvedPath, content)
+		targetLine := 1
+		if p.Line > 0 {
+			targetLine = p.Line
+		}
+		previewURL := codePathToURI(resolvedPath)
+		logger.Info("ui/code/open: image parser applied",
+			"resolved_path", resolvedPath,
+			"relative_path", relativePath,
+			"media_type", mediaType,
+			"size_bytes", len(content),
+		)
+		return map[string]any{
+			"ok":           true,
+			"filePath":     resolvedPath,
+			"relative":     relativePath,
+			"line":         targetLine,
+			"column":       clampColumn(p.Column),
+			"startLine":    1,
+			"endLine":      1,
+			"totalLines":   1,
+			"language":     fileLanguageByPath(resolvedPath),
+			"context":      0,
+			"snippet":      []map[string]any{{"line": 1, "text": fmt.Sprintf("[image preview: %s, %d bytes]", mediaType, len(content))}},
+			"diagnostics":  []map[string]any{},
+			"lspOpened":    false,
+			"binary":       looksLikeBinaryContent(content),
+			"mediaType":    mediaType,
+			"sizeBytes":    len(content),
+			"image":        true,
+			"plugin":       "image-parser",
+			"previewURL":   previewURL,
+			"thumbnailURL": previewURL,
+		}, nil
+	}
+
+	if looksLikeBinaryContent(content) {
+		mediaType := detectMediaType(resolvedPath, content)
+		targetLine := 1
+		if p.Line > 0 {
+			targetLine = p.Line
+		}
+		logger.Info("ui/code/open: binary content detected",
+			"resolved_path", resolvedPath,
+			"relative_path", relativePath,
+			"media_type", mediaType,
+			"size_bytes", len(content),
+		)
+		return map[string]any{
+			"ok":         true,
+			"filePath":   resolvedPath,
+			"relative":   relativePath,
+			"line":       targetLine,
+			"column":     clampColumn(p.Column),
+			"startLine":  1,
+			"endLine":    1,
+			"totalLines": 1,
+			"language":   fileLanguageByPath(resolvedPath),
+			"context":    0,
+			"snippet": []map[string]any{
+				{
+					"line": 1,
+					"text": fmt.Sprintf("[binary file omitted: %s, %d bytes]", mediaType, len(content)),
+				},
+			},
+			"diagnostics": []map[string]any{},
+			"lspOpened":   false,
+			"binary":      true,
+			"mediaType":   mediaType,
+			"sizeBytes":   len(content),
+		}, nil
+	}
+
 	text := strings.ReplaceAll(string(content), "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	lines := strings.Split(text, "\n")
@@ -317,20 +484,6 @@ func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, er
 		lspOpened = true
 	}
 	diagnostics := s.gatherCodeDiagnostics(resolvedPath, startLine, endLine)
-
-	relativePath := resolvedPath
-	for _, root := range normalizeProjectRoots(p.Project, p.Projects) {
-		rel, relErr := filepath.Rel(root, resolvedPath)
-		if relErr != nil {
-			continue
-		}
-		rel = filepath.Clean(rel)
-		if rel == "." || strings.HasPrefix(rel, "..") {
-			continue
-		}
-		relativePath = filepath.ToSlash(rel)
-		break
-	}
 
 	result := map[string]any{
 		"ok":          true,

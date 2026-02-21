@@ -150,6 +150,104 @@ func TestUICodeOpenTyped_FileNotFound(t *testing.T) {
 	}
 }
 
+func TestUICodeOpenTyped_ImageExtensionsUseImageParser(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	cases := []struct {
+		name      string
+		relPath   string
+		content   []byte
+		mediaType string
+	}{
+		{
+			name:    "png",
+			relPath: "assets/preview.png",
+			content: []byte{
+				0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
+				0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
+				0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+				0x08, 0x02, 0x00, 0x00, 0x00,
+			},
+			mediaType: "image/png",
+		},
+		{
+			name:    "jpg",
+			relPath: "assets/preview.jpg",
+			content: []byte{
+				0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00,
+				0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+				0xff, 0xd9,
+			},
+			mediaType: "image/jpeg",
+		},
+		{
+			name:    "jpeg",
+			relPath: "assets/preview.jpeg",
+			content: []byte{
+				0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00,
+				0x01, 0x02, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+				0xff, 0xd9,
+			},
+			mediaType: "image/jpeg",
+		},
+		{
+			name:      "svg",
+			relPath:   "assets/preview.svg",
+			content:   []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#222"/></svg>`),
+			mediaType: "image/svg+xml",
+		},
+	}
+
+	srv := New(Deps{})
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			target := filepath.Join(root, filepath.FromSlash(tc.relPath))
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				t.Fatalf("mkdir failed: %v", err)
+			}
+			if err := os.WriteFile(target, tc.content, 0o644); err != nil {
+				t.Fatalf("write image file failed: %v", err)
+			}
+
+			out, err := srv.uiCodeOpenTyped(context.Background(), uiCodeOpenParams{
+				FilePath: tc.relPath,
+				Project:  root,
+			})
+			if err != nil {
+				t.Fatalf("uiCodeOpenTyped failed: %v", err)
+			}
+			result, ok := out.(map[string]any)
+			if !ok {
+				t.Fatalf("result type = %T, want map[string]any", out)
+			}
+			if got, _ := result["image"].(bool); !got {
+				t.Fatal("image flag = false, want true")
+			}
+			if got := asString(result["plugin"]); got != "image-parser" {
+				t.Fatalf("plugin = %q, want image-parser", got)
+			}
+			if got := asString(result["mediaType"]); got != tc.mediaType {
+				t.Fatalf("mediaType = %q, want %q", got, tc.mediaType)
+			}
+			if previewURL := asString(result["previewURL"]); !strings.HasPrefix(previewURL, "file://") {
+				t.Fatalf("previewURL = %q, want file://", previewURL)
+			}
+			if thumbURL := asString(result["thumbnailURL"]); !strings.HasPrefix(thumbURL, "file://") {
+				t.Fatalf("thumbnailURL = %q, want file://", thumbURL)
+			}
+			snippet, ok := result["snippet"].([]map[string]any)
+			if !ok || len(snippet) != 1 {
+				t.Fatalf("snippet length = %d, want 1", len(snippet))
+			}
+			lineText := asString(snippet[0]["text"])
+			if !strings.Contains(lineText, "image preview") {
+				t.Fatalf("snippet text = %q, want image preview placeholder", lineText)
+			}
+		})
+	}
+}
+
 func ensureTestFile(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

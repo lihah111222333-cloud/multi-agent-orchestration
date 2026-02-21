@@ -167,6 +167,15 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 	if value, ok := prefs["threadPins.chat"]; ok {
 		result["threadPins.chat"] = value
 	}
+	logger.Info("ui/state/get: snapshot prepared",
+		"threads_count", len(snapshot.Threads),
+		"active_thread_id", resolvedActiveThreadID,
+		"active_cmd_thread_id", resolvedActiveCmdThreadID,
+		"timeline_threads", len(timelinesByThread),
+		"diff_threads", len(diffTextByThread),
+		"active_thread_diff_len", len(diffTextByThread[resolvedActiveThreadID]),
+		"active_cmd_thread_diff_len", len(diffTextByThread[resolvedActiveCmdThreadID]),
+	)
 
 	return result, nil
 }

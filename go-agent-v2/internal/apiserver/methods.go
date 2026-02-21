@@ -20,6 +20,18 @@ const (
 
 	prefKeyJsonRenderPrompt = "settings.jsonRenderPrompt"
 	maxJsonRenderPromptLen  = 8000
+
+	defaultBrowserPrompt = "已注入 Playwright 浏览器自动化能力。" +
+		"当需要访问网页、截图、提取页面内容、填写表单或执行浏览器操作时，" +
+		"请使用 shell 调用 npx playwright 命令行工具。" +
+		"常用操作:\n" +
+		"- 截图: npx playwright screenshot <url> <output.png>\n" +
+		"- 生成代码: npx playwright codegen <url>\n" +
+		"- 也可编写 Node.js 脚本使用 playwright API 进行复杂操作（导航、点击、填表、提取文本、执行 JS 等）\n" +
+		"- 脚本示例: const { chromium } = require('playwright'); const browser = await chromium.launch(); const page = await browser.newPage(); await page.goto('url'); ...\n" +
+		"优先使用 playwright CLI，复杂场景再写脚本。使用完毕后确保关闭浏览器释放资源。"
+	prefKeyBrowserPrompt = "settings.browserPrompt"
+	maxBrowserPromptLen  = 4000
 )
 
 // registerMethods 注册所有 JSON-RPC 方法 (完整对标 APP-SERVER-PROTOCOL.md)。
@@ -67,6 +79,7 @@ func (s *Server) registerMethods() {
 	s.methods["skills/remote/write"] = typedHandler(s.skillsRemoteWriteTyped)
 	s.methods["skills/config/read"] = typedHandler(s.skillsConfigReadTyped)
 	s.methods["skills/config/write"] = typedHandler(s.skillsConfigWriteTyped)
+	s.methods["skills/summary/write"] = typedHandler(s.skillsSummaryWriteTyped)
 	s.methods["skills/match/preview"] = typedHandler(s.skillsMatchPreviewTyped)
 	s.methods["app/list"] = s.appList
 
@@ -81,6 +94,8 @@ func (s *Server) registerMethods() {
 	s.methods["config/lspPromptHint/write"] = typedHandler(s.configLSPPromptHintWriteTyped)
 	s.methods["config/jsonRenderPrompt/read"] = s.configJsonRenderPromptRead
 	s.methods["config/jsonRenderPrompt/write"] = typedHandler(s.configJsonRenderPromptWriteTyped)
+	s.methods["config/browserPrompt/read"] = s.configBrowserPromptRead
+	s.methods["config/browserPrompt/write"] = typedHandler(s.configBrowserPromptWriteTyped)
 	s.methods["configRequirements/read"] = s.configRequirementsRead
 
 	// § 7. 账号 (5 methods)

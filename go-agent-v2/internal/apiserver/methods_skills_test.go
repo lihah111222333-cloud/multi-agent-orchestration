@@ -16,21 +16,41 @@ func TestSkillsListUsesConfiguredDirectory(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(tmp, "backend"), 0o755); err != nil {
 		t.Fatalf("mkdir backend: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(tmp, "backend", "SKILL.md"), []byte(`---
+description: "backend helper"
+summary: "backend summary"
+---
+# backend`), 0o644); err != nil {
+		t.Fatalf("write backend SKILL.md: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Join(tmp, "tdd"), 0o755); err != nil {
 		t.Fatalf("mkdir tdd: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(tmp, "tdd", "SKILL.md"), []byte(`---
+description: "tdd helper"
+summary: "tdd summary"
+---
+# tdd`), 0o644); err != nil {
+		t.Fatalf("write tdd SKILL.md: %v", err)
+	}
 
-	srv := &Server{skillsDir: tmp}
+	srv := &Server{
+		skillsDir: tmp,
+		skillSvc:  service.NewSkillService(tmp),
+	}
 	raw, err := srv.skillsList(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("skillsList error: %v", err)
 	}
 	resp := raw.(map[string]any)
-	skills := resp["skills"].([]map[string]string)
-	got := []string{skills[0]["name"], skills[1]["name"]}
+	skills := resp["skills"].([]map[string]any)
+	got := []string{skills[0]["name"].(string), skills[1]["name"].(string)}
 	want := []string{"backend", "tdd"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("skillsList names=%v, want=%v", got, want)
+	}
+	if skills[0]["summary"] != "backend summary" || skills[1]["summary"] != "tdd summary" {
+		t.Fatalf("skillsList summaries=%v", []any{skills[0]["summary"], skills[1]["summary"]})
 	}
 }
 
@@ -109,6 +129,48 @@ func TestSkillsConfigWriteAndRemoteWriteUseConfiguredDirectory(t *testing.T) {
 	}
 }
 
+func TestSkillsSummaryWriteTypedUpdatesFrontmatterSummary(t *testing.T) {
+	tmp := t.TempDir()
+	skillDir := filepath.Join(tmp, "backend")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	path := filepath.Join(skillDir, "SKILL.md")
+	content := `---
+name: "backend"
+description: "backend helper"
+---
+# Backend
+Body`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	srv := &Server{skillsDir: tmp}
+	raw, err := srv.skillsSummaryWriteTyped(context.Background(), skillsSummaryWriteParams{
+		Name:    "backend",
+		Summary: "inline edited summary",
+	})
+	if err != nil {
+		t.Fatalf("skillsSummaryWriteTyped error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	if resp["summary"] != "inline edited summary" {
+		t.Fatalf("response summary=%v, want=%q", resp["summary"], "inline edited summary")
+	}
+	updated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read updated SKILL.md: %v", err)
+	}
+	text := string(updated)
+	if !strings.Contains(text, `summary: "inline edited summary"`) {
+		t.Fatalf("updated content missing summary, got=%q", text)
+	}
+	if !strings.Contains(text, "# Backend\nBody") {
+		t.Fatalf("updated content should keep body, got=%q", text)
+	}
+}
+
 func TestBuildConfiguredSkillPrompt(t *testing.T) {
 	tmp := t.TempDir()
 	writeSkill := func(name, content string) {
@@ -122,8 +184,16 @@ func TestBuildConfiguredSkillPrompt(t *testing.T) {
 		}
 	}
 
-	writeSkill("backend", "backend rules")
-	writeSkill("tdd", "tdd rules")
+	writeSkill("backend", `---
+summary: "backend-summary"
+---
+# backend
+FULL BACKEND DETAIL SHOULD NOT INJECT`)
+	writeSkill("tdd", `---
+summary: "tdd-summary"
+---
+# tdd
+FULL TDD DETAIL SHOULD NOT INJECT`)
 
 	srv := &Server{
 		skillSvc:  service.NewSkillService(tmp),
@@ -142,6 +212,12 @@ func TestBuildConfiguredSkillPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "[skill:backend]") {
 		t.Fatalf("expected backend skill in prompt, got=%q", prompt)
+	}
+	if !strings.Contains(prompt, "摘要: backend-summary") {
+		t.Fatalf("expected backend summary in prompt, got=%q", prompt)
+	}
+	if strings.Contains(prompt, "FULL BACKEND DETAIL SHOULD NOT INJECT") {
+		t.Fatalf("full skill body should not be injected, got=%q", prompt)
 	}
 	if strings.Contains(prompt, "[skill:tdd]") {
 		t.Fatalf("input skill should skip configured duplicate, got=%q", prompt)
@@ -164,8 +240,16 @@ func TestBuildSelectedSkillPrompt(t *testing.T) {
 		}
 	}
 
-	writeSkill("backend", "backend rules")
-	writeSkill("tdd", "tdd rules")
+	writeSkill("backend", `---
+summary: "backend-summary"
+---
+# backend
+FULL BACKEND DETAIL SHOULD NOT INJECT`)
+	writeSkill("tdd", `---
+summary: "tdd-summary"
+---
+# tdd
+FULL TDD DETAIL SHOULD NOT INJECT`)
 
 	srv := &Server{
 		skillSvc:  service.NewSkillService(tmp),
@@ -180,6 +264,12 @@ func TestBuildSelectedSkillPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "[skill:backend]") {
 		t.Fatalf("expected backend selected skill in prompt, got=%q", prompt)
+	}
+	if !strings.Contains(prompt, "摘要: backend-summary") {
+		t.Fatalf("expected backend summary in prompt, got=%q", prompt)
+	}
+	if strings.Contains(prompt, "FULL BACKEND DETAIL SHOULD NOT INJECT") {
+		t.Fatalf("full skill body should not be injected, got=%q", prompt)
 	}
 	if strings.Contains(prompt, "[skill:tdd]") {
 		t.Fatalf("input skill should skip selected duplicate, got=%q", prompt)
@@ -225,6 +315,12 @@ tdd skill`)
 	}
 	if !strings.Contains(prompt, "[skill:tdd]") {
 		t.Fatalf("expected tdd skill in auto matched prompt, got=%q", prompt)
+	}
+	if !strings.Contains(prompt, "摘要: test helper") {
+		t.Fatalf("expected summary-based auto matched prompt, got=%q", prompt)
+	}
+	if strings.Contains(prompt, "tdd skill") {
+		t.Fatalf("full skill body should not be injected, got=%q", prompt)
 	}
 	if strings.Contains(prompt, "[skill:backend]") {
 		t.Fatalf("configured skill should be skipped in auto match, got=%q", prompt)
@@ -413,6 +509,57 @@ backend guide`)
 	}
 }
 
+func TestSkillsMatchPreviewTypedAtAliasUsesExplicitMatch(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("skill-finder", `---
+description: Skill 能力检索
+aliases: ["@Skill", "@skill"]
+summary: "这段摘要是否存在不应影响 @ 触发"
+---
+skill helper`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+	}
+
+	raw, err := srv.skillsMatchPreviewTyped(context.Background(), skillsMatchPreviewParams{
+		ThreadID: "thread-3",
+		Text:     "请按@skill处理这个问题",
+	})
+	if err != nil {
+		t.Fatalf("skillsMatchPreviewTyped error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	matches, ok := resp["matches"].([]skillsMatchPreviewItem)
+	if !ok {
+		t.Fatalf("matches type=%T, want=[]skillsMatchPreviewItem", resp["matches"])
+	}
+	if len(matches) != 1 {
+		t.Fatalf("len(matches)=%d, want=1", len(matches))
+	}
+	if matches[0].Name != "skill-finder" {
+		t.Fatalf("match[0].Name=%q, want=skill-finder", matches[0].Name)
+	}
+	if matches[0].MatchedBy != "explicit" {
+		t.Fatalf("match[0].MatchedBy=%q, want=explicit", matches[0].MatchedBy)
+	}
+	if !reflect.DeepEqual(matches[0].MatchedTerms, []string{"@Skill"}) {
+		t.Fatalf("match[0].MatchedTerms=%v, want=[@Skill]", matches[0].MatchedTerms)
+	}
+}
+
 func TestSkillsMatchPreviewTypedSkipsInputSkillAndSupportsAgentID(t *testing.T) {
 	tmp := t.TempDir()
 	writeSkill := func(name, content string) {
@@ -497,6 +644,12 @@ func TestSkillsConfigReadAndLocalRead(t *testing.T) {
 	}
 	if !strings.Contains(skill["content"], "backend") {
 		t.Fatalf("local read content=%q", skill["content"])
+	}
+	if strings.TrimSpace(skill["summary"]) == "" {
+		t.Fatalf("local read summary should not be empty")
+	}
+	if skill["summary_source"] != "generated" {
+		t.Fatalf("local read summary_source=%q, want=generated", skill["summary_source"])
 	}
 }
 

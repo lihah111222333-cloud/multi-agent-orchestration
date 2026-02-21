@@ -492,6 +492,13 @@ func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams
 	}
 	total := int64(len(allMsgs))
 	msgs := paginateRolloutMessages(allMsgs, p.Limit, p.Before)
+	logger.Info("thread/messages: page selected",
+		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+		"before", p.Before,
+		"limit", p.Limit,
+		"page_count", len(msgs),
+		"total", total,
+	)
 
 	// 第一页立即返回, 剩余页后台流式加载 + 通知
 	if s.uiRuntime != nil && p.Before == 0 {
@@ -518,6 +525,20 @@ func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams
 		records := msgsToRecords(msgs)
 		_ = s.uiRuntime.HydrateHistory(p.ThreadID, records)
 	}
+
+	diffLen := 0
+	timelineLen := 0
+	if s.uiRuntime != nil {
+		diffLen = len(s.uiRuntime.ThreadDiff(p.ThreadID))
+		timelineLen = len(s.uiRuntime.ThreadTimeline(p.ThreadID))
+	}
+	logger.Info("thread/messages: response prepared",
+		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+		"page_count", len(msgs),
+		"total", total,
+		"timeline_len", timelineLen,
+		"diff_len", diffLen,
+	)
 
 	return map[string]any{
 		"messages": msgs,
@@ -567,6 +588,8 @@ func (s *Server) streamRemainingHistory(threadID string, all []threadHistoryMess
 	// 追加到已有 timeline (不重置)
 	records := msgsToRecords(remaining)
 	s.uiRuntime.AppendHistory(threadID, records)
+	diffLen := len(s.uiRuntime.ThreadDiff(threadID))
+	timelineLen := len(s.uiRuntime.ThreadTimeline(threadID))
 
 	// 通知前端 timeline 已更新
 	s.Notify("thread/messages/page", map[string]any{
@@ -579,6 +602,13 @@ func (s *Server) streamRemainingHistory(threadID string, all []threadHistoryMess
 		logger.FieldAgentID, threadID,
 		"total_loaded", loaded,
 		"pages", pageNum,
+	)
+	logger.Info("thread/messages: streaming page notified",
+		logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
+		"total_loaded", loaded,
+		"pages", pageNum,
+		"timeline_len", timelineLen,
+		"diff_len", diffLen,
 	)
 }
 

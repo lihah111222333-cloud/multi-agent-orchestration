@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multi-agent/go-agent-v2/internal/service"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -22,15 +23,33 @@ import (
 // ========================================
 
 func (s *Server) skillsList(_ context.Context, _ json.RawMessage) (any, error) {
-	var skills []map[string]string
-	skillsDir := s.skillsDirectory()
-	entries, err := os.ReadDir(skillsDir)
+	if s.skillSvc != nil {
+		list, err := s.skillSvc.ListSkills()
+		if err == nil {
+			skills := make([]map[string]any, 0, len(list))
+			for _, item := range list {
+				skills = append(skills, map[string]any{
+					"name":          item.Name,
+					"dir":           item.Dir,
+					"description":   item.Description,
+					"summary":       item.Summary,
+					"trigger_words": item.TriggerWords,
+					"force_words":   item.ForceWords,
+				})
+			}
+			return map[string]any{"skills": skills}, nil
+		}
+		logger.Warn("skills/list: load metadata failed, fallback to dir scan", logger.FieldError, err)
+	}
+
+	var skills []map[string]any
+	entries, err := os.ReadDir(s.skillsDirectory())
 	if err != nil {
 		return map[string]any{"skills": skills}, nil
 	}
-	for _, e := range entries {
-		if e.IsDir() {
-			skills = append(skills, map[string]string{"name": e.Name()})
+	for _, entry := range entries {
+		if entry.IsDir() {
+			skills = append(skills, map[string]any{"name": entry.Name()})
 		}
 	}
 	return map[string]any{"skills": skills}, nil
@@ -313,10 +332,13 @@ func (s *Server) skillsLocalReadTyped(_ context.Context, p skillsLocalReadParams
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsLocalRead", "read file")
 	}
+	summary, summarySource := service.SummarizeSkillContent(string(data))
 	return map[string]any{
 		"skill": map[string]string{
-			"path":    path,
-			"content": string(data),
+			"path":           path,
+			"content":        string(data),
+			"summary":        summary,
+			"summary_source": summarySource,
 		},
 	}, nil
 }
@@ -440,6 +462,12 @@ type skillsConfigWriteParams struct {
 	Skills  []string `json:"skills"`
 }
 
+// skillsSummaryWriteParams skills/summary/write 请求参数。
+type skillsSummaryWriteParams struct {
+	Name    string `json:"name"`
+	Summary string `json:"summary"`
+}
+
 type skillsMatchPreviewParams struct {
 	ThreadID string      `json:"threadId"`
 	AgentID  string      `json:"agent_id,omitempty"`
@@ -541,6 +569,33 @@ func (s *Server) skillsConfigWriteTyped(_ context.Context, p skillsConfigWritePa
 	return map[string]any{"ok": true, "path": path}, nil
 }
 
+func (s *Server) skillsSummaryWriteTyped(_ context.Context, p skillsSummaryWriteParams) (any, error) {
+	if strings.TrimSpace(p.Name) == "" {
+		return nil, apperrors.New("Server.skillsSummaryWrite", "name is required")
+	}
+	skillName, err := normalizeSkillName(p.Name)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsSummaryWrite", "normalize skill name")
+	}
+	path := filepath.Join(s.skillsDirectory(), skillName, "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsSummaryWrite", "read SKILL.md")
+	}
+	summary := strings.TrimSpace(p.Summary)
+	updated := service.UpsertSkillSummaryFrontmatter(string(data), summary)
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsSummaryWrite", "write SKILL.md")
+	}
+	logger.Info("skills/summary/write: saved", logger.FieldSkill, skillName, "summary_len", len(summary))
+	return map[string]any{
+		"ok":      true,
+		"path":    path,
+		"name":    skillName,
+		"summary": summary,
+	}, nil
+}
+
 // GetAgentSkills 返回指定 agent 配置的技能列表。
 func (s *Server) GetAgentSkills(agentID string) []string {
 	s.skillsMu.RLock()
@@ -565,7 +620,7 @@ type skillsRemoteReadParams struct {
 
 // skillsRemoteReadTyped 读取远程 Skill。
 func (s *Server) skillsRemoteReadTyped(_ context.Context, p skillsRemoteReadParams) (any, error) {
-	logger.Infow("skills/remote/read: fetching", logger.FieldURL, p.URL)
+	logger.Info("skills/remote/read: fetching", logger.FieldURL, p.URL)
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(p.URL)
 	if err != nil {

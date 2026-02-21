@@ -198,6 +198,40 @@ func (s *Server) resolveJsonRenderPrompt(ctx context.Context) string {
 	return prompt
 }
 
+// ========================================
+// Browser Prompt 配置
+// ========================================
+
+func (s *Server) configBrowserPromptRead(ctx context.Context, _ json.RawMessage) (any, error) {
+	return map[string]any{
+		"prompt":        s.resolveBrowserPrompt(ctx),
+		"defaultPrompt": defaultBrowserPrompt,
+		"prefKey":       prefKeyBrowserPrompt,
+	}, nil
+}
+
+type configBrowserPromptWriteParams struct {
+	Prompt string `json:"prompt"`
+}
+
+func (s *Server) configBrowserPromptWriteTyped(ctx context.Context, p configBrowserPromptWriteParams) (any, error) {
+	if s.prefManager == nil {
+		return nil, apperrors.New("Server.configBrowserPromptWrite", "preference manager not initialized")
+	}
+	normalized := strings.TrimSpace(p.Prompt)
+	if len(normalized) > maxBrowserPromptLen {
+		return nil, apperrors.Newf("Server.configBrowserPromptWrite", "prompt length exceeds %d", maxBrowserPromptLen)
+	}
+	if err := s.prefManager.Set(ctx, prefKeyBrowserPrompt, normalized); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":           true,
+		"prompt":       s.resolveBrowserPrompt(ctx),
+		"usingDefault": normalized == "",
+	}, nil
+}
+
 func (s *Server) mcpServerStatusList(_ context.Context, _ json.RawMessage) (any, error) {
 	if s.lsp == nil {
 		return map[string]any{"servers": []map[string]any{}}, nil

@@ -159,6 +159,30 @@ func (s *Server) appendJsonRenderHint(ctx context.Context, prompt string) string
 	return mergePromptText(prompt, s.resolveJsonRenderPrompt(ctx))
 }
 
+func (s *Server) resolveBrowserPrompt(ctx context.Context) string {
+	if s.prefManager == nil {
+		return defaultBrowserPrompt
+	}
+	value, err := s.prefManager.Get(ctx, prefKeyBrowserPrompt)
+	if err != nil {
+		logger.Warn("browser prompt: load preference failed", logger.FieldError, err)
+		return defaultBrowserPrompt
+	}
+	prompt := strings.TrimSpace(asString(value))
+	if prompt == "" {
+		return defaultBrowserPrompt
+	}
+	if len(prompt) > maxBrowserPromptLen {
+		logger.Warn("browser prompt: invalid preference fallback to default", "length", len(prompt))
+		return defaultBrowserPrompt
+	}
+	return prompt
+}
+
+func (s *Server) appendBrowserHint(ctx context.Context, prompt string) string {
+	return mergePromptText(prompt, s.resolveBrowserPrompt(ctx))
+}
+
 func appendSkillPlaceholders(input []UserInput, skillNames []string) []UserInput {
 	if len(skillNames) == 0 {
 		return input
@@ -197,7 +221,7 @@ func (s *Server) buildConfiguredSkillPrompt(agentID string, input []UserInput) (
 		if _, exists := inputSkillSet[strings.ToLower(normalizedName)]; exists {
 			continue
 		}
-		content, err := s.skillSvc.ReadSkillContent(normalizedName)
+		content, err := s.skillSvc.ReadSkillDigestContent(normalizedName)
 		if err != nil {
 			logger.Warn("turn/start: configured skill unavailable, skip",
 				logger.FieldAgentID, agentID, logger.FieldThreadID, agentID,
@@ -228,7 +252,7 @@ func (s *Server) buildSelectedSkillPrompt(selectedSkills []string, input []UserI
 		if _, exists := inputSkillSet[strings.ToLower(skillName)]; exists {
 			continue
 		}
-		content, err := s.skillSvc.ReadSkillContent(skillName)
+		content, err := s.skillSvc.ReadSkillDigestContent(skillName)
 		if err != nil {
 			logger.Warn("turn/start: selected skill unavailable, skip",
 				logger.FieldSkill, skillName,
@@ -281,21 +305,39 @@ type autoSkillMatchOptions struct {
 	IncludeConfiguredExplicit bool
 }
 
-func explicitSkillMentionTerms(normalizedPrompt, skillName string) []string {
+func explicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords []string) []string {
 	trimmedName := strings.TrimSpace(skillName)
-	if trimmedName == "" {
-		return nil
+	candidates := make([]string, 0, 1+len(triggerWords))
+	if trimmedName != "" {
+		candidates = append(candidates, "@"+trimmedName)
+		candidates = append(candidates, "[skill:"+trimmedName+"]")
 	}
-	lowerName := strings.ToLower(trimmedName)
-	if lowerName == "" {
-		return nil
+	for _, raw := range triggerWords {
+		word := strings.TrimSpace(raw)
+		if word == "" {
+			continue
+		}
+		lowerWord := strings.ToLower(word)
+		if strings.HasPrefix(lowerWord, "@") || strings.HasPrefix(lowerWord, "[skill:") {
+			candidates = append(candidates, word)
+		}
 	}
-	terms := make([]string, 0, 2)
-	if strings.Contains(normalizedPrompt, "@"+lowerName) {
-		terms = append(terms, "@"+trimmedName)
-	}
-	if strings.Contains(normalizedPrompt, "[skill:"+lowerName+"]") {
-		terms = append(terms, "[skill:"+trimmedName+"]")
+
+	terms := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		lowerCandidate := strings.ToLower(strings.TrimSpace(candidate))
+		if lowerCandidate == "" {
+			continue
+		}
+		if _, exists := seen[lowerCandidate]; exists {
+			continue
+		}
+		if !strings.Contains(normalizedPrompt, lowerCandidate) {
+			continue
+		}
+		seen[lowerCandidate] = struct{}{}
+		terms = append(terms, candidate)
 	}
 	if len(terms) == 0 {
 		return nil
@@ -304,7 +346,7 @@ func explicitSkillMentionTerms(normalizedPrompt, skillName string) []string {
 }
 
 func classifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
-	explicitTerms := explicitSkillMentionTerms(normalizedPrompt, skillName)
+	explicitTerms := explicitSkillMentionTerms(normalizedPrompt, skillName, triggerWords)
 	if len(explicitTerms) > 0 {
 		return "explicit", explicitTerms
 	}
@@ -382,7 +424,7 @@ func (s *Server) buildAutoMatchedSkillPrompt(agentID, prompt string, input []Use
 		if skillName == "" {
 			continue
 		}
-		content, readErr := s.skillSvc.ReadSkillContent(skillName)
+		content, readErr := s.skillSvc.ReadSkillDigestContent(skillName)
 		if readErr != nil {
 			logger.Warn("turn/start: auto-matched skill unavailable, skip",
 				logger.FieldAgentID, agentID, logger.FieldThreadID, agentID,
@@ -435,6 +477,7 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 	submitPrompt = mergePromptText(submitPrompt, autoMatchedSkillPrompt)
 	submitPrompt = s.appendLSPUsageHint(ctx, submitPrompt)
 	submitPrompt = s.appendJsonRenderHint(ctx, submitPrompt)
+	submitPrompt = s.appendBrowserHint(ctx, submitPrompt)
 	logger.Info("turn/start: input prepared",
 		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 		"text_len", len(prompt),
@@ -494,6 +537,7 @@ func (s *Server) turnSteerTyped(ctx context.Context, p turnSteerParams) (any, er
 		submitPrompt = mergePromptText(submitPrompt, autoMatchedSkillPrompt)
 		submitPrompt = s.appendLSPUsageHint(ctx, submitPrompt)
 		submitPrompt = s.appendJsonRenderHint(ctx, submitPrompt)
+		submitPrompt = s.appendBrowserHint(ctx, submitPrompt)
 		if err := proc.Client.Submit(submitPrompt, images, files, nil); err != nil {
 			return nil, err
 		}

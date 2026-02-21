@@ -5,6 +5,7 @@ const BOLD_RE = /\*\*([^*]+)\*\*/g;
 const ITALIC_RE = /(^|[\s(（\["'])\*([^*\n]+)\*(?=[\s).，。！？、\]"']|$)/g;
 const HR_RE = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
 const FILE_REF_RE = /^(?<path>(?:[a-zA-Z]:[\\/])?[^#:\n][^#\n]*?)(?::(?<line>\d+)(?::(?<column>\d+))?|#L(?<line2>\d+)(?:C(?<column2>\d+))?)$/;
+const INLINE_FILE_REF_RE = /(^|[\s(（\["'])([^\s<>()]+(?::\d+(?::\d+)?|#L\d+(?:C\d+)?))(?=$|[\s).，。！？、\]"'])/g;
 
 function escapeHtml(value) {
   return (value || '')
@@ -80,9 +81,10 @@ export function parseInlineFileReference(rawText) {
   if (!pathRaw) return null;
   if (/^https?:\/\//i.test(pathRaw)) return null;
 
-  const normalizedPath = pathRaw.replace(/\\/g, '/');
-  const looksLikePath = /[\\/]/.test(pathRaw) || normalizedPath.includes('.');
-  if (!looksLikePath) return null;
+  const hasPathSeparator = /[\\/]/.test(pathRaw);
+  const hasRelativePrefix = /^\.{1,2}[\\/]/.test(pathRaw);
+  const hasCodeLikeExtension = /\.[a-zA-Z][a-zA-Z0-9_-]{0,10}$/.test(pathRaw);
+  if (!hasPathSeparator && !hasRelativePrefix && !hasCodeLikeExtension) return null;
 
   const lineRaw = match.groups.line || match.groups.line2 || '';
   const line = Number(lineRaw);
@@ -97,12 +99,20 @@ export function parseInlineFileReference(rawText) {
   };
 }
 
+function renderFileRefCode(rawRef, parsedFileRef) {
+  const lineText = parsedFileRef.column > 0
+    ? `${parsedFileRef.line}:${parsedFileRef.column}`
+    : `${parsedFileRef.line}`;
+  return `<code class="chat-md-inline-code is-file-ref" data-file-path="${escapeHtml(parsedFileRef.path)}" data-file-line="${parsedFileRef.line}" data-file-column="${parsedFileRef.column}" title="定位 ${escapeHtml(parsedFileRef.path)}:${lineText}">${escapeHtml(rawRef)}</code>`;
+}
+
 function renderInlineLine(raw) {
   const source = (raw || '').toString();
   if (!source) return '';
 
   const codeTokens = [];
   const linkTokens = [];
+  const fileRefTokens = [];
   let text = source.replace(INLINE_CODE_RE, (_, code) => {
     const parsedFileRef = parseInlineFileReference(code);
     if (!parsedFileRef) {
@@ -112,13 +122,10 @@ function renderInlineLine(raw) {
         `<code class="chat-md-inline-code">${escapeHtml(code)}</code>`,
       );
     }
-    const lineText = parsedFileRef.column > 0
-      ? `${parsedFileRef.line}:${parsedFileRef.column}`
-      : `${parsedFileRef.line}`;
     return stashToken(
       codeTokens,
       'CODE',
-      `<code class="chat-md-inline-code is-file-ref" data-file-path="${escapeHtml(parsedFileRef.path)}" data-file-line="${parsedFileRef.line}" data-file-column="${parsedFileRef.column}" title="定位 ${escapeHtml(parsedFileRef.path)}:${lineText}">${escapeHtml(code)}</code>`,
+      renderFileRefCode(code, parsedFileRef),
     );
   });
 
@@ -132,6 +139,12 @@ function renderInlineLine(raw) {
       'LINK',
       `<a class="chat-md-link" href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`,
     );
+  });
+
+  text = text.replace(INLINE_FILE_REF_RE, (full, prefix, candidate) => {
+    const parsedFileRef = parseInlineFileReference(candidate);
+    if (!parsedFileRef) return full;
+    return `${prefix}${stashToken(fileRefTokens, 'FILEREF', renderFileRefCode(candidate, parsedFileRef))}`;
   });
 
   text = escapeHtml(text);
@@ -149,6 +162,7 @@ function renderInlineLine(raw) {
   text = text.replace(ITALIC_RE, '$1<em>$2</em>');
 
   text = restoreToken(text, 'LINK', linkTokens);
+  text = restoreToken(text, 'FILEREF', fileRefTokens);
   text = restoreToken(text, 'CODE', codeTokens);
   return text;
 }

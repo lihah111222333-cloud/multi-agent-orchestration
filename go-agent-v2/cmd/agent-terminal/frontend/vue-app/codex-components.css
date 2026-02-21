@@ -58,7 +58,7 @@
     --color-text-button-primary: #0d0d0d;
     --color-text-button-secondary: #afafaf;
     --color-text-button-tertiary: #5d5d5d;
-    --color-text-accent: #99ceff;
+    --color-text-accent: #d1d5db;
     --color-text-success: #40c977;
     --color-text-warning: #ff8549;
     --color-text-error: #ff6764;
@@ -68,14 +68,14 @@
     --color-icon-secondary: #ffffffb3;
     --color-icon-tertiary: #ffffff80;
     --color-icon-inverted: #000;
-    --color-icon-accent: #339cff;
+    --color-icon-accent: #b4b9c3;
     --color-icon-success: #40c977;
     --color-icon-warning: #ff8549;
     --color-icon-error: #ff6764;
 
     /* --- 强调色 --- */
     --color-accent-red: #ff6764;
-    --color-accent-blue: #339cff;
+    --color-accent-blue: #b4b9c3;
     --color-accent-yellow: #ffd240;
     --color-accent-orange: #fb6a22;
     --color-accent-green: #40c977;
@@ -87,7 +87,7 @@
     --color-border-light: #ffffff0a;
     --color-border-warning: #ff854966;
     --color-border-error: #fa423e66;
-    --color-border-focus: #339cffb3;
+    --color-border-focus: rgba(180, 185, 195, 0.7);
 
     /* --- 代码差异 --- */
     --color-decoration-added: #40c977;
@@ -170,7 +170,7 @@
     --color-text-button-primary: #fff;
     --color-text-button-secondary: #0d0d0d;
     --color-text-button-tertiary: #5d5d5d;
-    --color-text-accent: #0285ff;
+    --color-text-accent: #6b7280;
     --color-text-success: #00a240;
     --color-text-warning: #e25507;
     --color-text-error: #e02e2a;
@@ -180,14 +180,14 @@
     --color-icon-secondary: #0d0d0db3;
     --color-icon-tertiary: #0d0d0d80;
     --color-icon-inverted: #fff;
-    --color-icon-accent: #0285ff;
+    --color-icon-accent: #6b7280;
     --color-icon-success: #00a240;
     --color-icon-warning: #e25507;
     --color-icon-error: #e02e2a;
 
     /* --- 强调色 --- */
     --color-accent-red: #e02e2a;
-    --color-accent-blue: #0285ff;
+    --color-accent-blue: #6b7280;
     --color-accent-yellow: #ffc300;
     --color-accent-orange: #e25507;
     --color-accent-green: #00a240;
@@ -199,7 +199,7 @@
     --color-border-light: #0d0d0d0d;
     --color-border-warning: #e2550726;
     --color-border-error: #e02e2a26;
-    --color-border-focus: #0285ff;
+    --color-border-focus: #6b7280;
 
     /* --- 代码差异 --- */
     --color-decoration-added: #00a240;
@@ -541,8 +541,8 @@ pre[class*=language-] {
 }
 
 .hyperspeed-model-shimmer {
-    --hyperspeed-link-blue: #339cff;
-    --hyperspeed-mid-blue: rgba(51, 156, 255, 0.72);
+    --hyperspeed-link-blue: #b4b9c3;
+    --hyperspeed-mid-blue: rgba(180, 185, 195, 0.72);
     --hyperspeed-shimmer-run-ms: 4.5s;
     --hyperspeed-shimmer-pause-ms: 4.5s;
     display: inline-block;

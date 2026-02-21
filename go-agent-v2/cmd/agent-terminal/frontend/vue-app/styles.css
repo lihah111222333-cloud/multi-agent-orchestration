@@ -10,12 +10,12 @@
   --card: #212121;
   --card-hover: #2a2a2a;
   --elevated: #282828;
-  --primary: #339cff;
-  --primary-dim: rgba(51, 156, 255, 0.14);
+  --primary: #b4b9c3;
+  --primary-dim: rgba(180, 185, 195, 0.14);
   --success: #40c977;
   --error: #ff6764;
   --warning: #ff8549;
-  --info: #339cff;
+  --info: #b4b9c3;
   --text: #fff;
   --text-sec: #ffffffb3;
   --text-muted: #ffffff80;
@@ -23,7 +23,7 @@
   --border: #ffffff14;
   --border-hover: #ffffff29;
   --hover: #ffffff08;
-  --selected: rgba(51, 156, 255, 0.14);
+  --selected: rgba(180, 185, 195, 0.14);
   --chat-bg: #000;
   --chat-user-bg: #212121;
   --chat-user-border: #ffffff14;
@@ -31,7 +31,7 @@
   --chat-assistant-border: transparent;
   --chat-system-bg: #181818;
   --chat-system-border: #ffffff14;
-  --chat-thinking-bg: rgba(51, 156, 255, 0.06);
+  --chat-thinking-bg: rgba(180, 185, 195, 0.08);
   --chat-command-bg: rgba(64, 201, 119, 0.06);
   --chat-danger-bg: rgba(255, 103, 100, 0.06);
   --chat-pill-bg: #ffffff0d;
@@ -1433,6 +1433,15 @@ a,
   overflow: hidden;
 }
 
+.diff-file-group.is-focused {
+  border-color: rgba(220, 224, 232, 0.5);
+  box-shadow: 0 0 0 1px rgba(220, 224, 232, 0.28), 0 8px 24px rgba(0, 0, 0, 0.36);
+}
+
+.diff-file-group.is-focused .diff-file-header {
+  background: rgba(40, 40, 40, 0.98);
+}
+
 .diff-file-header {
   display: flex;
   justify-content: space-between;
@@ -1485,6 +1494,7 @@ a,
   font-size: var(--diffs-font-size, 12px);
   line-height: var(--diffs-line-height, 1.8);
   border-top: 1px solid var(--color-border-light, #ffffff0a);
+  transition: background-color 0.16s ease;
 }
 
 .diff-line:first-child {
@@ -1546,6 +1556,19 @@ a,
 .diff-line.meta .diff-line-prefix,
 .diff-line.meta .diff-line-content {
   color: var(--color-text-foreground-tertiary, #ffffff80);
+}
+
+.diff-line.is-focused-line {
+  background: linear-gradient(90deg, rgba(212, 216, 224, 0.2) 0%, rgba(212, 216, 224, 0.12) 100%);
+}
+
+.diff-line.is-focused-line .diff-line-num,
+.diff-line.is-focused-line .diff-line-prefix {
+  color: rgba(241, 243, 247, 0.9);
+}
+
+.diff-line.is-focused-line .diff-line-content {
+  color: #f8fafc;
 }
 
 .chat-messages-vue {
@@ -1774,8 +1797,8 @@ a,
 }
 
 .chat-item.dialog.role-user .chat-item-avatar {
-  background: var(--color-accent-blue, #339cff);
-  border-color: var(--color-border-focus, #339cffb3);
+  background: linear-gradient(180deg, rgba(72, 72, 72, 0.96) 0%, rgba(48, 48, 48, 0.98) 100%);
+  border-color: rgba(228, 228, 228, 0.32);
 }
 
 .chat-item.dialog.role-assistant .chat-item-avatar {
@@ -2072,6 +2095,20 @@ a,
   background: var(--color-background-elevated-primary-opaque, #282828);
 }
 
+.chat-item-markdown .chat-md-inline-code.is-file-ref {
+  cursor: pointer;
+  border-color: rgba(215, 220, 228, 0.32);
+  text-decoration: underline;
+  text-decoration-color: rgba(215, 220, 228, 0.5);
+  text-underline-offset: 2px;
+}
+
+.chat-item-markdown .chat-md-inline-code.is-file-ref:hover {
+  border-color: rgba(236, 239, 244, 0.58);
+  background: rgba(54, 54, 54, 0.92);
+  text-decoration-color: rgba(236, 239, 244, 0.86);
+}
+
 .chat-item-markdown .chat-md-code {
   margin: 4px 0;
   padding: 14px 12px;
@@ -2155,14 +2192,14 @@ a,
 .chat-process-terminal {
   max-height: 36vh;
   overflow: auto;
-  background: var(--color-token-terminal-background, rgba(0, 0, 0, 0.45));
-  border: 1px solid var(--color-token-terminal-border, rgba(255, 255, 255, 0.1));
-  border-radius: 12px;
-  padding: 8px 12px;
+  background: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
   font-family: var(--font-mono, ui-monospace, "SF Mono", "Menlo", Consolas, monospace);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.4;
-  color: var(--color-token-terminal-foreground, rgba(255, 255, 255, 0.88));
+  color: var(--text-sec, #ffffffb3);
 }
 
 .chat-process-output {
@@ -2936,7 +2973,7 @@ a,
 
 .skill-card.active {
   border-color: var(--primary);
-  box-shadow: 0 0 0 1px rgba(51, 156, 255, 0.2);
+  box-shadow: 0 0 0 1px rgba(180, 185, 195, 0.22);
 }
 
 .skill-actions {
@@ -3369,8 +3406,8 @@ h4.jr-heading {
 }
 
 .jr-alert-info {
-  border-color: rgba(51, 156, 255, 0.35);
-  background: rgba(51, 156, 255, 0.06);
+  border-color: rgba(180, 185, 195, 0.42);
+  background: rgba(180, 185, 195, 0.1);
 }
 
 .jr-alert-warning {
@@ -3432,9 +3469,9 @@ h4.jr-heading {
 }
 
 .jr-badge-primary {
-  background: rgba(51, 156, 255, 0.14);
-  color: #7dd3fc;
-  border: 1px solid rgba(51, 156, 255, 0.35);
+  background: rgba(180, 185, 195, 0.16);
+  color: #e5e7eb;
+  border: 1px solid rgba(180, 185, 195, 0.4);
 }
 
 .jr-badge-success {
@@ -3517,19 +3554,19 @@ h4.jr-heading {
 }
 
 .jr-button-default:hover {
-  background: rgba(22, 35, 59, 0.95);
+  background: rgba(48, 48, 48, 0.95);
   color: var(--text);
   border-color: var(--border-hover);
 }
 
 .jr-button-primary {
-  background: rgba(51, 156, 255, 0.18);
-  color: #7dd3fc;
-  border-color: rgba(51, 156, 255, 0.45);
+  background: rgba(180, 185, 195, 0.2);
+  color: #f3f4f6;
+  border-color: rgba(180, 185, 195, 0.46);
 }
 
 .jr-button-primary:hover {
-  background: rgba(51, 156, 255, 0.28);
+  background: rgba(180, 185, 195, 0.3);
 }
 
 .jr-button-danger {
@@ -3577,7 +3614,7 @@ h4.jr-heading {
 .jr-progress-fill {
   height: 100%;
   border-radius: 3px;
-  background: linear-gradient(90deg, rgba(51, 156, 255, 0.7), rgba(51, 156, 255, 0.95));
+  background: linear-gradient(90deg, rgba(181, 187, 197, 0.76), rgba(216, 220, 227, 0.96));
   transition: width 0.3s ease;
 }
 
@@ -3793,7 +3830,7 @@ h4.jr-heading {
 
 .jr-dot-active {
   border-color: var(--primary);
-  background: rgba(51, 156, 255, 0.25);
+  background: rgba(181, 187, 197, 0.28);
 }
 
 .jr-dot-pending {

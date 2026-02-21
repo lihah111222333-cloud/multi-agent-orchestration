@@ -230,11 +230,12 @@ func TestUICodeOpenTyped_ImageExtensionsUseImageParser(t *testing.T) {
 			if got := asString(result["mediaType"]); got != tc.mediaType {
 				t.Fatalf("mediaType = %q, want %q", got, tc.mediaType)
 			}
-			if previewURL := asString(result["previewURL"]); !strings.HasPrefix(previewURL, "file://") {
-				t.Fatalf("previewURL = %q, want file://", previewURL)
+			expectedDataPrefix := "data:" + tc.mediaType + ";base64,"
+			if previewURL := asString(result["previewURL"]); !strings.HasPrefix(previewURL, expectedDataPrefix) {
+				t.Fatalf("previewURL = %q, want prefix %q", previewURL, expectedDataPrefix)
 			}
-			if thumbURL := asString(result["thumbnailURL"]); !strings.HasPrefix(thumbURL, "file://") {
-				t.Fatalf("thumbnailURL = %q, want file://", thumbURL)
+			if thumbURL := asString(result["thumbnailURL"]); !strings.HasPrefix(thumbURL, expectedDataPrefix) {
+				t.Fatalf("thumbnailURL = %q, want prefix %q", thumbURL, expectedDataPrefix)
 			}
 			snippet, ok := result["snippet"].([]map[string]any)
 			if !ok || len(snippet) != 1 {

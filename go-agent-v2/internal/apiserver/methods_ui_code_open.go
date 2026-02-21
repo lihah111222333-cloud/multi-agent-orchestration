@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -18,6 +19,7 @@ const (
 	defaultCodeOpenContextLines = 90
 	maxCodeOpenContextLines     = 180
 	maxCodeOpenFileBytes        = 64 << 20 // 64MB
+	maxInlineImageDataURLBytes  = 8 << 20  // 8MB
 	binaryProbeBytes            = 8 << 10  // 8KB
 )
 
@@ -276,6 +278,16 @@ func isImagePreviewExtension(path string) bool {
 	}
 }
 
+func imageDataURL(mediaType string, content []byte) string {
+	if strings.TrimSpace(mediaType) == "" || len(content) == 0 {
+		return ""
+	}
+	if len(content) > maxInlineImageDataURLBytes {
+		return ""
+	}
+	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(content)
+}
+
 func resolveCodeOpenRelativePath(resolvedPath, project string, projects []string) string {
 	relativePath := resolvedPath
 	for _, root := range normalizeProjectRoots(project, projects) {
@@ -391,7 +403,13 @@ func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, er
 		if p.Line > 0 {
 			targetLine = p.Line
 		}
-		previewURL := codePathToURI(resolvedPath)
+		fileURL := codePathToURI(resolvedPath)
+		previewURL := fileURL
+		thumbnailURL := fileURL
+		if inlineURL := imageDataURL(mediaType, content); inlineURL != "" {
+			previewURL = inlineURL
+			thumbnailURL = inlineURL
+		}
 		logger.Info("ui/code/open: image parser applied",
 			"resolved_path", resolvedPath,
 			"relative_path", relativePath,
@@ -418,7 +436,7 @@ func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, er
 			"image":        true,
 			"plugin":       "image-parser",
 			"previewURL":   previewURL,
-			"thumbnailURL": previewURL,
+			"thumbnailURL": thumbnailURL,
 		}, nil
 	}
 

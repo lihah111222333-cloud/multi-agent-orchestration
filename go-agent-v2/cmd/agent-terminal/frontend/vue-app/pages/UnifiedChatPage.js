@@ -339,7 +339,14 @@ export const UnifiedChatPage = {
         return leftArchived - rightArchived;
       });
     });
+    const showArchivedThreadList = ref(false);
+    const chatActiveThreadCards = computed(() => chatThreadCards.value.filter((thread) => !thread.isArchived));
+    const chatArchivedThreadCards = computed(() => chatThreadCards.value.filter((thread) => thread.isArchived));
+    const visibleChatThreadCards = computed(() => (
+      showArchivedThreadList.value ? chatArchivedThreadCards.value : chatActiveThreadCards.value
+    ));
     const activeChatThreadCount = computed(() => chatThreadCards.value.filter((thread) => !thread.isArchived).length);
+    const archivedChatThreadCount = computed(() => chatThreadCards.value.filter((thread) => thread.isArchived).length);
 
     const activeTimeline = computed(() => props.threadStore.getThreadTimeline(selectedThreadId.value));
     const activeThreadDiffText = computed(() => props.threadStore.getThreadDiff(selectedThreadId.value));
@@ -1144,6 +1151,10 @@ export const UnifiedChatPage = {
       }
     }
 
+    function toggleArchivedThreadList() {
+      showArchivedThreadList.value = !showArchivedThreadList.value;
+    }
+
     function setRenameInputRef(threadId, el) {
       const id = (threadId || '').toString().trim();
       if (!id) return;
@@ -1627,7 +1638,12 @@ export const UnifiedChatPage = {
       activeThread,
       chatThreadOptions,
       chatThreadCards,
+      showArchivedThreadList,
+      chatActiveThreadCards,
+      chatArchivedThreadCards,
+      visibleChatThreadCards,
       activeChatThreadCount,
+      archivedChatThreadCount,
       activeTimeline,
       activeDiffText,
       activeDiffFocusFile,
@@ -1691,6 +1707,7 @@ export const UnifiedChatPage = {
       stopCard,
       toggleThreadPin,
       toggleThreadArchive,
+      toggleArchivedThreadList,
       editingThreadId,
       editingAlias,
       renamingThreadId,
@@ -1733,7 +1750,17 @@ export const UnifiedChatPage = {
           <button class="btn btn-ghost btn-xs" :class="{active: layoutMode==='mix'}" @click="setChatMix">混合</button>
         </div>
 
-        <button class="btn btn-secondary btn-toolbar-sm" @click="launchOne">+ 启动 Agent</button>
+        <button
+          class="btn btn-secondary btn-toolbar-sm launch-agent-icon-btn"
+          aria-label="启动 Agent"
+          title="启动 Agent"
+          @click="launchOne"
+        >
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <path d="M2 10l2.3-.5L10 3.8a1.3 1.3 0 10-1.8-1.8L2.5 7.7 2 10z"></path>
+            <path d="M7.6 2.6l1.8 1.8"></path>
+          </svg>
+        </button>
         <button class="btn btn-ghost btn-toolbar-sm" @click="loadCurrentHistory">加载历史</button>
         <button class="btn btn-ghost btn-toolbar-sm" @click="refreshAll">刷新</button>
         <button
@@ -1773,15 +1800,61 @@ export const UnifiedChatPage = {
       </div>
 
       <div class="unified-main">
-        <aside v-if="!isCmd" class="thread-rail" aria-label="会话列表">
+        <aside v-if="!isCmd" class="thread-rail" :aria-label="showArchivedThreadList ? '归档会话列表' : '会话列表'">
           <header class="thread-rail-header">
-            <strong>会话列表</strong>
-            <span>{{ activeChatThreadCount }} 个 Agent</span>
+            <div class="thread-rail-header-main">
+              <span
+                class="thread-rail-kind-icon"
+                role="img"
+                :aria-label="showArchivedThreadList ? '归档列表' : '会话列表'"
+                :title="showArchivedThreadList ? '归档列表' : '会话列表'"
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                  <circle cx="5" cy="4" r="1.5"></circle>
+                  <circle cx="5" cy="12" r="1.5"></circle>
+                  <circle cx="11" cy="7" r="1.5"></circle>
+                  <path d="M5 5.5V10.5M5 7H9.5"></path>
+                </svg>
+              </span>
+              <span
+                class="thread-rail-count-chip"
+                role="img"
+                :aria-label="showArchivedThreadList ? (archivedChatThreadCount + ' 个 Agent') : (activeChatThreadCount + ' 个 Agent')"
+                :title="showArchivedThreadList ? (archivedChatThreadCount + ' 个 Agent') : (activeChatThreadCount + ' 个 Agent')"
+              >
+                <svg class="thread-rail-count-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                  <circle cx="5" cy="4" r="1.5"></circle>
+                  <circle cx="5" cy="12" r="1.5"></circle>
+                  <circle cx="11" cy="7" r="1.5"></circle>
+                  <path d="M5 5.5V10.5M5 7H9.5"></path>
+                </svg>
+                <strong>{{ showArchivedThreadList ? archivedChatThreadCount : activeChatThreadCount }}</strong>
+              </span>
+            </div>
+            <button
+              type="button"
+              class="btn btn-ghost btn-xs thread-rail-switch-btn"
+              :class="{ active: showArchivedThreadList }"
+              :aria-label="showArchivedThreadList ? '返回会话列表' : '打开归档列表'"
+              :title="showArchivedThreadList ? '返回会话列表' : '打开归档列表'"
+              @click="toggleArchivedThreadList"
+            >
+              <svg v-if="showArchivedThreadList" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M6 4L10 8L6 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" transform="rotate(180 8 8)"></path>
+              </svg>
+              <svg v-else viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <path d="M2.2 3.3h11.6a.9.9 0 0 1 .9.9v1.7a.9.9 0 0 1-.9.9H2.2a.9.9 0 0 1-.9-.9V4.2a.9.9 0 0 1 .9-.9Z"></path>
+                <path d="M3.4 6.8h9.2V12a1 1 0 0 1-1 1h-7.2a1 1 0 0 1-1-1V6.8Z"></path>
+                <path d="M6.1 9.3h3.8" stroke-linecap="round"></path>
+              </svg>
+            </button>
           </header>
-          <div v-if="chatThreadCards.length === 0" class="thread-rail-empty">暂无会话，点击顶部「启动 Agent」开始对话</div>
+          <div v-if="visibleChatThreadCards.length === 0" class="thread-rail-empty">
+            {{ showArchivedThreadList ? '暂无归档会话' : '暂无会话，点击顶部「启动 Agent」开始对话' }}
+          </div>
           <div v-else class="thread-rail-list hide-scrollbar">
             <button
-              v-for="thread in chatThreadCards"
+              v-for="thread in visibleChatThreadCards"
               :key="thread.id"
               class="thread-rail-item"
               :class="{ active: thread.selected, archived: thread.isArchived }"

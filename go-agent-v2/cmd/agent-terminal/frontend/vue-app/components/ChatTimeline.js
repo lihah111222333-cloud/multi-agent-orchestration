@@ -88,6 +88,15 @@ export const ChatTimeline = {
       return parts.join('\n') || '$ ';
     }
 
+    function displayFilePath(path) {
+      const raw = (path || '').toString().trim();
+      if (!raw) return '';
+      return raw
+        .replace(/^\/Users\/[^/]+\//, '~/')
+        .replace(/^\/home\/[^/]+\//, '~/')
+        .replace(/^C:\\Users\\[^\\]+\\/i, '~\\');
+    }
+
     function stateLabel(item) {
       if (!item) return '';
       if (item.kind === 'thinking') return item.done ? '完成' : '处理中';
@@ -267,6 +276,7 @@ export const ChatTimeline = {
       roleLabel,
       stateLabel,
       commandText,
+      displayFilePath,
       attachmentType,
       attachmentPreview,
       formatTime,
@@ -363,13 +373,13 @@ export const ChatTimeline = {
               <pre class="chat-process-text chat-process-code tool-call-name">{{ item.tool }}</pre>
               <div v-if="typeof item.elapsedMs !== 'undefined'" class="chat-process-foot tool-call-time">{{ item.elapsedMs }}ms</div>
             </div>
-            <div v-if="item.file" class="chat-process-text chat-process-meta chat-item-truncate" :title="item.file">{{ item.file }}</div>
+            <div v-if="item.file" class="chat-process-text chat-process-meta chat-file-path" :title="item.file">{{ displayFilePath(item.file) }}</div>
             <pre v-if="item.preview" class="chat-process-text chat-process-meta tool-preview">{{ item.preview }}</pre>
           </template>
 
           <template v-else-if="item.kind === 'file'">
-            <div class="chat-process-text chat-process-meta chat-item-truncate" :title="item.file || '(unknown file)'">
-              {{ item.file || '(unknown file)' }}
+            <div class="chat-process-text chat-process-meta chat-file-path" :title="item.file || '(unknown file)'">
+              {{ displayFilePath(item.file) || '(unknown file)' }}
             </div>
           </template>
 

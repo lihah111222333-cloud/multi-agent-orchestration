@@ -82,6 +82,22 @@ func (m *RuntimeManager) ThreadDiff(threadID string) string {
 	return m.snapshot.DiffTextByThread[id]
 }
 
+// AllTimelinesAndDiffs returns all hydrated timelines and diff texts.
+// Used by ui/state/get to avoid race conditions when switching threads.
+func (m *RuntimeManager) AllTimelinesAndDiffs() (map[string][]TimelineItem, map[string]string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	timelines := make(map[string][]TimelineItem, len(m.snapshot.TimelinesByThread))
+	for k, v := range m.snapshot.TimelinesByThread {
+		timelines[k] = v
+	}
+	diffs := make(map[string]string, len(m.snapshot.DiffTextByThread))
+	for k, v := range m.snapshot.DiffTextByThread {
+		diffs[k] = v
+	}
+	return timelines, diffs
+}
+
 // ReplaceThreads upserts thread list and status snapshot.
 func (m *RuntimeManager) ReplaceThreads(threads []ThreadSnapshot) {
 	m.mu.Lock()
@@ -612,4 +628,3 @@ func (m *RuntimeManager) SetWorkspaceUnavailable(message string) {
 	m.snapshot.WorkspaceFeatureEnabled = &flag
 	m.snapshot.WorkspaceLastError = strings.TrimSpace(message)
 }
-

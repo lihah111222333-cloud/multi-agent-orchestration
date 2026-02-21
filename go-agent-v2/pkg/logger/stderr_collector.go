@@ -83,12 +83,10 @@ func (c *StderrCollector) scan() {
 	}
 }
 
-// containsErrorKeyword 简单匹配 stderr 行中的错误关键词。
+// containsErrorKeyword 判断 stderr 行中是否包含错误关键词 (大小写不敏感)。
 func containsErrorKeyword(line string) bool {
-	for _, kw := range []string{"error", "Error", "ERROR", "panic", "PANIC", "fatal", "FATAL"} {
-		if strings.Contains(line, kw) {
-			return true
-		}
-	}
-	return false
+	lower := strings.ToLower(line)
+	return strings.Contains(lower, "error") ||
+		strings.Contains(lower, "panic") ||
+		strings.Contains(lower, "fatal")
 }

@@ -286,14 +286,17 @@ func (m *MultiHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return false
 }
 
-// Handle 分发到所有 Handler。
+// Handle 分发到所有 Handler, 返回首个错误 (若有)。
 func (m *MultiHandler) Handle(ctx context.Context, r slog.Record) error {
+	var firstErr error
 	for _, h := range m.handlers {
 		if h.Enabled(ctx, r.Level) {
-			_ = h.Handle(ctx, r)
+			if err := h.Handle(ctx, r); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
-	return nil
+	return firstErr
 }
 
 // WithAttrs 对所有 Handler 调用 WithAttrs。
@@ -353,7 +356,7 @@ func AttachDBHandler(pool *pgxpool.Pool) {
 
 // ShutdownDBHandler 关闭 DBHandler 并 flush 剩余日志。
 func ShutdownDBHandler() {
-	if h := dbHandler.Load(); h != nil {
+	if h := dbHandler.Swap(nil); h != nil {
 		h.Shutdown()
 	}
 }

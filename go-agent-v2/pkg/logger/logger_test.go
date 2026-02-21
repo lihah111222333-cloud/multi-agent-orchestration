@@ -1,11 +1,15 @@
 package logger
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // ========================================
@@ -333,4 +337,104 @@ func TestStderrCollector_ScannerErrorHandled(t *testing.T) {
 	// 修复后 scan() 应记录 scanner 错误 (我们无法拦截 slog 输出,
 	// 但至少确认 goroutine 正常完成而非死锁)。
 	// done channel 已在 Close() 中等待, 没有超时说明 goroutine 已退出。
+}
+
+// ========================================
+// Bug 1 (TDD): ShutdownDBHandler 应清零 dbHandler 指针
+// ========================================
+
+func TestShutdownDBHandler_NilAfterShutdown(t *testing.T) {
+	// 恢复原始状态
+	origLogger := getLogger()
+	defer storeLogger(origLogger)
+	defer func() { dbHandler.Store(nil) }()
+
+	// 模拟 AttachDBHandler: 手动存一个 non-nil DBHandler
+	// 使用 nil pool (flush 不会真写 DB)
+	h := &DBHandler{
+		buf:    make(chan LogEntry, 8),
+		done:   make(chan struct{}),
+		closed: &atomic.Bool{},
+	}
+	go h.consumeLoop()
+	dbHandler.Store(h)
+
+	// 执行 shutdown
+	ShutdownDBHandler()
+
+	// 验证: 指针应被清零
+	if got := dbHandler.Load(); got != nil {
+		t.Fatal("dbHandler should be nil after ShutdownDBHandler(), but got non-nil")
+	}
+}
+
+// ========================================
+// Bug 4 (TDD): MultiHandler 应传播子 Handler 错误
+// ========================================
+
+// errHandler 是一个总是返回 error 的 slog.Handler (测试用)。
+type errHandler struct {
+	err error
+}
+
+func (h *errHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *errHandler) Handle(_ context.Context, _ slog.Record) error {
+	return h.err
+}
+func (h *errHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *errHandler) WithGroup(_ string) slog.Handler      { return h }
+
+func TestMultiHandler_ReturnsFirstError(t *testing.T) {
+	wantErr := fmt.Errorf("handler write failed")
+	good := slog.NewTextHandler(os.Stderr, nil)
+	bad := &errHandler{err: wantErr}
+
+	multi := NewMultiHandler(good, bad)
+
+	r := slog.NewRecord(time.Now(), slog.LevelInfo, "test", 0)
+	err := multi.Handle(context.Background(), r)
+	if err == nil {
+		t.Fatal("MultiHandler.Handle should return error when sub-handler fails, got nil")
+	}
+	if err != wantErr {
+		t.Errorf("MultiHandler.Handle error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestMultiHandler_NoErrorWhenAllSucceed(t *testing.T) {
+	h1 := slog.NewTextHandler(os.Stderr, nil)
+	h2 := slog.NewTextHandler(os.Stderr, nil)
+	multi := NewMultiHandler(h1, h2)
+
+	r := slog.NewRecord(time.Now(), slog.LevelInfo, "test", 0)
+	if err := multi.Handle(context.Background(), r); err != nil {
+		t.Errorf("MultiHandler.Handle should return nil when all succeed, got %v", err)
+	}
+}
+
+// ========================================
+// Bug 6 (TDD): containsErrorKeyword 应大小写不敏感
+// ========================================
+
+func TestContainsErrorKeyword_MixedCase(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"mixed case eRrOr", "something eRrOr here", true},
+		{"mixed case PaNiC", "PaNiC in goroutine", true},
+		{"mixed case FaTaL", "FaTaL exception", true},
+		{"warning not matched", "wArNiNg level message", false},
+		{"info not matched", "iNfO level message", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := containsErrorKeyword(tt.line)
+			if got != tt.want {
+				t.Errorf("containsErrorKeyword(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
 }

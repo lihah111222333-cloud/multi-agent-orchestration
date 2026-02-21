@@ -72,9 +72,24 @@ import { useComposerStore } from '../stores/composer.js';
  * @property {boolean} [ok]
  * @property {string} [relative]
  * @property {string} [filePath]
+ * @property {boolean} [image]
+ * @property {string} [plugin]
+ * @property {string} [mediaType]
+ * @property {string} [previewURL]
+ * @property {string} [thumbnailURL]
+ * @property {number} [sizeBytes]
  * @property {number} [startLine]
  * @property {number} [endLine]
  * @property {string | CodeOpenSnippetLine[]} [snippet]
+ */
+
+/**
+ * @typedef {Object} ImagePreviewState
+ * @property {string} src
+ * @property {string} fullSrc
+ * @property {string} path
+ * @property {string} mediaType
+ * @property {number} sizeBytes
  */
 
 /**
@@ -269,6 +284,63 @@ function buildSyntheticDiffFromCodeOpen(codeOpenResult) {
 }
 
 /**
+ * @param {string} path
+ * @returns {boolean}
+ */
+function isPreviewableImagePath(path) {
+  const value = (path || '').toString().trim().toLowerCase();
+  if (!value) return false;
+  return /\.(png|jpg|jpeg|svg)$/.test(value);
+}
+
+/**
+ * @param {string} path
+ * @returns {string}
+ */
+function toFilePreviewURL(path) {
+  const raw = (path || '').toString().trim();
+  if (!raw) return '';
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('file://') || lower.startsWith('http://') || lower.startsWith('https://') || lower.startsWith('data:image/')) {
+    return raw;
+  }
+  if (/^[a-z]:[\\/]/i.test(raw)) {
+    return encodeURI(`file:///${raw.replace(/\\/g, '/')}`);
+  }
+  return encodeURI(`file://${raw}`);
+}
+
+/**
+ * @param {CodeOpenResult | null | undefined} codeOpenResult
+ * @returns {ImagePreviewState | null}
+ */
+function buildImagePreviewFromCodeOpen(codeOpenResult) {
+  if (!codeOpenResult || codeOpenResult.ok !== true) return null;
+  const mediaType = (codeOpenResult.mediaType || '').toString().trim().toLowerCase();
+  const resolvedPath = (codeOpenResult.relative || codeOpenResult.filePath || '').toString().trim();
+  const imageByType = mediaType === 'image/png'
+    || mediaType === 'image/jpeg'
+    || mediaType === 'image/svg+xml';
+  const imageByPath = isPreviewableImagePath(resolvedPath);
+  if (!codeOpenResult.image && !imageByType && !imageByPath) return null;
+
+  const thumb = (codeOpenResult.thumbnailURL || '').toString().trim();
+  const preview = (codeOpenResult.previewURL || '').toString().trim();
+  const src = thumb || preview || toFilePreviewURL((codeOpenResult.filePath || '').toString().trim());
+  const fullSrc = preview || src;
+  if (!src || !fullSrc) return null;
+
+  const size = Number(codeOpenResult.sizeBytes);
+  return {
+    src,
+    fullSrc,
+    path: resolvedPath,
+    mediaType: mediaType || 'image/*',
+    sizeBytes: Number.isFinite(size) && size > 0 ? Math.floor(size) : 0,
+  };
+}
+
+/**
  * @param {string} targetPath
  * @param {string} candidatePath
  * @returns {number}
@@ -372,6 +444,7 @@ export const UnifiedChatPage = {
     const focusedDiffLine = ref(0);
     const pendingFileRefFocus = /** @type {{ value: PendingFileRefFocus | null }} */ (ref(null));
     const fallbackDiffText = ref('');
+    const fallbackMediaPreview = /** @type {{ value: ImagePreviewState | null }} */ (ref(null));
 
     const isCmd = computed(() => props.mode === 'cmd');
     const modeKey = computed(() => (isCmd.value ? 'cmd' : 'chat'));
@@ -456,7 +529,9 @@ export const UnifiedChatPage = {
 
     const activeTimeline = computed(() => props.threadStore.getThreadTimeline(selectedThreadId.value));
     const activeThreadDiffText = computed(() => props.threadStore.getThreadDiff(selectedThreadId.value));
+    const activeMediaPreview = computed(() => fallbackMediaPreview.value);
     const activeDiffText = computed(() => {
+      if (activeMediaPreview.value?.src) return '';
       const rawDiffText = (activeThreadDiffText.value || '').toString();
       const targetPath = (focusedDiffPath.value || '').toString().trim();
       if (!targetPath) return rawDiffText;
@@ -1072,6 +1147,7 @@ export const UnifiedChatPage = {
         focusedDiffPath.value = '';
         focusedDiffLine.value = 0;
         fallbackDiffText.value = '';
+        fallbackMediaPreview.value = null;
         if (!id) return;
         shouldAutoScroll.value = true;
         try {
@@ -1480,6 +1556,7 @@ export const UnifiedChatPage = {
           const targetThreadId = (crossThreadSelection.threadId || '').toString().trim();
           if (targetThreadId && targetThreadId !== threadId) {
             fallbackDiffText.value = '';
+            fallbackMediaPreview.value = null;
             pendingFileRefFocus.value = {
               threadId: targetThreadId,
               path: crossThreadSelection.path,
@@ -1497,6 +1574,7 @@ export const UnifiedChatPage = {
             return;
           }
           fallbackDiffText.value = '';
+          fallbackMediaPreview.value = null;
           focusedDiffPath.value = crossThreadSelection.path;
           focusedDiffLine.value = line;
           logInfo('ui', 'chat.diff.focus.recovered', {
@@ -1541,10 +1619,28 @@ export const UnifiedChatPage = {
           }
         }
         if (codeOpenResult?.ok) {
+          const imagePreview = buildImagePreviewFromCodeOpen(codeOpenResult);
+          if (imagePreview) {
+            fallbackDiffText.value = '';
+            fallbackMediaPreview.value = imagePreview;
+            focusedDiffPath.value = imagePreview.path || rawPath;
+            focusedDiffLine.value = 0;
+            logInfo('ui', 'chat.diff.focus.image_preview_applied', {
+              thread_id: threadId,
+              requested_path: rawPath,
+              open_input_path: codeOpenInputPath,
+              resolved_path: imagePreview.path || rawPath,
+              media_type: imagePreview.mediaType,
+              size_bytes: imagePreview.sizeBytes,
+            });
+            return;
+          }
+
           const syntheticDiff = buildSyntheticDiffFromCodeOpen(codeOpenResult);
           const resolvedPath = (codeOpenResult?.relative || codeOpenResult?.filePath || codeOpenInputPath || rawPath).toString().trim();
           if (syntheticDiff && resolvedPath) {
             fallbackDiffText.value = syntheticDiff;
+            fallbackMediaPreview.value = null;
             focusedDiffPath.value = resolvedPath;
             focusedDiffLine.value = line;
             logInfo('ui', 'chat.diff.focus.code_open_applied', {
@@ -1592,6 +1688,7 @@ export const UnifiedChatPage = {
         });
         // 回退：即使没有精确命中，也尝试以原始路径触发右侧 diff 聚焦。
         fallbackDiffText.value = '';
+        fallbackMediaPreview.value = null;
         focusedDiffPath.value = rawPath;
         focusedDiffLine.value = line;
         logInfo('ui', 'chat.diff.focus.fallback_applied', {
@@ -1603,6 +1700,7 @@ export const UnifiedChatPage = {
       }
 
       fallbackDiffText.value = '';
+      fallbackMediaPreview.value = null;
       focusedDiffPath.value = selection.filename;
       focusedDiffLine.value = line;
       logInfo('ui', 'chat.diff.focus.applied', {
@@ -1858,6 +1956,7 @@ export const UnifiedChatPage = {
       archivedChatThreadCount,
       activeTimeline,
       activeDiffText,
+      activeMediaPreview,
       activeDiffFocusFile,
       activeDiffFocusLine,
       activeStatus,
@@ -2250,6 +2349,7 @@ export const UnifiedChatPage = {
               <div class="workspace-right-col" :style="{ flex: '0 0 ' + (100 - splitRatio) + '%' }">
                 <DiffPanel
                   :diff-text="activeDiffText"
+                  :media-preview="activeMediaPreview"
                   :focus-file="activeDiffFocusFile"
                   :focus-line="activeDiffFocusLine"
                 />

@@ -1621,6 +1621,109 @@ a,
   font-size: 13px;
 }
 
+.diff-media-card {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  background: rgba(22, 22, 22, 0.85);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+}
+
+.diff-media-thumb-btn {
+  width: 100%;
+  border: none;
+  padding: 0;
+  margin: 0;
+  background: rgba(0, 0, 0, 0.22);
+  cursor: zoom-in;
+  display: block;
+}
+
+.diff-media-thumb {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.diff-media-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.diff-media-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-sec);
+}
+
+.diff-media-meta {
+  font-size: 10px;
+  color: var(--text-subtle);
+}
+
+.diff-media-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.diff-media-lightbox-inner {
+  position: relative;
+  width: min(88vw, 1200px);
+  max-height: 88vh;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  background: rgba(12, 12, 12, 0.96);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.diff-media-lightbox-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(18, 18, 18, 0.88);
+  color: #f8fafc;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.diff-media-full {
+  width: 100%;
+  max-height: 80vh;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.66);
+}
+
+.diff-media-lightbox-path {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-sec);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
 .diff-file-group {
   margin-bottom: 12px;
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -2086,9 +2189,9 @@ a,
 
 .chat-process-line {
   width: min(78%, 860px);
-  padding: 6px 0 10px 14px;
+  padding: 4px 0 6px 10px;
   border-left: 2px solid var(--color-border, #ffffff14);
-  border-radius: 0 8px 8px 0;
+  border-radius: 0 7px 7px 0;
   background: var(--color-background-elevated-secondary, #ffffff08);
   margin: 2px 0;
   transition: background 0.2s ease, border-color 0.2s ease;
@@ -2123,7 +2226,7 @@ a,
 
 .chat-item.process.kind-file .chat-process-line {
   width: min(94%, 1040px);
-  padding: 8px 0 12px 14px;
+  padding: 3px 0 4px 10px;
   border-left-color: var(--color-accent-orange, #fb6a22);
   background: rgba(251, 106, 34, 0.06);
 }
@@ -2177,12 +2280,12 @@ a,
 .chat-process-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 5px;
+  gap: 5px;
+  margin-bottom: 2px;
 }
 
 .chat-process-role {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   color: var(--color-text-foreground-tertiary, #ffffff80);
   letter-spacing: 0.1em;
@@ -2190,17 +2293,95 @@ a,
 }
 
 .chat-process-status {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--color-text-foreground-tertiary, #ffffff80);
   background: var(--color-background-elevated-secondary, #ffffff08);
   border-radius: 4px;
-  padding: 1px 6px;
+  padding: 1px 5px;
 }
 
 .chat-process-time {
   color: var(--color-text-foreground-tertiary, #ffffff80);
-  font-size: 10px;
+  font-size: 8px;
   font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.chat-process-head-file {
+  gap: 4px;
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.chat-process-kind-icon,
+.chat-process-state-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-process-kind-icon {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.chat-process-kind-icon svg,
+.chat-process-state-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.chat-process-state-icon.is-saved {
+  color: #7fd7a2;
+}
+
+.chat-process-state-icon.is-editing {
+  color: #f7c36a;
+}
+
+.chat-process-file-inline {
+  min-width: 0;
+  flex: 1;
+  font-family: var(--font-mono, "SF Mono", "Menlo", monospace);
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--color-text-foreground-secondary, #ffffffb3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-process-copy-btn {
+  width: 15px;
+  height: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-foreground-secondary, #ffffffb3);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.chat-process-copy-btn:hover:not(:disabled) {
+  color: var(--color-text-foreground, #fff);
+  border-color: rgba(255, 255, 255, 0.36);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.chat-process-copy-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chat-process-copy-icon {
+  width: 9px;
+  height: 9px;
 }
 
 .chat-item-spacer {
@@ -2487,9 +2668,9 @@ a,
   margin: 0;
   white-space: pre-wrap;
   font-family: var(--font-mono, "SF Mono", "Menlo", monospace);
-  font-size: 12.5px;
+  font-size: 11.5px;
   color: var(--color-text-foreground, #fff);
-  line-height: 1.6;
+  line-height: 1.45;
   word-break: break-word;
 }
 
@@ -2533,18 +2714,18 @@ a,
 }
 
 .chat-process-meta {
-  margin-top: 4px;
+  margin-top: 3px;
   color: var(--color-text-foreground-secondary, #ffffffb3);
-  font-size: 11.5px;
+  font-size: 10.5px;
   font-family: var(--font-mono, "SF Mono", "Menlo", monospace);
 }
 
 .chat-file-path {
-  margin-top: 6px;
+  margin-top: 4px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
-  line-height: 1.5;
+  line-height: 1.35;
 }
 
 .chat-process-row {
@@ -2732,6 +2913,11 @@ a,
 }
 
 .chat-input-vue.drop-active {
+  border-top-color: rgba(255, 255, 255, 0.46);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.32);
+}
+
+.chat-input-vue.file-drop-target-active {
   border-top-color: rgba(255, 255, 255, 0.46);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.32);
 }

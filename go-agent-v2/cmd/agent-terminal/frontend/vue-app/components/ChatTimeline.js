@@ -213,6 +213,46 @@ export const ChatTimeline = {
       });
     }
 
+    async function copyTextToClipboard(text) {
+      const value = (text || '').toString();
+      if (!value) return false;
+      try {
+        if (navigator?.clipboard?.writeText) {
+          await navigator.clipboard.writeText(value);
+          return true;
+        }
+      } catch (error) {
+        logWarn('ui', 'timeline.copy.clipboard_api_failed', { error: String(error || '') });
+      }
+      try {
+        const input = document.createElement('textarea');
+        input.value = value;
+        input.setAttribute('readonly', 'readonly');
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        input.style.pointerEvents = 'none';
+        document.body.appendChild(input);
+        input.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(input);
+        return Boolean(ok);
+      } catch (error) {
+        logWarn('ui', 'timeline.copy.exec_command_failed', { error: String(error || '') });
+        return false;
+      }
+    }
+
+    async function copyFilePath(path) {
+      const target = (path || '').toString().trim();
+      if (!target) return;
+      const copied = await copyTextToClipboard(target);
+      if (copied) {
+        logInfo('ui', 'timeline.file_path_copied', { path: target });
+      } else {
+        logWarn('ui', 'timeline.file_path_copy_failed', { path: target });
+      }
+    }
+
     function bubbleRole(item) {
       if (item?.kind === 'user') return 'role-user';
       if (item?.kind === 'assistant') return 'role-assistant';
@@ -355,6 +395,7 @@ export const ChatTimeline = {
       onAttachmentHoverMove,
       onAttachmentHoverLeave,
       attachmentHoverPreview,
+      copyFilePath,
       itemHasSpec,
       splitBySpec,
       showAgentPresence,
@@ -431,10 +472,53 @@ export const ChatTimeline = {
         </template>
 
         <section v-else class="chat-process-line">
-          <header v-if="item.kind !== 'thinking' && item.kind !== 'command'" class="chat-process-head">
-            <span class="chat-process-role">{{ roleLabel(item) }}</span>
-            <span v-if="stateLabel(item)" class="chat-process-status">{{ stateLabel(item) }}</span>
-            <span class="chat-item-spacer"></span>
+          <header v-if="item.kind !== 'thinking' && item.kind !== 'command'" class="chat-process-head" :class="{ 'chat-process-head-file': item.kind === 'file' }">
+            <template v-if="item.kind === 'file'">
+              <span class="chat-process-kind-icon" title="文件" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M6.75 3.75h7.5l3 3v13.5H6.75z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                  <path d="M14.25 3.75v3h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+              </span>
+            </template>
+            <span v-else class="chat-process-role">{{ roleLabel(item) }}</span>
+            <template v-if="item.kind === 'file' && stateLabel(item)">
+              <span
+                class="chat-process-state-icon"
+                :class="item.status === 'saved' ? 'is-saved' : 'is-editing'"
+                :title="stateLabel(item)"
+                aria-hidden="true"
+              >
+                <svg v-if="item.status === 'saved'" viewBox="0 0 24 24" fill="none">
+                  <path d="M5 12.5l4.2 4.2L19 6.9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+                <svg v-else viewBox="0 0 24 24" fill="none">
+                  <path d="M4.5 15.75V19.5h3.75L18.8 8.95l-3.75-3.75L4.5 15.75z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                  <path d="M13.95 6.3l3.75 3.75" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+                </svg>
+              </span>
+            </template>
+            <span v-else-if="stateLabel(item)" class="chat-process-status">{{ stateLabel(item) }}</span>
+            <template v-if="item.kind === 'file'">
+              <span class="chat-process-file-inline" :title="item.file || '(unknown file)'">
+                {{ displayFilePath(item.file) || '(unknown file)' }}
+              </span>
+            </template>
+            <span v-else class="chat-item-spacer"></span>
+            <button
+              v-if="item.kind === 'file'"
+              class="chat-process-copy-btn"
+              type="button"
+              :title="item.file ? ('复制路径: ' + displayFilePath(item.file)) : '无可复制路径'"
+              aria-label="复制文件路径"
+              :disabled="!item.file"
+              @click.stop="copyFilePath(item.file)"
+            >
+              <svg class="chat-process-copy-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="9" y="9" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.8"></rect>
+                <rect x="5" y="5" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.8"></rect>
+              </svg>
+            </button>
             <time class="chat-process-time">{{ formatTime(item.ts) }}</time>
           </header>
 
@@ -453,12 +537,6 @@ export const ChatTimeline = {
             </div>
             <div v-if="item.file" class="chat-process-text chat-process-meta chat-file-path" :title="item.file">{{ displayFilePath(item.file) }}</div>
             <pre v-if="item.preview" class="chat-process-text chat-process-meta tool-preview">{{ item.preview }}</pre>
-          </template>
-
-          <template v-else-if="item.kind === 'file'">
-            <div class="chat-process-text chat-process-meta chat-file-path" :title="item.file || '(unknown file)'">
-              {{ displayFilePath(item.file) || '(unknown file)' }}
-            </div>
           </template>
 
           <template v-else-if="item.kind === 'approval'">

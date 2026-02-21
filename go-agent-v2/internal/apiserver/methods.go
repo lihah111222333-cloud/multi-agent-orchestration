@@ -17,6 +17,9 @@ const (
 	defaultLSPUsagePromptHint = "已注入LSP工具。凡是源代码的分析、定位、修改与解释，必须调用lsp_open_file、lsp_hover、lsp_diagnostics；未使用上述工具前，不得基于猜测给出结论"
 	prefKeyLSPUsagePromptHint = "settings.lspUsagePromptHint"
 	maxLSPUsagePromptHintLen  = 4000
+
+	prefKeyJsonRenderPrompt = "settings.jsonRenderPrompt"
+	maxJsonRenderPromptLen  = 8000
 )
 
 // registerMethods 注册所有 JSON-RPC 方法 (完整对标 APP-SERVER-PROTOCOL.md)。
@@ -76,6 +79,8 @@ func (s *Server) registerMethods() {
 	s.methods["config/batchWrite"] = typedHandler(s.configBatchWriteTyped)
 	s.methods["config/lspPromptHint/read"] = s.configLSPPromptHintRead
 	s.methods["config/lspPromptHint/write"] = typedHandler(s.configLSPPromptHintWriteTyped)
+	s.methods["config/jsonRenderPrompt/read"] = s.configJsonRenderPromptRead
+	s.methods["config/jsonRenderPrompt/write"] = typedHandler(s.configJsonRenderPromptWriteTyped)
 	s.methods["configRequirements/read"] = s.configRequirementsRead
 
 	// § 7. 账号 (5 methods)

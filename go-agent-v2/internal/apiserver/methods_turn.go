@@ -155,6 +155,10 @@ func (s *Server) appendLSPUsageHint(ctx context.Context, prompt string) string {
 	return mergePromptText(prompt, s.resolveLSPUsagePromptHint(ctx))
 }
 
+func (s *Server) appendJsonRenderHint(ctx context.Context, prompt string) string {
+	return mergePromptText(prompt, s.resolveJsonRenderPrompt(ctx))
+}
+
 func appendSkillPlaceholders(input []UserInput, skillNames []string) []UserInput {
 	if len(skillNames) == 0 {
 		return input
@@ -430,6 +434,7 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 	submitPrompt = mergePromptText(submitPrompt, selectedSkillPrompt)
 	submitPrompt = mergePromptText(submitPrompt, autoMatchedSkillPrompt)
 	submitPrompt = s.appendLSPUsageHint(ctx, submitPrompt)
+	submitPrompt = s.appendJsonRenderHint(ctx, submitPrompt)
 	logger.Info("turn/start: input prepared",
 		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 		"text_len", len(prompt),
@@ -488,6 +493,7 @@ func (s *Server) turnSteerTyped(ctx context.Context, p turnSteerParams) (any, er
 		submitPrompt = mergePromptText(submitPrompt, selectedSkillPrompt)
 		submitPrompt = mergePromptText(submitPrompt, autoMatchedSkillPrompt)
 		submitPrompt = s.appendLSPUsageHint(ctx, submitPrompt)
+		submitPrompt = s.appendJsonRenderHint(ctx, submitPrompt)
 		if err := proc.Client.Submit(submitPrompt, images, files, nil); err != nil {
 			return nil, err
 		}

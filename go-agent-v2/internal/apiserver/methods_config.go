@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
@@ -141,6 +142,60 @@ func (s *Server) configLSPPromptHintWriteTyped(ctx context.Context, p configLSPP
 		"hint":         s.resolveLSPUsagePromptHint(ctx),
 		"usingDefault": normalized == "",
 	}, nil
+}
+
+// ========================================
+// json-render Prompt 配置
+// ========================================
+
+func (s *Server) configJsonRenderPromptRead(ctx context.Context, _ json.RawMessage) (any, error) {
+	return map[string]any{
+		"prompt":        s.resolveJsonRenderPrompt(ctx),
+		"defaultPrompt": codex.JsonRenderCatalogPrompt,
+		"prefKey":       prefKeyJsonRenderPrompt,
+	}, nil
+}
+
+type configJsonRenderPromptWriteParams struct {
+	Prompt string `json:"prompt"`
+}
+
+func (s *Server) configJsonRenderPromptWriteTyped(ctx context.Context, p configJsonRenderPromptWriteParams) (any, error) {
+	if s.prefManager == nil {
+		return nil, apperrors.New("Server.configJsonRenderPromptWrite", "preference manager not initialized")
+	}
+	normalized := strings.TrimSpace(p.Prompt)
+	if len(normalized) > maxJsonRenderPromptLen {
+		return nil, apperrors.Newf("Server.configJsonRenderPromptWrite", "prompt length exceeds %d", maxJsonRenderPromptLen)
+	}
+	if err := s.prefManager.Set(ctx, prefKeyJsonRenderPrompt, normalized); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":           true,
+		"prompt":       s.resolveJsonRenderPrompt(ctx),
+		"usingDefault": normalized == "",
+	}, nil
+}
+
+func (s *Server) resolveJsonRenderPrompt(ctx context.Context) string {
+	if s.prefManager == nil {
+		return codex.JsonRenderCatalogPrompt
+	}
+	value, err := s.prefManager.Get(ctx, prefKeyJsonRenderPrompt)
+	if err != nil {
+		logger.Warn("json-render prompt: load preference failed", logger.FieldError, err)
+		return codex.JsonRenderCatalogPrompt
+	}
+	prompt := strings.TrimSpace(asString(value))
+	if prompt == "" {
+		return codex.JsonRenderCatalogPrompt
+	}
+	if len(prompt) > maxJsonRenderPromptLen {
+		logger.Warn("json-render prompt: invalid preference fallback to default", "length", len(prompt))
+		return codex.JsonRenderCatalogPrompt
+	}
+	return prompt
 }
 
 func (s *Server) mcpServerStatusList(_ context.Context, _ json.RawMessage) (any, error) {

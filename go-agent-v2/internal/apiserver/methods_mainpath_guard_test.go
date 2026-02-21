@@ -15,6 +15,7 @@ func TestMainPathMethods_StillRegisteredWhenOffline52Enabled(t *testing.T) {
 		"ui/projects/get", "ui/projects/setActive",
 		"skills/local/read", "skills/local/importDir", "skills/config/read", "skills/config/write", "skills/match/preview",
 		"config/lspPromptHint/read", "config/lspPromptHint/write",
+		"config/jsonRenderPrompt/read", "config/jsonRenderPrompt/write",
 	}
 	for _, method := range mainPath {
 		if _, ok := srv.methods[method]; !ok {

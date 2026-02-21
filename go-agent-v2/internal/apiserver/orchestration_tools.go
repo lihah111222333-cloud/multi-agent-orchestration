@@ -157,7 +157,7 @@ func (s *Server) orchestrationLaunchAgent(args json.RawMessage) string {
 	// 构建完整工具列表 (LSP + 编排 + 资源)
 	tools := s.buildAllDynamicTools()
 
-	if err := s.mgr.Launch(ctx, id, p.Name, p.Prompt, p.Cwd, tools); err != nil {
+	if err := s.mgr.Launch(ctx, id, p.Name, p.Prompt, p.Cwd, "", tools); err != nil {
 		return toolError(apperrors.Wrap(err, "orchestrationLaunchAgent", "launch agent"))
 	}
 

@@ -354,7 +354,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 
 	dynamicTools := s.buildAllDynamicTools()
 
-	if err := s.mgr.Launch(ctx, id, id, "", launchCwd, dynamicTools); err != nil {
+	if err := s.mgr.Launch(ctx, id, id, "", launchCwd, s.resolveJsonRenderPrompt(ctx), dynamicTools); err != nil {
 		// 并发补加载时可能已被其他请求拉起，二次确认后再报错。
 		if proc := s.mgr.Get(id); proc != nil {
 			return proc, nil
@@ -441,7 +441,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 		// proc 在 non-crash 路径中仍然存活，但可能被 mgr 移除
 		if s.mgr.Get(id) == nil {
 			_ = s.mgr.Stop(id)
-			if launchErr := s.mgr.Launch(ctx, id, id, "", launchCwd, dynamicTools); launchErr != nil {
+			if launchErr := s.mgr.Launch(ctx, id, id, "", launchCwd, s.resolveJsonRenderPrompt(ctx), dynamicTools); launchErr != nil {
 				return nil, apperrors.Wrapf(launchErr, "Server.ensureThreadReady", "final re-spawn thread %s", id)
 			}
 			proc = s.mgr.Get(id)

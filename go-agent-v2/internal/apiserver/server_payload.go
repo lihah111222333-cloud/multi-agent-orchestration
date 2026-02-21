@@ -180,8 +180,10 @@ func shouldReplayThreadNotifyToUIRuntime(method string, payload map[string]any) 
 var payloadExtractKeys = []string{
 	// legacy fields
 	"delta", "content", "message", "command",
+	"cmd", "command_display", "commandDisplay", "displayCommand",
 	"exit_code", "reason", "name", "status",
 	"file", "files", "diff", "tool_name",
+	"item", "process",
 	"turn", "last_agent_message", "lastAgentMessage",
 	// v2 protocol fields
 	"text", "summary", "args", "arguments", "output",
@@ -199,6 +201,29 @@ var payloadExtractKeys = []string{
 	"input_tokens", "inputTokens", "output_tokens", "outputTokens",
 	"context_window_tokens", "contextWindowTokens",
 	"model_context_window", "modelContextWindow",
+}
+
+func parseMapAny(raw any) map[string]any {
+	switch value := raw.(type) {
+	case map[string]any:
+		return value
+	case string:
+		var out map[string]any
+		if json.Unmarshal([]byte(value), &out) == nil {
+			return out
+		}
+	case json.RawMessage:
+		var out map[string]any
+		if json.Unmarshal(value, &out) == nil {
+			return out
+		}
+	case []byte:
+		var out map[string]any
+		if json.Unmarshal(value, &out) == nil {
+			return out
+		}
+	}
+	return nil
 }
 
 func mergePayloadFromMap(payload map[string]any, data map[string]any) {
@@ -247,6 +272,9 @@ func mergePayloadFromMap(payload map[string]any, data map[string]any) {
 				payload["additional_details"] = details
 			}
 		}
+	}
+	if item := parseMapAny(data["item"]); item != nil {
+		mergePayloadFromMap(payload, item)
 	}
 }
 

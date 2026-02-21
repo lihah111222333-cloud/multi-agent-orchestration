@@ -5,7 +5,6 @@ func offline52MethodList() []string {
 		"initialize",
 		"thread/resume",
 		"thread/fork",
-		"thread/compact/start",
 		"thread/rollback",
 		"thread/loaded/list",
 		"thread/read",

@@ -101,6 +101,31 @@ func TestMergePayloadFieldsKeepsTurnAndLastAgentMessage(t *testing.T) {
 	}
 }
 
+func TestMergePayloadFieldsExtractsNestedItemCommandFields(t *testing.T) {
+	payload := map[string]any{
+		"threadId": "agent-3",
+	}
+	raw := json.RawMessage(`{
+		"item":{"type":"commandExecution","command":"echo hi","command_display":"echo hi"}
+	}`)
+
+	mergePayloadFields(payload, raw)
+
+	item, ok := payload["item"].(map[string]any)
+	if !ok || len(item) == 0 {
+		t.Fatalf("payload item should be kept as object, got %#v", payload["item"])
+	}
+	if got, _ := payload["type"].(string); got != "commandExecution" {
+		t.Fatalf("payload type = %q, want commandExecution", got)
+	}
+	if got, _ := payload["command"].(string); got != "echo hi" {
+		t.Fatalf("payload command = %q, want echo hi", got)
+	}
+	if got, _ := payload["command_display"].(string); got != "echo hi" {
+		t.Fatalf("payload command_display = %q, want echo hi", got)
+	}
+}
+
 func TestConnEntryEnqueueBackpressure(t *testing.T) {
 	entry := &connEntry{
 		outbox:  make(chan wsOutbound, 1),

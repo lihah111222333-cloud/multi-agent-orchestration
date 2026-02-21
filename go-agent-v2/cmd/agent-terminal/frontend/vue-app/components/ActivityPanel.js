@@ -14,7 +14,7 @@ export const ActivityPanel = {
     stats: { type: Object, default: () => ({}) },
     /** @type {Array<{ id: string, time: string, level: string, message: string }>} */
     alerts: { type: Array, default: () => [] },
-    /** @type {Array<{ id: string, time: string, message: string, status: string, multiline?: boolean }>} */
+    /** @type {Array<{ id: string, time: string, message: string, status: string, kind?: string, title?: string, command?: string, output?: string, exitCode?: number, multiline?: boolean }>} */
     processEvents: { type: Array, default: () => [] },
   },
   setup(props) {
@@ -83,7 +83,77 @@ export const ActivityPanel = {
 
     function processClass(status) {
       if (status === 'done') return 'alert-info';
+      if (status === 'failed') return 'alert-error';
       return 'alert-warning';
+    }
+
+    function isCommandEntry(entry) {
+      const kind = (entry?.kind || '').toString().trim();
+      if (kind === 'command') return true;
+      if ((entry?.command || '').toString().trim()) return true;
+      if ((entry?.output || '').toString().trim()) return true;
+      if (Number.isFinite(Number(entry?.exitCode))) return true;
+      const msg = (entry?.message || '').toString();
+      if (!msg) return false;
+      if (msg.includes('命令执行')) return true;
+      if (msg.includes('Running command') || msg.includes('Ran command') || msg.includes('Errored command')) return true;
+      if (msg.includes('\n$ ') || msg.startsWith('$ ')) return true;
+      return false;
+    }
+
+    function commandStatusText(entry) {
+      const status = (entry?.status || '').toString().trim();
+      if (status === 'active') return 'Running command';
+      if (status === 'failed') return 'Errored command';
+      const msg = (entry?.message || '').toString();
+      if (msg.includes('命令执行中') || msg.includes('Running command')) return 'Running command';
+      if (msg.includes('执行失败') || msg.includes('Errored command')) return 'Errored command';
+      return 'Ran command';
+    }
+
+    function commandStatusIcon(entry) {
+      const status = (entry?.status || '').toString().trim();
+      if (status === 'active') return '◌';
+      if (status === 'failed') return '✕';
+      return '✓';
+    }
+
+    function commandStatusIconClass(entry) {
+      const status = (entry?.status || '').toString().trim();
+      if (status === 'active') return 'ran-command-card__icon--running ran-command-card__icon--spinning';
+      if (status === 'failed') return 'ran-command-card__icon--error';
+      return 'ran-command-card__icon--done';
+    }
+
+    function commandTitle(entry) {
+      const title = (entry?.title || entry?.message || '').toString().trim();
+      if (title.startsWith('$ ')) return title;
+      const command = (entry?.command || '').toString().trim();
+      if (command) return `$ ${command}`;
+      if (title.includes('\n')) {
+        const lines = title.split('\n').map((line) => line.trim()).filter(Boolean);
+        const candidate = lines.find((line) => line.startsWith('$ '));
+        if (candidate) return candidate;
+      }
+      if (title && !title.includes('命令执行')) return title;
+      return 'Terminal command';
+    }
+
+    function commandOutput(entry) {
+      const output = (entry?.output || '').toString();
+      if (output.trim()) return output;
+      const msg = (entry?.message || '').toString();
+      if (!msg.includes('\n')) return '';
+      const lines = msg.split('\n').map((line) => line.toString());
+      if (lines.length <= 1) return '';
+      const payload = lines.slice(1).filter((line) => !line.trim().startsWith('$ ')).join('\n').trim();
+      return payload;
+    }
+
+    function commandExitText(entry) {
+      const code = Number(entry?.exitCode);
+      if (!Number.isFinite(code)) return '';
+      return `Exit code ${Math.trunc(code)}`;
     }
 
     return {
@@ -102,6 +172,13 @@ export const ActivityPanel = {
       alertClass,
       processIcon,
       processClass,
+      isCommandEntry,
+      commandStatusText,
+      commandStatusIcon,
+      commandStatusIconClass,
+      commandTitle,
+      commandOutput,
+      commandExitText,
     };
   },
   template: `
@@ -130,11 +207,37 @@ export const ActivityPanel = {
             v-for="(entry, idx) in recentProcessEvents"
             :key="entry.id + '-' + idx"
             class="alert-line"
-            :class="processClass(entry.status)"
+            :class="[processClass(entry.status), { 'alert-line-command': isCommandEntry(entry) }]"
           >
             <span class="alert-time">{{ entry.time }}</span>
-            <span class="alert-icon">{{ processIcon(entry.status) }}</span>
-            <span class="alert-msg" :class="{ 'alert-msg-wrap': Boolean(entry.multiline) }">{{ entry.message }}</span>
+            <template v-if="isCommandEntry(entry)">
+              <div class="activity-command-entry ran-command-card">
+                <div class="ran-command-card__header">
+                  <span class="ran-command-card__status">{{ commandStatusText(entry) }}</span>
+                </div>
+                <div class="ran-command-card__main-row">
+                  <span class="ran-command-card__icon" :class="commandStatusIconClass(entry)" aria-hidden="true">{{ commandStatusIcon(entry) }}</span>
+                  <span class="ran-command-card__title" :title="commandTitle(entry)">{{ commandTitle(entry) }}</span>
+                </div>
+                <div
+                  class="ran-command-card__details"
+                  :class="commandOutput(entry) ? 'ran-command-card__details--open' : 'ran-command-card__details--closed'"
+                >
+                  <pre v-if="commandOutput(entry)" class="ran-command-card__output activity-command-output">{{ commandOutput(entry) }}</pre>
+                </div>
+                <div class="ran-command-card__footer">
+                  <span class="ran-command-card__auto-exec">Terminal command</span>
+                  <div class="ran-command-card__footer-right">
+                    <span v-if="entry.status === 'active'" class="ran-command-card__cancel-btn">Running...</span>
+                    <span v-if="commandExitText(entry)" class="ran-command-card__exit-code">{{ commandExitText(entry) }}</span>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <template v-else>
+              <span class="alert-icon">{{ processIcon(entry.status) }}</span>
+              <span class="alert-msg" :class="{ 'alert-msg-wrap': Boolean(entry.multiline) }">{{ entry.message }}</span>
+            </template>
           </div>
         </template>
         <template v-if="hasAlerts">

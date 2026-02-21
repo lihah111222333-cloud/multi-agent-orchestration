@@ -91,12 +91,53 @@ export const ChatTimeline = {
       }
     }
 
-    function commandText(item) {
-      if (!item || item.kind !== 'command') return '';
-      const parts = [];
-      if (item.command) parts.push(`$ ${item.command}`);
-      if (item.output) parts.push(item.output);
-      return parts.join('\n') || '$ ';
+    function commandStatusKey(item) {
+      if (!item || item.kind !== 'command') return 'done';
+      const status = (item.status || '').toString().trim().toLowerCase();
+      if (status === 'running') return 'running';
+      if (status === 'failed') return 'error';
+      if (status === 'canceled' || status === 'cancelled') return 'waiting';
+      return 'done';
+    }
+
+    function commandStatusText(item) {
+      const key = commandStatusKey(item);
+      if (key === 'running') return 'Running command';
+      if (key === 'error') return 'Errored command';
+      if (key === 'waiting') return 'Canceled command';
+      return 'Ran command';
+    }
+
+    function commandStatusIcon(item) {
+      const key = commandStatusKey(item);
+      if (key === 'running') return '◌';
+      if (key === 'error') return '✕';
+      if (key === 'waiting') return '⚠';
+      return '✓';
+    }
+
+    function commandStatusIconClass(item) {
+      const key = commandStatusKey(item);
+      if (key === 'running') return 'ran-command-card__icon--running ran-command-card__icon--spinning';
+      if (key === 'error') return 'ran-command-card__icon--error';
+      if (key === 'waiting') return 'ran-command-card__icon--waiting';
+      return 'ran-command-card__icon--done';
+    }
+
+    function commandTitle(item) {
+      const command = (item?.command || '').toString().trim();
+      if (!command) return 'Terminal command';
+      return `$ ${command}`;
+    }
+
+    function commandHasOutput(item) {
+      return (item?.output || '').toString().length > 0;
+    }
+
+    function commandExitText(item) {
+      const code = Number(item?.exitCode);
+      if (!Number.isFinite(code)) return '';
+      return `Exit code ${Math.trunc(code)}`;
     }
 
     function displayFilePath(path) {
@@ -381,7 +422,12 @@ export const ChatTimeline = {
       showMore,
       roleLabel,
       stateLabel,
-      commandText,
+      commandStatusText,
+      commandStatusIcon,
+      commandStatusIconClass,
+      commandTitle,
+      commandHasOutput,
+      commandExitText,
       displayFilePath,
       attachmentType,
       attachmentPreview,
@@ -527,7 +573,28 @@ export const ChatTimeline = {
           </template>
 
           <template v-else-if="item.kind === 'command'">
-            <pre class="chat-process-text chat-process-terminal">{{ commandText(item) }}</pre>
+            <div class="ran-command-card">
+              <div class="ran-command-card__header">
+                <span class="ran-command-card__status">{{ commandStatusText(item) }}</span>
+              </div>
+              <div class="ran-command-card__main-row">
+                <span class="ran-command-card__icon" :class="commandStatusIconClass(item)" aria-hidden="true">{{ commandStatusIcon(item) }}</span>
+                <span class="ran-command-card__title" :title="commandTitle(item)">{{ commandTitle(item) }}</span>
+              </div>
+              <div
+                class="ran-command-card__details"
+                :class="commandHasOutput(item) ? 'ran-command-card__details--open' : 'ran-command-card__details--closed'"
+              >
+                <pre v-if="commandHasOutput(item)" class="ran-command-card__output">{{ item.output }}</pre>
+              </div>
+              <div class="ran-command-card__footer">
+                <span class="ran-command-card__auto-exec">Terminal command</span>
+                <div class="ran-command-card__footer-right">
+                  <span v-if="item.status === 'running'" class="ran-command-card__cancel-btn">Running...</span>
+                  <span v-if="commandExitText(item)" class="ran-command-card__exit-code">{{ commandExitText(item) }}</span>
+                </div>
+              </div>
+            </div>
           </template>
 
           <template v-else-if="item.kind === 'tool'">

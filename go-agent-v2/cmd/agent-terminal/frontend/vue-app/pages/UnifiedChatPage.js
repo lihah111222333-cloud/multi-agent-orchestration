@@ -116,7 +116,12 @@ import { useComposerStore } from '../stores/composer.js';
  * @property {string} id
  * @property {string} time
  * @property {string} message
- * @property {'active' | 'done'} status
+ * @property {'active' | 'done' | 'failed'} status
+ * @property {'thinking' | 'command'} [kind]
+ * @property {string} [title]
+ * @property {string} [command]
+ * @property {string} [output]
+ * @property {number} [exitCode]
  * @property {boolean} [multiline]
  */
 
@@ -500,10 +505,12 @@ export const UnifiedChatPage = {
     let composerSkillPreviewLastWarnAt = 0;
     const workspaceRef = ref(null);
     const dragging = ref(false);
+    const activityPanelDragging = ref(false);
     const copyState = ref('idle');
     let scrollTimer = 0;
     let copyStateTimer = 0;
     let offFilesDropped = () => { };
+    let clearActivityPanelResizeListeners = () => { };
     const editingThreadId = ref('');
     const editingAlias = ref('');
     const renamingThreadId = ref('');
@@ -534,6 +541,10 @@ export const UnifiedChatPage = {
     });
 
     const splitRatio = ref(props.threadStore.getSplitRatio(modeKey.value));
+    const ACTIVITY_PANEL_DEFAULT_HEIGHT = 124;
+    const ACTIVITY_PANEL_MIN_HEIGHT = 124;
+    const ACTIVITY_PANEL_MAX_HEIGHT = 460;
+    const activityPanelHeight = ref(ACTIVITY_PANEL_DEFAULT_HEIGHT);
 
     const threads = computed(() => props.threadStore.getThreadsByMode(modeKey.value));
     const mainAgentId = computed(() => props.threadStore.state.mainAgentId || '');
@@ -683,6 +694,18 @@ export const UnifiedChatPage = {
         minute: '2-digit',
       });
     }
+
+    /**
+     * @param {unknown} value
+     * @returns {string}
+     */
+    function normalizeActivityOutput(value) {
+      const text = (value || '').toString();
+      if (!text.trim()) return '';
+      const maxLen = 420;
+      if (text.length <= maxLen) return text;
+      return `${text.slice(0, maxLen)}\n...[truncated]`;
+    }
     /**
      * @param {any} item
      * @param {number} index
@@ -698,26 +721,56 @@ export const UnifiedChatPage = {
           id: (item.id || `${kind}-${index}`).toString(),
           time: formatTimelineTime(item.ts),
           message: done ? '思考完成' : '思考中',
+          kind: 'thinking',
           status: done ? 'done' : 'active',
         };
       }
       if (kind === 'command') {
         const status = (item.status || '').toString().trim().toLowerCase();
         const commandText = (item.command || '').toString().trim();
+        const title = commandText ? `$ ${commandText}` : 'Terminal command';
+        const output = normalizeActivityOutput(item.output);
+        const rawExitCode = Number(item.exitCode);
+        const hasExitCode = Number.isFinite(rawExitCode);
+        const exitCode = hasExitCode ? Math.trunc(rawExitCode) : undefined;
         if (status === 'running') {
           return {
             id: (item.id || `${kind}-${index}`).toString(),
             time: formatTimelineTime(item.ts),
-            message: commandText ? `命令执行中\n$ ${commandText}` : '命令执行中',
+            message: title,
+            kind: 'command',
+            title,
+            command: commandText,
+            output,
             status: 'active',
-            multiline: Boolean(commandText),
+            multiline: Boolean(commandText || output),
+          };
+        }
+        if (status === 'failed') {
+          return {
+            id: (item.id || `${kind}-${index}`).toString(),
+            time: formatTimelineTime(item.ts),
+            message: title,
+            kind: 'command',
+            title,
+            command: commandText,
+            output,
+            status: 'failed',
+            exitCode,
+            multiline: Boolean(output),
           };
         }
         return {
           id: (item.id || `${kind}-${index}`).toString(),
           time: formatTimelineTime(item.ts),
-          message: '命令执行完成',
+          message: title,
+          kind: 'command',
+          title,
+          command: commandText,
+          output,
           status: 'done',
+          exitCode,
+          multiline: Boolean(output),
         };
       }
       return null;
@@ -786,6 +839,22 @@ export const UnifiedChatPage = {
       const ratio = Math.max(30, Math.min(75, Math.round(Number(splitRatio.value) || 60)));
       return {
         width: `calc(${ratio}% - 6px)`,
+      };
+    });
+    function clampActivityPanelHeight(value, maxHeight = ACTIVITY_PANEL_MAX_HEIGHT) {
+      const number = Number(value);
+      const fallback = ACTIVITY_PANEL_DEFAULT_HEIGHT;
+      const normalized = Number.isFinite(number) ? Math.round(number) : fallback;
+      const cappedMax = Math.max(
+        ACTIVITY_PANEL_MIN_HEIGHT,
+        Math.floor(Number(maxHeight) || ACTIVITY_PANEL_MAX_HEIGHT),
+      );
+      return Math.max(ACTIVITY_PANEL_MIN_HEIGHT, Math.min(cappedMax, normalized));
+    }
+    const activityPanelRowStyle = computed(() => {
+      if (isCmd.value) return {};
+      return {
+        '--activity-panel-fixed-height': `${clampActivityPanelHeight(activityPanelHeight.value)}px`,
       };
     });
     const latestPlanItem = computed(() => {
@@ -1969,6 +2038,40 @@ export const UnifiedChatPage = {
       window.addEventListener('mouseup', onUp);
     }
 
+    function onActivityResizeStart(event) {
+      if (isCmd.value) return;
+      if (event.button !== 0) return;
+      event.preventDefault();
+      activityPanelDragging.value = true;
+      clearActivityPanelResizeListeners();
+
+      const startY = event.clientY;
+      const startHeight = clampActivityPanelHeight(activityPanelHeight.value);
+      const viewportMaxHeight = Math.max(
+        ACTIVITY_PANEL_MIN_HEIGHT,
+        Math.floor(window.innerHeight * 0.72),
+      );
+      const maxHeight = Math.max(ACTIVITY_PANEL_MAX_HEIGHT, viewportMaxHeight);
+
+      const onMove = (e) => {
+        const nextHeight = startHeight + (startY - e.clientY);
+        activityPanelHeight.value = clampActivityPanelHeight(nextHeight, maxHeight);
+      };
+
+      const onUp = () => {
+        activityPanelDragging.value = false;
+        clearActivityPanelResizeListeners();
+      };
+
+      clearActivityPanelResizeListeners = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    }
+
     function ensureStatusTickTimer() {
       if (statusTickTimer) return;
       statusTickTimer = window.setInterval(() => {
@@ -2027,6 +2130,9 @@ export const UnifiedChatPage = {
       offFilesDropped();
       offFilesDropped = () => { };
       dragging.value = false;
+      activityPanelDragging.value = false;
+      clearActivityPanelResizeListeners();
+      clearActivityPanelResizeListeners = () => { };
       clearComposerSkillPreviewTimer();
       composerSkillPreviewSeq += 1;
       hasComposerSkillPreviewQueued = false;
@@ -2079,6 +2185,7 @@ export const UnifiedChatPage = {
       showOverview,
       showWorkspace,
       chatComposerShellStyle,
+      activityPanelRowStyle,
       activePinnedPlan,
       stats,
       recentThreads,
@@ -2093,6 +2200,7 @@ export const UnifiedChatPage = {
       composerSkillMatchClass,
       composerSkillMatchReason,
       dragging,
+      activityPanelDragging,
       composerBarRef,
       workspaceRef,
       activeActivityStats,
@@ -2110,6 +2218,7 @@ export const UnifiedChatPage = {
       timelinePreview,
       diffPreview,
       onResizeStart,
+      onActivityResizeStart,
       stopSelected,
       renameSelected,
       setMainSelected,
@@ -2460,7 +2569,7 @@ export const UnifiedChatPage = {
               </div>
             </div>
 
-            <div class="workspace-bottom-row" :class="{ 'is-cmd': isCmd }">
+            <div class="workspace-bottom-row" :class="{ 'is-cmd': isCmd }" :style="activityPanelRowStyle">
               <div class="chat-composer-shell" :class="{ 'for-chat': !isCmd }" :style="chatComposerShellStyle">
                 <ComposerBar
                   ref="composerBarRef"
@@ -2483,6 +2592,7 @@ export const UnifiedChatPage = {
                 />
               </div>
               <div v-if="!isCmd" class="workspace-bottom-side">
+                <div class="activity-panel-resizer" :class="{ dragging: activityPanelDragging }" @mousedown="onActivityResizeStart"></div>
                 <ActivityPanel
                   :stats="activeActivityStats"
                   :alerts="activeAlerts"

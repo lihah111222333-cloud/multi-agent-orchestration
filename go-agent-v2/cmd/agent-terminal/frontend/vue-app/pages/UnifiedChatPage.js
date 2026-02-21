@@ -409,6 +409,62 @@ export const UnifiedChatPage = {
       if (typeof props.threadStore.getThreadAlerts !== 'function') return [];
       return props.threadStore.getThreadAlerts(selectedThreadId.value);
     });
+    function formatTimelineTime(ts) {
+      const raw = (ts || '').toString().trim();
+      if (!raw) return '';
+      const date = new Date(raw);
+      if (Number.isNaN(date.getTime())) return '';
+      return date.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    }
+    function toProcessActivityItem(item, index) {
+      if (!item || typeof item !== 'object') return null;
+      const kind = (item.kind || '').toString().trim();
+      if (!kind) return null;
+      if (kind === 'thinking') {
+        const done = Boolean(item.done);
+        return {
+          id: (item.id || `${kind}-${index}`).toString(),
+          time: formatTimelineTime(item.ts),
+          message: done ? '思考完成' : '思考中',
+          status: done ? 'done' : 'active',
+        };
+      }
+      if (kind === 'command') {
+        const status = (item.status || '').toString().trim().toLowerCase();
+        if (status === 'running') {
+          return {
+            id: (item.id || `${kind}-${index}`).toString(),
+            time: formatTimelineTime(item.ts),
+            message: '命令执行中',
+            status: 'active',
+          };
+        }
+        return {
+          id: (item.id || `${kind}-${index}`).toString(),
+          time: formatTimelineTime(item.ts),
+          message: '命令执行完成',
+          status: 'done',
+        };
+      }
+      return null;
+    }
+    const activeProcessActivity = computed(() => {
+      const list = Array.isArray(activeTimeline.value) ? activeTimeline.value : [];
+      const items = [];
+      let lastSignature = '';
+      for (let index = 0; index < list.length; index += 1) {
+        const entry = toProcessActivityItem(list[index], index);
+        if (!entry) continue;
+        const signature = `${entry.message}|${entry.status}`;
+        if (signature === lastSignature) continue;
+        lastSignature = signature;
+        items.push(entry);
+      }
+      return items.slice(-12).reverse();
+    });
     const isStatusTimerModalPaused = computed(() => Boolean(props.projectStore?.state?.showModal));
     const statusSinceByThread = ref({});
     const statusPausedAtByThread = ref({});
@@ -991,7 +1047,7 @@ export const UnifiedChatPage = {
       const attachments = [...composer.state.attachments];
       if (!text.trim() && attachments.length === 0) return;
       const selectedSkills = [...composerSelectedSkillNames.value];
-      const manualSkillSelection = composerSkillMatches.value.length > 0 || selectedSkills.length > 0;
+      const manualSkillSelection = selectedSkills.length > 0;
       composer.clearComposer();
       composerSelectedSkillNames.value = [];
       shouldAutoScroll.value = true;
@@ -1233,14 +1289,6 @@ export const UnifiedChatPage = {
 
     function getDisplayName(thread) {
       return props.threadStore.displayName(thread);
-    }
-
-    function setChatFocus() {
-      layoutMode.value = 'focus';
-    }
-
-    function setChatMix() {
-      layoutMode.value = 'mix';
     }
 
     function setCmdLayout(value) {
@@ -1683,6 +1731,7 @@ export const UnifiedChatPage = {
       workspaceRef,
       activeActivityStats,
       activeAlerts,
+      activeProcessActivity,
       selectThread,
       launchOne,
       send,
@@ -1690,8 +1739,6 @@ export const UnifiedChatPage = {
       compactCurrent,
       forceCompleteCurrent,
       loadCurrentHistory,
-      setChatFocus,
-      setChatMix,
       setCmdLayout,
       setCmdCardCols,
       copySelectedThreadId,
@@ -1732,8 +1779,6 @@ export const UnifiedChatPage = {
           @add-project="projectStore.quickAdd()"
         />
 
-        <div class="mode-badge" :class="{ 'hyperspeed-model-shimmer': activeStatus === 'thinking' || activeStatus === 'responding' }">{{ isCmd ? 'CMD' : 'CHAT' }}</div>
-
         <div class="layout-switch" v-if="isCmd">
           <button class="btn btn-ghost btn-xs" :class="{active: layoutMode==='overview'}" @click="setCmdLayout('overview')">A 紧凑</button>
           <button class="btn btn-ghost btn-xs" :class="{active: layoutMode==='chat'}" @click="setCmdLayout('chat')">B 对话</button>
@@ -1743,11 +1788,6 @@ export const UnifiedChatPage = {
         <div class="layout-switch" v-if="isCmd">
           <button class="btn btn-ghost btn-xs" :class="{active: cmdCardCols===2}" @click="setCmdCardCols(2)">2列</button>
           <button class="btn btn-ghost btn-xs" :class="{active: cmdCardCols===3}" @click="setCmdCardCols(3)">3列</button>
-        </div>
-
-        <div class="layout-switch" v-else>
-          <button class="btn btn-ghost btn-xs" :class="{active: layoutMode==='focus'}" @click="setChatFocus">对话优先</button>
-          <button class="btn btn-ghost btn-xs" :class="{active: layoutMode==='mix'}" @click="setChatMix">混合</button>
         </div>
 
         <button
@@ -1809,11 +1849,13 @@ export const UnifiedChatPage = {
                 :aria-label="showArchivedThreadList ? '归档列表' : '会话列表'"
                 :title="showArchivedThreadList ? '归档列表' : '会话列表'"
               >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                  <circle cx="5" cy="4" r="1.5"></circle>
-                  <circle cx="5" cy="12" r="1.5"></circle>
-                  <circle cx="11" cy="7" r="1.5"></circle>
-                  <path d="M5 5.5V10.5M5 7H9.5"></path>
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M10 3V5"></path>
+                  <path d="M6.2 5H13.8C15 5 16 6 16 7.2V12.8C16 14 15 15 13.8 15H6.2C5 15 4 14 4 12.8V7.2C4 6 5 5 6.2 5Z"></path>
+                  <path d="M2.8 8V12"></path>
+                  <path d="M17.2 8V12"></path>
+                  <circle cx="8" cy="10" r="0.9" fill="currentColor" stroke="none"></circle>
+                  <circle cx="12" cy="10" r="0.9" fill="currentColor" stroke="none"></circle>
                 </svg>
               </span>
               <span
@@ -1822,11 +1864,13 @@ export const UnifiedChatPage = {
                 :aria-label="showArchivedThreadList ? (archivedChatThreadCount + ' 个 Agent') : (activeChatThreadCount + ' 个 Agent')"
                 :title="showArchivedThreadList ? (archivedChatThreadCount + ' 个 Agent') : (activeChatThreadCount + ' 个 Agent')"
               >
-                <svg class="thread-rail-count-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                  <circle cx="5" cy="4" r="1.5"></circle>
-                  <circle cx="5" cy="12" r="1.5"></circle>
-                  <circle cx="11" cy="7" r="1.5"></circle>
-                  <path d="M5 5.5V10.5M5 7H9.5"></path>
+                <svg class="thread-rail-count-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M10 3V5"></path>
+                  <path d="M6.2 5H13.8C15 5 16 6 16 7.2V12.8C16 14 15 15 13.8 15H6.2C5 15 4 14 4 12.8V7.2C4 6 5 5 6.2 5Z"></path>
+                  <path d="M2.8 8V12"></path>
+                  <path d="M17.2 8V12"></path>
+                  <circle cx="8" cy="10" r="0.9" fill="currentColor" stroke="none"></circle>
+                  <circle cx="12" cy="10" r="0.9" fill="currentColor" stroke="none"></circle>
                 </svg>
                 <strong>{{ showArchivedThreadList ? archivedChatThreadCount : activeChatThreadCount }}</strong>
               </span>
@@ -2035,33 +2079,38 @@ export const UnifiedChatPage = {
                   :focus-file="activeDiffFocusFile"
                   :focus-line="activeDiffFocusLine"
                 />
-                <ActivityPanel
-                  :stats="activeActivityStats"
-                  :alerts="activeAlerts"
-                />
               </div>
             </div>
 
-            <div class="chat-composer-shell" :class="{ 'for-chat': !isCmd }" :style="chatComposerShellStyle">
-              <ComposerBar
-                ref="composerBarRef"
-                :composer="composer"
-                :thread-id="selectedThreadId"
-                :interruptible="canInterrupt"
-                :compacting="compacting"
-                :token-inline="activeTokenInline"
-                :token-tooltip="activeTokenTooltip"
-                :disabled="noActiveThread"
-                :skill-matches="composerSkillMatches"
-                :skill-matches-loading="composerSkillPreviewLoading"
-                :selected-skill-names="composerSelectedSkillNames"
-                @toggle-skill="toggleComposerSelectedSkill"
-                @select-all-skills="selectAllComposerSuggestedSkills"
-                @clear-skills="clearComposerSelectedSkills"
-                @send="send"
-                @interrupt="interruptCurrent"
-                @compact="compactCurrent"
-              />
+            <div class="workspace-bottom-row" :class="{ 'is-cmd': isCmd }">
+              <div class="chat-composer-shell" :class="{ 'for-chat': !isCmd }" :style="chatComposerShellStyle">
+                <ComposerBar
+                  ref="composerBarRef"
+                  :composer="composer"
+                  :thread-id="selectedThreadId"
+                  :interruptible="canInterrupt"
+                  :compacting="compacting"
+                  :token-inline="activeTokenInline"
+                  :token-tooltip="activeTokenTooltip"
+                  :disabled="noActiveThread"
+                  :skill-matches="composerSkillMatches"
+                  :skill-matches-loading="composerSkillPreviewLoading"
+                  :selected-skill-names="composerSelectedSkillNames"
+                  @toggle-skill="toggleComposerSelectedSkill"
+                  @select-all-skills="selectAllComposerSuggestedSkills"
+                  @clear-skills="clearComposerSelectedSkills"
+                  @send="send"
+                  @interrupt="interruptCurrent"
+                  @compact="compactCurrent"
+                />
+              </div>
+              <div v-if="!isCmd" class="workspace-bottom-side">
+                <ActivityPanel
+                  :stats="activeActivityStats"
+                  :alerts="activeAlerts"
+                  :process-events="activeProcessActivity"
+                />
+              </div>
             </div>
           </div>
         </div>

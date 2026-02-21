@@ -21,6 +21,7 @@ export const ChatTimeline = {
     let updateSeq = 0;
     const visibleCount = ref(VISIBLE_WINDOW);
     const assistantMarkdownCache = new Map();
+    const attachmentHoverPreview = ref(null);
 
     // items 引用变化时重置窗口
     watch(
@@ -44,13 +45,23 @@ export const ChatTimeline = {
       { immediate: true },
     );
 
+    function isBottomOnlyStatusItem(item) {
+      const kind = (item?.kind || '').toString().trim();
+      return kind === 'thinking' || kind === 'command';
+    }
+
+    const timelineItems = computed(() => {
+      const all = Array.isArray(props.items) ? props.items : [];
+      return all.filter((item) => !isBottomOnlyStatusItem(item));
+    });
+
     const visibleItems = computed(() => {
-      const all = props.items;
+      const all = timelineItems.value;
       if (all.length <= visibleCount.value) return all;
       return all.slice(all.length - visibleCount.value);
     });
 
-    const hasMore = computed(() => props.items.length > visibleCount.value);
+    const hasMore = computed(() => timelineItems.value.length > visibleCount.value);
 
     function showMore() {
       visibleCount.value += VISIBLE_WINDOW;
@@ -136,6 +147,60 @@ export const ChatTimeline = {
         return '';
       }
       return encodeURI(`file://${path}`);
+    }
+
+    function attachmentHoverPoint(event) {
+      const x = Number(event?.clientX);
+      const y = Number(event?.clientY);
+      if (Number.isFinite(x) && Number.isFinite(y) && (x > 0 || y > 0)) {
+        return { x, y };
+      }
+      const rect = event?.currentTarget?.getBoundingClientRect?.();
+      if (rect) {
+        return {
+          x: rect.left + Math.min(rect.width, 32),
+          y: rect.top + Math.min(rect.height, 32),
+        };
+      }
+      return { x: 32, y: 32 };
+    }
+
+    function attachmentHoverPosition(pointX, pointY) {
+      const margin = 14;
+      const offset = 18;
+      const previewWidth = 360;
+      const previewHeight = 280;
+      const viewportWidth = window.innerWidth || previewWidth + margin * 2;
+      const viewportHeight = window.innerHeight || previewHeight + margin * 2;
+      let left = pointX + offset;
+      let top = pointY + offset;
+      if (left + previewWidth > viewportWidth - margin) {
+        left = Math.max(margin, pointX - previewWidth - offset);
+      }
+      if (top + previewHeight > viewportHeight - margin) {
+        top = Math.max(margin, pointY - previewHeight - offset);
+      }
+      return { left, top };
+    }
+
+    function onAttachmentHoverMove(event, att) {
+      const src = attachmentPreview(att);
+      if (!src) {
+        attachmentHoverPreview.value = null;
+        return;
+      }
+      const point = attachmentHoverPoint(event);
+      const pos = attachmentHoverPosition(point.x, point.y);
+      attachmentHoverPreview.value = {
+        src,
+        alt: (att?.name || att?.path || 'image attachment').toString(),
+        left: pos.left,
+        top: pos.top,
+      };
+    }
+
+    function onAttachmentHoverLeave() {
+      attachmentHoverPreview.value = null;
     }
 
     function formatTime(ts) {
@@ -271,6 +336,7 @@ export const ChatTimeline = {
 
     return {
       visibleItems,
+      timelineItems,
       hasMore,
       showMore,
       roleLabel,
@@ -286,6 +352,9 @@ export const ChatTimeline = {
       avatarText,
       renderAssistantBody,
       onAssistantBodyClick,
+      onAttachmentHoverMove,
+      onAttachmentHoverLeave,
+      attachmentHoverPreview,
       itemHasSpec,
       splitBySpec,
       showAgentPresence,
@@ -295,11 +364,16 @@ export const ChatTimeline = {
     };
   },
   template: `
-    <div class="chat-messages-vue hide-scrollbar" :class="{ 'has-plan-pin': pinnedPlanVisible }">
-      <div v-if="items.length === 0" class="chat-empty">暂无消息，先发送一句话试试。</div>
+    <div
+      class="chat-messages-vue hide-scrollbar"
+      :class="{ 'has-plan-pin': pinnedPlanVisible }"
+      @mouseleave="onAttachmentHoverLeave"
+      @scroll.passive="onAttachmentHoverLeave"
+    >
+      <div v-if="timelineItems.length === 0" class="chat-empty">暂无消息，先发送一句话试试。</div>
 
       <div v-if="hasMore" class="chat-load-more">
-        <button class="chat-load-more-btn" @click="showMore">显示更早消息 ({{ items.length - visibleItems.length }} 条)</button>
+        <button class="chat-load-more-btn" @click="showMore">显示更早消息 ({{ timelineItems.length - visibleItems.length }} 条)</button>
       </div>
 
       <article
@@ -338,6 +412,9 @@ export const ChatTimeline = {
                 :key="(att.path || att.name || '') + '-' + idx"
                 class="chat-attachment-pill"
                 :class="{ 'has-image': Boolean(attachmentPreview(att)) }"
+                @mouseenter="onAttachmentHoverMove($event, att)"
+                @mousemove="onAttachmentHoverMove($event, att)"
+                @mouseleave="onAttachmentHoverLeave"
               >
                 <span class="attachment-kind">{{ attachmentType(att) }}</span>
                 <span class="attachment-name">{{ att.name || att.path }}</span>
@@ -346,6 +423,7 @@ export const ChatTimeline = {
                   class="chat-attachment-image"
                   :src="attachmentPreview(att)"
                   :alt="att.name || 'image attachment'"
+                  loading="lazy"
                 />
               </span>
             </div>
@@ -353,7 +431,7 @@ export const ChatTimeline = {
         </template>
 
         <section v-else class="chat-process-line">
-          <header class="chat-process-head">
+          <header v-if="item.kind !== 'thinking' && item.kind !== 'command'" class="chat-process-head">
             <span class="chat-process-role">{{ roleLabel(item) }}</span>
             <span v-if="stateLabel(item)" class="chat-process-status">{{ stateLabel(item) }}</span>
             <span class="chat-item-spacer"></span>
@@ -388,6 +466,14 @@ export const ChatTimeline = {
           </template>
         </section>
       </article>
+      <div
+        v-if="attachmentHoverPreview"
+        class="chat-attachment-hover-preview"
+        :style="{ left: attachmentHoverPreview.left + 'px', top: attachmentHoverPreview.top + 'px' }"
+        aria-hidden="true"
+      >
+        <img :src="attachmentHoverPreview.src" :alt="attachmentHoverPreview.alt" />
+      </div>
       <div v-if="showAgentPresence" class="chat-presence-row">
         <div class="chat-item-avatar chat-item-avatar-presence">AI</div>
         <div class="chat-status chat-status-presence">

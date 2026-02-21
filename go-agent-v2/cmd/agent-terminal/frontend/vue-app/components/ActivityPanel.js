@@ -14,6 +14,8 @@ export const ActivityPanel = {
     stats: { type: Object, default: () => ({}) },
     /** @type {Array<{ id: string, time: string, level: string, message: string }>} */
     alerts: { type: Array, default: () => [] },
+    /** @type {Array<{ id: string, time: string, message: string, status: string }>} */
+    processEvents: { type: Array, default: () => [] },
   },
   setup(props) {
     const expanded = ref(false);
@@ -49,7 +51,13 @@ export const ActivityPanel = {
       return items.slice(-5).reverse();
     });
 
+    const recentProcessEvents = computed(() => {
+      const items = Array.isArray(props.processEvents) ? props.processEvents : [];
+      return items.slice(0, 12);
+    });
+
     const hasAlerts = computed(() => recentAlerts.value.length > 0);
+    const hasProcessEvents = computed(() => recentProcessEvents.value.length > 0);
 
     function toggleExpand() {
       expanded.value = !expanded.value;
@@ -67,6 +75,17 @@ export const ActivityPanel = {
       return 'alert-info';
     }
 
+    function processIcon(status) {
+      if (status === 'done') return '✓';
+      if (status === 'active') return '●';
+      return '•';
+    }
+
+    function processClass(status) {
+      if (status === 'done') return 'alert-info';
+      return 'alert-warning';
+    }
+
     return {
       expanded,
       lspCount,
@@ -75,10 +94,14 @@ export const ActivityPanel = {
       totalTools,
       toolCallEntries,
       recentAlerts,
+      recentProcessEvents,
       hasAlerts,
+      hasProcessEvents,
       toggleExpand,
       alertIcon,
       alertClass,
+      processIcon,
+      processClass,
     };
   },
   template: `
@@ -101,7 +124,19 @@ export const ActivityPanel = {
         >{{ entry.name }}:<strong>{{ entry.count }}</strong></span>
       </div>
 
-      <div class="activity-alerts" :class="{ empty: !hasAlerts }">
+      <div class="activity-alerts" :class="{ empty: !hasAlerts && !hasProcessEvents }">
+        <template v-if="hasProcessEvents">
+          <div
+            v-for="(entry, idx) in recentProcessEvents"
+            :key="entry.id + '-' + idx"
+            class="alert-line"
+            :class="processClass(entry.status)"
+          >
+            <span class="alert-time">{{ entry.time }}</span>
+            <span class="alert-icon">{{ processIcon(entry.status) }}</span>
+            <span class="alert-msg">{{ entry.message }}</span>
+          </div>
+        </template>
         <template v-if="hasAlerts">
           <div
             v-for="alert in recentAlerts"
@@ -114,7 +149,7 @@ export const ActivityPanel = {
             <span class="alert-msg">{{ alert.message }}</span>
           </div>
         </template>
-        <div v-else class="alert-empty">无告警</div>
+        <div v-if="!hasAlerts && !hasProcessEvents" class="alert-empty">无告警</div>
       </div>
     </div>
   `,

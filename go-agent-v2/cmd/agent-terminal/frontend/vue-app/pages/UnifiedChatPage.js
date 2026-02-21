@@ -308,26 +308,38 @@ export const UnifiedChatPage = {
     });
     const chatThreadCards = computed(() => {
       if (isCmd.value) return [];
-      return chatThreadOptions.value.map((thread) => {
+      const cards = chatThreadOptions.value.map((thread) => {
         const threadID = thread.id;
         const displayName = (props.threadStore.displayName(thread) || '').toString().trim() || threadID;
         const pinnedAt = (typeof props.threadStore.getThreadPinnedAt === 'function')
           ? Number(props.threadStore.getThreadPinnedAt(threadID))
           : 0;
+        const archivedAt = (typeof props.threadStore.getThreadArchivedAt === 'function')
+          ? Number(props.threadStore.getThreadArchivedAt(threadID))
+          : 0;
+        const isArchived = Number.isFinite(archivedAt) && archivedAt > 0;
         return {
           id: threadID,
           name: displayName,
           showId: displayName === threadID,
-          status: normalizeStatus(props.threadStore.getThreadStatus(threadID)),
-          statusHeader: getThreadStatusHeader(threadID) || '等待指示',
+          status: isArchived ? 'idle' : normalizeStatus(props.threadStore.getThreadStatus(threadID)),
+          statusHeader: isArchived ? '已归档' : (getThreadStatusHeader(threadID) || '等待指示'),
           interruptible: isThreadInterruptible(threadID),
           pinnedAt,
+          archivedAt,
+          isArchived,
           isPinned: Number.isFinite(pinnedAt) && pinnedAt > 0,
           selected: threadID === selectedThreadId.value,
           isMain: threadID === mainAgentId.value,
         };
       });
+      return cards.sort((left, right) => {
+        const leftArchived = left.isArchived ? 1 : 0;
+        const rightArchived = right.isArchived ? 1 : 0;
+        return leftArchived - rightArchived;
+      });
     });
+    const activeChatThreadCount = computed(() => chatThreadCards.value.filter((thread) => !thread.isArchived).length);
 
     const activeTimeline = computed(() => props.threadStore.getThreadTimeline(selectedThreadId.value));
     const activeThreadDiffText = computed(() => props.threadStore.getThreadDiff(selectedThreadId.value));
@@ -1120,6 +1132,18 @@ export const UnifiedChatPage = {
       props.threadStore.toggleThreadPin(threadId);
     }
 
+    async function toggleThreadArchive(threadId) {
+      if (typeof props.threadStore.toggleThreadArchive !== 'function') return;
+      try {
+        await props.threadStore.toggleThreadArchive(threadId);
+      } catch (error) {
+        logWarn('ui', 'thread.archive.toggle.failed', {
+          thread_id: (threadId || '').toString(),
+          error,
+        });
+      }
+    }
+
     function setRenameInputRef(threadId, el) {
       const id = (threadId || '').toString().trim();
       if (!id) return;
@@ -1603,6 +1627,7 @@ export const UnifiedChatPage = {
       activeThread,
       chatThreadOptions,
       chatThreadCards,
+      activeChatThreadCount,
       activeTimeline,
       activeDiffText,
       activeDiffFocusFile,
@@ -1665,6 +1690,7 @@ export const UnifiedChatPage = {
       renameCard,
       stopCard,
       toggleThreadPin,
+      toggleThreadArchive,
       editingThreadId,
       editingAlias,
       renamingThreadId,
@@ -1725,11 +1751,6 @@ export const UnifiedChatPage = {
         <button
           v-if="!isCmd && selectedThreadId"
           class="btn btn-ghost btn-xs"
-          @click="renameSelected"
-        >改名</button>
-        <button
-          v-if="!isCmd && selectedThreadId"
-          class="btn btn-ghost btn-xs"
           :disabled="!canInterrupt"
           :title="canInterrupt ? '中断当前执行' : '当前没有可中断任务'"
           @click="stopSelected"
@@ -1755,7 +1776,7 @@ export const UnifiedChatPage = {
         <aside v-if="!isCmd" class="thread-rail" aria-label="会话列表">
           <header class="thread-rail-header">
             <strong>会话列表</strong>
-            <span>{{ chatThreadCards.length }} 个 Agent</span>
+            <span>{{ activeChatThreadCount }} 个 Agent</span>
           </header>
           <div v-if="chatThreadCards.length === 0" class="thread-rail-empty">暂无会话，点击顶部「启动 Agent」开始对话</div>
           <div v-else class="thread-rail-list hide-scrollbar">
@@ -1763,11 +1784,24 @@ export const UnifiedChatPage = {
               v-for="thread in chatThreadCards"
               :key="thread.id"
               class="thread-rail-item"
-              :class="{ active: thread.selected }"
+              :class="{ active: thread.selected, archived: thread.isArchived }"
               @click="selectThread(thread.id)"
               :title="thread.name"
             >
               <div class="thread-rail-item-head">
+                <button
+                  type="button"
+                  class="thread-rail-pin-btn"
+                  :class="{ active: thread.isPinned }"
+                  :aria-label="thread.isPinned ? '取消置顶会话' : '置顶会话'"
+                  :title="thread.isPinned ? '取消置顶' : '置顶'"
+                  @click.stop="toggleThreadPin(thread.id)"
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="M9.5 2.5L13.5 6.5L10 10L8 14L2 8L6 6L9.5 2.5Z" stroke-linejoin="round"></path>
+                    <path d="M6 10L2.5 13.5" stroke-linecap="round"></path>
+                  </svg>
+                </button>
                 <input
                   v-if="editingThreadId === thread.id"
                   :ref="(el) => setRenameInputRef(thread.id, el)"
@@ -1788,23 +1822,18 @@ export const UnifiedChatPage = {
                 >{{ thread.name }}</strong>
                 <button
                   type="button"
-                  class="thread-rail-pin-btn"
-                  :class="{ active: thread.isPinned }"
-                  :aria-label="thread.isPinned ? '取消置顶会话' : '置顶会话'"
-                  :title="thread.isPinned ? '取消置顶' : '置顶'"
-                  @click.stop="toggleThreadPin(thread.id)"
+                  class="thread-rail-archive-btn"
+                  :class="{ active: thread.isArchived }"
+                  :aria-label="thread.isArchived ? '恢复会话' : '归档会话'"
+                  :title="thread.isArchived ? '恢复' : '归档'"
+                  @click.stop="toggleThreadArchive(thread.id)"
                 >
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M10.8 2.2c.4 0 .8.2 1.1.5l1.4 1.4a1.6 1.6 0 0 1 0 2.2l-1 1V10l1.2 1.2a.8.8 0 0 1-.6 1.3H8.7v2.7a.7.7 0 0 1-1.2.5L6 14.2V12.5H2.1a.8.8 0 0 1-.6-1.3L2.7 10V7.3l-1-1a1.6 1.6 0 0 1 0-2.2L3.1 2.7c.3-.3.7-.5 1.1-.5h6.6Z" fill="currentColor"></path>
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="M2.2 3.3h11.6a.9.9 0 0 1 .9.9v1.7a.9.9 0 0 1-.9.9H2.2a.9.9 0 0 1-.9-.9V4.2a.9.9 0 0 1 .9-.9Z"></path>
+                    <path d="M3.4 6.8h9.2V12a1 1 0 0 1-1 1h-7.2a1 1 0 0 1-1-1V6.8Z"></path>
+                    <path d="M6.1 9.3h3.8" stroke-linecap="round"></path>
                   </svg>
                 </button>
-                <button
-                  v-if="editingThreadId !== thread.id"
-                  type="button"
-                  class="thread-rail-rename-btn"
-                  aria-label="重命名 Agent"
-                  @click.stop="beginInlineRename(thread.id)"
-                >改名</button>
                 <span v-if="thread.isMain" class="thread-main-badge">主</span>
               </div>
               <div v-if="thread.showId" class="thread-rail-item-id">{{ thread.id }}</div>

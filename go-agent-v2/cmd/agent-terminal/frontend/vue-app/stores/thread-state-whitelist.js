@@ -3,6 +3,7 @@ const UI_LOCAL_STATE_KEYS = Object.freeze([
   'activeCmdThreadId',
   'mainAgentId',
   'pinnedThreadAtById',
+  'archivedThreadAtById',
 ]);
 
 const RUNTIME_STATE_KEYS = Object.freeze([
@@ -18,6 +19,8 @@ const RUNTIME_STATE_KEYS = Object.freeze([
   'tokenUsageByThread',
   'agentMetaById',
   'agentRuntimeById',
+  'activityStatsByThread',
+  'alertsByThread',
 ]);
 
 export const THREAD_STORE_UI_LOCAL_STATE_WHITELIST = UI_LOCAL_STATE_KEYS;

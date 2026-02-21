@@ -23,12 +23,14 @@ const PREF_MAIN_AGENT_ID = 'mainAgentId';
 const PREF_VIEW_CHAT = 'viewPrefs.chat';
 const PREF_VIEW_CMD = 'viewPrefs.cmd';
 const PREF_PINNED_THREADS_CHAT = 'threadPins.chat';
+const PREF_ARCHIVED_THREADS_CHAT = 'threadArchives.chat';
 
 const state = reactive({
   activeThreadId: '',
   activeCmdThreadId: '',
   mainAgentId: '',
   pinnedThreadAtById: {},
+  archivedThreadAtById: {},
 });
 
 const compactPendingByThread = reactive({});
@@ -46,6 +48,8 @@ const runtimeRootState = reactive({
   tokenUsageByThread: {},
   agentMetaById: {},
   agentRuntimeById: {},
+  activityStatsByThread: {},
+  alertsByThread: {},
 });
 
 for (const key of THREAD_STORE_RUNTIME_STATE_KEYS) {
@@ -360,7 +364,7 @@ function normalizeThread(item) {
   };
 }
 
-function normalizePinnedThreadMap(value) {
+function normalizeThreadTimestampMap(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {};
   }
@@ -373,6 +377,14 @@ function normalizePinnedThreadMap(value) {
     next[id] = Math.round(ts);
   }
   return next;
+}
+
+function normalizePinnedThreadMap(value) {
+  return normalizeThreadTimestampMap(value);
+}
+
+function normalizeArchivedThreadMap(value) {
+  return normalizeThreadTimestampMap(value);
 }
 
 function sortChatThreadsByPinned(threads) {
@@ -514,6 +526,8 @@ function applyRuntimeSnapshot(snapshot) {
   mergeObjectMap(state.tokenUsageByThread, data.tokenUsageByThread);
   mergeObjectMap(state.agentMetaById, data.agentMetaById);
   mergeObjectMap(state.agentRuntimeById, data.agentRuntimeById);
+  mergeObjectMap(state.activityStatsByThread, data.activityStatsByThread);
+  mergeObjectMap(state.alertsByThread, data.alertsByThread);
 
   if (Object.prototype.hasOwnProperty.call(data, PREF_ACTIVE_THREAD_ID)) {
     const next = (data[PREF_ACTIVE_THREAD_ID] || '').toString();
@@ -533,6 +547,13 @@ function applyRuntimeSnapshot(snapshot) {
       ensureThreadOrderIndex(id);
     }
     state.pinnedThreadAtById = pinnedMap;
+  }
+  if (Object.prototype.hasOwnProperty.call(data, PREF_ARCHIVED_THREADS_CHAT)) {
+    const archivedMap = normalizeArchivedThreadMap(data[PREF_ARCHIVED_THREADS_CHAT]);
+    for (const id of Object.keys(archivedMap)) {
+      ensureThreadOrderIndex(id);
+    }
+    state.archivedThreadAtById = archivedMap;
   }
   state.viewPrefsChat = normalizeChatPrefs(data[PREF_VIEW_CHAT]);
   state.viewPrefsCmd = normalizeCmdPrefs(data[PREF_VIEW_CMD]);
@@ -968,10 +989,31 @@ function getThreadCompacting(threadId) {
   return Boolean(compactPendingByThread[threadId]);
 }
 
+function getThreadActivityStats(threadId) {
+  if (!threadId) return {};
+  const value = state.activityStatsByThread?.[threadId];
+  if (!value || typeof value !== 'object') return {};
+  return value;
+}
+
+function getThreadAlerts(threadId) {
+  if (!threadId) return [];
+  const value = state.alertsByThread?.[threadId];
+  return Array.isArray(value) ? value : [];
+}
+
 function getThreadPinnedAt(threadId) {
   const id = (threadId || '').toString().trim();
   if (!id) return 0;
   const value = Number(state.pinnedThreadAtById?.[id]);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return value;
+}
+
+function getThreadArchivedAt(threadId) {
+  const id = (threadId || '').toString().trim();
+  if (!id) return 0;
+  const value = Number(state.archivedThreadAtById?.[id]);
   if (!Number.isFinite(value) || value <= 0) return 0;
   return value;
 }
@@ -998,6 +1040,48 @@ function toggleThreadPin(threadId) {
   if (!id) return;
   const currentPinned = getThreadPinnedAt(id) > 0;
   setThreadPinned(id, !currentPinned);
+}
+
+async function setThreadArchived(threadId, archived) {
+  const id = (threadId || '').toString().trim();
+  if (!id) return;
+  const previous = { ...(state.archivedThreadAtById || {}) };
+  const next = { ...previous };
+  if (archived) {
+    next[id] = Date.now();
+  } else {
+    delete next[id];
+  }
+  state.archivedThreadAtById = next;
+  try {
+    const response = await callAPI(archived ? 'thread/archive' : 'thread/unarchive', { threadId: id });
+    await syncRuntimeState();
+    if (!archived && response && response.archiveModified) {
+      const warningText = (response.warning || '检测到归档文件已变化，恢复后的上下文可能与归档时不一致。').toString();
+      logWarn('thread', 'unarchive.modified_warning', {
+        thread_id: id,
+        warning: warningText,
+        modified_files: Array.isArray(response.modifiedFiles) ? response.modifiedFiles.length : 0,
+      });
+      if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+        window.alert(warningText);
+      }
+    }
+  } catch (error) {
+    state.archivedThreadAtById = previous;
+    logWarn('thread', archived ? 'archive.failed' : 'unarchive.failed', {
+      thread_id: id,
+      error,
+    });
+    throw error;
+  }
+}
+
+function toggleThreadArchive(threadId) {
+  const id = (threadId || '').toString().trim();
+  if (!id) return Promise.resolve();
+  const currentArchived = getThreadArchivedAt(id) > 0;
+  return setThreadArchived(id, !currentArchived);
 }
 
 function promptRenameThread(threadId) {
@@ -1050,9 +1134,14 @@ export function useThreadStore() {
     getThreadStatusDetails,
     getThreadTokenUsage,
     getThreadCompacting,
+    getThreadActivityStats,
+    getThreadAlerts,
     getThreadPinnedAt,
+    getThreadArchivedAt,
     setThreadPinned,
     toggleThreadPin,
+    setThreadArchived,
+    toggleThreadArchive,
     displayName,
   };
 }

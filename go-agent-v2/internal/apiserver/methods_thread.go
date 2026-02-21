@@ -3,9 +3,16 @@ package apiserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -150,6 +157,60 @@ func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, er
 			Thread: threadInfo{ID: newID, ForkedFrom: p.ThreadID},
 		}, nil
 	})
+}
+
+func (s *Server) threadArchiveTyped(ctx context.Context, p threadIDParams) (any, error) {
+	threadID := strings.TrimSpace(p.ThreadID)
+	if threadID == "" {
+		return nil, apperrors.New("Server.threadArchive", "threadId is required")
+	}
+	if !s.threadExistsForArchive(ctx, threadID) {
+		return nil, apperrors.Newf("Server.threadArchive", "thread %s not found", threadID)
+	}
+
+	manifest, err := s.archiveThreadArtifacts(ctx, threadID)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.threadArchive", "archive codex artifacts")
+	}
+	archivedAt := time.Now().UnixMilli()
+	if err := s.persistThreadArchivedState(ctx, threadID, archivedAt); err != nil {
+		return nil, apperrors.Wrap(err, "Server.threadArchive", "persist archive state")
+	}
+
+	return map[string]any{
+		"ok":            true,
+		"threadId":      threadID,
+		"archivedAt":    archivedAt,
+		"codexThreadId": manifest.CodexThreadID,
+		"archiveDir":    manifest.ArchiveDir,
+		"rolloutPath":   manifest.RolloutPath,
+		"files":         manifest.Files,
+	}, nil
+}
+
+func (s *Server) threadUnarchiveTyped(ctx context.Context, p threadIDParams) (any, error) {
+	threadID := strings.TrimSpace(p.ThreadID)
+	if threadID == "" {
+		return nil, apperrors.New("Server.threadUnarchive", "threadId is required")
+	}
+	restoreNotice, err := inspectThreadArchiveForRestore(threadID)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.threadUnarchive", "inspect archive integrity")
+	}
+	if err := s.removeThreadArchivedState(ctx, threadID); err != nil {
+		return nil, apperrors.Wrap(err, "Server.threadUnarchive", "persist archive state")
+	}
+	result := map[string]any{
+		"ok":       true,
+		"threadId": threadID,
+	}
+	if restoreNotice.Modified {
+		result["archiveModified"] = true
+		result["warning"] = restoreNotice.Warning
+		result["manifestPath"] = restoreNotice.ManifestPath
+		result["modifiedFiles"] = restoreNotice.ModifiedFiles
+	}
+	return result, nil
 }
 
 // threadNameSetParams thread/name/set 请求参数。
@@ -674,10 +735,12 @@ func (s *Server) resolveRolloutHistorySource(ctx context.Context, threadID strin
 		return "", ""
 	}
 
-	if proc := s.mgr.Get(id); proc != nil && proc.Client != nil {
-		candidate := normalizeCodexThreadID(proc.Client.GetThreadID())
-		if candidate != "" {
-			return candidate, ""
+	if s.mgr != nil {
+		if proc := s.mgr.Get(id); proc != nil && proc.Client != nil {
+			candidate := normalizeCodexThreadID(proc.Client.GetThreadID())
+			if candidate != "" {
+				return candidate, ""
+			}
 		}
 	}
 
@@ -790,4 +853,655 @@ func (s *Server) loadAllThreadMessagesFromCodexRollout(ctx context.Context, thre
 	}
 
 	return all, nil
+}
+
+type threadArchiveFile struct {
+	Kind         string `json:"kind"`
+	SourcePath   string `json:"sourcePath"`
+	ArchivedPath string `json:"archivedPath"`
+	SizeBytes    int64  `json:"sizeBytes"`
+	SHA256       string `json:"sha256,omitempty"`
+}
+
+type threadArchiveManifest struct {
+	ThreadID      string              `json:"threadId"`
+	CodexThreadID string              `json:"codexThreadId,omitempty"`
+	ArchivedAt    string              `json:"archivedAt"`
+	ArchiveDir    string              `json:"archiveDir"`
+	RolloutPath   string              `json:"rolloutPath,omitempty"`
+	Files         []threadArchiveFile `json:"files"`
+}
+
+type threadArtifactCandidate struct {
+	Kind string
+	Path string
+}
+
+func (s *Server) threadExistsForArchive(ctx context.Context, threadID string) bool {
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return false
+	}
+	if s.mgr != nil && s.mgr.Get(id) != nil {
+		return true
+	}
+	if s.uiRuntime != nil && hasThread(s.uiRuntime.SnapshotLight().Threads, id) {
+		return true
+	}
+	return s.threadExistsInHistory(ctx, id)
+}
+
+func (s *Server) persistThreadArchivedState(ctx context.Context, threadID string, archivedAt int64) error {
+	if s.prefManager == nil {
+		return nil
+	}
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return nil
+	}
+	archivedMap, err := s.loadThreadArchiveMap(ctx)
+	if err != nil {
+		return err
+	}
+	if archivedAt <= 0 {
+		archivedAt = time.Now().UnixMilli()
+	}
+	archivedMap[id] = archivedAt
+	return s.prefManager.Set(ctx, prefThreadArchivesChat, archivedMap)
+}
+
+func (s *Server) removeThreadArchivedState(ctx context.Context, threadID string) error {
+	if s.prefManager == nil {
+		return nil
+	}
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return nil
+	}
+	archivedMap, err := s.loadThreadArchiveMap(ctx)
+	if err != nil {
+		return err
+	}
+	delete(archivedMap, id)
+	return s.prefManager.Set(ctx, prefThreadArchivesChat, archivedMap)
+}
+
+func (s *Server) loadThreadArchiveMap(ctx context.Context) (map[string]int64, error) {
+	if s.prefManager == nil {
+		return map[string]int64{}, nil
+	}
+	value, err := s.prefManager.Get(ctx, prefThreadArchivesChat)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeThreadArchiveMap(value), nil
+}
+
+func normalizeThreadArchiveMap(value any) map[string]int64 {
+	result := map[string]int64{}
+	appendEntry := func(rawID string, rawAt any) {
+		id := strings.TrimSpace(rawID)
+		if id == "" {
+			return
+		}
+		var at int64
+		switch v := rawAt.(type) {
+		case int:
+			at = int64(v)
+		case int64:
+			at = v
+		case float64:
+			at = int64(v)
+		case json.Number:
+			parsed, err := v.Int64()
+			if err == nil {
+				at = parsed
+			}
+		case string:
+			parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+			if err == nil {
+				at = parsed
+			}
+		}
+		if at <= 0 {
+			return
+		}
+		result[id] = at
+	}
+
+	switch typed := value.(type) {
+	case map[string]int64:
+		for id, at := range typed {
+			appendEntry(id, at)
+		}
+	case map[string]any:
+		for id, at := range typed {
+			appendEntry(id, at)
+		}
+	case string:
+		decoded := map[string]any{}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(typed)), &decoded); err == nil {
+			for id, at := range decoded {
+				appendEntry(id, at)
+			}
+		}
+	case json.RawMessage:
+		decoded := map[string]any{}
+		if err := json.Unmarshal(typed, &decoded); err == nil {
+			for id, at := range decoded {
+				appendEntry(id, at)
+			}
+		}
+	}
+
+	return result
+}
+
+func (s *Server) archiveThreadArtifacts(ctx context.Context, threadID string) (threadArchiveManifest, error) {
+	id := strings.TrimSpace(threadID)
+	manifest := threadArchiveManifest{
+		ThreadID:   id,
+		ArchivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Files:      []threadArchiveFile{},
+	}
+	rootDir, err := resolveThreadArchiveRootDir()
+	if err != nil {
+		return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "resolve archive root")
+	}
+	archiveDir, err := resolveThreadArchiveSnapshotDir(rootDir, id, manifest.ArchivedAt)
+	if err != nil {
+		return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "resolve archive dir")
+	}
+	manifest.ArchiveDir = archiveDir
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "ensure archive dir")
+	}
+
+	codexThreadID, rolloutPath := s.resolveRolloutHistorySource(ctx, id)
+	manifest.CodexThreadID = normalizeCodexThreadID(codexThreadID)
+	candidates := collectThreadArtifactCandidates(manifest.CodexThreadID, rolloutPath)
+
+	for _, candidate := range candidates {
+		srcPath := strings.TrimSpace(candidate.Path)
+		if srcPath == "" {
+			continue
+		}
+		info, err := os.Stat(srcPath)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		targetPath, err := nextArchiveFilePath(archiveDir, filepath.Base(srcPath))
+		if err != nil {
+			return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "resolve archive target")
+		}
+		if err := copyFile(srcPath, targetPath); err != nil {
+			logger.Warn("thread/archive: copy artifact failed",
+				logger.FieldThreadID, id,
+				"source_path", srcPath,
+				"target_path", targetPath,
+				logger.FieldError, err,
+			)
+			continue
+		}
+		fileMeta := threadArchiveFile{
+			Kind:         candidate.Kind,
+			SourcePath:   srcPath,
+			ArchivedPath: targetPath,
+			SizeBytes:    info.Size(),
+		}
+		checksum, err := fileSHA256(targetPath)
+		if err != nil {
+			return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "compute archived file checksum")
+		}
+		fileMeta.SHA256 = checksum
+		manifest.Files = append(manifest.Files, fileMeta)
+		if manifest.RolloutPath == "" && candidate.Kind == "rollout" {
+			manifest.RolloutPath = targetPath
+		}
+	}
+	sort.SliceStable(manifest.Files, func(i, j int) bool {
+		return manifest.Files[i].ArchivedPath < manifest.Files[j].ArchivedPath
+	})
+
+	if err := writeThreadArchiveManifest(manifest); err != nil {
+		return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "write manifest")
+	}
+	if s.bindingStore != nil && manifest.CodexThreadID != "" && strings.TrimSpace(manifest.RolloutPath) != "" {
+		dbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := s.bindingStore.Bind(dbCtx, id, manifest.CodexThreadID, manifest.RolloutPath)
+		cancel()
+		if err != nil {
+			logger.Warn("thread/archive: persist rollout path failed",
+				logger.FieldThreadID, id,
+				"codex_thread_id", manifest.CodexThreadID,
+				"rollout_path", manifest.RolloutPath,
+				logger.FieldError, err,
+			)
+		}
+	}
+	return manifest, nil
+}
+
+func resolveThreadArchiveRootDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", apperrors.Wrap(err, "resolveThreadArchiveRootDir", "resolve user home")
+	}
+	homeDir = strings.TrimSpace(homeDir)
+	if homeDir == "" {
+		return "", apperrors.New("resolveThreadArchiveRootDir", "user home is empty")
+	}
+	appRootDir := filepath.Join(homeDir, ".multi-agent")
+	if err := os.MkdirAll(appRootDir, 0o755); err != nil {
+		return "", apperrors.Wrap(err, "resolveThreadArchiveRootDir", "ensure app root")
+	}
+	archiveRoot := filepath.Join(appRootDir, "thread-archives")
+	if err := os.MkdirAll(archiveRoot, 0o755); err != nil {
+		return "", apperrors.Wrap(err, "resolveThreadArchiveRootDir", "ensure archive root")
+	}
+	return archiveRoot, nil
+}
+
+func resolveThreadArchiveSnapshotDir(rootDir string, threadID string, archivedAt string) (string, error) {
+	safeThreadID, err := sanitizeArchiveNameStrict(threadID)
+	if err != nil {
+		return "", apperrors.Wrap(err, "resolveThreadArchiveSnapshotDir", "sanitize thread id")
+	}
+	threadDir := filepath.Join(rootDir, safeThreadID)
+	if err := os.MkdirAll(threadDir, 0o755); err != nil {
+		return "", apperrors.Wrap(err, "resolveThreadArchiveSnapshotDir", "ensure thread dir")
+	}
+	snapshotName, err := sanitizeArchiveNameStrict(strings.TrimSpace(archivedAt))
+	if err != nil {
+		return "", apperrors.Wrap(err, "resolveThreadArchiveSnapshotDir", "sanitize archive timestamp")
+	}
+	snapshotDir := filepath.Join(threadDir, snapshotName)
+	if _, err := os.Stat(snapshotDir); os.IsNotExist(err) {
+		return snapshotDir, nil
+	} else if err != nil {
+		return "", apperrors.Wrap(err, "resolveThreadArchiveSnapshotDir", "stat snapshot dir")
+	}
+	for i := 2; i <= 9999; i++ {
+		candidate := filepath.Join(threadDir, fmt.Sprintf("%s-%d", snapshotName, i))
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate, nil
+		} else if err != nil {
+			return "", apperrors.Wrap(err, "resolveThreadArchiveSnapshotDir", "stat snapshot candidate")
+		}
+	}
+	return "", apperrors.New("resolveThreadArchiveSnapshotDir", "unable to allocate unique archive snapshot dir")
+}
+
+func collectThreadArtifactCandidates(codexThreadID string, rolloutPath string) []threadArtifactCandidate {
+	candidates := make([]threadArtifactCandidate, 0, 8)
+	seen := make(map[string]struct{}, 8)
+	addCandidate := func(kind, path string) {
+		cleaned := strings.TrimSpace(path)
+		if cleaned == "" {
+			return
+		}
+		if _, ok := seen[cleaned]; ok {
+			return
+		}
+		seen[cleaned] = struct{}{}
+		candidates = append(candidates, threadArtifactCandidate{Kind: kind, Path: cleaned})
+	}
+
+	resolvedRollout := strings.TrimSpace(rolloutPath)
+	if resolvedRollout == "" && strings.TrimSpace(codexThreadID) != "" {
+		if found, err := codex.FindRolloutPath(codexThreadID); err == nil {
+			resolvedRollout = found
+		}
+	}
+	if resolvedRollout != "" {
+		addCandidate("rollout", resolvedRollout)
+	}
+	if strings.TrimSpace(codexThreadID) == "" {
+		return candidates
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return candidates
+	}
+	addCandidate("shell_snapshot", filepath.Join(homeDir, ".codex", "shell_snapshots", codexThreadID+".sh"))
+
+	searchRoots := []string{
+		filepath.Join(homeDir, ".codex", "sessions"),
+		filepath.Join(homeDir, ".codex", "shell_snapshots"),
+		filepath.Join(homeDir, ".codex", "archived_sessions"),
+		filepath.Join(homeDir, ".codex", "tmp"),
+	}
+	for _, root := range searchRoots {
+		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil || d == nil || d.IsDir() {
+				return nil
+			}
+			name := d.Name()
+			if !strings.Contains(name, codexThreadID) {
+				return nil
+			}
+			addCandidate(inferThreadArtifactKind(name), path)
+			return nil
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Kind != candidates[j].Kind {
+			return candidates[i].Kind < candidates[j].Kind
+		}
+		return candidates[i].Path < candidates[j].Path
+	})
+	return candidates
+}
+
+func inferThreadArtifactKind(filename string) string {
+	lower := strings.ToLower(strings.TrimSpace(filename))
+	switch {
+	case strings.HasPrefix(lower, "rollout-") && strings.HasSuffix(lower, ".jsonl"):
+		return "rollout"
+	case strings.Contains(lower, "bp"):
+		return "breakpoint"
+	case strings.HasSuffix(lower, ".sh"):
+		return "shell_snapshot"
+	case strings.HasSuffix(lower, ".jsonl"):
+		return "jsonl"
+	default:
+		return "artifact"
+	}
+}
+
+func sanitizeArchiveName(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(trimmed))
+	for _, r := range trimmed {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '.', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "._")
+}
+
+func sanitizeArchiveNameStrict(raw string) (string, error) {
+	sanitized := sanitizeArchiveName(raw)
+	if sanitized == "" {
+		return "", apperrors.Newf("sanitizeArchiveNameStrict", "invalid archive name from %q", raw)
+	}
+	return sanitized, nil
+}
+
+func nextArchiveFilePath(dir, filename string) (string, error) {
+	base, err := sanitizeArchiveNameStrict(filepath.Base(filename))
+	if err != nil {
+		return "", apperrors.Wrap(err, "nextArchiveFilePath", "sanitize filename")
+	}
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	candidate := filepath.Join(dir, base)
+	if _, err := os.Stat(candidate); os.IsNotExist(err) {
+		return candidate, nil
+	} else if err != nil {
+		return "", apperrors.Wrap(err, "nextArchiveFilePath", "stat archive target")
+	}
+	for i := 2; i <= 9999; i++ {
+		candidate = filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, i, ext))
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate, nil
+		} else if err != nil {
+			return "", apperrors.Wrap(err, "nextArchiveFilePath", "stat archive target candidate")
+		}
+	}
+	return "", apperrors.New("nextArchiveFilePath", "unable to allocate unique archive filename")
+}
+
+func copyFile(srcPath, targetPath string) error {
+	if _, err := os.Stat(targetPath); err == nil {
+		return apperrors.Newf("copyFile", "target already exists: %s", targetPath)
+	} else if !os.IsNotExist(err) {
+		return apperrors.Wrap(err, "copyFile", "stat target path")
+	}
+
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+
+	info, err := src.Stat()
+	if err != nil {
+		return err
+	}
+	mode := info.Mode().Perm()
+	if mode == 0 {
+		mode = 0o644
+	}
+
+	tmpPath := targetPath + ".tmp"
+	dst, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := dst.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, targetPath)
+}
+
+func fileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+type threadArchiveRestoreNotice struct {
+	Modified      bool
+	Warning       string
+	ManifestPath  string
+	ModifiedFiles []string
+}
+
+type manifestPathCandidate struct {
+	Path       string
+	ModifiedAt time.Time
+}
+
+func inspectThreadArchiveForRestore(threadID string) (threadArchiveRestoreNotice, error) {
+	notice := threadArchiveRestoreNotice{
+		Modified:      false,
+		Warning:       "",
+		ManifestPath:  "",
+		ModifiedFiles: []string{},
+	}
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return notice, nil
+	}
+	rootDir, err := resolveThreadArchiveRootDir()
+	if err != nil {
+		return notice, err
+	}
+	safeThreadID, err := sanitizeArchiveNameStrict(id)
+	if err != nil {
+		return notice, apperrors.Wrap(err, "inspectThreadArchiveForRestore", "sanitize thread id")
+	}
+	threadDir := filepath.Join(rootDir, safeThreadID)
+	manifestPath, err := findLatestThreadArchiveManifestPath(threadDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return notice, nil
+		}
+		return notice, apperrors.Wrap(err, "inspectThreadArchiveForRestore", "find latest manifest")
+	}
+	manifest, err := readThreadArchiveManifest(manifestPath)
+	if err != nil {
+		return notice, apperrors.Wrap(err, "inspectThreadArchiveForRestore", "read manifest")
+	}
+	notice.ManifestPath = manifestPath
+
+	modified := make([]string, 0, len(manifest.Files))
+	for _, meta := range manifest.Files {
+		archivedPath := strings.TrimSpace(meta.ArchivedPath)
+		if archivedPath == "" {
+			continue
+		}
+		if !filepath.IsAbs(archivedPath) && strings.TrimSpace(manifest.ArchiveDir) != "" {
+			archivedPath = filepath.Join(strings.TrimSpace(manifest.ArchiveDir), archivedPath)
+		}
+		if strings.TrimSpace(manifest.ArchiveDir) != "" {
+			withinRoot, err := pathWithinRoot(manifest.ArchiveDir, archivedPath)
+			if err != nil || !withinRoot {
+				modified = append(modified, archivedPath)
+				continue
+			}
+		}
+		info, err := os.Stat(archivedPath)
+		if err != nil || info.IsDir() {
+			modified = append(modified, archivedPath)
+			continue
+		}
+		if meta.SizeBytes > 0 && info.Size() != meta.SizeBytes {
+			modified = append(modified, archivedPath)
+			continue
+		}
+		if checksum := strings.TrimSpace(meta.SHA256); checksum != "" {
+			actualSHA256, err := fileSHA256(archivedPath)
+			if err != nil || !strings.EqualFold(checksum, actualSHA256) {
+				modified = append(modified, archivedPath)
+				continue
+			}
+		}
+	}
+	if len(modified) > 0 {
+		sort.Strings(modified)
+		notice.Modified = true
+		notice.ModifiedFiles = modified
+		notice.Warning = fmt.Sprintf("检测到 %d 个归档文件在归档后被修改，恢复对话可能与归档时不一致。", len(modified))
+	}
+	return notice, nil
+}
+
+func findLatestThreadArchiveManifestPath(threadDir string) (string, error) {
+	info, err := os.Stat(threadDir)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", apperrors.Newf("findLatestThreadArchiveManifestPath", "thread archive path is not a directory: %s", threadDir)
+	}
+
+	candidates := make([]manifestPathCandidate, 0, 8)
+	appendCandidate := func(path string) error {
+		fileInfo, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if fileInfo.IsDir() {
+			return nil
+		}
+		candidates = append(candidates, manifestPathCandidate{
+			Path:       path,
+			ModifiedAt: fileInfo.ModTime(),
+		})
+		return nil
+	}
+
+	if err := appendCandidate(filepath.Join(threadDir, "manifest.json")); err != nil {
+		return "", apperrors.Wrap(err, "findLatestThreadArchiveManifestPath", "stat legacy manifest")
+	}
+	entries, err := os.ReadDir(threadDir)
+	if err != nil {
+		return "", apperrors.Wrap(err, "findLatestThreadArchiveManifestPath", "read thread archive dir")
+	}
+	for _, entry := range entries {
+		if entry == nil || !entry.IsDir() {
+			continue
+		}
+		manifestPath := filepath.Join(threadDir, entry.Name(), "manifest.json")
+		if err := appendCandidate(manifestPath); err != nil {
+			return "", apperrors.Wrapf(err, "findLatestThreadArchiveManifestPath", "stat manifest for snapshot %s", entry.Name())
+		}
+	}
+	if len(candidates) == 0 {
+		return "", os.ErrNotExist
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if !candidates[i].ModifiedAt.Equal(candidates[j].ModifiedAt) {
+			return candidates[i].ModifiedAt.After(candidates[j].ModifiedAt)
+		}
+		return candidates[i].Path > candidates[j].Path
+	})
+	return candidates[0].Path, nil
+}
+
+func readThreadArchiveManifest(manifestPath string) (threadArchiveManifest, error) {
+	manifest := threadArchiveManifest{}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return manifest, err
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return manifest, err
+	}
+	return manifest, nil
+}
+
+func pathWithinRoot(root string, path string) (bool, error) {
+	rootAbs, err := filepath.Abs(strings.TrimSpace(root))
+	if err != nil {
+		return false, err
+	}
+	pathAbs, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return false, err
+	}
+	rel, err := filepath.Rel(rootAbs, pathAbs)
+	if err != nil {
+		return false, err
+	}
+	rel = filepath.Clean(rel)
+	if rel == "." {
+		return true, nil
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..", nil
+}
+
+func writeThreadArchiveManifest(manifest threadArchiveManifest) error {
+	if strings.TrimSpace(manifest.ArchiveDir) == "" {
+		return apperrors.New("writeThreadArchiveManifest", "archive dir is empty")
+	}
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	manifestPath := filepath.Join(manifest.ArchiveDir, "manifest.json")
+	return os.WriteFile(manifestPath, data, 0o644)
 }

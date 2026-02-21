@@ -800,6 +800,15 @@ a,
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
 }
 
+.unified-chat-page .thread-rail-item.archived {
+  border-style: dashed;
+  opacity: 0.8;
+}
+
+.unified-chat-page .thread-rail-item.archived .thread-rail-item-meta {
+  color: var(--text-subtle);
+}
+
 .unified-chat-page .thread-rail-item-head {
   display: flex;
   align-items: center;
@@ -895,26 +904,40 @@ a,
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.16);
 }
 
-.unified-chat-page .thread-rail-rename-btn {
+.unified-chat-page .thread-rail-archive-btn {
   flex-shrink: 0;
+  width: 24px;
+  height: 24px;
   border: 1px solid rgba(255, 255, 255, 0.32);
   border-radius: 999px;
   background: rgba(33, 33, 33, 0.92);
   color: var(--text-muted);
-  font-size: 10px;
-  line-height: 1.3;
-  padding: 1px 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   transition: border-color var(--transition), color var(--transition), background var(--transition);
 }
 
-.unified-chat-page .thread-rail-rename-btn:hover {
+.unified-chat-page .thread-rail-archive-btn svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
+.unified-chat-page .thread-rail-archive-btn:hover {
   border-color: rgba(255, 255, 255, 0.52);
   color: var(--text-sec);
   background: rgba(58, 58, 58, 0.92);
 }
 
-.unified-chat-page .thread-rail-rename-btn:focus-visible {
+.unified-chat-page .thread-rail-archive-btn.active {
+  border-color: rgba(248, 228, 160, 0.72);
+  color: rgba(248, 228, 160, 0.95);
+  background: rgba(120, 97, 18, 0.2);
+}
+
+.unified-chat-page .thread-rail-archive-btn:focus-visible {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.16);

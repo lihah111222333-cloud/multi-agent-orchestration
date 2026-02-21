@@ -14,7 +14,10 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-const prefThreadAliases = "threads.aliases"
+const (
+	prefThreadAliases      = "threads.aliases"
+	prefThreadArchivesChat = "threadArchives.chat"
+)
 
 type uiPrefGetParams struct {
 	Key string `json:"key"`
@@ -99,21 +102,8 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 	})
 	prefs["activeCmdThreadId"] = resolvedActiveCmdThreadID
 
-	// 按需获取活跃线程的 timeline/diff, 避免深拷贝所有线程
-	timelinesByThread := map[string][]uistate.TimelineItem{}
-	diffTextByThread := map[string]string{}
-	activeIDs := []string{resolvedActiveThreadID, resolvedActiveCmdThreadID}
-	for _, tid := range activeIDs {
-		tid = strings.TrimSpace(tid)
-		if tid == "" {
-			continue
-		}
-		if _, ok := timelinesByThread[tid]; ok {
-			continue
-		}
-		timelinesByThread[tid] = s.uiRuntime.ThreadTimeline(tid)
-		diffTextByThread[tid] = s.uiRuntime.ThreadDiff(tid)
-	}
+	// 返回所有已 hydrate 线程的 timeline/diff — 避免切换会话时的竞态丢失。
+	timelinesByThread, diffTextByThread := s.uiRuntime.AllTimelinesAndDiffs()
 
 	result := map[string]any{
 		"threads":               snapshot.Threads,
@@ -166,6 +156,9 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 	}
 	if value, ok := prefs["threadPins.chat"]; ok {
 		result["threadPins.chat"] = value
+	}
+	if value, ok := prefs[prefThreadArchivesChat]; ok {
+		result[prefThreadArchivesChat] = value
 	}
 	logger.Info("ui/state/get: snapshot prepared",
 		"threads_count", len(snapshot.Threads),

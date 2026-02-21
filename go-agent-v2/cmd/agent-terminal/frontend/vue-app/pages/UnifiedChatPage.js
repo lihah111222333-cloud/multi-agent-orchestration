@@ -13,7 +13,7 @@ import { ComposerBar } from '../components/ComposerBar.js';
 import { ActivityPanel } from '../components/ActivityPanel.js';
 import { normalizeStatus } from '../services/status.js';
 import { parseUnifiedDiff } from '../services/diff.js';
-import { callAPI, copyTextToClipboard, resolveThreadIdentity } from '../services/api.js';
+import { callAPI, copyTextToClipboard, onFilesDropped, resolveThreadIdentity } from '../services/api.js';
 import { logDebug, logInfo, logWarn } from '../services/log.js';
 import { useComposerStore } from '../stores/composer.js';
 
@@ -151,11 +151,12 @@ function basename(path) {
  */
 function pickDiffFile(files, targetPath) {
   const target = normalizeDiffPath(targetPath);
-  if (!target || !Array.isArray(files) || files.length === 0) return null;
+  const list = /** @type {DiffFile[]} */ (Array.isArray(files) ? files : []);
+  if (!target || list.length === 0) return null;
   /** @type {DiffFile | null} */
   let best = null;
   let bestScore = -1;
-  files.forEach((file) => {
+  list.forEach((file) => {
     const filename = (file?.filename || '').toString();
     const normalizedFile = normalizeDiffPath(filename);
     if (!normalizedFile) return;
@@ -175,10 +176,10 @@ function pickDiffFile(files, targetPath) {
     }
     if (score > bestScore) {
       bestScore = score;
-      best = file;
+      best = /** @type {DiffFile} */ (file);
     }
   });
-  return best;
+  return bestScore < 0 ? null : best;
 }
 
 /**
@@ -229,8 +230,8 @@ function serializeDiffFile(file) {
 function buildFocusedDiffSelection(rawDiffText, targetPath) {
   const text = (rawDiffText || '').toString().trim();
   if (!text) return null;
-  const files = parseUnifiedDiff(text);
-  const target = pickDiffFile(files, targetPath);
+  const files = /** @type {DiffFile[]} */ (parseUnifiedDiff(text));
+  const target = /** @type {DiffFile | null} */ (pickDiffFile(files, targetPath));
   if (!target) return null;
   const focusedText = serializeDiffFile(target);
   if (!focusedText) return null;
@@ -296,15 +297,15 @@ function scoreDiffPathMatch(targetPath, candidatePath) {
 function findCrossThreadDiffSelection(diffTextByThread, targetPath, preferredThreadId = '') {
   const target = normalizeDiffPath(targetPath);
   if (!target || !diffTextByThread || typeof diffTextByThread !== 'object') return null;
-  /** @type {CrossThreadDiffSelection | null} */
-  let best = null;
   let bestScore = -1;
+  /** @type {CrossThreadDiffSelection | null} */
+  let bestSelection = null;
   for (const [threadIdRaw, rawDiffText] of Object.entries(diffTextByThread)) {
     const threadId = (threadIdRaw || '').toString().trim();
     const diffText = (rawDiffText || '').toString();
     if (!threadId || !diffText) continue;
-    const files = parseUnifiedDiff(diffText);
-    const matchedFile = pickDiffFile(files, targetPath);
+    const files = /** @type {DiffFile[]} */ (parseUnifiedDiff(diffText));
+    const matchedFile = /** @type {DiffFile | null} */ (pickDiffFile(files, targetPath));
     const resolvedPath = (matchedFile?.filename || '').toString().trim();
     if (!resolvedPath) continue;
     let score = scoreDiffPathMatch(targetPath, resolvedPath);
@@ -314,13 +315,13 @@ function findCrossThreadDiffSelection(diffTextByThread, targetPath, preferredThr
     }
     if (score > bestScore) {
       bestScore = score;
-      best = {
+      bestSelection = {
         threadId,
         path: resolvedPath,
       };
     }
   }
-  return best;
+  return bestSelection;
 }
 
 export const UnifiedChatPage = {
@@ -352,8 +353,9 @@ export const UnifiedChatPage = {
     const composerSkillPreviewLoading = ref(false);
     let composerSkillPreviewTimer = 0;
     let composerSkillPreviewSeq = 0;
-    /** @type {SkillPreviewQueuedRequest | null} */
-    let composerSkillPreviewQueued = null;
+    /** @type {SkillPreviewQueuedRequest} */
+    let composerSkillPreviewQueued = { requestSeq: 0, threadId: '', text: '' };
+    let hasComposerSkillPreviewQueued = false;
     let composerSkillPreviewLastSignature = '';
     let composerSkillPreviewLastWarnAt = 0;
     const workspaceRef = ref(null);
@@ -361,6 +363,7 @@ export const UnifiedChatPage = {
     const copyState = ref('idle');
     let scrollTimer = 0;
     let copyStateTimer = 0;
+    let offFilesDropped = () => { };
     const editingThreadId = ref('');
     const editingAlias = ref('');
     const renamingThreadId = ref('');
@@ -443,8 +446,8 @@ export const UnifiedChatPage = {
       });
     });
     const showArchivedThreadList = ref(false);
-    const chatActiveThreadCards = computed(() => chatThreadCards.value.filter((/** @type {any} */ thread) => !thread.isArchived));
-    const chatArchivedThreadCards = computed(() => chatThreadCards.value.filter((/** @type {any} */ thread) => thread.isArchived));
+    const chatActiveThreadCards = computed(() => chatThreadCards.value.filter((thread) => !thread.isArchived));
+    const chatArchivedThreadCards = computed(() => chatThreadCards.value.filter((thread) => thread.isArchived));
     const visibleChatThreadCards = computed(() => (
       showArchivedThreadList.value ? chatArchivedThreadCards.value : chatActiveThreadCards.value
     ));
@@ -588,8 +591,8 @@ export const UnifiedChatPage = {
       return items.slice(-12).reverse();
     });
     const isStatusTimerModalPaused = computed(() => Boolean(props.projectStore?.state?.showModal));
-    const statusSinceByThread = ref({});
-    const statusPausedAtByThread = ref({});
+    const statusSinceByThread = /** @type {{ value: Record<string, number> }} */ (ref({}));
+    const statusPausedAtByThread = /** @type {{ value: Record<string, number> }} */ (ref({}));
     const statusTick = ref(Date.now());
     let statusTickTimer = 0;
     const activeStatusMeta = computed(() => {
@@ -774,10 +777,14 @@ export const UnifiedChatPage = {
       composerSkillPreviewTimer = 0;
     }
 
+    /**
+     * @param {any} rawMatches
+     * @returns {SkillPreviewMatch[]}
+     */
     function normalizeSkillPreviewMatches(rawMatches) {
       if (!Array.isArray(rawMatches)) return [];
       const deduped = /** @type {SkillPreviewMatch[]} */ ([]);
-      const seenNames = new Set();
+      const seenNames = /** @type {Set<string>} */ (new Set());
       rawMatches.forEach((raw) => {
         const name = (raw?.name || raw?.skill || '').toString().trim();
         if (!name) return;
@@ -785,14 +792,16 @@ export const UnifiedChatPage = {
         if (seenNames.has(lowerName)) return;
         seenNames.add(lowerName);
         const matchedByRaw = (raw?.matched_by || raw?.matchedBy || '').toString().trim().toLowerCase();
+        /** @type {SkillMatchType} */
         const matchedBy = matchedByRaw === 'force'
           ? 'force'
           : (matchedByRaw === 'explicit' ? 'explicit' : 'trigger');
-        const sourceTerms = Array.isArray(raw?.matched_terms)
+        const sourceTermsRaw = Array.isArray(raw?.matched_terms)
           ? raw.matched_terms
           : (Array.isArray(raw?.matchedTerms) ? raw.matchedTerms : []);
+        const sourceTerms = /** @type {any[]} */ (sourceTermsRaw);
         const terms = /** @type {string[]} */ ([]);
-        const seenTerms = new Set();
+        const seenTerms = /** @type {Set<string>} */ (new Set());
         sourceTerms.forEach((rawTerm) => {
           const term = (rawTerm || '').toString().trim();
           if (!term) return;
@@ -801,11 +810,13 @@ export const UnifiedChatPage = {
           seenTerms.add(lowerTerm);
           terms.push(term);
         });
-        deduped.push({
+        /** @type {SkillPreviewMatch} */
+        const match = {
           name,
           matchedBy,
           matchedTerms: terms,
-        });
+        };
+        deduped.push(match);
       });
       return deduped;
     }
@@ -890,6 +901,9 @@ export const UnifiedChatPage = {
         .join(';');
     }
 
+    /**
+     * @param {any} meta
+     */
     function maybeWarnSkillPreviewFailure(meta) {
       const now = Date.now();
       if (now - composerSkillPreviewLastWarnAt < 2000) return;
@@ -898,13 +912,19 @@ export const UnifiedChatPage = {
     }
 
     function runQueuedComposerSkillPreviewIfNeeded() {
-      if (!composerSkillPreviewQueued || composerSkillPreviewLoading.value) return;
-      const queued = composerSkillPreviewQueued;
-      composerSkillPreviewQueued = null;
+      if (!hasComposerSkillPreviewQueued || composerSkillPreviewLoading.value) return;
+      const queued = /** @type {SkillPreviewQueuedRequest} */ (composerSkillPreviewQueued);
+      hasComposerSkillPreviewQueued = false;
       if (queued.requestSeq !== composerSkillPreviewSeq) return;
       runComposerSkillPreview(queued.requestSeq, queued.threadId, queued.text).catch(() => { });
     }
 
+    /**
+     * @param {number} requestSeq
+     * @param {string} threadId
+     * @param {string} text
+     * @returns {Promise<void>}
+     */
     async function runComposerSkillPreview(requestSeq, threadId, text) {
       const startedAt = Date.now();
       composerSkillPreviewLoading.value = true;
@@ -944,10 +964,15 @@ export const UnifiedChatPage = {
       }
     }
 
+    /**
+     * @param {string} threadId
+     * @param {string} text
+     */
     function requestComposerSkillPreview(threadId, text) {
       const requestSeq = ++composerSkillPreviewSeq;
       if (composerSkillPreviewLoading.value) {
         composerSkillPreviewQueued = { requestSeq, threadId, text };
+        hasComposerSkillPreviewQueued = true;
         return;
       }
       runComposerSkillPreview(requestSeq, threadId, text).catch(() => { });
@@ -959,7 +984,7 @@ export const UnifiedChatPage = {
       const text = (composer.state.text || '').toString().trim();
       if (!threadId || !text) {
         composerSkillPreviewSeq += 1;
-        composerSkillPreviewQueued = null;
+        hasComposerSkillPreviewQueued = false;
         composerSkillPreviewLastSignature = '';
         composerSkillMatches.value = [];
         composerSkillPreviewLoading.value = false;
@@ -1495,17 +1520,17 @@ export const UnifiedChatPage = {
         /** @type {CodeOpenResult | null} */
         let codeOpenResult = null;
         let codeOpenInputPath = '';
-        /** @type {unknown} */
+        /** @type {any} */
         let codeOpenError = null;
         for (const candidatePath of codeOpenCandidates) {
           try {
-            const result = await callAPI('ui/code/open', {
+            const result = /** @type {CodeOpenResult | null} */ (await callAPI('ui/code/open', {
               filePath: candidatePath,
               line,
               column,
               project: activeProject,
               projects: projectList,
-            });
+            }));
             if (result?.ok) {
               codeOpenResult = result;
               codeOpenInputPath = candidatePath;
@@ -1593,15 +1618,17 @@ export const UnifiedChatPage = {
     async function copySelectedThreadId() {
       const threadId = (selectedThreadId.value || '').toString();
       if (!threadId) return;
-      const runtime = /** @type {ThreadIdentityInfo} */ (activeRuntime.value || {});
+      const runtime = /** @type {ThreadIdentityInfo} */ ((activeRuntime.value && typeof activeRuntime.value === 'object')
+        ? activeRuntime.value
+        : { codexThreadId: '', port: null });
       /** @type {ThreadIdentityInfo} */
-      let resolved = {};
+      let resolved = { codexThreadId: '', port: null };
       const existingCodexThreadID = (runtime.codexThreadId || '').toString().trim();
       if (!existingCodexThreadID) {
         try {
-          resolved = await resolveThreadIdentity(threadId);
+          resolved = /** @type {ThreadIdentityInfo} */ (await resolveThreadIdentity(threadId));
         } catch {
-          resolved = {};
+          resolved = { codexThreadId: '', port: null };
         }
       }
       const codexThreadID = existingCodexThreadID || (resolved.codexThreadId || '').toString().trim();
@@ -1769,18 +1796,40 @@ export const UnifiedChatPage = {
       return `${hours}h ${minutes.toString().padStart(2, '0')}m ${sec.toString().padStart(2, '0')}s`;
     }
 
+    function onNativeFilesDropped(evt) {
+      const payload = evt && typeof evt === 'object' ? evt : {};
+      const files = Array.isArray(payload.files) ? payload.files : [];
+      if (files.length === 0) return;
+
+      const details = payload.details && typeof payload.details === 'object'
+        ? payload.details
+        : {};
+      const targetID = (details.id || '').toString().trim();
+      if (targetID && targetID !== 'chat-input-bar') return;
+
+      const added = composer.attachByPaths(files, 'wails-drop');
+      logInfo('ui', 'chat.nativeFilesDropped.handled', {
+        files: files.length,
+        added,
+        target_id: targetID,
+      });
+    }
+
     onMounted(() => {
       window.addEventListener('keydown', onGlobalEscape, true);
       document.addEventListener('keydown', onGlobalEscape, true);
+      offFilesDropped = onFilesDropped(onNativeFilesDropped);
     });
 
     onBeforeUnmount(() => {
       window.removeEventListener('keydown', onGlobalEscape, true);
       document.removeEventListener('keydown', onGlobalEscape, true);
+      offFilesDropped();
+      offFilesDropped = () => { };
       dragging.value = false;
       clearComposerSkillPreviewTimer();
       composerSkillPreviewSeq += 1;
-      composerSkillPreviewQueued = null;
+      hasComposerSkillPreviewQueued = false;
       if (scrollTimer) {
         cancelAnimationFrame(scrollTimer);
         scrollTimer = 0;

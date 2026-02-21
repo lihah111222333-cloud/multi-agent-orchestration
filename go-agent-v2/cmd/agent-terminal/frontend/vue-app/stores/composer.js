@@ -47,7 +47,7 @@ function pushAttachment(attachment) {
 function normalizeFileAttachment(path) {
   const value = (path || '').trim();
   if (!value) return null;
-  const parts = value.split('/');
+  const parts = value.split(/[\\/]/);
   const name = parts[parts.length - 1] || value;
   const lower = name.toLowerCase();
   const image = /\.(png|jpg|jpeg|gif|webp|bmp|svg)$/.test(lower);
@@ -56,6 +56,45 @@ function normalizeFileAttachment(path) {
     name,
     path: value,
     previewUrl: image ? `file://${value}` : '',
+  };
+}
+
+function collectDroppedFiles(event) {
+  const files = event?.dataTransfer?.files;
+  if (files && files.length > 0) return Array.from(files).filter(Boolean);
+
+  const items = event?.dataTransfer?.items;
+  if (!items || items.length === 0) return [];
+  const normalized = [];
+  for (const item of items) {
+    if (item?.kind !== 'file') continue;
+    const file = item.getAsFile?.();
+    if (file) normalized.push(file);
+  }
+  return normalized;
+}
+
+async function normalizeDroppedFileAttachment(file, index) {
+  const path = (file?.path || '').toString().trim();
+  if (path) return normalizeFileAttachment(path);
+
+  const type = (file?.type || '').toString().toLowerCase();
+  if (!type.startsWith('image/')) {
+    logWarn('composer', 'drop.file.ignored.noPath', {
+      name: (file?.name || '').toString(),
+      type,
+    });
+    return null;
+  }
+
+  const dataUrl = await blobToDataURL(file);
+  const base64 = dataUrl.split(',')[1] || '';
+  const tempPath = await saveClipboardImage(base64);
+  return {
+    kind: 'image',
+    name: (file?.name || `dropped-image-${Date.now()}-${index}.png`).toString(),
+    path: (tempPath || '').toString(),
+    previewUrl: dataUrl,
   };
 }
 
@@ -117,6 +156,40 @@ async function handlePaste(event) {
   return false;
 }
 
+async function handleDrop(event) {
+  const files = collectDroppedFiles(event);
+  if (files.length === 0) {
+    logDebug('composer', 'drop.ignored.noFiles', {});
+    return false;
+  }
+
+  event.preventDefault();
+  if (typeof event.stopPropagation === 'function') event.stopPropagation();
+
+  let added = 0;
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    try {
+      const attachment = await normalizeDroppedFileAttachment(file, index);
+      if (!attachment) continue;
+      pushAttachment(attachment);
+      added += 1;
+    } catch (error) {
+      logWarn('composer', 'drop.file.failed', {
+        name: (file?.name || '').toString(),
+        error,
+      });
+    }
+  }
+
+  logInfo('composer', 'drop.done', {
+    files: files.length,
+    added,
+    dropped: Math.max(files.length - added, 0),
+  });
+  return added > 0;
+}
+
 async function blobToDataURL(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -138,6 +211,7 @@ export function useComposerStore() {
     removeAttachment,
     attachByPicker,
     handlePaste,
+    handleDrop,
 
   };
 }

@@ -22,6 +22,8 @@ export const ComposerBar = {
     const interruptPending = ref(false);
     const interruptRequestThreadId = ref('');
     const interruptTimeoutId = ref(0);
+    const dropActive = ref(false);
+    const dropDepth = ref(0);
 
     function clearInterruptTimeout() {
       if (!interruptTimeoutId.value) return;
@@ -91,6 +93,56 @@ export const ComposerBar = {
     function onPaste(event) {
       logDebug('ui', 'composerBar.paste', {});
       props.composer.handlePaste(event);
+    }
+
+    function hasFilesTransfer(event) {
+      const transfer = event?.dataTransfer;
+      if (!transfer) return false;
+      if (transfer.files && transfer.files.length > 0) return true;
+      if (!transfer.types) return false;
+      return Array.from(transfer.types).includes('Files');
+    }
+
+    function resetDropState() {
+      dropDepth.value = 0;
+      dropActive.value = false;
+    }
+
+    function onDragEnter(event) {
+      if (props.disabled) return;
+      if (!hasFilesTransfer(event)) return;
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      dropDepth.value += 1;
+      dropActive.value = true;
+    }
+
+    function onDragOver(event) {
+      if (props.disabled) return;
+      if (!hasFilesTransfer(event)) return;
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      const transfer = event?.dataTransfer;
+      if (transfer) transfer.dropEffect = 'copy';
+      if (!dropActive.value) dropActive.value = true;
+    }
+
+    function onDragLeave(event) {
+      if (!dropActive.value) return;
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      dropDepth.value = Math.max(dropDepth.value - 1, 0);
+      if (dropDepth.value === 0) dropActive.value = false;
+    }
+
+    async function onDrop(event) {
+      if (!hasFilesTransfer(event)) return;
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      if (typeof event.stopPropagation === 'function') event.stopPropagation();
+      resetDropState();
+      if (props.disabled) return;
+      try {
+        await props.composer.handleDrop(event);
+      } catch (error) {
+        logDebug('ui', 'composerBar.drop.failed', { error });
+      }
     }
 
     function onCompositionStart() {
@@ -268,6 +320,7 @@ export const ComposerBar = {
         pauseAcknowledged.value = false;
         interruptPending.value = false;
         interruptRequestThreadId.value = '';
+        resetDropState();
         logDebug('ui', 'composerBar.thread.switch.reset', {
           from_thread_id: prevID,
           to_thread_id: nextID,
@@ -284,6 +337,7 @@ export const ComposerBar = {
 
     onBeforeUnmount(() => {
       clearInterruptTimeout();
+      resetDropState();
     });
 
     return {
@@ -292,9 +346,15 @@ export const ComposerBar = {
       interruptPending,
       interruptRequestThreadId,
       interruptTimeoutId,
+      dropActive,
+      dropDepth,
       hasReadyInput,
       isPauseMode,
       onPaste,
+      onDragEnter,
+      onDragOver,
+      onDragLeave,
+      onDrop,
       onCompositionStart,
       onCompositionEnd,
       onSend,
@@ -313,8 +373,18 @@ export const ComposerBar = {
     };
   },
   template: `
-    <div id="chat-input-bar" class="chat-input-vue" style="position:relative">
+    <div
+      id="chat-input-bar"
+      class="chat-input-vue"
+      :class="{ 'drop-active': dropActive }"
+      style="position:relative"
+      @dragenter="onDragEnter"
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+      @drop="onDrop"
+    >
       <div v-if="compacting" class="codex-loading-bar"></div>
+      <div v-if="dropActive" class="composer-drop-hint" aria-live="polite">松开即可添加附件</div>
       <div class="composer-skill-selector" role="status" aria-live="polite">
         <div class="composer-skill-selector-head">
           <span class="composer-skill-selector-title" :class="{ 'loading-shimmer': skillMatchesLoading }">

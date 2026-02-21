@@ -23,7 +23,7 @@ type stubClient struct {
 func (s *stubClient) GetPort() int                         { return s.port }
 func (s *stubClient) GetThreadID() string                  { return s.threadID }
 func (s *stubClient) SetEventHandler(_ codex.EventHandler) {}
-func (s *stubClient) SpawnAndConnect(_ context.Context, _, _, _ string, _ []codex.DynamicTool) error {
+func (s *stubClient) SpawnAndConnect(_ context.Context, _, _, _, _ string, _ []codex.DynamicTool) error {
 	return nil
 }
 func (s *stubClient) Submit(_ string, _, _ []string, _ json.RawMessage) error { return nil }
@@ -49,7 +49,7 @@ type fakeLaunchClient struct {
 func (f *fakeLaunchClient) GetPort() int                         { return f.port }
 func (f *fakeLaunchClient) GetThreadID() string                  { return f.threadID }
 func (f *fakeLaunchClient) SetEventHandler(_ codex.EventHandler) {}
-func (f *fakeLaunchClient) SpawnAndConnect(_ context.Context, _, _, _ string, _ []codex.DynamicTool) error {
+func (f *fakeLaunchClient) SpawnAndConnect(_ context.Context, _, _, _, _ string, _ []codex.DynamicTool) error {
 	f.spawnCalls.Add(1)
 	return f.spawnErr
 }
@@ -311,7 +311,7 @@ func TestLaunch_FallbackToRESTWhenAppServerFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	if err := mgr.Launch(ctx, "agent-fallback-ok", "Agent Fallback", "", ".", nil); err != nil {
+	if err := mgr.Launch(ctx, "agent-fallback-ok", "Agent Fallback", "", ".", "", nil); err != nil {
 		t.Fatalf("Launch returned error: %v", err)
 	}
 	proc := mgr.Get("agent-fallback-ok")
@@ -352,7 +352,7 @@ func TestLaunch_FallbackFailureRemovesAgent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	err := mgr.Launch(ctx, "agent-fallback-fail", "Agent Fallback Fail", "", ".", nil)
+	err := mgr.Launch(ctx, "agent-fallback-fail", "Agent Fallback Fail", "", ".", "", nil)
 	if err == nil {
 		t.Fatal("expected launch error when app-server and rest fallback both fail")
 	}

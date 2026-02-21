@@ -191,7 +191,7 @@ func (m *AgentManager) findFreePort() (int, error) {
 // 流程: 探测空闲端口 → spawn codex app-server → JSON-RPC initialize → thread/start。
 // ctx 控制 spawn 超时和子进程生命周期。
 // dynamicTools 为 nil 时不注入自定义工具。
-func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string, dynamicTools []codex.DynamicTool) error {
+func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string, instructions string, dynamicTools []codex.DynamicTool) error {
 	logger.Infow("runner: launching agent",
 		logger.FieldAgentID, id,
 		logger.FieldName, name,
@@ -233,7 +233,7 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 	})
 
 	// SpawnAndConnect: 启动 app-server → WS 连接 → initialize → thread/start (with dynamicTools)
-	if err := client.SpawnAndConnect(ctx, prompt, cwd, "", dynamicTools); err != nil {
+	if err := client.SpawnAndConnect(ctx, prompt, cwd, "", instructions, dynamicTools); err != nil {
 		logger.Warn("runner: app-server launch failed, attempting REST fallback",
 			logger.FieldAgentID, id,
 			logger.FieldPort, port,
@@ -249,7 +249,7 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 			fallback.SetEventHandler(func(event codex.Event) {
 				m.handleEvent(proc, event)
 			})
-			if fallbackErr := fallback.SpawnAndConnect(ctx, prompt, cwd, "", dynamicTools); fallbackErr == nil {
+			if fallbackErr := fallback.SpawnAndConnect(ctx, prompt, cwd, "", instructions, dynamicTools); fallbackErr == nil {
 				payload, err := json.Marshal(map[string]any{
 					"message": "App-server unavailable; using HTTP fallback",
 					"status":  "degraded",

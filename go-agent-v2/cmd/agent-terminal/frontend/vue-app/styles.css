@@ -2152,6 +2152,19 @@ a,
   color: var(--color-token-terminal-foreground, rgba(255, 255, 255, 0.88));
 }
 
+.chat-process-terminal {
+  max-height: 36vh;
+  overflow: auto;
+  background: var(--color-token-terminal-background, rgba(0, 0, 0, 0.45));
+  border: 1px solid var(--color-token-terminal-border, rgba(255, 255, 255, 0.1));
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-family: var(--font-mono, ui-monospace, "SF Mono", "Menlo", Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-token-terminal-foreground, rgba(255, 255, 255, 0.88));
+}
+
 .chat-process-output {
   margin-top: 4px;
   max-height: 36vh;

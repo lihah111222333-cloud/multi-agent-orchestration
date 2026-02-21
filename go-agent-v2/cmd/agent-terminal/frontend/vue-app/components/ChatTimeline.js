@@ -80,6 +80,14 @@ export const ChatTimeline = {
       }
     }
 
+    function commandText(item) {
+      if (!item || item.kind !== 'command') return '';
+      const parts = [];
+      if (item.command) parts.push(`$ ${item.command}`);
+      if (item.output) parts.push(item.output);
+      return parts.join('\n') || '$ ';
+    }
+
     function stateLabel(item) {
       if (!item) return '';
       if (item.kind === 'thinking') return item.done ? '完成' : '处理中';
@@ -220,6 +228,7 @@ export const ChatTimeline = {
       showMore,
       roleLabel,
       stateLabel,
+      commandText,
       attachmentType,
       attachmentPreview,
       formatTime,
@@ -308,9 +317,7 @@ export const ChatTimeline = {
           </template>
 
           <template v-else-if="item.kind === 'command'">
-            <pre class="chat-process-text chat-process-code">$ {{ item.command }}</pre>
-            <pre v-if="item.output" class="chat-process-text chat-process-output">{{ item.output }}</pre>
-            <div v-if="typeof item.exitCode !== 'undefined'" class="chat-process-foot">exit {{ item.exitCode }}</div>
+            <pre class="chat-process-text chat-process-terminal">{{ commandText(item) }}</pre>
           </template>
 
           <template v-else-if="item.kind === 'tool'">

@@ -1437,7 +1437,8 @@ export const UnifiedChatPage = {
   },
   template: `
     <section class="page active unified-chat-page" :class="isCmd ? 'mode-cmd' : 'mode-chat'">
-      <div class="chat-toolbar unified-toolbar">
+      <div class="chat-toolbar unified-toolbar" style="position:relative">
+        <div v-if="activeStatus === 'thinking' || activeStatus === 'responding' || activeStatus === 'running'" class="codex-loading-bar"></div>
         <ProjectSelect
           :model-value="projectStore.state.active"
           :options="projectStore.projectOptions.value"
@@ -1445,7 +1446,7 @@ export const UnifiedChatPage = {
           @add-project="projectStore.quickAdd()"
         />
 
-        <div class="mode-badge">{{ isCmd ? 'CMD' : 'CHAT' }}</div>
+        <div class="mode-badge" :class="{ 'hyperspeed-model-shimmer': activeStatus === 'thinking' || activeStatus === 'responding' }">{{ isCmd ? 'CMD' : 'CHAT' }}</div>
 
         <div class="layout-switch" v-if="isCmd">
           <button class="btn btn-ghost btn-xs" :class="{active: layoutMode==='overview'}" @click="setCmdLayout('overview')">A 紧凑</button>
@@ -1514,7 +1515,7 @@ export const UnifiedChatPage = {
             <span>{{ chatThreadCards.length }} 个 Agent</span>
           </header>
           <div v-if="chatThreadCards.length === 0" class="thread-rail-empty">暂无会话，点击顶部「启动 Agent」开始对话</div>
-          <div v-else class="thread-rail-list">
+          <div v-else class="thread-rail-list hide-scrollbar">
             <button
               v-for="thread in chatThreadCards"
               :key="thread.id"

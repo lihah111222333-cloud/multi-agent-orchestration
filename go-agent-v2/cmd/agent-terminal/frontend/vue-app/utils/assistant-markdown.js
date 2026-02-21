@@ -4,6 +4,7 @@ const RAW_URL_RE = /https?:\/\/[^\s<]+/gi;
 const BOLD_RE = /\*\*([^*]+)\*\*/g;
 const ITALIC_RE = /(^|[\s(（\["'])\*([^*\n]+)\*(?=[\s).，。！？、\]"']|$)/g;
 const HR_RE = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
+const FILE_REF_RE = /^(?<path>(?:[a-zA-Z]:[\\/])?[^#:\n][^#\n]*?)(?::(?<line>\d+)(?::(?<column>\d+))?|#L(?<line2>\d+)(?:C(?<column2>\d+))?)$/;
 
 function escapeHtml(value) {
   return (value || '')
@@ -69,17 +70,57 @@ function stripTrailingPunctuation(url) {
   return { url: text, tail };
 }
 
+export function parseInlineFileReference(rawText) {
+  const text = (rawText || '').toString().trim();
+  if (!text) return null;
+  const match = text.match(FILE_REF_RE);
+  if (!match || !match.groups) return null;
+
+  const pathRaw = (match.groups.path || '').toString().trim();
+  if (!pathRaw) return null;
+  if (/^https?:\/\//i.test(pathRaw)) return null;
+
+  const normalizedPath = pathRaw.replace(/\\/g, '/');
+  const looksLikePath = /[\\/]/.test(pathRaw) || normalizedPath.includes('.');
+  if (!looksLikePath) return null;
+
+  const lineRaw = match.groups.line || match.groups.line2 || '';
+  const line = Number(lineRaw);
+  if (!Number.isFinite(line) || line <= 0) return null;
+  const columnRaw = match.groups.column || match.groups.column2 || '';
+  const column = Number.isFinite(Number(columnRaw)) && Number(columnRaw) > 0 ? Number(columnRaw) : 0;
+
+  return {
+    path: pathRaw,
+    line,
+    column,
+  };
+}
+
 function renderInlineLine(raw) {
   const source = (raw || '').toString();
   if (!source) return '';
 
   const codeTokens = [];
   const linkTokens = [];
-  let text = source.replace(INLINE_CODE_RE, (_, code) => stashToken(
-    codeTokens,
-    'CODE',
-    `<code class="chat-md-inline-code">${escapeHtml(code)}</code>`,
-  ));
+  let text = source.replace(INLINE_CODE_RE, (_, code) => {
+    const parsedFileRef = parseInlineFileReference(code);
+    if (!parsedFileRef) {
+      return stashToken(
+        codeTokens,
+        'CODE',
+        `<code class="chat-md-inline-code">${escapeHtml(code)}</code>`,
+      );
+    }
+    const lineText = parsedFileRef.column > 0
+      ? `${parsedFileRef.line}:${parsedFileRef.column}`
+      : `${parsedFileRef.line}`;
+    return stashToken(
+      codeTokens,
+      'CODE',
+      `<code class="chat-md-inline-code is-file-ref" data-file-path="${escapeHtml(parsedFileRef.path)}" data-file-line="${parsedFileRef.line}" data-file-column="${parsedFileRef.column}" title="定位 ${escapeHtml(parsedFileRef.path)}:${lineText}">${escapeHtml(code)}</code>`,
+    );
+  });
 
   text = text.replace(MARKDOWN_LINK_RE, (_, label, href) => {
     const safeHref = normalizeHref(href);

@@ -1,11 +1,14 @@
 import { watch, computed, ref } from '../../lib/vue.esm-browser.prod.js';
 import { logDebug } from '../services/log.js';
 import { renderAssistantMarkdown } from '../utils/assistant-markdown.js';
+import { hasJsonRenderSpec, extractSpecBlocks } from '../services/json-render-engine.js';
+import { JsonRenderer } from './JsonRenderer.js';
 
 const VISIBLE_WINDOW = 100;
 
 export const ChatTimeline = {
   name: 'ChatTimeline',
+  components: { JsonRenderer },
   props: {
     items: { type: Array, default: () => [] },
     activeStatus: { type: String, default: 'idle' },
@@ -13,7 +16,8 @@ export const ChatTimeline = {
     activeStatusMeta: { type: String, default: '' },
     pinnedPlanVisible: { type: Boolean, default: false },
   },
-  setup(props) {
+  emits: ['file-ref-click'],
+  setup(props, { emit }) {
     let updateSeq = 0;
     const visibleCount = ref(VISIBLE_WINDOW);
     const assistantMarkdownCache = new Map();
@@ -162,6 +166,43 @@ export const ChatTimeline = {
       return html;
     }
 
+    function onAssistantBodyClick(event) {
+      const target = event?.target;
+      if (!target || typeof target.closest !== 'function') return;
+      const refNode = target.closest('.chat-md-inline-code.is-file-ref');
+      if (!refNode) return;
+      const path = (refNode.getAttribute('data-file-path') || '').toString().trim();
+      const line = Number(refNode.getAttribute('data-file-line') || 0);
+      const column = Number(refNode.getAttribute('data-file-column') || 0);
+      if (!path || !Number.isFinite(line) || line <= 0) return;
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      if (typeof event.stopPropagation === 'function') event.stopPropagation();
+      emit('file-ref-click', {
+        path,
+        line,
+        column: Number.isFinite(column) && column > 0 ? column : 0,
+        raw: (refNode.textContent || '').toString().trim(),
+      });
+    }
+
+    /**
+     * 检查文本是否包含 json-render spec 代码块。
+     * @param {string} text
+     * @returns {boolean}
+     */
+    function itemHasSpec(text) {
+      return hasJsonRenderSpec(text);
+    }
+
+    /**
+     * 将文本拆分为 text/spec 交替段落。
+     * @param {string} text
+     * @returns {Array<{ type: string, content?: string, spec?: object }>}
+     */
+    function splitBySpec(text) {
+      return extractSpecBlocks(text);
+    }
+
     const sharedStatusText = computed(() => (props.activeStatusText || '').toString().trim());
 
     const showAgentPresence = computed(() => {
@@ -187,6 +228,9 @@ export const ChatTimeline = {
       hasAvatar,
       avatarText,
       renderAssistantBody,
+      onAssistantBodyClick,
+      itemHasSpec,
+      splitBySpec,
       showAgentPresence,
       presenceLabel,
       sharedStatusText,
@@ -194,7 +238,7 @@ export const ChatTimeline = {
     };
   },
   template: `
-    <div class="chat-messages-vue" :class="{ 'has-plan-pin': pinnedPlanVisible }">
+    <div class="chat-messages-vue hide-scrollbar" :class="{ 'has-plan-pin': pinnedPlanVisible }">
       <div v-if="items.length === 0" class="chat-empty">暂无消息，先发送一句话试试。</div>
 
       <div v-if="hasMore" class="chat-load-more">
@@ -217,11 +261,19 @@ export const ChatTimeline = {
               <span class="chat-item-spacer"></span>
               <time class="chat-item-time">{{ formatTime(item.ts) }}</time>
             </header>
-            <div
-              v-if="item.kind === 'assistant'"
-              class="chat-item-body chat-item-markdown"
-              v-html="renderAssistantBody(item.text)"
-            ></div>
+            <template v-if="item.kind === 'assistant'">
+              <div v-if="!itemHasSpec(item.text)"
+                class="chat-item-body chat-item-markdown codex-markdown-root"
+                v-html="renderAssistantBody(item.text)"
+                @click="onAssistantBodyClick"
+              ></div>
+              <div v-else class="chat-item-body chat-item-markdown codex-markdown-root jr-mixed" @click="onAssistantBodyClick">
+                <template v-for="(part, pIdx) in splitBySpec(item.text)" :key="pIdx">
+                  <div v-if="part.type === 'text'" v-html="renderAssistantBody(part.content)"></div>
+                  <JsonRenderer v-else-if="part.spec" :spec="part.spec" />
+                </template>
+              </div>
+            </template>
             <pre v-else class="chat-item-body chat-item-plain">{{ item.text }}</pre>
             <div v-if="(item.attachments || []).length > 0" class="chat-attachment-list">
               <span
@@ -252,7 +304,7 @@ export const ChatTimeline = {
           </header>
 
           <template v-if="item.kind === 'thinking' || item.kind === 'plan' || item.kind === 'error'">
-            <pre class="chat-process-text">{{ item.text }}</pre>
+            <pre class="chat-process-text" :class="{ 'loading-shimmer': item.kind === 'thinking' && !item.done }">{{ item.text }}</pre>
           </template>
 
           <template v-else-if="item.kind === 'command'">
@@ -284,9 +336,10 @@ export const ChatTimeline = {
       <div v-if="showAgentPresence" class="chat-presence-row">
         <div class="chat-item-avatar chat-item-avatar-presence">AI</div>
         <div class="chat-status chat-status-presence">
-          <span class="status-dot" :class="activeStatus"></span>
-          <span>{{ presenceLabel }}</span>
-          <span v-if="sharedStatusMeta" class="chat-status-meta">{{ sharedStatusMeta }}</span>
+          <span v-if="activeStatus === 'thinking' || activeStatus === 'starting'" class="pulsing-dot"></span>
+          <span v-else class="status-dot" :class="activeStatus"></span>
+          <span :class="{ 'loading-shimmer': activeStatus === 'thinking' || activeStatus === 'responding' }">{{ presenceLabel }}</span>
+          <span v-if="sharedStatusMeta" class="chat-status-meta" :class="{ 'hyperspeed-model-shimmer': activeStatus === 'thinking' }">{{ sharedStatusMeta }}</span>
         </div>
       </div>
     </div>

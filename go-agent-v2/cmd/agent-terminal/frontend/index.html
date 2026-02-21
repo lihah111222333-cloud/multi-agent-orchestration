@@ -2,15 +2,17 @@
 <html lang="en" style="color-scheme: dark">
 
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Agent Terminal</title>
-    <link rel="stylesheet" href="./src/styles/index.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Orchestrator</title>
+  <link rel="stylesheet" href="vue-app/styles.css">
+  <link rel="stylesheet" href="vue-app/codex-components.css">
 </head>
 
-<body tabindex="0" style="outline: none" class="dark electron-dark">
-    <div id="root"></div>
-    <script type="module" src="./src/main.js"></script>
+<body class="electron-dark">
+  <div id="app"></div>
+  <script src="lib/echarts.min.js"></script>
+  <script type="module" src="vue-app/main.js"></script>
 </body>
 
 </html>

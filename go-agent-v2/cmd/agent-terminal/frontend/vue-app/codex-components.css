@@ -1,0 +1,1333 @@
+/* =============================================================================
+ * codex-components.css
+ * 从 codex-react/public/assets/index.css (308K) 选择性提取的组件样式
+ *
+ * 模块:
+ *   1. Dark / Light 主题 Token 系统
+ *   2. 代码语法高亮 (hljs)
+ *   3. Shimmer / Loading 动画
+ *   4. Dialog 弹窗动画
+ *   5. Toast 通知
+ *   6. Terminal (xterm) + ANSI 颜色
+ *   7. 滚动条 + 视觉优化
+ *   8. 文件树组件
+ *
+ * 注意: --vscode-* 变量已替换为 electron-dark/light 硬编码值
+ * ============================================================================= */
+
+
+/* =============================================================================
+ * 1. Dark / Light 主题 Token 系统
+ *    用法: 在 <body> 或根元素添加 class="electron-dark" 或 "electron-light"
+ * ============================================================================= */
+
+.electron-dark {
+    color-scheme: dark;
+
+    /* --- 表面/背景 --- */
+    --color-background-surface: #181818;
+    --color-background-surface-under: black;
+    --color-background-elevated-primary: #212121f5;
+    --color-background-elevated-primary-opaque: #282828;
+    --color-background-elevated-secondary: #ffffff08;
+    --color-background-elevated-secondary-opaque: #212121;
+
+    /* --- 按钮 --- */
+    --color-background-button-primary: #0d0d0d;
+    --color-background-button-primary-hover: #0d0d0d0f;
+    --color-background-button-primary-active: #0d0d0d1a;
+    --color-background-button-secondary: #ffffff0d;
+    --color-background-button-secondary-hover: #ffffff14;
+    --color-background-button-secondary-active: #ffffff1f;
+    --color-background-button-tertiary: #ffffff08;
+    --color-background-button-tertiary-hover: #ffffff12;
+    --color-background-button-tertiary-active: #ffffff1a;
+
+    /* --- 状态 --- */
+    --color-background-accent: #00284d;
+    --color-background-status-success: #04b84c29;
+    --color-background-status-warning: #4a2206;
+    --color-background-status-error: #4d100e;
+    --color-background-danger: #fa423e24;
+    --color-background-danger-hover: #fa423e47;
+
+    /* --- 文本 --- */
+    --color-text-foreground: #fff;
+    --color-text-foreground-secondary: #ffffffb3;
+    --color-text-foreground-tertiary: #ffffff80;
+    --color-text-button-primary: #0d0d0d;
+    --color-text-button-secondary: #afafaf;
+    --color-text-button-tertiary: #5d5d5d;
+    --color-text-accent: #99ceff;
+    --color-text-success: #40c977;
+    --color-text-warning: #ff8549;
+    --color-text-error: #ff6764;
+
+    /* --- 图标 --- */
+    --color-icon-primary: #ffffffe6;
+    --color-icon-secondary: #ffffffb3;
+    --color-icon-tertiary: #ffffff80;
+    --color-icon-inverted: #000;
+    --color-icon-accent: #339cff;
+    --color-icon-success: #40c977;
+    --color-icon-warning: #ff8549;
+    --color-icon-error: #ff6764;
+
+    /* --- 强调色 --- */
+    --color-accent-red: #ff6764;
+    --color-accent-blue: #339cff;
+    --color-accent-yellow: #ffd240;
+    --color-accent-orange: #fb6a22;
+    --color-accent-green: #40c977;
+    --color-accent-purple: #ad7bf9;
+
+    /* --- 边框 --- */
+    --color-border: #ffffff14;
+    --color-border-heavy: #ffffff29;
+    --color-border-light: #ffffff0a;
+    --color-border-warning: #ff854966;
+    --color-border-error: #fa423e66;
+    --color-border-focus: #339cffb3;
+
+    /* --- 代码差异 --- */
+    --color-decoration-added: #40c977;
+    --color-decoration-modified: #ff8549;
+    --color-decoration-deleted: #fa423e;
+    --color-decoration-unchanged: #414141;
+    --color-editor-added: #40c9773b;
+    --color-editor-modified: #ff85493b;
+    --color-editor-deleted: #fa423e3b;
+    --color-editor-unchanged: #41414133;
+
+    /* --- 字体 --- */
+    --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+    /* --- Diff 面板 (来自 308K CSS) --- */
+    --diffs-font-family: var(--font-mono);
+    --diffs-font-size: 12px;
+    --diffs-line-height: calc(var(--diffs-font-size) * 1.8);
+    --diffs-deletion-color-override: var(--color-decoration-deleted);
+    --diffs-addition-color-override: var(--color-decoration-added);
+    --diffs-gap-block: 0;
+    --diffs-min-number-column-width: 4ch;
+
+    /* --- 终端 ANSI (已内嵌于主题) --- */
+    --term-ansi-black: #fff;
+    --term-ansi-red: #f67576;
+    --term-ansi-green: #85df7b;
+    --term-ansi-yellow: #fa994c;
+    --term-ansi-blue: #3d8dff;
+    --term-ansi-magenta: #b06dff;
+    --term-ansi-cyan: #6dcbf4;
+    --term-ansi-white: #999;
+    --term-ansi-bright-black: #000;
+    --term-ansi-bright-red: #f44a4c;
+    --term-ansi-bright-green: #59d24e;
+    --term-ansi-bright-yellow: #f87915;
+    --term-ansi-bright-blue: #006aff;
+    --term-ansi-bright-magenta: #9840ff;
+    --term-ansi-bright-cyan: #20b8ff;
+    --term-ansi-bright-white: #828282;
+
+    /* --- 杂项 --- */
+    --color-simple-scrim: #ffffff1a;
+}
+
+.electron-light {
+    color-scheme: light;
+
+    /* --- 表面/背景 --- */
+    --color-background-surface: #fff;
+    --color-background-surface-under: #f9f9f9;
+    --color-background-elevated-primary: #ffffffb3;
+    --color-background-elevated-primary-opaque: #fff;
+    --color-background-elevated-secondary: #0d0d0d05;
+    --color-background-elevated-secondary-opaque: #ededed66;
+
+    /* --- 按钮 --- */
+    --color-background-button-primary: #0d0d0d;
+    --color-background-button-primary-hover: #0d0d0d14;
+    --color-background-button-primary-active: #0d0d0d29;
+    --color-background-button-secondary: #0d0d0d0d;
+    --color-background-button-secondary-hover: #0d0d0d12;
+    --color-background-button-secondary-active: #0d0d0d0a;
+    --color-background-button-tertiary: transparent;
+    --color-background-button-tertiary-hover: #0d0d0d1a;
+    --color-background-button-tertiary-active: #0d0d0d33;
+
+    /* --- 状态 --- */
+    --color-background-accent: #e5f3ff;
+    --color-background-status-success: #00a24012;
+    --color-background-status-warning: #ffe7d9;
+    --color-background-status-error: #ffd9d9;
+    --color-background-danger: transparent;
+    --color-background-danger-hover: #e02e2acc;
+
+    /* --- 文本 --- */
+    --color-text-foreground: #0d0d0d;
+    --color-text-foreground-secondary: #0d0d0db3;
+    --color-text-foreground-tertiary: #0d0d0d80;
+    --color-text-button-primary: #fff;
+    --color-text-button-secondary: #0d0d0d;
+    --color-text-button-tertiary: #5d5d5d;
+    --color-text-accent: #0285ff;
+    --color-text-success: #00a240;
+    --color-text-warning: #e25507;
+    --color-text-error: #e02e2a;
+
+    /* --- 图标 --- */
+    --color-icon-primary: #0d0d0d;
+    --color-icon-secondary: #0d0d0db3;
+    --color-icon-tertiary: #0d0d0d80;
+    --color-icon-inverted: #fff;
+    --color-icon-accent: #0285ff;
+    --color-icon-success: #00a240;
+    --color-icon-warning: #e25507;
+    --color-icon-error: #e02e2a;
+
+    /* --- 强调色 --- */
+    --color-accent-red: #e02e2a;
+    --color-accent-blue: #0285ff;
+    --color-accent-yellow: #ffc300;
+    --color-accent-orange: #e25507;
+    --color-accent-green: #00a240;
+    --color-accent-purple: #924ff7;
+
+    /* --- 边框 --- */
+    --color-border: #0d0d0d14;
+    --color-border-heavy: #0d0d0d1f;
+    --color-border-light: #0d0d0d0d;
+    --color-border-warning: #e2550726;
+    --color-border-error: #e02e2a26;
+    --color-border-focus: #0285ff;
+
+    /* --- 代码差异 --- */
+    --color-decoration-added: #00a240;
+    --color-decoration-modified: #923b0f;
+    --color-decoration-deleted: #ba2623;
+    --color-decoration-unchanged: #afafaf;
+    --color-editor-added: #00a24026;
+    --color-editor-modified: #923b0f26;
+    --color-editor-deleted: #ba262326;
+    --color-editor-unchanged: #afafaf26;
+
+    /* --- 终端 ANSI --- */
+    --term-ansi-black: #000;
+    --term-ansi-red: #d53538;
+    --term-ansi-green: #008809;
+    --term-ansi-yellow: #bd5800;
+    --term-ansi-blue: #001bcb;
+    --term-ansi-magenta: #751ed9;
+    --term-ansi-cyan: #0071ea;
+    --term-ansi-white: #666;
+    --term-ansi-bright-black: #000;
+    --term-ansi-bright-red: #f44a4c;
+    --term-ansi-bright-green: #59d24e;
+    --term-ansi-bright-yellow: #f87915;
+    --term-ansi-bright-blue: #006aff;
+    --term-ansi-bright-magenta: #9840ff;
+    --term-ansi-bright-cyan: #20b8ff;
+    --term-ansi-bright-white: #828282;
+
+    /* --- 杂项 --- */
+    --color-simple-scrim: #0000001a;
+}
+
+
+/* =============================================================================
+ * 2. 代码语法高亮 (hljs)
+ *    支持 dark (.dark) 和 light (.light) 两套配色
+ * ============================================================================= */
+
+/* == 通用 == */
+code,
+pre {
+    font-family: var(--font-mono, ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace) !important;
+}
+
+code[class*=language-],
+pre[class*=language-],
+code.hljs {
+    background: none;
+    text-align: left;
+    white-space: pre;
+    word-spacing: normal;
+    word-break: normal;
+    word-wrap: normal;
+    line-height: 1.5;
+    tab-size: 4;
+    hyphens: none;
+}
+
+pre[class*=language-] {
+    overflow: auto;
+    border-radius: 0.3em;
+}
+
+:not(pre)>code[class*=language-],
+:not(pre)>code.hljs {
+    padding: 0.1em;
+    border-radius: 0.3em;
+    white-space: normal;
+}
+
+/* == Dark Theme 语法色 == */
+.dark code[class*=language-],
+.dark pre[class*=language-],
+.dark code.hljs,
+.electron-dark code[class*=language-],
+.electron-dark pre[class*=language-],
+.electron-dark code.hljs {
+    color: #fff;
+}
+
+.dark .hljs-comment,
+.electron-dark .hljs-comment {
+    color: #ffffff7f;
+}
+
+.dark .hljs-meta,
+.electron-dark .hljs-meta {
+    color: #fff9;
+}
+
+.dark .hljs-built_in,
+.dark .hljs-class .hljs-title,
+.electron-dark .hljs-built_in,
+.electron-dark .hljs-class .hljs-title {
+    color: #e9950c;
+}
+
+.dark .hljs-doctag,
+.dark .hljs-keyword,
+.dark .hljs-formula,
+.dark .hljs-literal,
+.electron-dark .hljs-doctag,
+.electron-dark .hljs-keyword,
+.electron-dark .hljs-formula,
+.electron-dark .hljs-literal {
+    color: #2e95d3;
+}
+
+.dark .hljs-string,
+.dark .hljs-regexp,
+.dark .hljs-addition,
+.dark .hljs-attribute,
+.dark .hljs-meta-string,
+.electron-dark .hljs-string,
+.electron-dark .hljs-regexp,
+.electron-dark .hljs-addition,
+.electron-dark .hljs-attribute,
+.electron-dark .hljs-meta-string {
+    color: #00a67d;
+}
+
+.dark .hljs-attr,
+.dark .hljs-variable,
+.dark .hljs-template-variable,
+.dark .hljs-type,
+.dark .hljs-selector-class,
+.dark .hljs-selector-attr,
+.dark .hljs-selector-pseudo,
+.dark .hljs-number,
+.electron-dark .hljs-attr,
+.electron-dark .hljs-variable,
+.electron-dark .hljs-template-variable,
+.electron-dark .hljs-type,
+.electron-dark .hljs-selector-class,
+.electron-dark .hljs-selector-attr,
+.electron-dark .hljs-selector-pseudo,
+.electron-dark .hljs-number {
+    color: #df3079;
+}
+
+.dark .hljs-symbol,
+.dark .hljs-bullet,
+.dark .hljs-link,
+.dark .hljs-selector-id,
+.dark .hljs-title,
+.electron-dark .hljs-symbol,
+.electron-dark .hljs-bullet,
+.electron-dark .hljs-link,
+.electron-dark .hljs-selector-id,
+.electron-dark .hljs-title {
+    color: #f22c3d;
+}
+
+/* == Light Theme 语法色 == */
+.light code[class*=language-],
+.light pre[class*=language-],
+.light code.hljs,
+.electron-light code[class*=language-],
+.electron-light pre[class*=language-],
+.electron-light code.hljs {
+    color: #383a42;
+}
+
+.light .hljs-comment,
+.light .hljs-quote,
+.electron-light .hljs-comment,
+.electron-light .hljs-quote {
+    color: #a0a1a7;
+    font-style: italic;
+}
+
+.light .hljs-doctag,
+.light .hljs-keyword,
+.light .hljs-formula,
+.electron-light .hljs-doctag,
+.electron-light .hljs-keyword,
+.electron-light .hljs-formula {
+    color: #a626a4;
+}
+
+.light .hljs-section,
+.light .hljs-name,
+.light .hljs-selector-tag,
+.light .hljs-deletion,
+.light .hljs-subst,
+.electron-light .hljs-section,
+.electron-light .hljs-name,
+.electron-light .hljs-selector-tag,
+.electron-light .hljs-deletion,
+.electron-light .hljs-subst {
+    color: #e45649;
+}
+
+.light .hljs-literal,
+.electron-light .hljs-literal {
+    color: #0184bb;
+}
+
+.light .hljs-string,
+.light .hljs-regexp,
+.light .hljs-addition,
+.light .hljs-attribute,
+.light .hljs-meta-string,
+.electron-light .hljs-string,
+.electron-light .hljs-regexp,
+.electron-light .hljs-addition,
+.electron-light .hljs-attribute,
+.electron-light .hljs-meta-string {
+    color: #50a14f;
+}
+
+.light .hljs-built_in,
+.light .hljs-class .hljs-title,
+.electron-light .hljs-built_in,
+.electron-light .hljs-class .hljs-title {
+    color: #c18401;
+}
+
+.light .hljs-attr,
+.light .hljs-variable,
+.light .hljs-template-variable,
+.light .hljs-type,
+.light .hljs-selector-class,
+.light .hljs-selector-attr,
+.light .hljs-selector-pseudo,
+.light .hljs-number,
+.electron-light .hljs-attr,
+.electron-light .hljs-variable,
+.electron-light .hljs-template-variable,
+.electron-light .hljs-type,
+.electron-light .hljs-selector-class,
+.electron-light .hljs-selector-attr,
+.electron-light .hljs-selector-pseudo,
+.electron-light .hljs-number {
+    color: #986801;
+}
+
+.light .hljs-symbol,
+.light .hljs-bullet,
+.light .hljs-link,
+.light .hljs-meta,
+.light .hljs-selector-id,
+.light .hljs-title,
+.electron-light .hljs-symbol,
+.electron-light .hljs-bullet,
+.electron-light .hljs-link,
+.electron-light .hljs-meta,
+.electron-light .hljs-selector-id,
+.electron-light .hljs-title {
+    color: #4078f2;
+}
+
+.light .hljs-emphasis,
+.electron-light .hljs-emphasis {
+    font-style: italic;
+}
+
+.light .hljs-strong,
+.electron-light .hljs-strong {
+    font-weight: 700;
+}
+
+.light .hljs-link,
+.electron-light .hljs-link {
+    text-decoration: underline;
+}
+
+
+/* =============================================================================
+ * 3. Shimmer / Loading 动画
+ *    用法: <span class="loading-shimmer">Loading...</span>
+ *          <span class="hyperspeed-model-shimmer">GPT-4</span>
+ * ============================================================================= */
+
+/* -- 基础 shimmer 动画关键帧 -- */
+@keyframes loading-shimmer {
+    0% {
+        background-position: -100% 0;
+    }
+
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+/* -- Loading shimmer 文本效果 -- */
+.loading-shimmer-pure-text,
+.loading-shimmer {
+    --shimmer-text-primary: #a1a1aa;
+    --shimmer-text-secondary: rgba(161, 161, 170, 0.55);
+    --shimmer-contrast: rgba(255, 255, 255, 0.75);
+    background: var(--shimmer-text-secondary) linear-gradient(to right,
+            transparent 0%,
+            var(--shimmer-contrast) 40%,
+            var(--shimmer-contrast) 60%,
+            transparent 100%);
+    background-position: -100% 0;
+    background-repeat: no-repeat;
+    background-size: 50% 200%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation-name: loading-shimmer;
+    animation-duration: 2s;
+    animation-timing-function: steps(48, end);
+    animation-iteration-count: infinite;
+    animation-delay: 0s;
+    display: inline-block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+    .loading-shimmer-pure-text,
+    .loading-shimmer {
+        animation: none;
+    }
+}
+
+.loading-shimmer:hover {
+    -webkit-text-fill-color: var(--shimmer-text-primary);
+    background: none;
+    animation: none;
+}
+
+/* -- Hyperspeed model shimmer (高级品牌动效) -- */
+@keyframes hyperspeed-model-shimmer {
+    0% {
+        background-position: 120% top, 0 0;
+    }
+
+    45% {
+        background-position: -220% top, 0 0;
+    }
+
+    100% {
+        background-position: -220% top, 0 0;
+    }
+}
+
+.hyperspeed-model-shimmer {
+    --hyperspeed-link-blue: #339cff;
+    --hyperspeed-mid-blue: rgba(51, 156, 255, 0.72);
+    --hyperspeed-shimmer-run-ms: 4.5s;
+    --hyperspeed-shimmer-pause-ms: 4.5s;
+    display: inline-block;
+    color: var(--color-text-foreground, #e4e4e7);
+    background-image:
+        linear-gradient(to right,
+            transparent 0%,
+            transparent 40%,
+            var(--hyperspeed-mid-blue) 48%,
+            var(--hyperspeed-link-blue) 54%,
+            var(--hyperspeed-mid-blue) 60%,
+            transparent 78%,
+            transparent 100%),
+        linear-gradient(currentColor, currentColor);
+    background-position: 120% top, 0 0;
+    background-size: 300% 200%, 100% 100%;
+    background-repeat: no-repeat, no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation-duration: calc(var(--hyperspeed-shimmer-run-ms) + var(--hyperspeed-shimmer-pause-ms));
+    animation-delay: 0ms;
+    animation-name: hyperspeed-model-shimmer;
+    animation-iteration-count: infinite;
+    animation-timing-function: linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .hyperspeed-model-shimmer {
+        background: transparent;
+        animation: none;
+        -webkit-text-fill-color: currentColor;
+        color: var(--color-text-foreground, #e4e4e7);
+    }
+}
+
+.hyperspeed-model-shimmer:hover {
+    -webkit-text-fill-color: currentColor;
+    color: var(--color-text-foreground, #e4e4e7);
+    background: transparent;
+    animation: none;
+}
+
+/* -- Pulsing dot (脉冲点) -- */
+.pulsing-dot {
+    background-color: currentColor;
+    border-radius: 50%;
+    width: 6px;
+    height: 6px;
+    animation: 1.5s infinite pulse;
+    display: inline-block;
+}
+
+
+/* =============================================================================
+ * 4. Dialog 弹窗动画
+ *    用法: <div class="codex-dialog">...</div>
+ * ============================================================================= */
+
+@keyframes codex-dialog-enter {
+    0% {
+        opacity: 0;
+        transform: translateY(8px) scale(0.98);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@keyframes codex-dialog-overlay {
+    0% {
+        opacity: 0;
+    }
+
+    100% {
+        opacity: 1;
+    }
+}
+
+.codex-dialog {
+    animation: codex-dialog-enter 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+    transform-origin: center top;
+    will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .codex-dialog {
+        animation: none;
+    }
+}
+
+.codex-dialog-overlay {
+    animation: codex-dialog-overlay 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+    will-change: opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .codex-dialog-overlay {
+        animation: none;
+    }
+}
+
+
+/* =============================================================================
+ * 5. Toast 通知
+ *    用法: <div class="toast-root" data-state="entering">...</div>
+ * ============================================================================= */
+
+@keyframes toast-open {
+    0% {
+        opacity: 0;
+        transform: translateY(-100%);
+    }
+
+    100% {
+        transform: translateY(0);
+    }
+}
+
+@keyframes toast-close {
+    0% {
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0;
+    }
+}
+
+.toast-root {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transition: all 0.24s cubic-bezier(0, 0, 0.2, 1);
+    animation: toast-open 0.25s cubic-bezier(0.175, 0.885, 0.32, 1) both;
+}
+
+.toast-root[data-state="entering"],
+.toast-root[data-state="entered"] {
+    animation: toast-open 0.25s cubic-bezier(0.175, 0.885, 0.32, 1) both;
+}
+
+.toast-root[data-state="exiting"] {
+    animation: toast-close 0.25s cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+.toast-root .alert-root {
+    flex-shrink: 0;
+    pointer-events: all;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+
+/* =============================================================================
+ * 6. Terminal (xterm) 样式
+ *    用法: Wails 中嵌入 xterm.js 时自动生效
+ * ============================================================================= */
+
+.xterm {
+    cursor: text;
+    position: relative;
+    user-select: none;
+    -webkit-user-select: none;
+    background-color: transparent !important;
+    height: 100% !important;
+}
+
+.xterm.focus,
+.xterm:focus {
+    outline: none;
+}
+
+.xterm .xterm-helpers {
+    position: absolute;
+    top: 0;
+    z-index: 5;
+}
+
+.xterm .xterm-helper-textarea {
+    padding: 0;
+    border: 0;
+    margin: 0;
+    position: absolute;
+    opacity: 0;
+    left: -9999em;
+    top: 0;
+    width: 0;
+    height: 0;
+    z-index: -5;
+    white-space: nowrap;
+    overflow: hidden;
+    resize: none;
+}
+
+.xterm .composition-view {
+    background: #000;
+    color: #fff;
+    display: none;
+    position: absolute;
+    white-space: nowrap;
+    z-index: 1;
+}
+
+.xterm .composition-view.active {
+    display: block;
+}
+
+.xterm .xterm-viewport {
+    background-color: transparent !important;
+    overflow-y: scroll;
+    cursor: default;
+    position: absolute;
+    inset: 0;
+}
+
+.xterm .xterm-screen {
+    position: relative;
+}
+
+.xterm .xterm-screen canvas {
+    position: absolute;
+    left: 0;
+    top: 0;
+}
+
+.xterm .xterm-scroll-area {
+    visibility: hidden;
+}
+
+.xterm-char-measure-element {
+    display: inline-block;
+    visibility: hidden;
+    position: absolute;
+    top: 0;
+    left: -9999em;
+    line-height: normal;
+}
+
+.xterm.enable-mouse-events {
+    cursor: default;
+}
+
+.xterm.xterm-cursor-pointer,
+.xterm .xterm-cursor-pointer {
+    cursor: pointer;
+}
+
+.xterm.column-select.focus {
+    cursor: crosshair;
+}
+
+.xterm .xterm-accessibility:not(.debug),
+.xterm .xterm-message {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    color: transparent;
+    pointer-events: none;
+}
+
+.xterm .xterm-accessibility-tree:not(.debug) *::selection {
+    color: transparent;
+}
+
+.xterm .xterm-accessibility-tree {
+    user-select: text;
+    -webkit-user-select: text;
+    white-space: pre;
+}
+
+.xterm .live-region {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+.xterm-dim {
+    opacity: 1 !important;
+}
+
+.xterm-underline-1 {
+    text-decoration: underline;
+}
+
+.xterm-underline-2 {
+    text-decoration: double underline;
+}
+
+.xterm-underline-3 {
+    text-decoration: wavy underline;
+}
+
+.xterm-underline-4 {
+    text-decoration: dotted underline;
+}
+
+.xterm-underline-5 {
+    text-decoration: dashed underline;
+}
+
+.xterm-overline {
+    text-decoration: overline;
+}
+
+.xterm-strikethrough {
+    text-decoration: line-through;
+}
+
+.xterm-screen .xterm-decoration-container .xterm-decoration {
+    z-index: 6;
+    position: absolute;
+}
+
+.xterm-decoration-overview-ruler {
+    z-index: 8;
+    position: absolute;
+    top: 0;
+    right: 0;
+    pointer-events: none;
+}
+
+
+/* == ANSI 颜色类 (适用于终端输出渲染) == */
+
+.ansi-black-fg {
+    color: var(--term-ansi-black, #000) !important;
+}
+
+.ansi-black-bg {
+    background-color: var(--term-ansi-black, #000) !important;
+}
+
+.ansi-red-fg {
+    color: var(--term-ansi-red, #f66) !important;
+}
+
+.ansi-red-bg {
+    background-color: var(--term-ansi-red, #f66) !important;
+}
+
+.ansi-green-fg {
+    color: var(--term-ansi-green, #94f494) !important;
+}
+
+.ansi-green-bg {
+    background-color: var(--term-ansi-green, #94f494) !important;
+}
+
+.ansi-yellow-fg {
+    color: var(--term-ansi-yellow, #f4f47b) !important;
+}
+
+.ansi-yellow-bg {
+    background-color: var(--term-ansi-yellow, #f4f47b) !important;
+}
+
+.ansi-blue-fg {
+    color: var(--term-ansi-blue, #9e9eff) !important;
+}
+
+.ansi-blue-bg {
+    background-color: var(--term-ansi-blue, #9e9eff) !important;
+}
+
+.ansi-magenta-fg {
+    color: var(--term-ansi-magenta, #db6bdb) !important;
+}
+
+.ansi-magenta-bg {
+    background-color: var(--term-ansi-magenta, #db6bdb) !important;
+}
+
+.ansi-cyan-fg {
+    color: var(--term-ansi-cyan, #81eeee) !important;
+}
+
+.ansi-cyan-bg {
+    background-color: var(--term-ansi-cyan, #81eeee) !important;
+}
+
+.ansi-white-fg {
+    color: var(--term-ansi-white, #d6d6d6) !important;
+}
+
+.ansi-white-bg {
+    background-color: var(--term-ansi-white, #d6d6d6) !important;
+}
+
+.ansi-bright-black-fg {
+    color: var(--term-ansi-bright-black, #6e6e6e) !important;
+}
+
+.ansi-bright-red-fg {
+    color: var(--term-ansi-bright-red, #ffa8a8) !important;
+}
+
+.ansi-bright-green-fg {
+    color: var(--term-ansi-bright-green, #0f0) !important;
+}
+
+.ansi-bright-yellow-fg {
+    color: var(--term-ansi-bright-yellow, #ffffa8) !important;
+}
+
+.ansi-bright-blue-fg {
+    color: var(--term-ansi-bright-blue, #9494ff) !important;
+}
+
+.ansi-bright-magenta-fg {
+    color: var(--term-ansi-bright-magenta, #ffb3ff) !important;
+}
+
+.ansi-bright-cyan-fg {
+    color: var(--term-ansi-bright-cyan, #adffff) !important;
+}
+
+.ansi-bright-white-fg {
+    color: var(--term-ansi-bright-white, #fff) !important;
+}
+
+
+/* =============================================================================
+ * 7. 滚动条 + 视觉优化
+ * ============================================================================= */
+
+/* -- 自动隐藏滚动条拇指 -- */
+.hide-scrollbar {
+    transition: scrollbar-color 0.15s;
+    scrollbar-color: transparent transparent !important;
+}
+
+.hide-scrollbar:hover {
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.hide-scrollbar::-webkit-scrollbar-thumb {
+    background-color: transparent;
+}
+
+.hide-scrollbar:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.hide-scrollbar::-webkit-scrollbar-track {
+    background-color: transparent;
+}
+
+/* -- 滚动渐变遮罩 (需要浏览器支持 animation-timeline) -- */
+@property --top-fade {
+    syntax: "<length>";
+    inherits: false;
+    initial-value: 0;
+}
+
+@property --bottom-fade {
+    syntax: "<length>";
+    inherits: false;
+    initial-value: 0;
+}
+
+@property --edge-fade-distance {
+    syntax: "<length>";
+    inherits: false;
+    initial-value: 1rem;
+}
+
+@keyframes edge-fade {
+    0% {
+        --top-fade: 0;
+        --bottom-fade: var(--edge-fade-distance, 1rem);
+    }
+
+    1% {
+        --top-fade: 0;
+        --bottom-fade: var(--edge-fade-distance, 1rem);
+    }
+
+    99% {
+        --top-fade: var(--edge-fade-distance, 1rem);
+        --bottom-fade: 0;
+    }
+
+    100% {
+        --top-fade: var(--edge-fade-distance, 1rem);
+        --bottom-fade: 0;
+    }
+}
+
+@supports (animation-timeline: --scroll-fade) {
+    .vertical-scroll-fade-mask {
+        mask: linear-gradient(to bottom in oklch,
+                oklch(60% 0 0 / 0),
+                oklch(85% 0 0) var(--top-fade) calc(100% - var(--bottom-fade)),
+                oklch(60% 0 0 / 0));
+        animation-name: edge-fade;
+        animation-timing-function: linear;
+        animation-fill-mode: both;
+        animation-timeline: scroll(self y);
+    }
+}
+
+
+/* =============================================================================
+ * 8. 文件树组件
+ *    用法: 文件浏览器 UI
+ * ============================================================================= */
+
+.file-tree-root {
+    contain: layout paint style;
+}
+
+.file-tree-row {
+    content-visibility: auto;
+    contain-intrinsic-size: 28px;
+}
+
+.accordion-content {
+    overflow: hidden;
+}
+
+.accordion-content[data-state="open"],
+.accordion-content[data-state="closed"] {
+    animation: none;
+}
+
+.folder-icon-slot {
+    display: grid;
+    place-items: center;
+}
+
+.folder-icon-default,
+.folder-icon-chevron {
+    transition: none;
+}
+
+.folder-icon-chevron {
+    opacity: 0;
+}
+
+.accordion-trigger[data-state="open"] .folder-icon-chevron {
+    transition: transform 0.12s ease;
+}
+
+.accordion-trigger:hover .folder-icon-default {
+    opacity: 0;
+}
+
+.accordion-trigger:hover .folder-icon-chevron {
+    opacity: 1;
+}
+
+.accordion-trigger[data-state="open"]:hover .folder-icon-chevron {
+    transform: rotate(90deg);
+}
+
+
+/* =============================================================================
+ * 9. Markdown 淡入动画
+ *    用法: markdown 内容渲染时的逐元素渐显效果
+ * ============================================================================= */
+
+@keyframes codex-fade-in {
+    to {
+        opacity: 1;
+    }
+}
+
+.codex-markdown-root .fade-in,
+.codex-markdown-root hr,
+.codex-markdown-root li,
+.codex-markdown-root tr,
+.codex-markdown-root blockquote,
+.codex-markdown-root code,
+.codex-markdown-root pre {
+    opacity: 0;
+    animation: codex-fade-in var(--duration, 0.2s) cubic-bezier(0.37, 0.55, 0.86, 0.88) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+    .codex-markdown-root .fade-in,
+    .codex-markdown-root hr,
+    .codex-markdown-root li,
+    .codex-markdown-root tr,
+    .codex-markdown-root blockquote,
+    .codex-markdown-root code,
+    .codex-markdown-root pre {
+        --duration: 0s;
+        opacity: 1;
+    }
+}
+
+
+/* =============================================================================
+ * 10. 图标尺寸工具类
+ * ============================================================================= */
+
+.icon-3xs {
+    width: 10px;
+    height: 10px;
+}
+
+.icon-xxs {
+    width: 12px;
+    height: 12px;
+}
+
+.icon-2xs {
+    width: 14px;
+    height: 14px;
+}
+
+.icon-xs {
+    width: 16px;
+    height: 16px;
+}
+
+.icon-sm {
+    width: 18px;
+    height: 18px;
+}
+
+.icon-base {
+    width: 20px;
+    height: 20px;
+}
+
+.icon-md {
+    width: 24px;
+    height: 24px;
+}
+
+.icon-lg {
+    width: 28px;
+    height: 28px;
+}
+
+
+/* =============================================================================
+ * 11. 标题尺寸工具类
+ * ============================================================================= */
+
+.heading-4xl {
+    font-size: 72px;
+    font-weight: 500;
+    line-height: 1;
+}
+
+.heading-3xl {
+    font-size: 48px;
+    font-weight: 500;
+    line-height: 1;
+}
+
+.heading-2xl {
+    font-size: 36px;
+    font-weight: 500;
+    line-height: 1;
+}
+
+.heading-xl {
+    font-size: 28px;
+    font-weight: 500;
+    line-height: 1.2;
+}
+
+.heading-lg {
+    font-size: 24px;
+    font-weight: 500;
+    line-height: 1.2;
+}
+
+.heading-base {
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 1.33;
+}
+
+.heading-sm {
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.4;
+}
+
+.heading-xs {
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1.4;
+}
+
+
+/* =============================================================================
+ * 12. 表面/动画过渡 (window-fx)
+ *     用法: 庆祝动画、窗口特效
+ * ============================================================================= */
+
+.main-surface {
+    transition:
+        background-color 0.3s ease,
+        border-radius 0.3s ease,
+        box-shadow 0.3s ease;
+}
+
+.window-fx-celebration .main-surface {
+    background-color: transparent;
+    background-image: none;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+/* =============================================================================
+ * 13. Loading bar 进度条
+ *     用法: <div class="codex-loading-bar"></div>
+ * ============================================================================= */
+
+@keyframes codex-loading-bar-slide {
+    0% {
+        transform: translateX(0);
+    }
+
+    100% {
+        transform: translateX(350%);
+    }
+}
+
+.codex-loading-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    overflow: hidden;
+}
+
+.codex-loading-bar::after {
+    content: "";
+    position: absolute;
+    left: -40%;
+    width: 40%;
+    height: 100%;
+    background: rgba(161, 161, 170, 0.6);
+    animation: codex-loading-bar-slide 1.2s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .codex-loading-bar::after {
+        animation: none;
+        left: 0;
+        width: 100%;
+    }
+}
+
+
+/* =============================================================================
+ * 14. 面板动画 (resizable panels)
+ * ============================================================================= */
+
+.panel-animated [data-panel] {
+    will-change: flex-grow, max-width;
+    transition: flex-grow 0.3s ease, max-width 0.3s ease;
+}
+
+.panel-animated.panel-dragging [data-panel] {
+    transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .panel-animated [data-panel] {
+        transition: none;
+    }
+}
+
+/* 虚拟化性能优化 */
+.review-diff-virtualized {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 360px;
+}
+
+.thread-diff-virtualized {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 40vh;
+}

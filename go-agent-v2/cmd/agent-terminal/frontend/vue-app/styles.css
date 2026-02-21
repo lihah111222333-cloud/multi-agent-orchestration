@@ -641,6 +641,67 @@ a,
   box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.06);
 }
 
+.chat-running-card {
+  flex-shrink: 0;
+  min-width: 0;
+  max-width: min(48vw, 340px);
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 11px;
+  background: linear-gradient(180deg, rgba(34, 34, 34, 0.92) 0%, rgba(20, 20, 20, 0.95) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.chat-running-spinner {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  animation: chat-status-spin 0.95s linear infinite;
+}
+
+.chat-running-spinner-track,
+.chat-running-spinner-arc {
+  stroke-width: 2.2;
+}
+
+.chat-running-spinner-track {
+  stroke: rgba(255, 255, 255, 0.24);
+}
+
+.chat-running-spinner-arc {
+  stroke: rgba(248, 250, 252, 0.96);
+  stroke-linecap: round;
+  stroke-dasharray: 18 60;
+}
+
+.chat-running-copy {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-sec);
+}
+
+.chat-running-copy strong {
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.chat-running-copy span {
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .chat-status {
   display: flex;
   align-items: center;
@@ -1903,6 +1964,28 @@ a,
   height: 10px;
 }
 
+.chat-status-spinner {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  animation: chat-status-spin 0.95s linear infinite;
+}
+
+.chat-status-spinner-track,
+.chat-status-spinner-arc {
+  stroke-width: 2.3;
+}
+
+.chat-status-spinner-track {
+  stroke: rgba(255, 255, 255, 0.24);
+}
+
+.chat-status-spinner-arc {
+  stroke: rgba(248, 250, 252, 0.96);
+  stroke-linecap: round;
+  stroke-dasharray: 18 60;
+}
+
 .chat-status.chat-status-presence .chat-status-meta {
   color: var(--color-text-foreground-tertiary, #ffffff80);
   font-size: 12px;
@@ -3048,21 +3131,56 @@ a,
   }
 }
 
-.chat-messages-vue::-webkit-scrollbar,
+.chat-messages-vue {
+  scrollbar-color: transparent transparent;
+}
+
+.chat-messages-vue:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.chat-messages-vue::-webkit-scrollbar {
+  width: 4px;
+}
+
+.chat-messages-vue::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-messages-vue::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+}
+
+.chat-messages-vue:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+}
+
 #diff-content::-webkit-scrollbar,
 .cmd-output::-webkit-scrollbar {
   width: 5px;
 }
 
-.chat-messages-vue::-webkit-scrollbar-track,
 #diff-content::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.chat-messages-vue::-webkit-scrollbar-thumb,
 #diff-content::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 3px;
+}
+
+@keyframes chat-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-running-spinner,
+  .chat-status-spinner {
+    animation: none;
+  }
 }
 
 /* -- Utility classes replacing inline styles -- */

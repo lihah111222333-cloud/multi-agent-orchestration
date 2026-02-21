@@ -1766,7 +1766,21 @@ export const UnifiedChatPage = {
   template: `
     <section class="page active unified-chat-page" :class="isCmd ? 'mode-cmd' : 'mode-chat'">
       <div class="chat-toolbar unified-toolbar" style="position:relative">
-        <div v-if="activeStatus === 'thinking' || activeStatus === 'responding' || activeStatus === 'running'" class="codex-loading-bar"></div>
+        <div
+          v-if="activeStatus === 'thinking' || activeStatus === 'responding' || activeStatus === 'running'"
+          class="chat-running-card"
+          role="status"
+          aria-live="polite"
+        >
+          <svg class="chat-running-spinner" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle class="chat-running-spinner-track" cx="12" cy="12" r="8.5"></circle>
+            <circle class="chat-running-spinner-arc" cx="12" cy="12" r="8.5"></circle>
+          </svg>
+          <div class="chat-running-copy">
+            <strong>{{ displayStatusText || '执行中' }}</strong>
+            <span v-if="activeStatusMeta">{{ activeStatusMeta }}</span>
+          </div>
+        </div>
         <ProjectSelect
           :model-value="projectStore.state.active"
           :options="projectStore.projectOptions.value"

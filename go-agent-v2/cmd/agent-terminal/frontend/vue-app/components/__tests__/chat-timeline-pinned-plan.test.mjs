@@ -8,5 +8,6 @@ test('ChatTimeline supports top-right pinned plan spacing class', async () => {
   const src = await fs.readFile(CHAT_TIMELINE_JS_PATH, 'utf8');
 
   assert.equal(src.includes("pinnedPlanVisible: { type: Boolean, default: false }"), true);
-  assert.equal(src.includes("<div class=\"chat-messages-vue\" :class=\"{ 'has-plan-pin': pinnedPlanVisible }\">"), true);
+  assert.match(src, /class="chat-messages-vue hide-scrollbar"/);
+  assert.match(src, /:class="\{\s*'has-plan-pin': pinnedPlanVisible\s*\}"/);
 });

@@ -477,7 +477,16 @@ export const ChatTimeline = {
       <div v-if="showAgentPresence" class="chat-presence-row">
         <div class="chat-item-avatar chat-item-avatar-presence">AI</div>
         <div class="chat-status chat-status-presence">
-          <span v-if="activeStatus === 'thinking' || activeStatus === 'starting'" class="pulsing-dot"></span>
+          <svg
+            v-if="activeStatus === 'thinking' || activeStatus === 'starting' || activeStatus === 'running' || activeStatus === 'responding'"
+            class="chat-status-spinner"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <circle class="chat-status-spinner-track" cx="12" cy="12" r="8.5"></circle>
+            <circle class="chat-status-spinner-arc" cx="12" cy="12" r="8.5"></circle>
+          </svg>
           <span v-else class="status-dot" :class="activeStatus"></span>
           <span :class="{ 'loading-shimmer': activeStatus === 'thinking' || activeStatus === 'responding' }">{{ presenceLabel }}</span>
           <span v-if="sharedStatusMeta" class="chat-status-meta" :class="{ 'hyperspeed-model-shimmer': activeStatus === 'thinking' }">{{ sharedStatusMeta }}</span>

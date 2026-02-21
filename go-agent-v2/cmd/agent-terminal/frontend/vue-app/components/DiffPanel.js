@@ -1,6 +1,6 @@
 import { computed, watch, nextTick, ref } from '../../lib/vue.esm-browser.prod.js';
 import { parseUnifiedDiff, diffStats } from '../services/diff.js';
-import { logDebug } from '../services/log.js';
+import { logDebug, logInfo, logWarn } from '../services/log.js';
 
 export const DiffPanel = {
   name: 'DiffPanel',
@@ -44,6 +44,16 @@ export const DiffPanel = {
     watch(
       () => [props.focusFile, props.focusLine, props.diffText],
       () => {
+        const requestedPath = (props.focusFile || '').toString().trim();
+        const requestedLine = Number(props.focusLine);
+        if (requestedPath || (Number.isFinite(requestedLine) && requestedLine > 0)) {
+          logInfo('ui', 'chat.diff.panel.focus.request', {
+            focus_file: requestedPath,
+            focus_line: requestedLine,
+            diff_len: (props.diffText || '').length,
+            file_count: files.value.length,
+          });
+        }
         syncFocus().catch(() => {});
       },
       { immediate: true },
@@ -95,22 +105,52 @@ export const DiffPanel = {
     }
 
     async function syncFocus() {
-      if (!panelRef.value) return;
+      if (!panelRef.value) {
+        logWarn('ui', 'chat.diff.panel.focus.no_panel', {
+          focus_file: normalizedFocusFile.value,
+          focus_line: normalizedFocusLine.value,
+        });
+        return;
+      }
       await nextTick();
 
       const root = panelRef.value;
-      if (!root || typeof root.querySelector !== 'function') return;
+      if (!root || typeof root.querySelector !== 'function') {
+        logWarn('ui', 'chat.diff.panel.focus.invalid_root', {
+          focus_file: normalizedFocusFile.value,
+          focus_line: normalizedFocusLine.value,
+        });
+        return;
+      }
 
       const line = root.querySelector('.diff-line.is-focused-line');
       if (line && typeof line.scrollIntoView === 'function') {
+        logInfo('ui', 'chat.diff.panel.focus.line_hit', {
+          focus_file: normalizedFocusFile.value,
+          focus_line: normalizedFocusLine.value,
+          line_text: ((line.textContent || '').toString().trim()).slice(0, 120),
+        });
         line.scrollIntoView({ behavior: 'smooth', block: 'center' });
         return;
       }
 
       const file = root.querySelector('.diff-file-group.is-focused .diff-file-header');
       if (file && typeof file.scrollIntoView === 'function') {
+        logInfo('ui', 'chat.diff.panel.focus.file_hit', {
+          focus_file: normalizedFocusFile.value,
+          focus_line: normalizedFocusLine.value,
+          file_text: ((file.textContent || '').toString().trim()).slice(0, 120),
+        });
         file.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return;
       }
+
+      logWarn('ui', 'chat.diff.panel.focus.miss', {
+        focus_file: normalizedFocusFile.value,
+        focus_line: normalizedFocusLine.value,
+        file_count: files.value.length,
+        file_sample: files.value.slice(0, 8).map((item) => (item?.filename || '').toString()),
+      });
     }
 
     function linePrefix(type) {

@@ -6,11 +6,14 @@ const ITALIC_RE = /(^|[\s(（\["'])\*([^*\n]+)\*(?=[\s).，。！？、\]"']|$)/
 const HR_RE = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
 const FILE_REF_COLON_RE = /^(?<path>.*?):(?<line>\d+)(?::(?<column>\d+))?(?:[-–](?<endLine>\d+)(?::(?<endColumn>\d+))?)?$/;
 const FILE_REF_HASH_RE = /^(?<path>.*?)#L(?<line>\d+)(?:C(?<column>\d+))?(?:-L(?<endLine>\d+)(?:C(?<endColumn>\d+))?)?$/;
-const INLINE_FILE_REF_RE = /(^|[\s(（\["'])([A-Za-z0-9_./\\][^\s<>()]*)(?=$|[\s).，。！？、\]"'])/g;
+const FILE_REF_LINE_LABEL_RE = /^(?<path>.+?)\s*\((?:line|lines)\s*(?<line>\d+)(?:\s*[,，]\s*(?:col|column)\s*(?<column>\d+))?\)$/i;
+const INLINE_FILE_REF_LINE_LABEL_RE = /(^|[\s(（\["'，。！？、\-])(-?[A-Za-z0-9_./\\][^\s<>()]*)\s*\((?:line|lines)\s*(\d+)(?:\s*[,，]\s*(?:col|column)\s*(\d+))?\)(?=$|[\s).，。！？、:：;；\]"'\-])/gi;
+const INLINE_FILE_REF_RE = /(^|[\s(（\["'，。！？、\-])(-?[A-Za-z0-9_./\\][^\s<>()]*)(?=$|[\s).，。！？、:：;；\]"'\-])/g;
 const TABLE_DELIMITER_CELL_RE = /^:?-{2,}:?$/;
 const TABLE_DELIMITER_ROW_RE = /^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*(?:\s*:?-{2,}:?\s*)?\|?\s*$/;
 const CALLOUT_RE = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i;
 const FILE_REF_TRAILING_PUNCTUATION_RE = /[),.!?;:'"。，、！？；：）】》]+$/;
+const FILE_REF_LINE_LABEL_TRAILING_PUNCTUATION_RE = /[,.!?;:'"。，、！？；：】》]+$/;
 const LONG_EXTENSION_ALLOWLIST = new Set([
   'bashrc',
   'dockerignore',
@@ -23,6 +26,54 @@ const LONG_EXTENSION_ALLOWLIST = new Set([
   'prettierrc',
   'terraform',
   'workspace',
+]);
+const KNOWN_FILE_EXT_ALLOWLIST = new Set([
+  'c',
+  'cc',
+  'cpp',
+  'cs',
+  'css',
+  'csv',
+  'go',
+  'h',
+  'hpp',
+  'html',
+  'ini',
+  'java',
+  'js',
+  'json',
+  'jsx',
+  'kt',
+  'less',
+  'log',
+  'lua',
+  'm',
+  'md',
+  'mjs',
+  'mm',
+  'php',
+  'pl',
+  'properties',
+  'proto',
+  'ps1',
+  'py',
+  'rb',
+  'rs',
+  'sass',
+  'scala',
+  'scss',
+  'sh',
+  'sql',
+  'swift',
+  'toml',
+  'ts',
+  'tsx',
+  'txt',
+  'vue',
+  'xml',
+  'yaml',
+  'yml',
+  'zsh',
 ]);
 const BARE_FILENAME_ALLOWLIST = new Set([
   'dockerfile',
@@ -95,8 +146,61 @@ function stripTrailingPunctuation(url) {
   return { url: text, tail };
 }
 
+function isLikelyFilePath(pathRaw, hasLocation) {
+  const hasPathSeparator = /[\\/]/.test(pathRaw);
+  const hasRelativePrefix = /^\.{1,2}[\\/]/.test(pathRaw);
+  if (hasPathSeparator || hasRelativePrefix) return true;
+
+  const filename = pathRaw.split(/[\\/]/).filter(Boolean).pop() || pathRaw;
+  const filenameLower = filename.toLowerCase();
+  if (BARE_FILENAME_ALLOWLIST.has(filenameLower)) return true;
+
+  if (!filename.includes('.')) return false;
+  const extension = filename.split('.').pop() || '';
+  if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,20}$/.test(extension)) return false;
+
+  const extLower = extension.toLowerCase();
+  const hasLower = /[a-z]/.test(extension);
+  const hasUpperAfterFirst = /[A-Z]/.test(extension.slice(1));
+  if (hasLower && hasUpperAfterFirst) return false;
+
+  const knownExtension = KNOWN_FILE_EXT_ALLOWLIST.has(extLower) || LONG_EXTENSION_ALLOWLIST.has(extLower);
+  if (!knownExtension && !hasLocation) return false;
+  if (!knownExtension && !hasPathSeparator && !hasRelativePrefix) return false;
+
+  if (extLower.length > 10 && !LONG_EXTENSION_ALLOWLIST.has(extLower)) return false;
+  return true;
+}
+
 export function parseInlineFileReference(rawText) {
-  const text = (rawText || '').toString().trim().replace(FILE_REF_TRAILING_PUNCTUATION_RE, '');
+  const raw = (rawText || '').toString().trim();
+  if (!raw) return null;
+  let text = raw;
+  if (text.includes('：')) {
+    text = text.split('：')[0].trim();
+  }
+  if (/^-[A-Za-z0-9_./\\]/.test(text)) {
+    text = text.slice(1).trim();
+  }
+  const lineLabelText = text.replace(FILE_REF_LINE_LABEL_TRAILING_PUNCTUATION_RE, '').trim();
+  if (lineLabelText) {
+    const lineLabelMatch = lineLabelText.match(FILE_REF_LINE_LABEL_RE);
+    if (lineLabelMatch && lineLabelMatch.groups) {
+      const pathRaw = (lineLabelMatch.groups.path || '').toString().trim().replace(FILE_REF_TRAILING_PUNCTUATION_RE, '');
+      const line = Number.parseInt(lineLabelMatch.groups.line || '0', 10) || 0;
+      const column = Number.parseInt(lineLabelMatch.groups.column || '0', 10) || 0;
+      if (pathRaw && line > 0 && isLikelyFilePath(pathRaw, true)) {
+        return {
+          path: pathRaw,
+          line,
+          column,
+          endLine: 0,
+          endColumn: 0,
+        };
+      }
+    }
+  }
+  text = text.replace(FILE_REF_TRAILING_PUNCTUATION_RE, '').trim();
   if (!text) return null;
   let pathRaw = text;
   let line = 0;
@@ -114,30 +218,16 @@ export function parseInlineFileReference(rawText) {
     endLine = Number.parseInt(match.groups.endLine || '0', 10) || 0;
     endColumn = Number.parseInt(match.groups.endColumn || '0', 10) || 0;
   }
+  if (/^-[A-Za-z0-9_./\\]/.test(pathRaw)) {
+    pathRaw = pathRaw.slice(1).trim();
+  }
   if (!pathRaw) return null;
   if (/^https?:\/\//i.test(pathRaw)) return null;
   if (/^www\./i.test(pathRaw)) return null;
   if (/^(mailto|tel):/i.test(pathRaw)) return null;
 
   const hasLocation = line > 0 || column > 0 || endLine > 0 || endColumn > 0;
-
-  const hasPathSeparator = /[\\/]/.test(pathRaw);
-  const hasRelativePrefix = /^\.{1,2}[\\/]/.test(pathRaw);
-  const filename = pathRaw.split(/[\\/]/).filter(Boolean).pop() || pathRaw;
-  const extension = filename.includes('.') ? (filename.split('.').pop() || '') : '';
-  const hasCodeLikeExtension = /^[a-zA-Z][a-zA-Z0-9_-]{0,20}$/.test(extension);
-  const hasKnownBareFilename = BARE_FILENAME_ALLOWLIST.has(filename.toLowerCase());
-  if (!hasLocation && !hasPathSeparator && !hasRelativePrefix && !hasCodeLikeExtension && !hasKnownBareFilename) {
-    return null;
-  }
-  if (!hasLocation && hasCodeLikeExtension) {
-    const extLower = extension.toLowerCase();
-    const hasLower = /[a-z]/.test(extension);
-    const hasUpperAfterFirst = /[A-Z]/.test(extension.slice(1));
-    if (!hasPathSeparator && hasLower && hasUpperAfterFirst) return null;
-    if (!hasPathSeparator && extLower.length > 10 && !LONG_EXTENSION_ALLOWLIST.has(extLower)) return null;
-  }
-  if (!hasLocation && !hasCodeLikeExtension && !hasKnownBareFilename) return null;
+  if (!isLikelyFilePath(pathRaw, hasLocation)) return null;
 
   return {
     path: pathRaw,
@@ -224,6 +314,17 @@ function renderInlineLine(raw) {
       'LINK',
       `<a class="chat-md-link" href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`,
     );
+  });
+
+  text = text.replace(INLINE_FILE_REF_LINE_LABEL_RE, (full, prefix, path, lineText, columnText) => {
+    const line = Number.parseInt((lineText || '').toString(), 10) || 0;
+    const column = Number.parseInt((columnText || '').toString(), 10) || 0;
+    const rawRef = column > 0
+      ? `${path} (line ${line}, column ${column})`
+      : `${path} (line ${line})`;
+    const parsedFileRef = parseInlineFileReference(rawRef);
+    if (!parsedFileRef) return full;
+    return `${prefix}${stashToken(fileRefTokens, 'FILEREF', renderFileRefCode(rawRef, parsedFileRef))}`;
   });
 
   text = text.replace(INLINE_FILE_REF_RE, (full, prefix, candidate) => {

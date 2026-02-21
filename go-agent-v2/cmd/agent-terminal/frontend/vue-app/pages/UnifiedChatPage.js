@@ -161,6 +161,73 @@ function buildFocusedDiffSelection(rawDiffText, targetPath) {
   };
 }
 
+function buildSyntheticDiffFromCodeOpen(codeOpenResult) {
+  const path = (codeOpenResult?.relative || codeOpenResult?.filePath || '').toString().trim();
+  if (!path) return '';
+  const snippetRaw = codeOpenResult?.snippet;
+  const snippetLines = Array.isArray(snippetRaw)
+    ? snippetRaw.map((item) => (item?.text || '').toString())
+    : ((snippetRaw || '').toString().split('\n'));
+  if (!Array.isArray(snippetLines) || snippetLines.length === 0) return '';
+  const startLineRaw = Number(codeOpenResult?.startLine);
+  const fallbackStartLine = Array.isArray(snippetRaw) ? Number(snippetRaw?.[0]?.line) : 0;
+  const startLine = Number.isFinite(startLineRaw) && startLineRaw > 0
+    ? Math.floor(startLineRaw)
+    : (Number.isFinite(fallbackStartLine) && fallbackStartLine > 0 ? Math.floor(fallbackStartLine) : 1);
+  const span = Math.max(1, snippetLines.length);
+  return [
+    `diff --git a/${path} b/${path}`,
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    `@@ -${startLine},${span} +${startLine},${span} @@`,
+    ...snippetLines.map((line) => ` ${line}`),
+  ].join('\n');
+}
+
+function scoreDiffPathMatch(targetPath, candidatePath) {
+  const target = normalizeDiffPath(targetPath);
+  const candidate = normalizeDiffPath(candidatePath);
+  if (!target || !candidate) return -1;
+  if (candidate === target) return 10_000 + candidate.length;
+  if (candidate.endsWith(`/${target}`)) return 9_000 + target.length;
+  if (target.endsWith(`/${candidate}`)) return 8_000 + candidate.length;
+  const targetBase = basename(target);
+  const candidateBase = basename(candidate);
+  if (targetBase && candidateBase && targetBase === candidateBase) {
+    return 2_000 + targetBase.length;
+  }
+  return -1;
+}
+
+function findCrossThreadDiffSelection(diffTextByThread, targetPath, preferredThreadId = '') {
+  const target = normalizeDiffPath(targetPath);
+  if (!target || !diffTextByThread || typeof diffTextByThread !== 'object') return null;
+  let best = null;
+  let bestScore = -1;
+  for (const [threadIdRaw, rawDiffText] of Object.entries(diffTextByThread)) {
+    const threadId = (threadIdRaw || '').toString().trim();
+    const diffText = (rawDiffText || '').toString();
+    if (!threadId || !diffText) continue;
+    const files = parseUnifiedDiff(diffText);
+    const matchedFile = pickDiffFile(files, targetPath);
+    const resolvedPath = (matchedFile?.filename || '').toString().trim();
+    if (!resolvedPath) continue;
+    let score = scoreDiffPathMatch(targetPath, resolvedPath);
+    if (score < 0) continue;
+    if (threadId === preferredThreadId) {
+      score += 100;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = {
+        threadId,
+        path: resolvedPath,
+      };
+    }
+  }
+  return best;
+}
+
 export const UnifiedChatPage = {
   name: 'UnifiedChatPage',
   components: {
@@ -197,6 +264,8 @@ export const UnifiedChatPage = {
     const renameInputRefByThread = new Map();
     const focusedDiffPath = ref('');
     const focusedDiffLine = ref(0);
+    const pendingFileRefFocus = ref(null);
+    const fallbackDiffText = ref('');
 
     const isCmd = computed(() => props.mode === 'cmd');
     const modeKey = computed(() => (isCmd.value ? 'cmd' : 'chat'));
@@ -267,8 +336,12 @@ export const UnifiedChatPage = {
       const targetPath = (focusedDiffPath.value || '').toString().trim();
       if (!targetPath) return rawDiffText;
       const selection = buildFocusedDiffSelection(rawDiffText, targetPath);
-      if (!selection) return rawDiffText;
-      return selection.diffText;
+      if (selection) return selection.diffText;
+      const fallbackText = (fallbackDiffText.value || '').toString();
+      if (!fallbackText) return rawDiffText;
+      const fallbackSelection = buildFocusedDiffSelection(fallbackText, targetPath);
+      if (fallbackSelection) return fallbackSelection.diffText;
+      return fallbackText;
     });
     const activeDiffFocusFile = computed(() => (focusedDiffPath.value || '').toString().trim());
     const activeDiffFocusLine = computed(() => {
@@ -776,12 +849,31 @@ export const UnifiedChatPage = {
       async (id) => {
         focusedDiffPath.value = '';
         focusedDiffLine.value = 0;
+        fallbackDiffText.value = '';
         if (!id) return;
         shouldAutoScroll.value = true;
         try {
           await requestHistoryLoad(props.threadStore, id);
         } catch {
           // ignore: real-time stream may still backfill timeline
+        }
+        const pendingFocus = pendingFileRefFocus.value;
+        if (pendingFocus && pendingFocus.threadId === id) {
+          const pendingPath = (pendingFocus.path || '').toString().trim();
+          const pendingLineRaw = Number(pendingFocus.line);
+          if (pendingPath) {
+            focusedDiffPath.value = pendingPath;
+            focusedDiffLine.value = Number.isFinite(pendingLineRaw) && pendingLineRaw > 0
+              ? Math.floor(pendingLineRaw)
+              : 1;
+            logInfo('ui', 'chat.diff.focus.pending_applied', {
+              thread_id: id,
+              requested_path: (pendingFocus.requestedPath || '').toString(),
+              resolved_path: pendingPath,
+              line: focusedDiffLine.value,
+            });
+          }
+          pendingFileRefFocus.value = null;
         }
         scheduleScrollToBottom(true);
       },
@@ -1124,33 +1216,180 @@ export const UnifiedChatPage = {
       cmdCardCols.value = value;
     }
 
-    function onTimelineFileRefClick(payload) {
+    async function onTimelineFileRefClick(payload) {
       const threadId = (selectedThreadId.value || '').toString().trim();
-      if (!threadId) return;
+      if (!threadId) {
+        logWarn('ui', 'chat.fileRef.handle.no_thread', {
+          payload,
+        });
+        return;
+      }
       const rawPath = (payload?.path || '').toString().trim();
       const lineRaw = Number(payload?.line);
       const line = Number.isFinite(lineRaw) && lineRaw > 0 ? Math.floor(lineRaw) : 1;
-      if (!rawPath) return;
+      const columnRaw = Number(payload?.column);
+      const column = Number.isFinite(columnRaw) && columnRaw > 0 ? Math.floor(columnRaw) : 0;
+      const diffText = (activeThreadDiffText.value || '').toString();
+      const diffFiles = parseUnifiedDiff(diffText);
+      logInfo('ui', 'chat.fileRef.handle.received', {
+        thread_id: threadId,
+        path: rawPath,
+        line,
+        column,
+        diff_len: diffText.length,
+        diff_files: diffFiles.length,
+        payload,
+      });
+      if (!rawPath) {
+        logWarn('ui', 'chat.fileRef.handle.no_path', {
+          thread_id: threadId,
+          line,
+          payload,
+        });
+        return;
+      }
 
-      const selection = buildFocusedDiffSelection(activeThreadDiffText.value, rawPath);
+      const selection = buildFocusedDiffSelection(diffText, rawPath);
       if (!selection) {
-        logInfo('ui', 'chat.diff.focus.miss', {
+        const crossThreadSelection = findCrossThreadDiffSelection(
+          props.threadStore?.state?.diffTextByThread,
+          rawPath,
+          threadId,
+        );
+        if (crossThreadSelection?.path) {
+          const targetThreadId = (crossThreadSelection.threadId || '').toString().trim();
+          if (targetThreadId && targetThreadId !== threadId) {
+            fallbackDiffText.value = '';
+            pendingFileRefFocus.value = {
+              threadId: targetThreadId,
+              path: crossThreadSelection.path,
+              line,
+              requestedPath: rawPath,
+            };
+            selectedThreadId.value = targetThreadId;
+            logInfo('ui', 'chat.diff.focus.cross_thread_switch', {
+              from_thread_id: threadId,
+              to_thread_id: targetThreadId,
+              requested_path: rawPath,
+              resolved_path: crossThreadSelection.path,
+              line,
+            });
+            return;
+          }
+          fallbackDiffText.value = '';
+          focusedDiffPath.value = crossThreadSelection.path;
+          focusedDiffLine.value = line;
+          logInfo('ui', 'chat.diff.focus.recovered', {
+            thread_id: threadId,
+            requested_path: rawPath,
+            resolved_path: crossThreadSelection.path,
+            line,
+          });
+          return;
+        }
+        const activeProject = ((props.projectStore?.state?.active || '.').toString().trim()) || '.';
+        const projectList = Array.isArray(props.projectStore?.state?.projects)
+          ? props.projectStore.state.projects
+            .map((item) => (item || '').toString().trim())
+            .filter(Boolean)
+          : [];
+        const codeOpenCandidates = [rawPath];
+        if (!/[\\/]/.test(rawPath) && /\.log$/i.test(rawPath)) {
+          codeOpenCandidates.push(`logs/${rawPath}`);
+        }
+        let codeOpenResult = null;
+        let codeOpenInputPath = '';
+        let codeOpenError = null;
+        for (const candidatePath of codeOpenCandidates) {
+          try {
+            const result = await callAPI('ui/code/open', {
+              filePath: candidatePath,
+              line,
+              column,
+              project: activeProject,
+              projects: projectList,
+            });
+            if (result?.ok) {
+              codeOpenResult = result;
+              codeOpenInputPath = candidatePath;
+              break;
+            }
+          } catch (error) {
+            codeOpenError = error;
+          }
+        }
+        if (codeOpenResult?.ok) {
+          const syntheticDiff = buildSyntheticDiffFromCodeOpen(codeOpenResult);
+          const resolvedPath = (codeOpenResult?.relative || codeOpenResult?.filePath || codeOpenInputPath || rawPath).toString().trim();
+          if (syntheticDiff && resolvedPath) {
+            fallbackDiffText.value = syntheticDiff;
+            focusedDiffPath.value = resolvedPath;
+            focusedDiffLine.value = line;
+            logInfo('ui', 'chat.diff.focus.code_open_applied', {
+              thread_id: threadId,
+              requested_path: rawPath,
+              open_input_path: codeOpenInputPath,
+              resolved_path: resolvedPath,
+              line,
+              column,
+              snippet_start: Number(codeOpenResult?.startLine) || 0,
+              snippet_end: Number(codeOpenResult?.endLine) || 0,
+              snippet_len: Array.isArray(codeOpenResult?.snippet)
+                ? codeOpenResult.snippet.length
+                : (codeOpenResult?.snippet || '').toString().length,
+            });
+            return;
+          }
+          logWarn('ui', 'chat.diff.focus.code_open.empty', {
+            thread_id: threadId,
+            requested_path: rawPath,
+            open_input_path: codeOpenInputPath,
+            line,
+            column,
+            code_open_ok: true,
+            snippet_len: Array.isArray(codeOpenResult?.snippet)
+              ? codeOpenResult.snippet.length
+              : (codeOpenResult?.snippet || '').toString().length,
+          });
+        } else if (codeOpenError) {
+          logWarn('ui', 'chat.diff.focus.code_open.failed', {
+            thread_id: threadId,
+            requested_path: rawPath,
+            line,
+            column,
+            tried_paths: codeOpenCandidates,
+            error: codeOpenError,
+          });
+        }
+        logWarn('ui', 'chat.diff.focus.miss', {
+          thread_id: threadId,
+          requested_path: rawPath,
+          line,
+          diff_len: diffText.length,
+          diff_files: diffFiles.length,
+        });
+        // 回退：即使没有精确命中，也尝试以原始路径触发右侧 diff 聚焦。
+        fallbackDiffText.value = '';
+        focusedDiffPath.value = rawPath;
+        focusedDiffLine.value = line;
+        logInfo('ui', 'chat.diff.focus.fallback_applied', {
           thread_id: threadId,
           path: rawPath,
           line,
         });
-        // 回退：即使没有精确命中，也尝试以原始路径触发右侧 diff 聚焦。
-        focusedDiffPath.value = rawPath;
-        focusedDiffLine.value = line;
         return;
       }
 
+      fallbackDiffText.value = '';
       focusedDiffPath.value = selection.filename;
       focusedDiffLine.value = line;
-      logDebug('ui', 'chat.diff.focused', {
+      logInfo('ui', 'chat.diff.focus.applied', {
         thread_id: threadId,
-        path: selection.filename,
+        requested_path: rawPath,
+        resolved_path: selection.filename,
         line,
+        diff_len: diffText.length,
+        diff_files: diffFiles.length,
       });
     }
 

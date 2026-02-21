@@ -2,8 +2,10 @@ package apiserver
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -70,6 +72,69 @@ func TestUICodeOpenTyped_ReturnsSnippetAroundLine(t *testing.T) {
 	}
 	if text := asString(snippet[1]["text"]); text != "line3" {
 		t.Fatalf("focused line text = %q, want line3", text)
+	}
+}
+
+func TestUICodeOpenTyped_LargeLogFile(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	target := filepath.Join(root, "logs", "agent-terminal-2026-02-21.log")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("mkdir logs failed: %v", err)
+	}
+
+	const totalLines = 50000
+	const targetLine = 32123
+	linePayload := strings.Repeat("x", 64)
+	var builder strings.Builder
+	for i := 1; i <= totalLines; i++ {
+		_, _ = fmt.Fprintf(&builder, "entry-%06d %s\n", i, linePayload)
+	}
+	if err := os.WriteFile(target, []byte(builder.String()), 0o644); err != nil {
+		t.Fatalf("write large log failed: %v", err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat large log failed: %v", err)
+	}
+	if info.Size() <= 2<<20 {
+		t.Fatalf("large log size = %d, want > 2MB", info.Size())
+	}
+
+	srv := New(Deps{})
+	out, err := srv.uiCodeOpenTyped(context.Background(), uiCodeOpenParams{
+		FilePath: "logs/agent-terminal-2026-02-21.log",
+		Line:     targetLine,
+		Context:  1,
+		Project:  root,
+	})
+	if err != nil {
+		t.Fatalf("uiCodeOpenTyped failed for large log: %v", err)
+	}
+	result, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("result type = %T, want map[string]any", out)
+	}
+	if got := intFromAny(result["line"]); got != targetLine {
+		t.Fatalf("line = %d, want %d", got, targetLine)
+	}
+	snippet, ok := result["snippet"].([]map[string]any)
+	if !ok || len(snippet) == 0 {
+		t.Fatalf("snippet length = %d, want > 0", len(snippet))
+	}
+	expectedPrefix := fmt.Sprintf("entry-%06d ", targetLine)
+	hit := false
+	for _, row := range snippet {
+		if strings.HasPrefix(asString(row["text"]), expectedPrefix) {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		t.Fatalf("focused snippet line with prefix %q not found", expectedPrefix)
+	}
+	if opened, _ := result["lspOpened"].(bool); opened {
+		t.Fatalf("lspOpened = true for .log file, want false")
 	}
 }
 

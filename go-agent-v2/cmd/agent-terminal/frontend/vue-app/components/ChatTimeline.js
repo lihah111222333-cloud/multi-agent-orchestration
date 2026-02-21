@@ -1,5 +1,5 @@
 import { watch, computed, ref } from '../../lib/vue.esm-browser.prod.js';
-import { logDebug } from '../services/log.js';
+import { logDebug, logInfo, logWarn } from '../services/log.js';
 import { renderAssistantMarkdown } from '../utils/assistant-markdown.js';
 import { hasJsonRenderSpec, extractSpecBlocks } from '../services/json-render-engine.js';
 import { JsonRenderer } from './JsonRenderer.js';
@@ -174,9 +174,22 @@ export const ChatTimeline = {
       return html;
     }
 
+    function describeClickNode(node) {
+      const el = node && node.nodeType === 3 ? node.parentElement : node;
+      if (!el || typeof el !== 'object') return {};
+      return {
+        tag: (el.tagName || '').toString().toLowerCase(),
+        class_name: (el.className || '').toString(),
+        text_preview: ((el.textContent || '').toString().trim()).slice(0, 120),
+      };
+    }
+
     function onAssistantBodyClick(event) {
       const rawTarget = event?.target || null;
       const target = rawTarget && rawTarget.nodeType === 3 ? rawTarget.parentElement : rawTarget;
+      logInfo('ui', 'chat.fileRef.click.entry', {
+        target: describeClickNode(target),
+      });
       let refNode = null;
       if (target && typeof target.closest === 'function') {
         refNode = target.closest('.chat-md-inline-code.is-file-ref, .chat-md-file-ref');
@@ -188,20 +201,34 @@ export const ChatTimeline = {
           return node.classList.contains('is-file-ref') || node.classList.contains('chat-md-file-ref');
         }) || null;
       }
-      if (!refNode) return;
+      if (!refNode) {
+        logWarn('ui', 'chat.fileRef.click.no_ref_node', {
+          target: describeClickNode(target),
+        });
+        return;
+      }
       const path = (refNode.getAttribute('data-file-path') || '').toString().trim();
       const lineRaw = Number(refNode.getAttribute('data-file-line') || 0);
       const line = Number.isFinite(lineRaw) && lineRaw > 0 ? Math.floor(lineRaw) : 1;
       const column = Number(refNode.getAttribute('data-file-column') || 0);
-      if (!path) return;
+      if (!path) {
+        logWarn('ui', 'chat.fileRef.click.no_path', {
+          ref_text: (refNode.textContent || '').toString().trim(),
+          line_raw: lineRaw,
+          column_raw: column,
+        });
+        return;
+      }
       if (typeof event.preventDefault === 'function') event.preventDefault();
       if (typeof event.stopPropagation === 'function') event.stopPropagation();
-      emit('file-ref-click', {
+      const payload = {
         path,
         line,
         column: Number.isFinite(column) && column > 0 ? column : 0,
         raw: (refNode.textContent || '').toString().trim(),
-      });
+      };
+      logInfo('ui', 'chat.fileRef.click.emit', payload);
+      emit('file-ref-click', payload);
     }
 
     /**

@@ -15,7 +15,7 @@ import (
 const (
 	defaultCodeOpenContextLines = 90
 	maxCodeOpenContextLines     = 180
-	maxCodeOpenFileBytes        = 2 << 20 // 2MB
+	maxCodeOpenFileBytes        = 64 << 20 // 64MB
 )
 
 type uiCodeOpenParams struct {
@@ -274,6 +274,7 @@ func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, er
 		)
 		return nil, apperrors.Newf("Server.uiCodeOpen", "path is directory: %s", resolvedPath)
 	}
+	lspSupported := supportsLSPFileType(resolvedPath)
 	if info.Size() > maxCodeOpenFileBytes {
 		logger.Warn("ui/code/open: file too large",
 			"resolved_path", resolvedPath,
@@ -310,8 +311,10 @@ func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, er
 		endLine = len(lines)
 	}
 
-	if s.lsp != nil {
+	lspOpened := false
+	if s.lsp != nil && lspSupported {
 		_ = s.lsp.OpenFile(resolvedPath, string(content))
+		lspOpened = true
 	}
 	diagnostics := s.gatherCodeDiagnostics(resolvedPath, startLine, endLine)
 
@@ -342,7 +345,7 @@ func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, er
 		"context":     contextLines,
 		"snippet":     buildCodeSnippet(lines, startLine, endLine),
 		"diagnostics": diagnostics,
-		"lspOpened":   s.lsp != nil && supportsLSPFileType(resolvedPath),
+		"lspOpened":   lspOpened,
 	}
 
 	logger.Info("ui/code/open: success",
@@ -352,7 +355,7 @@ func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, er
 		"column", targetColumn,
 		"snippet_lines", endLine-startLine+1,
 		"diagnostics_count", len(diagnostics),
-		"lsp_opened", result["lspOpened"],
+		"lsp_opened", lspOpened,
 	)
 
 	return result, nil

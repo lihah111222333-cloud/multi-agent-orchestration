@@ -319,6 +319,45 @@ func TestApplyAgentEvent_ItemLifecycleCommandDoesNotLeaveRunning(t *testing.T) {
 	}
 }
 
+func TestApplyAgentEvent_ItemLifecycleCommandFromNestedItemKeepsCommandText(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-item-command-nested"
+
+	beginPayload := map[string]any{
+		"item": map[string]any{
+			"type":            "commandExecution",
+			"command_display": "echo hi",
+		},
+	}
+	begin := NormalizeEventFromPayload("item/started", "item/started", beginPayload)
+	mgr.ApplyAgentEvent(threadID, begin, beginPayload)
+
+	endPayload := map[string]any{
+		"item": map[string]any{
+			"type":      "commandExecution",
+			"exit_code": float64(1),
+		},
+		"exit_code": float64(1),
+	}
+	end := NormalizeEventFromPayload("item/completed", "item/completed", endPayload)
+	mgr.ApplyAgentEvent(threadID, end, endPayload)
+
+	items := mgr.Snapshot().TimelinesByThread[threadID]
+	if len(items) == 0 {
+		t.Fatalf("timeline is empty, want command item")
+	}
+	last := items[len(items)-1]
+	if last.Kind != "command" {
+		t.Fatalf("last kind = %q, want command", last.Kind)
+	}
+	if last.Command != "echo hi" {
+		t.Fatalf("last command = %q, want echo hi", last.Command)
+	}
+	if last.Status != "failed" {
+		t.Fatalf("last status = %q, want failed", last.Status)
+	}
+}
+
 func TestApplyAgentEvent_AgentTaskCompleteStopsRunning(t *testing.T) {
 	mgr := NewRuntimeManager()
 	threadID := "thread-agent-task"

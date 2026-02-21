@@ -153,6 +153,21 @@ func TestNormalizeEventFromPayload_ItemLifecycleCommand(t *testing.T) {
 	}
 }
 
+func TestNormalizeEventFromPayload_ItemLifecycleCommandFromNestedItem(t *testing.T) {
+	start := NormalizeEventFromPayload("item/started", "item/started", map[string]any{
+		"item": map[string]any{
+			"type":            "commandExecution",
+			"command_display": "go test ./...",
+		},
+	})
+	if start.UIType != UITypeCommandStart {
+		t.Fatalf("item/started nested item uiType = %q, want %q", start.UIType, UITypeCommandStart)
+	}
+	if start.Command != "go test ./..." {
+		t.Fatalf("item/started nested item command = %q, want go test ./...", start.Command)
+	}
+}
+
 func TestNormalizeEventFromPayload_ItemLifecycleFile(t *testing.T) {
 	start := NormalizeEventFromPayload("item/started", "item/started", map[string]any{
 		"item": map[string]any{

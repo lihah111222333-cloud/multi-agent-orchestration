@@ -51,7 +51,7 @@ func resolveEventFields(normalized NormalizedEvent, payload map[string]any) reso
 		fields.text = extractFirstString(payload, "uiText", "delta", "text", "content", "output", "message")
 	}
 	if fields.command == "" {
-		fields.command = extractFirstString(payload, "uiCommand", "command")
+		fields.command = extractNormalizedCommand(payload)
 	}
 	if fields.file == "" {
 		fields.file = extractFirstString(payload, "uiFile", "file")

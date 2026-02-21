@@ -241,6 +241,57 @@ func extractText(payload map[string]any) string {
 	return ""
 }
 
+func extractNormalizedCommand(payload map[string]any) string {
+	command := strings.TrimSpace(extractFirstString(
+		payload,
+		"uiCommand", "command", "cmd",
+		"command_display", "commandDisplay", "displayCommand",
+	))
+	if command != "" {
+		return command
+	}
+	command = strings.TrimSpace(extractNestedFirstString(
+		payload,
+		[]string{"item", "command"},
+		[]string{"item", "cmd"},
+		[]string{"item", "command_display"},
+		[]string{"item", "commandDisplay"},
+		[]string{"item", "displayCommand"},
+		[]string{"process", "command"},
+		[]string{"process", "command_display"},
+		[]string{"process", "commandDisplay"},
+		[]string{"process", "displayCommand"},
+		[]string{"args", "command"},
+		[]string{"args", "cmd"},
+		[]string{"arguments", "command"},
+		[]string{"arguments", "cmd"},
+		[]string{"msg", "command"},
+		[]string{"msg", "cmd"},
+		[]string{"data", "command"},
+		[]string{"data", "cmd"},
+		[]string{"payload", "command"},
+		[]string{"payload", "cmd"},
+	))
+	if command != "" {
+		return command
+	}
+	for _, key := range []string{"args", "arguments"} {
+		nested := parseNestedMapAny(payload[key])
+		if nested == nil {
+			continue
+		}
+		command = strings.TrimSpace(extractFirstString(
+			nested,
+			"command", "cmd",
+			"command_display", "commandDisplay", "displayCommand",
+		))
+		if command != "" {
+			return command
+		}
+	}
+	return ""
+}
+
 // extractNormalizedFiles 从 payload 提取文件路径。
 func extractNormalizedFiles(codexType string, payload map[string]any) (file string, files []string) {
 	switch {
@@ -311,10 +362,7 @@ func NormalizeEventFromPayload(codexType, method string, payload map[string]any)
 	}
 
 	result.Text = extractText(payload)
-
-	if v, ok := payload["command"].(string); ok {
-		result.Command = v
-	}
+	result.Command = extractNormalizedCommand(payload)
 
 	result.File, result.Files = extractNormalizedFiles(codexType, payload)
 

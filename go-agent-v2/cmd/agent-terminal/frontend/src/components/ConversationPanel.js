@@ -187,9 +187,14 @@ function TurnItemRenderer({ item, isLightweight }) {
 
 export function UserMessage({ message }) {
     return (
-        <div className="flex justify-end py-3">
-            <div className="bg-token-foreground/10 text-token-foreground rounded-2xl rounded-br-md px-4 py-2.5 max-w-[85%]">
-                <span className="text-sm whitespace-pre-wrap leading-relaxed">{message}</span>
+        <div className="flex justify-end py-2.5">
+            <div className="flex max-w-[88%] flex-col items-end gap-1">
+                <span className="px-1 text-[11px] font-medium tracking-wide text-token-description-foreground/80">
+                    You
+                </span>
+                <div className="max-w-full rounded-2xl rounded-br-md border border-token-border/40 bg-token-foreground/10 px-4 py-2.5">
+                    <span className="text-sm whitespace-pre-wrap break-words leading-relaxed">{message}</span>
+                </div>
             </div>
         </div>
     );
@@ -199,8 +204,19 @@ export function UserMessage({ message }) {
 
 function AgentMessageRenderer({ item }) {
     return (
-        <div className="py-3">
-            <MarkdownRenderer className="text-sm leading-relaxed">{item.text}</MarkdownRenderer>
+        <div className="py-2.5">
+            <div className="flex justify-start">
+                <div className="flex w-full max-w-[95%] flex-col items-start gap-1">
+                    <span className="px-1 text-[11px] font-medium tracking-wide text-token-description-foreground/80">
+                        Codex
+                    </span>
+                    <div className="w-full rounded-2xl rounded-tl-md border border-token-border/50 bg-token-bg-secondary/70 px-4 py-3">
+                        <MarkdownRenderer className="text-sm leading-relaxed break-words [&_.code-block]:rounded-lg [&_.code-block]:border [&_.code-block]:border-token-border/50 [&_.code-block]:bg-token-editor-background/80 [&_.inline-code]:bg-token-editor-background [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+                            {item.text}
+                        </MarkdownRenderer>
+                    </div>
+                </div>
+            </div>
         </div>
     );
 }

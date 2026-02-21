@@ -216,7 +216,13 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 	conversationID := extractConversationIDFromEventParams(msg.Params)
 	boundThreadID := strings.TrimSpace(c.ThreadID)
 	if conversationID != "" && boundThreadID != "" && !strings.EqualFold(conversationID, boundThreadID) {
-		logger.Warn("codex: incoming event conversation mismatch",
+		// MCP startup events are global (not bound to a specific conversation),
+		// so mismatch is expected — log at DEBUG to reduce noise.
+		logFn := logger.Warn
+		if isMCPStartupMethod(msg.Method) {
+			logFn = logger.Debug
+		}
+		logFn("codex: incoming event conversation mismatch",
 			logger.FieldAgentID, c.AgentID,
 			logger.FieldMethod, msg.Method,
 			logger.FieldEventType, event.Type,
@@ -798,6 +804,21 @@ func truncateString(s string, max int) string {
 		return s
 	}
 	return string(runes[:max]) + "...(truncated)"
+}
+
+// isMCPStartupMethod returns true for MCP startup event methods whose
+// conversation mismatch is expected (global events, not bound to a conversation).
+func isMCPStartupMethod(method string) bool {
+	m := strings.ToLower(strings.TrimSpace(method))
+	switch m {
+	case "agent/event/mcp_startup_update",
+		"agent/event/mcp_startup_complete",
+		"codex/event/mcp_startup_update",
+		"codex/event/mcp_startup_complete":
+		return true
+	default:
+		return false
+	}
 }
 
 // asWriteJSON 线程安全写入 WebSocket JSON。

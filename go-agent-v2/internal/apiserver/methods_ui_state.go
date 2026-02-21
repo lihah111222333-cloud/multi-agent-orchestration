@@ -160,7 +160,7 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 	if value, ok := prefs[prefThreadArchivesChat]; ok {
 		result[prefThreadArchivesChat] = value
 	}
-	logger.Info("ui/state/get: snapshot prepared",
+	logger.Debug("ui/state/get: snapshot prepared",
 		"threads_count", len(snapshot.Threads),
 		"active_thread_id", resolvedActiveThreadID,
 		"active_cmd_thread_id", resolvedActiveCmdThreadID,

@@ -84,11 +84,17 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 		case prev.done <- "failed":
 		default:
 		}
-		logger.Warn("turn tracker: superseding active turn",
+		// Short-lived turns superseded without interrupt are normal (rapid user input).
+		prevAge := time.Since(prev.StartedAt)
+		logFn := logger.Warn
+		if prevAge < 5*time.Second && !prev.InterruptRequested {
+			logFn = logger.Info
+		}
+		logFn("turn tracker: superseding active turn",
 			logger.FieldThreadID, id,
 			"prev_turn_id", prev.ID,
 			"next_turn_id", tid,
-			"prev_age_ms", time.Since(prev.StartedAt).Milliseconds(),
+			"prev_age_ms", prevAge.Milliseconds(),
 			"prev_interrupt_requested", prev.InterruptRequested,
 		)
 		superseded = map[string]any{
@@ -236,7 +242,9 @@ func (s *Server) completeTrackedTurnByID(threadID, turnID, status, reason string
 		return nil, false
 	}
 	if wantTurnID != "" && !strings.EqualFold(strings.TrimSpace(turn.ID), wantTurnID) {
-		logger.Warn("turn tracker: turn id mismatch, completing anyway to avoid stuck state",
+		// Turn ID mismatch is handled correctly (completing anyway),
+		// so this is informational, not a warning.
+		logger.Info("turn tracker: turn id mismatch, completing anyway to avoid stuck state",
 			logger.FieldThreadID, id,
 			"active_turn_id", strings.TrimSpace(turn.ID),
 			"event_turn_id", wantTurnID,
@@ -638,7 +646,7 @@ func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time
 		return false
 	}
 	age := time.Since(startedAt)
-	if age < 20*time.Second {
+	if age < 60*time.Second {
 		return false
 	}
 

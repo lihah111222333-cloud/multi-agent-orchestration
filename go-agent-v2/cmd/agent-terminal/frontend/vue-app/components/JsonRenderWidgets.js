@@ -246,35 +246,272 @@ const JrChart = defineComponent({
     setup(props) {
         const containerRef = ref(null);
         let chartInstance = null;
+        let resizeObserver = null;
+        const onWindowResize = () => {
+            if (chartInstance) chartInstance.resize();
+        };
 
-        function initChart() {
-            if (!containerRef.value || typeof echarts === 'undefined') return;
-            if (chartInstance) { chartInstance.dispose(); chartInstance = null; }
-            chartInstance = echarts.init(containerRef.value, 'dark', { renderer: 'canvas' });
-            const option = props.spec?.option || props.spec || {};
-            chartInstance.setOption(option);
+        function getEcharts() {
+            if (typeof globalThis !== 'undefined' && globalThis.echarts) return globalThis.echarts;
+            if (typeof window !== 'undefined' && window.echarts) return window.echarts;
+            return null;
         }
 
-        onMounted(() => { nextTick(initChart); });
+        // 解析尺寸: 支持数字 (300) 和字符串 ("300px" / "50vh" / "100%")
+        function parseSize(raw, fallback) {
+            if (raw == null || raw === '') return fallback;
+            const str = String(raw).trim();
+            if (!str) return fallback;
+            if (/^\d+(\.\d+)?$/.test(str)) return `${str}px`;
+            return str;
+        }
+
+        function initChart() {
+            if (!containerRef.value) return;
+            const ec = getEcharts();
+            if (!ec) return;
+            if (chartInstance) { chartInstance.dispose(); chartInstance = null; }
+            const theme = (typeof props.spec?.theme === 'string' && props.spec.theme.trim())
+                ? props.spec.theme.trim()
+                : 'dark';
+            chartInstance = ec.init(containerRef.value, theme, { renderer: 'canvas' });
+            const option = props.spec?.option || props.spec || {};
+            chartInstance.setOption(option, { notMerge: true });
+            requestAnimationFrame(() => {
+                if (chartInstance) chartInstance.resize();
+            });
+        }
+
+        onMounted(() => {
+            nextTick(initChart);
+            if (typeof window !== 'undefined') {
+                window.addEventListener('resize', onWindowResize);
+            }
+            // 监听容器可见性变化 (Tabs 切换时触发)
+            if (containerRef.value && typeof ResizeObserver !== 'undefined') {
+                resizeObserver = new ResizeObserver(() => {
+                    if (!containerRef.value) return;
+                    if (!chartInstance) {
+                        initChart();
+                    } else {
+                        chartInstance.resize();
+                    }
+                });
+                resizeObserver.observe(containerRef.value);
+            }
+        });
 
         watch(() => props.spec, () => {
             if (chartInstance) {
                 const option = props.spec?.option || props.spec || {};
-                chartInstance.setOption(option, true);
+                chartInstance.setOption(option, { notMerge: true });
+                nextTick(() => {
+                    if (chartInstance) chartInstance.resize();
+                });
             } else {
                 nextTick(initChart);
             }
         }, { deep: true });
 
         onBeforeUnmount(() => {
+            if (typeof window !== 'undefined') {
+                window.removeEventListener('resize', onWindowResize);
+            }
+            if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
             if (chartInstance) { chartInstance.dispose(); chartInstance = null; }
         });
 
         return () => h('div', {
             ref: containerRef,
             class: 'jr-root jr-chart',
-            style: { width: '100%', height: `${props.spec?.height || 300}px` },
+            style: {
+                width: parseSize(props.spec?.width, '100%'),
+                height: parseSize(props.spec?.height, '300px'),
+            },
         });
+    },
+});
+
+// ──── Stat (指标+趋势) ────
+
+const JrStat = defineComponent({
+    name: 'JrStat',
+    props: { spec: Object },
+    setup(props) {
+        return () => {
+            const s = props.spec || {};
+            const trend = s.trend || '';
+            const trendClass = trend === 'up' ? 'jr-stat-up' : trend === 'down' ? 'jr-stat-down' : '';
+            return h('div', { class: 'jr-root jr-stat' }, [
+                h('span', { class: 'jr-stat-label' }, s.label || ''),
+                h('span', { class: 'jr-stat-value' }, String(s.value ?? '')),
+                s.change != null
+                    ? h('span', { class: `jr-stat-change ${trendClass}` }, [
+                        trend === 'up' ? '↑ ' : trend === 'down' ? '↓ ' : '',
+                        String(s.change),
+                    ])
+                    : null,
+            ]);
+        };
+    },
+});
+
+// ──── Tabs (标签页) ────
+
+const JrTabs = defineComponent({
+    name: 'JrTabs',
+    props: { spec: Object },
+    setup(props) {
+        const activeTab = ref(null);
+
+        return () => {
+            const s = props.spec || {};
+            const tabs = s.tabs || [];
+            if (!activeTab.value && tabs.length > 0) {
+                activeTab.value = s.defaultTab || tabs[0]?.key || tabs[0]?.label || '';
+            }
+            const children = s.children || [];
+
+            return h('div', { class: 'jr-root jr-tabs' }, [
+                h('div', { class: 'jr-tabs-header' }, tabs.map(tab => {
+                    const key = tab.key || tab.label || '';
+                    const isActive = key === activeTab.value;
+                    return h('button', {
+                        key,
+                        class: `jr-tab-btn ${isActive ? 'active' : ''}`,
+                        onClick: () => { activeTab.value = key; },
+                    }, tab.label || key);
+                })),
+                h('div', { class: 'jr-tabs-body' },
+                    renderChildren(
+                        children.filter((_, i) => {
+                            const tab = tabs[i];
+                            return tab && (tab.key || tab.label) === activeTab.value;
+                        }),
+                        getRenderer(),
+                    ),
+                ),
+            ]);
+        };
+    },
+});
+
+// ──── Accordion (折叠面板) ────
+
+const JrAccordion = defineComponent({
+    name: 'JrAccordion',
+    props: { spec: Object },
+    setup(props) {
+        const isOpen = ref(false);
+
+        return () => {
+            const s = props.spec || {};
+            if (isOpen.value === false && s.open === true) isOpen.value = true;
+
+            return h('div', { class: `jr-root jr-accordion ${isOpen.value ? 'jr-accordion-open' : ''}` }, [
+                h('button', {
+                    class: 'jr-accordion-trigger',
+                    onClick: () => { isOpen.value = !isOpen.value; },
+                }, [
+                    h('span', { class: 'jr-accordion-arrow' }, isOpen.value ? '▾' : '▸'),
+                    h('span', null, s.title || ''),
+                ]),
+                isOpen.value
+                    ? h('div', { class: 'jr-accordion-body' },
+                        renderChildren(s.children || [], getRenderer()))
+                    : null,
+            ]);
+        };
+    },
+});
+
+// ──── Timeline (时间线) ────
+
+const JrTimeline = defineComponent({
+    name: 'JrTimeline',
+    props: { spec: Object },
+    setup(props) {
+        return () => {
+            const s = props.spec || {};
+            const items = s.items || [];
+            return h('div', { class: 'jr-root jr-timeline' }, items.map((item, i) => {
+                const status = item.status || 'pending';
+                const dotClass = status === 'done' ? 'jr-dot-done'
+                    : status === 'active' ? 'jr-dot-active' : 'jr-dot-pending';
+                const isLast = i === items.length - 1;
+                return h('div', { key: i, class: 'jr-timeline-item' }, [
+                    h('div', { class: 'jr-timeline-dot-col' }, [
+                        h('div', { class: `jr-timeline-dot ${dotClass}` }),
+                        !isLast ? h('div', { class: 'jr-timeline-line' }) : null,
+                    ]),
+                    h('div', { class: 'jr-timeline-content' }, [
+                        h('div', { class: 'jr-timeline-head' }, [
+                            h('strong', null, item.title || ''),
+                            item.time ? h('span', { class: 'jr-timeline-time' }, item.time) : null,
+                        ]),
+                        item.description
+                            ? h('p', { class: 'jr-timeline-desc' }, item.description)
+                            : null,
+                    ]),
+                ]);
+            }));
+        };
+    },
+});
+
+// ──── Button (按钮) ────
+
+const JrButton = defineComponent({
+    name: 'JrButton',
+    props: { spec: Object },
+    setup(props) {
+        return () => {
+            const s = props.spec || {};
+            const variant = s.variant || 'default';
+            return h('button', {
+                class: `jr-root jr-button jr-button-${variant}`,
+                disabled: !!s.disabled,
+            }, s.label || '');
+        };
+    },
+});
+
+// ──── Image (图片) ────
+
+const JrImage = defineComponent({
+    name: 'JrImage',
+    props: { spec: Object },
+    setup(props) {
+        return () => {
+            const s = props.spec || {};
+            return h('figure', { class: 'jr-root jr-image' }, [
+                h('img', {
+                    class: 'jr-image-img',
+                    src: s.src || '',
+                    alt: s.alt || '',
+                    style: s.width ? { maxWidth: s.width } : {},
+                }),
+                s.caption ? h('figcaption', { class: 'jr-image-caption' }, s.caption) : null,
+            ]);
+        };
+    },
+});
+
+// ──── Link (链接) ────
+
+const JrLink = defineComponent({
+    name: 'JrLink',
+    props: { spec: Object },
+    setup(props) {
+        return () => {
+            const s = props.spec || {};
+            return h('a', {
+                class: 'jr-root jr-link',
+                href: s.href || '#',
+                target: '_blank',
+                rel: 'noopener noreferrer',
+            }, s.text || s.href || '');
+        };
     },
 });
 
@@ -283,9 +520,13 @@ const JrChart = defineComponent({
 export const WIDGET_REGISTRY = {
     Card: { component: JrCard },
     Metric: { component: JrMetric },
+    Stat: { component: JrStat },
     Stack: { component: JrStack },
     Heading: { component: JrHeading },
     Table: { component: JrTable },
+    Tabs: { component: JrTabs },
+    Accordion: { component: JrAccordion },
+    Timeline: { component: JrTimeline },
     Alert: { component: JrAlert },
     Badge: { component: JrBadge },
     CodeBlock: { component: JrCodeBlock },
@@ -294,4 +535,7 @@ export const WIDGET_REGISTRY = {
     Separator: { component: JrSeparator },
     Text: { component: JrText },
     Chart: { component: JrChart },
+    Button: { component: JrButton },
+    Image: { component: JrImage },
+    Link: { component: JrLink },
 };

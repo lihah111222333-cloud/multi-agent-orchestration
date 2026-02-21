@@ -84,6 +84,22 @@ func TestTrimLSPInjection_WithoutMarker(t *testing.T) {
 	}
 }
 
+func TestTrimSkillInjection_WithGeneratedDigest(t *testing.T) {
+	input := "UI 需要改\n[skill:品牌设计规范] 摘要: 品牌规范摘要\n可选段落: 色彩系统 (SKILL.md:12)\n使用方式: 按任务选择相关段落，忽略无关内容。"
+	got := trimSkillInjection(input)
+	if got != "UI 需要改" {
+		t.Fatalf("got %q, want %q", got, "UI 需要改")
+	}
+}
+
+func TestTrimSkillInjection_ManualSkillTagShouldKeep(t *testing.T) {
+	input := "请按 [skill:品牌设计规范] 的思路输出，但不要自动注入"
+	got := trimSkillInjection(input)
+	if got != input {
+		t.Fatalf("got %q, want %q", got, input)
+	}
+}
+
 // ── ReadRolloutMessages ─────────────────────────────────────
 
 func TestReadRolloutMessages_BasicParsing(t *testing.T) {
@@ -156,6 +172,22 @@ func TestReadRolloutMessages_TrimsLSPInjection(t *testing.T) {
 	}
 }
 
+func TestReadRolloutMessages_TrimsSkillInjection(t *testing.T) {
+	content := `{"timestamp":"2026-02-20T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"前面一句话\n[skill:品牌设计规范] 摘要: 品牌规范摘要\n可选段落: 品牌设计规范 (SKILL.md:4)\n使用方式: 按任务选择相关段落，忽略无关内容。"}]}}
+`
+	path := writeTemp(t, content)
+	msgs, err := ReadRolloutMessages(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Content != "前面一句话" {
+		t.Fatalf("msg[0].Content = %q, want '前面一句话'", msgs[0].Content)
+	}
+}
+
 func TestReadRolloutMessages_SkipsNonResponseItem(t *testing.T) {
 	content := `{"timestamp":"2026-02-20T01:00:00Z","type":"session_start","payload":{}}
 {"timestamp":"2026-02-20T01:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}}
@@ -216,6 +248,19 @@ func TestReadRolloutMessages_UserOnlyLSPInjection_SkippedAsEmpty(t *testing.T) {
 	}
 	if len(msgs) != 0 {
 		t.Fatalf("got %d messages, want 0 (LSP-only user msg skipped)", len(msgs))
+	}
+}
+
+func TestReadRolloutMessages_UserOnlySkillInjection_SkippedAsEmpty(t *testing.T) {
+	content := `{"timestamp":"2026-02-20T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"[skill:技能查找] 摘要: 用于搜索技能\n可选段落: 技能查找 (SKILL.md:4)\n使用方式: 按任务选择相关段落，忽略无关内容。"}]}}
+`
+	path := writeTemp(t, content)
+	msgs, err := ReadRolloutMessages(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("got %d messages, want 0 (skill-only user msg skipped)", len(msgs))
 	}
 }
 

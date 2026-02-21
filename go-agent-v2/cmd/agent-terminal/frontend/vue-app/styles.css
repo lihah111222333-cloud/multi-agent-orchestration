@@ -1887,23 +1887,8 @@ a,
 }
 
 .chat-item.process.kind-command .chat-process-line {
-  border: none !important;
-  background: none !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  border-radius: 0 !important;
-  width: 100%;
-}
-
-.chat-item.process.kind-command .chat-process-line:hover {
-  background: none !important;
-  border: none !important;
-}
-
-.chat-item.process.kind-command .chat-process-head {
-  margin-bottom: 0;
-  padding-bottom: 0;
-  border-bottom: none;
+  border-left-color: var(--color-token-terminal-border, rgba(255, 255, 255, 0.2));
+  background: var(--assistant-surface, rgba(255, 255, 255, 0.04));
 }
 
 .chat-item.process.kind-tool .chat-process-line {

@@ -31,6 +31,13 @@ export const SettingsPage = {
     const jrPromptSaving = ref(false);
     const jrPromptNotice = reactive({ level: 'info', message: '' });
 
+    // Browser Prompt
+    const browserPrompt = ref('');
+    const browserDefaultPrompt = ref('');
+    const browserPromptLoading = ref(false);
+    const browserPromptSaving = ref(false);
+    const browserPromptNotice = reactive({ level: 'info', message: '' });
+
     let logRefreshTimer = 0;
 
     // Turn Tracker 设置
@@ -149,6 +156,51 @@ export const SettingsPage = {
       await saveJRPrompt();
     }
 
+    function setBrowserPromptNotice(level, message) {
+      browserPromptNotice.level = level || 'info';
+      browserPromptNotice.message = (message || '').toString().trim();
+    }
+
+    async function loadBrowserPrompt() {
+      browserPromptLoading.value = true;
+      try {
+        const res = await callAPI('config/browserPrompt/read', {});
+        browserPrompt.value = (res?.prompt || '').toString();
+        browserDefaultPrompt.value = (res?.defaultPrompt || '').toString();
+        setBrowserPromptNotice('info', '');
+      } catch (error) {
+        setBrowserPromptNotice('error', `加载失败：${error?.message || error}`);
+      } finally {
+        browserPromptLoading.value = false;
+      }
+    }
+
+    async function saveBrowserPrompt() {
+      if (browserPromptSaving.value) return;
+      browserPromptSaving.value = true;
+      try {
+        const res = await callAPI('config/browserPrompt/write', {
+          prompt: browserPrompt.value,
+        });
+        browserPrompt.value = (res?.prompt || '').toString();
+        if (res?.usingDefault) {
+          setBrowserPromptNotice('info', '已恢复默认提示词');
+        } else {
+          setBrowserPromptNotice('info', '提示词已保存');
+        }
+      } catch (error) {
+        setBrowserPromptNotice('error', `保存失败：${error?.message || error}`);
+      } finally {
+        browserPromptSaving.value = false;
+      }
+    }
+
+    async function resetBrowserPrompt() {
+      if (browserPromptSaving.value) return;
+      browserPrompt.value = '';
+      await saveBrowserPrompt();
+    }
+
     // Turn Tracker: 加载
     async function loadStallSettings() {
       stallLoading.value = true;
@@ -199,6 +251,7 @@ export const SettingsPage = {
       refreshLogPanel();
       loadLSPPromptHint();
       loadJRPrompt();
+      loadBrowserPrompt();
       loadStallSettings();
       logRefreshTimer = window.setInterval(refreshLogPanel, 1000);
     });
@@ -242,6 +295,14 @@ export const SettingsPage = {
       loadStallSettings,
       saveStallThreshold,
       saveStallHeartbeat,
+      browserPrompt,
+      browserDefaultPrompt,
+      browserPromptLoading,
+      browserPromptSaving,
+      browserPromptNotice,
+      loadBrowserPrompt,
+      saveBrowserPrompt,
+      resetBrowserPrompt,
     };
   },
   template: `
@@ -352,6 +413,32 @@ export const SettingsPage = {
             <button class="btn btn-secondary btn-toolbar-sm" @click="resetJRPrompt" :disabled="jrPromptLoading || jrPromptSaving">恢复默认</button>
             <button class="btn btn-primary btn-toolbar-sm" @click="saveJRPrompt" :disabled="jrPromptLoading || jrPromptSaving">
               {{ jrPromptSaving ? '保存中...' : '保存提示词' }}
+            </button>
+          </div>
+        </div>
+
+        <div class="section-header">BROWSER</div>
+        <div class="data-card-vue settings-prompt-card">
+          <div class="data-row-vue">
+            <strong>Playwright 浏览器提示词</strong>
+            <span>{{ browserPromptLoading ? '加载中...' : '已启用' }}</span>
+          </div>
+          <div class="settings-prompt-desc">控制 AI 使用 Playwright 浏览器自动化的系统提示词，留空并保存可恢复默认</div>
+          <textarea
+            class="settings-prompt-textarea"
+            rows="6"
+            v-model="browserPrompt"
+            :placeholder="browserDefaultPrompt || '请输入提示词'"
+            :disabled="browserPromptLoading || browserPromptSaving"
+          ></textarea>
+          <div v-if="browserPromptNotice.message" class="settings-prompt-notice" :class="'is-' + browserPromptNotice.level">
+            {{ browserPromptNotice.message }}
+          </div>
+          <div class="settings-action-row settings-action-inline">
+            <button class="btn btn-secondary btn-toolbar-sm" @click="loadBrowserPrompt" :disabled="browserPromptSaving">刷新</button>
+            <button class="btn btn-secondary btn-toolbar-sm" @click="resetBrowserPrompt" :disabled="browserPromptLoading || browserPromptSaving">恢复默认</button>
+            <button class="btn btn-primary btn-toolbar-sm" @click="saveBrowserPrompt" :disabled="browserPromptLoading || browserPromptSaving">
+              {{ browserPromptSaving ? '保存中...' : '保存提示词' }}
             </button>
           </div>
         </div>

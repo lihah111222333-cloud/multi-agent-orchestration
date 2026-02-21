@@ -107,6 +107,7 @@ function parseSkillMarkdown(content, fallbackName = '') {
   const { attrs, body } = parseFrontmatter(content);
   const name = cleanScalar(attrs.name) || fallbackName;
   const description = cleanScalar(attrs.description);
+  const summary = cleanScalar(attrs.summary ?? attrs.digest ?? '');
   const triggerWords = parseWordsValue(
     attrs.trigger_words ?? attrs.triggerwords ?? attrs.triggers ?? '',
   );
@@ -116,6 +117,7 @@ function parseSkillMarkdown(content, fallbackName = '') {
   return {
     name,
     description,
+    summary,
     triggerWords,
     forceWords,
     body: body || '',
@@ -129,11 +131,13 @@ function quoteYAML(value) {
 function buildSkillMarkdown(form) {
   const name = (form.name || '').trim();
   const description = (form.description || '').trim();
+  const summary = (form.summary || '').trim();
   const triggerWords = normalizeWordList(form.triggerWordsText);
   const forceWords = normalizeWordList(form.forceWordsText);
   const body = (form.body || '').toString().trim();
   const lines = ['---', `name: ${quoteYAML(name)}`];
   if (description) lines.push(`description: ${quoteYAML(description)}`);
+  if (summary) lines.push(`summary: ${quoteYAML(summary)}`);
   if (triggerWords.length > 0) {
     lines.push(`trigger_words: [${triggerWords.map(quoteYAML).join(', ')}]`);
   }
@@ -155,16 +159,21 @@ export const SkillsPage = {
     const selectedSkillName = ref('');
     const selectedThreadId = ref('');
     const threadSkills = ref([]);
+    const summarySource = ref('');
     const sourcePath = ref('');
     const importFailures = ref([]);
     const notice = reactive({ level: 'info', message: '' });
     const saving = ref(false);
     const uploading = ref(false);
     const binding = ref(false);
+    const inlineSummarySkillName = ref('');
+    const inlineSummaryDraft = ref('');
+    const inlineSummarySavingName = ref('');
 
     const form = reactive({
       name: '',
       description: '',
+      summary: '',
       triggerWordsText: '',
       forceWordsText: '',
       body: '',
@@ -187,6 +196,7 @@ export const SkillsPage = {
         name: (item?.name || '').toString(),
         dir: (item?.dir || '').toString(),
         description: (item?.description || '').toString(),
+        summary: (item?.summary || item?.description || '').toString(),
         triggerWords: Array.isArray(item?.trigger_words) ? item.trigger_words : [],
         forceWords: Array.isArray(item?.force_words) ? item.force_words : [],
       }));
@@ -198,14 +208,34 @@ export const SkillsPage = {
       return threadSkills.value.some((item) => item.toLowerCase() === target);
     });
 
+    const summarySourceLabel = computed(() => {
+      const source = (summarySource.value || '').toLowerCase();
+      if (source === 'frontmatter') return '用户摘要';
+      if (source === 'description') return '系统生成（基于描述）';
+      if (source === 'generated') return '系统生成（基于正文）';
+      return '系统生成';
+    });
+
     function setNotice(level, message) {
       notice.level = level || 'info';
       notice.message = (message || '').toString();
     }
 
-    function applyParsedSkill(parsed, rawContent, path = '') {
+    function applyParsedSkill(parsed, rawContent, path = '', fallbackSummary = '', fallbackSource = '') {
       form.name = parsed.name || form.name || '';
       form.description = parsed.description || '';
+      form.summary = parsed.summary || fallbackSummary || parsed.description || '';
+      if (parsed.summary) {
+        summarySource.value = 'frontmatter';
+      } else if (fallbackSource) {
+        summarySource.value = fallbackSource;
+      } else if (fallbackSummary) {
+        summarySource.value = 'generated';
+      } else if (parsed.description) {
+        summarySource.value = 'description';
+      } else {
+        summarySource.value = '';
+      }
       form.triggerWordsText = listToText(parsed.triggerWords);
       form.forceWordsText = listToText(parsed.forceWords);
       form.body = (parsed.body || '').trim();
@@ -218,14 +248,21 @@ export const SkillsPage = {
       });
     }
 
-    async function readSkillFile(path, fallbackName = '') {
+    async function readSkillFile(path, fallbackName = '', fallbackSummary = '', fallbackSource = '') {
       const raw = await callAPI('skills/local/read', { path });
       const content = (raw?.skill?.content || '').toString();
       if (!content.trim()) {
         throw new Error('读取的技能文件为空');
       }
+      const serverSummary = (raw?.skill?.summary || '').toString().trim();
+      const serverSummarySource = (raw?.skill?.summary_source || '').toString().trim();
       const parsed = parseSkillMarkdown(content, fallbackName);
-      applyParsedSkill(parsed, content, path);
+      const finalFallbackSummary = serverSummary || fallbackSummary;
+      const finalFallbackSource = serverSummarySource || fallbackSource;
+      applyParsedSkill(parsed, content, path, finalFallbackSummary, finalFallbackSource);
+      if (!parsed.summary && finalFallbackSummary) {
+        setNotice('info', '系统已生成摘要，你可以在编辑后保存为自定义摘要。');
+      }
     }
 
     async function onUploadSkill() {
@@ -298,14 +335,89 @@ export const SkillsPage = {
 
     async function onEditSkill(item) {
       if (!item?.dir) return;
+      cancelInlineSummaryEdit();
       const skillPath = `${item.dir}/SKILL.md`;
       try {
-        await readSkillFile(skillPath, item.name || '');
+        await readSkillFile(skillPath, item.name || '', item.summary || '', item.summary ? 'generated' : '');
         selectedSkillName.value = item.name || '';
         setNotice('info', `已加载技能：${item.name || ''}`);
       } catch (error) {
         logWarn('skills', 'load.savedSkill.failed', { error, path: skillPath });
         setNotice('error', `读取技能失败：${error?.message || error}`);
+      }
+    }
+
+    function isInlineSummaryEditing(name) {
+      return (inlineSummarySkillName.value || '').toLowerCase() === (name || '').toString().toLowerCase();
+    }
+
+    function isInlineSummarySaving(name) {
+      return (inlineSummarySavingName.value || '').toLowerCase() === (name || '').toString().toLowerCase();
+    }
+
+    async function startInlineSummaryEdit(item) {
+      if (!item?.name || !item?.dir) return;
+      cancelInlineSummaryEdit();
+      const skillPath = `${item.dir}/SKILL.md`;
+      try {
+        await readSkillFile(skillPath, item.name || '', item.summary || '', item.summary ? 'generated' : '');
+        selectedSkillName.value = item.name || '';
+      } catch (error) {
+        logWarn('skills', 'summary.inline.load.failed', { error, path: skillPath });
+        setNotice('error', `读取技能失败：${error?.message || error}`);
+        return;
+      }
+      inlineSummarySkillName.value = item.name;
+      inlineSummaryDraft.value = (form.summary || item.summary || '').toString();
+      setNotice('info', `正在编辑摘要：${item.name}`);
+    }
+
+    function cancelInlineSummaryEdit() {
+      inlineSummarySkillName.value = '';
+      inlineSummaryDraft.value = '';
+    }
+
+    async function saveInlineSummary(item) {
+      if (!item?.name || !item?.dir || inlineSummarySavingName.value) return;
+      const skillName = (item.name || '').toString().trim();
+      if (!skillName) return;
+      const nextSummary = (inlineSummaryDraft.value || '').toString().trim();
+      const currentSummary = (item.summary || '').toString().trim();
+      if (nextSummary === currentSummary) {
+        cancelInlineSummaryEdit();
+        return;
+      }
+      inlineSummarySavingName.value = skillName;
+      try {
+        await callAPI('skills/summary/write', {
+          name: skillName,
+          summary: nextSummary,
+        });
+        if ((form.name || '').toLowerCase() === skillName.toLowerCase()) {
+          form.summary = nextSummary;
+          summarySource.value = nextSummary ? 'frontmatter' : 'generated';
+        }
+        cancelInlineSummaryEdit();
+        emit('refresh-skills');
+        setNotice('success', `摘要已保存：${skillName}`);
+      } catch (error) {
+        logWarn('skills', 'summary.inline.save.failed', { error, skill: skillName });
+        setNotice('error', `摘要保存失败：${error?.message || error}`);
+      } finally {
+        inlineSummarySavingName.value = '';
+      }
+    }
+
+    function onInlineSummaryKeydown(event, item) {
+      const key = (event?.key || '').toLowerCase();
+      if (key === 'escape') {
+        event.preventDefault();
+        cancelInlineSummaryEdit();
+        return;
+      }
+      if (key === 'enter' && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        saveInlineSummary(item);
       }
     }
 
@@ -379,6 +491,7 @@ export const SkillsPage = {
         const content = buildSkillMarkdown(form);
         await callAPI('skills/config/write', { name, content });
         selectedSkillName.value = name;
+        summarySource.value = 'frontmatter';
         emit('refresh-skills');
         setNotice('success', `技能已保存：${name}`);
       } catch (error) {
@@ -406,6 +519,13 @@ export const SkillsPage = {
       if (!exists) {
         selectedSkillName.value = '';
       }
+      const inlineEditingName = inlineSummarySkillName.value;
+      if (inlineEditingName) {
+        const inlineExists = nextCards.some((item) => item.name.toLowerCase() === inlineEditingName.toLowerCase());
+        if (!inlineExists) {
+          cancelInlineSummaryEdit();
+        }
+      }
     });
 
     logDebug('skills', 'page.ready', {});
@@ -414,6 +534,8 @@ export const SkillsPage = {
       selectedSkillName,
       selectedThreadId,
       threadSkills,
+      summarySource,
+      summarySourceLabel,
       sourcePath,
       importFailures,
       notice,
@@ -427,6 +549,13 @@ export const SkillsPage = {
       onUploadSkill,
       onEditSkill,
       onSaveSkill,
+      inlineSummaryDraft,
+      isInlineSummaryEditing,
+      isInlineSummarySaving,
+      startInlineSummaryEdit,
+      cancelInlineSummaryEdit,
+      saveInlineSummary,
+      onInlineSummaryKeydown,
       toggleThreadSkill,
       loadThreadSkills,
     };
@@ -467,6 +596,38 @@ export const SkillsPage = {
                   <strong>描述</strong>
                   <span>{{ item.description || '-' }}</span>
                 </div>
+                <div class="data-row-vue skill-summary-row">
+                  <strong>摘要</strong>
+                  <div class="skill-summary-cell">
+                    <template v-if="isInlineSummaryEditing(item.name)">
+                      <textarea
+                        v-model="inlineSummaryDraft"
+                        class="modal-input skill-summary-input"
+                        rows="3"
+                        placeholder="用于运行时注入的摘要，建议 1-3 句"
+                        @keydown="onInlineSummaryKeydown($event, item)"
+                      ></textarea>
+                      <div class="skill-summary-actions">
+                        <button class="btn btn-primary btn-xs" :disabled="isInlineSummarySaving(item.name)" @click="saveInlineSummary(item)">
+                          {{ isInlineSummarySaving(item.name) ? '保存中...' : '保存' }}
+                        </button>
+                        <button class="btn btn-ghost btn-xs" :disabled="isInlineSummarySaving(item.name)" @click="cancelInlineSummaryEdit">
+                          取消
+                        </button>
+                      </div>
+                      <div class="skills-inline-tip">Cmd/Ctrl + Enter 保存，Esc 取消</div>
+                    </template>
+                    <button
+                      v-else
+                      type="button"
+                      class="skill-summary-text"
+                      :title="'点击编辑摘要：' + item.name"
+                      @click="startInlineSummaryEdit(item)"
+                    >
+                      {{ item.summary || '点击添加摘要' }}
+                    </button>
+                  </div>
+                </div>
                 <div class="data-row-vue">
                   <strong>触发词</strong>
                   <span>{{ (item.triggerWords || []).join(', ') || '-' }}</span>
@@ -476,7 +637,7 @@ export const SkillsPage = {
                   <span>{{ (item.forceWords || []).join(', ') || '-' }}</span>
                 </div>
                 <div class="data-actions-vue skill-actions">
-                  <button class="btn btn-ghost btn-xs" @click="onEditSkill(item)">编辑</button>
+                  <button class="btn btn-ghost btn-xs" @click="onEditSkill(item)">编辑详情</button>
                   <button class="btn btn-ghost btn-xs" :disabled="binding" @click="toggleThreadSkill(item.name)">
                     {{ threadSkills.some((s) => s.toLowerCase() === item.name.toLowerCase()) ? '移出会话' : '加入会话' }}
                   </button>
@@ -496,6 +657,12 @@ export const SkillsPage = {
             <div class="skills-field">
               <label>描述（可选）</label>
               <input v-model="form.description" class="modal-input" placeholder="一句话描述" />
+            </div>
+            <div class="skills-field">
+              <label>摘要（注入内容）</label>
+              <textarea v-model="form.summary" class="modal-input" rows="3" placeholder="用于运行时注入的摘要，建议 1-3 句"></textarea>
+              <div class="skills-inline-tip">摘要来源：{{ summarySourceLabel }}</div>
+              <div class="skills-inline-tip">系统会先生成一版摘要；你可以直接修改并保存到 SKILL.md 的 frontmatter。</div>
             </div>
             <div class="skills-field two-col">
               <div>

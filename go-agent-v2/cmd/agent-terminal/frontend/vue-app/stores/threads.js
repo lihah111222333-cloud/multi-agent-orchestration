@@ -467,7 +467,7 @@ function applyRuntimeSnapshot(snapshot) {
     for (const [key, value] of Object.entries(data.timelinesByThread)) {
       const newItems = Array.isArray(value) ? value : [];
       const oldItems = state.timelinesByThread[key];
-      // 快速对比: 长度相同 + 最后一条 item 的 id/text长度/done 都相同 → 跳过
+      // 快速对比: 长度相同 + 最后一条 item 的 id/text长度/output长度/command/status/done 都相同 → 跳过
       if (
         oldItems &&
         oldItems.length === newItems.length &&
@@ -475,6 +475,12 @@ function applyRuntimeSnapshot(snapshot) {
         oldItems[oldItems.length - 1]?.id === newItems[newItems.length - 1]?.id &&
         (oldItems[oldItems.length - 1]?.text || '').length ===
         (newItems[newItems.length - 1]?.text || '').length &&
+        (oldItems[oldItems.length - 1]?.output || '').length ===
+        (newItems[newItems.length - 1]?.output || '').length &&
+        (oldItems[oldItems.length - 1]?.command || '') ===
+        (newItems[newItems.length - 1]?.command || '') &&
+        (oldItems[oldItems.length - 1]?.status || '') ===
+        (newItems[newItems.length - 1]?.status || '') &&
         Boolean(oldItems[oldItems.length - 1]?.done) ===
         Boolean(newItems[newItems.length - 1]?.done)
       ) {
@@ -546,7 +552,29 @@ async function syncRuntimeState() {
 
   runtimeSyncPromise = (async () => {
     try {
-      const res = await callAPI('ui/state/get', { threadId: state.activeThreadId || '' });
+      const activeThreadId = (state.activeThreadId || '').toString().trim();
+      logInfo('thread', 'state.sync.request', {
+        active_thread_id: activeThreadId,
+      });
+      const res = await callAPI('ui/state/get', { threadId: activeThreadId });
+      const timelines = (res && typeof res.timelinesByThread === 'object' && res.timelinesByThread)
+        ? res.timelinesByThread
+        : {};
+      const diffs = (res && typeof res.diffTextByThread === 'object' && res.diffTextByThread)
+        ? res.diffTextByThread
+        : {};
+      const diffLengths = Object.entries(diffs)
+        .slice(0, 8)
+        .map(([threadId, text]) => ({
+          thread_id: threadId,
+          diff_len: (text || '').toString().length,
+        }));
+      logInfo('thread', 'state.sync.response', {
+        active_thread_id: activeThreadId,
+        timeline_threads: Object.keys(timelines).length,
+        diff_threads: Object.keys(diffs).length,
+        diff_lengths: diffLengths,
+      });
       applyRuntimeSnapshot(res || {});
     } finally {
       runtimeSyncPromise = null;
@@ -746,7 +774,7 @@ async function loadMessages(threadId, limit = 300) {
   }
 }
 
-async function sendMessage(threadId, prompt, attachments = []) {
+async function sendMessage(threadId, prompt, attachments = [], options = {}) {
   const text = (prompt || '').trim();
   const hasAttachments = attachments.length > 0;
   if (!threadId || (!text && !hasAttachments)) return;
@@ -800,6 +828,19 @@ async function sendMessage(threadId, prompt, attachments = []) {
   }
 
   const start = perfNow();
+  const selectedSkills = Array.isArray(options?.selectedSkills)
+    ? options.selectedSkills
+      .map((item) => (item || '').toString().trim())
+      .filter(Boolean)
+    : [];
+  const manualSkillSelection = Boolean(options?.manualSkillSelection);
+  const requestPayload = { threadId, input };
+  if (selectedSkills.length > 0) {
+    requestPayload.selectedSkills = selectedSkills;
+  }
+  if (manualSkillSelection || selectedSkills.length > 0) {
+    requestPayload.manualSkillSelection = manualSkillSelection;
+  }
   logInfo('thread', 'send.start', {
     thread_id: threadId,
     text_len: text.length,
@@ -808,9 +849,11 @@ async function sendMessage(threadId, prompt, attachments = []) {
     inline_images: remoteImageCount,
     files: fileCount,
     dropped_attachments: droppedAttachmentCount,
+    selected_skills: selectedSkills.length,
+    manual_skill_selection: manualSkillSelection,
   });
   try {
-    await callAPI('turn/start', { threadId, input });
+    await callAPI('turn/start', requestPayload);
     await syncRuntimeState();
     logInfo('thread', 'send.done', {
       thread_id: threadId,

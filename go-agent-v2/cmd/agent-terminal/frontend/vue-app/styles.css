@@ -1887,8 +1887,14 @@ a,
 }
 
 .chat-item.process.kind-command .chat-process-line {
-  border-left-color: var(--color-token-terminal-border, rgba(255, 255, 255, 0.2));
-  background: var(--assistant-surface, rgba(255, 255, 255, 0.04));
+  border-left-color: transparent;
+  background: transparent;
+  border-radius: 0;
+}
+
+.chat-item.process.kind-command .chat-process-line:hover {
+  background: transparent;
+  border-left-color: transparent;
 }
 
 .chat-item.process.kind-tool .chat-process-line {
@@ -3066,6 +3072,45 @@ a,
 }
 
 .skill-actions {
+  gap: 6px;
+}
+
+.skill-summary-row {
+  align-items: flex-start;
+}
+
+.skill-summary-cell {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.skill-summary-text {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(33, 33, 33, 0.35);
+  color: var(--text);
+  text-align: left;
+  padding: 7px 10px;
+  line-height: 1.45;
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.skill-summary-text:hover {
+  border-color: var(--primary);
+  background: rgba(33, 33, 33, 0.55);
+}
+
+.skill-summary-input {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.skill-summary-actions {
+  display: flex;
+  justify-content: flex-end;
   gap: 6px;
 }
 

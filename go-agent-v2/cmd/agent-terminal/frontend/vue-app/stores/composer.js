@@ -105,12 +105,10 @@ async function attachByPicker() {
   logInfo('composer', 'picker.start', {});
   try {
     const paths = await selectFiles();
-    paths.forEach((path) => {
-      const attachment = normalizeFileAttachment(path);
-      if (attachment) pushAttachment(attachment);
-    });
+    const added = attachByPaths(paths, 'picker');
     logInfo('composer', 'picker.done', {
       selected: paths.length,
+      added,
       duration_ms: Date.now() - start,
     });
   } catch (error) {
@@ -121,6 +119,33 @@ async function attachByPicker() {
   } finally {
     state.attaching = false;
   }
+}
+
+function attachByPaths(paths, source = 'external') {
+  const list = Array.isArray(paths)
+    ? paths.map((item) => (item || '').toString().trim()).filter(Boolean)
+    : [];
+  if (list.length === 0) {
+    logDebug('composer', 'paths.ignored.empty', { source });
+    return 0;
+  }
+
+  let added = 0;
+  list.forEach((path) => {
+    const before = state.attachments.length;
+    const attachment = normalizeFileAttachment(path);
+    if (!attachment) return;
+    pushAttachment(attachment);
+    if (state.attachments.length > before) added += 1;
+  });
+
+  logInfo('composer', 'paths.done', {
+    source,
+    files: list.length,
+    added,
+    dropped: Math.max(list.length - added, 0),
+  });
+  return added;
 }
 
 async function handlePaste(event) {
@@ -164,7 +189,6 @@ async function handleDrop(event) {
   }
 
   event.preventDefault();
-  if (typeof event.stopPropagation === 'function') event.stopPropagation();
 
   let added = 0;
   for (let index = 0; index < files.length; index += 1) {
@@ -210,6 +234,7 @@ export function useComposerStore() {
     clearComposer,
     removeAttachment,
     attachByPicker,
+    attachByPaths,
     handlePaste,
     handleDrop,
 

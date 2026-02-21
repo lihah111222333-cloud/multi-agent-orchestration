@@ -1,4 +1,5 @@
-import { ref, watch, onUpdated, onBeforeUnmount } from '../../lib/vue.esm-browser.prod.js';
+import { ref, watch, onMounted, onUpdated, onBeforeUnmount } from '../../lib/vue.esm-browser.prod.js';
+import { onFilesDropped } from '../services/api.js';
 import { logDebug, logInfo } from '../services/log.js';
 
 export const ComposerBar = {
@@ -24,6 +25,7 @@ export const ComposerBar = {
     const interruptTimeoutId = ref(0);
     const dropActive = ref(false);
     const dropDepth = ref(0);
+    let offFilesDropped = () => { };
 
     function clearInterruptTimeout() {
       if (!interruptTimeoutId.value) return;
@@ -135,7 +137,6 @@ export const ComposerBar = {
     async function onDrop(event) {
       if (!hasFilesTransfer(event)) return;
       if (typeof event.preventDefault === 'function') event.preventDefault();
-      if (typeof event.stopPropagation === 'function') event.stopPropagation();
       resetDropState();
       if (props.disabled) return;
       try {
@@ -143,6 +144,27 @@ export const ComposerBar = {
       } catch (error) {
         logDebug('ui', 'composerBar.drop.failed', { error });
       }
+    }
+
+    function onNativeFilesDropped(evt) {
+      if (props.disabled) return;
+      const payload = evt && typeof evt === 'object' ? evt : {};
+      const files = Array.isArray(payload.files) ? payload.files : [];
+      if (files.length === 0) return;
+
+      const details = payload.details && typeof payload.details === 'object'
+        ? payload.details
+        : {};
+      const targetID = (details.id || '').toString().trim();
+      if (targetID && targetID !== 'chat-input-bar') return;
+
+      const added = props.composer.attachByPaths(files, 'wails-drop');
+      if (added > 0) resetDropState();
+      logInfo('ui', 'composerBar.nativeDrop.handled', {
+        files: files.length,
+        added,
+        target_id: targetID,
+      });
     }
 
     function onCompositionStart() {
@@ -335,7 +357,13 @@ export const ComposerBar = {
       }
     });
 
+    onMounted(() => {
+      offFilesDropped = onFilesDropped(onNativeFilesDropped);
+    });
+
     onBeforeUnmount(() => {
+      offFilesDropped();
+      offFilesDropped = () => { };
       clearInterruptTimeout();
       resetDropState();
     });
@@ -377,6 +405,7 @@ export const ComposerBar = {
       id="chat-input-bar"
       class="chat-input-vue"
       :class="{ 'drop-active': dropActive }"
+      data-file-drop-target=""
       style="position:relative"
       @dragenter="onDragEnter"
       @dragover="onDragOver"

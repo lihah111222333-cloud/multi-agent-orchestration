@@ -37,6 +37,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 //go:embed frontend/dist/*
@@ -228,12 +229,13 @@ func main() {
 
 	appSvc.wailsApp = app
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:           title,
 		Width:           1440,
 		Height:          900,
 		MinWidth:        800,
 		MinHeight:       600,
+		EnableFileDrop:  true,
 		InitialPosition: application.WindowCentered,
 		BackgroundColour: application.RGBA{
 			Red: 12, Green: 16, Blue: 23, Alpha: 255,
@@ -241,6 +243,40 @@ func main() {
 		Mac: application.MacWindow{
 			TitleBar: application.MacTitleBarDefault,
 		},
+	})
+
+	mainWindow.OnWindowEvent(events.Common.WindowFilesDropped, func(event *application.WindowEvent) {
+		if event == nil {
+			return
+		}
+		ctx := event.Context()
+		files := ctx.DroppedFiles()
+		if len(files) == 0 {
+			return
+		}
+
+		payload := map[string]any{
+			"files": files,
+		}
+
+		targetID := ""
+		if details := ctx.DropTargetDetails(); details != nil {
+			targetID = strings.TrimSpace(details.ElementID)
+			payload["details"] = map[string]any{
+				"id":         details.ElementID,
+				"classList":  details.ClassList,
+				"attributes": details.Attributes,
+				"x":          details.X,
+				"y":          details.Y,
+			}
+		}
+
+		app.Event.Emit("files-dropped", payload)
+		logger.Info("wails: files dropped",
+			logger.FieldCount, len(files),
+			"target_id", targetID,
+			"first", files[0],
+		)
 	})
 
 	if err := app.Run(); err != nil {

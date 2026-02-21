@@ -344,6 +344,39 @@ export function onBridgeEvent(callback) {
   return () => off();
 }
 
+export function onFilesDropped(callback) {
+  let off = () => { };
+  const wrapped = (evt) => {
+    const normalized = normalizeRuntimeEventEnvelope(evt);
+    try {
+      callback(normalized);
+    } catch (error) {
+      logError('event', 'filesDropped.callback.failed', { error });
+    }
+  };
+  waitRuntime().then((runtime) => {
+    if (!runtime?.Events?.On) {
+      logWarn('event', 'filesDropped.subscribe.unavailable', {});
+      return;
+    }
+    const unbind = runtime.Events.On('files-dropped', wrapped);
+    logInfo('event', 'filesDropped.subscribe.ready', {});
+    if (typeof unbind === 'function') {
+      off = unbind;
+      return;
+    }
+    off = () => {
+      try {
+        runtime.Events.Off('files-dropped');
+        logInfo('event', 'filesDropped.unsubscribe.done', {});
+      } catch {
+        // ignore
+      }
+    };
+  });
+  return () => off();
+}
+
 export function onAppWillQuit(callback) {
   let off = () => { };
   const wrapped = (evt) => {

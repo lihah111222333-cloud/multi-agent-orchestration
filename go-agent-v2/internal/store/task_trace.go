@@ -21,7 +21,7 @@ const taskTraceCols = `id, trace_id, span_id, parent_span_id, span_name, compone
 	status, input_payload, output_payload, error_text, metadata,
 	started_at, finished_at, duration_ms`
 
-// StartSpan 开始跟踪 (对应 Python start_task_trace_span)。
+// Deprecated: StartSpan 无外部调用者。
 func (s *TaskTraceStore) StartSpan(ctx context.Context, t *TaskTrace) (*TaskTrace, error) {
 	inJSON := mustMarshalJSON(t.Input)
 	metaJSON := mustMarshalJSON(t.Metadata)
@@ -38,7 +38,7 @@ func (s *TaskTraceStore) StartSpan(ctx context.Context, t *TaskTrace) (*TaskTrac
 	return collectOne[TaskTrace](rows)
 }
 
-// FinishSpan 完成跟踪 (对应 Python finish_task_trace_span, 自动计算 duration)。
+// Deprecated: FinishSpan 无外部调用者。
 func (s *TaskTraceStore) FinishSpan(ctx context.Context, traceID, spanID, status string, output any, errText string) (*TaskTrace, error) {
 	outJSON := mustMarshalJSON(output)
 	rows, err := s.pool.Query(ctx,
@@ -73,7 +73,7 @@ func (s *TaskTraceStore) Create(ctx context.Context, t *TaskTrace) (*TaskTrace, 
 	return collectOne[TaskTrace](rows)
 }
 
-// ListByTraceID 按 trace_id 查询 (对应 Python list_task_trace_spans)。
+// Deprecated: ListByTraceID 无外部调用者。
 func (s *TaskTraceStore) ListByTraceID(ctx context.Context, traceID string) ([]TaskTrace, error) {
 	rows, err := s.pool.Query(ctx,
 		"SELECT "+taskTraceCols+" FROM task_traces WHERE trace_id = $1 ORDER BY started_at", traceID)

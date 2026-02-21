@@ -131,7 +131,7 @@ func (s *WorkspaceRunStore) TryTransitionRunStatus(
 	return run, true, nil
 }
 
-// DeleteRunCascade 删除 run 及其文件记录。
+// Deprecated: DeleteRunCascade 无外部调用者。
 func (s *WorkspaceRunStore) DeleteRunCascade(ctx context.Context, runKey string) error {
 	_, err := s.pool.Exec(ctx, `
 		WITH del_files AS (

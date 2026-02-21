@@ -96,7 +96,7 @@ type PromptTemplate struct {
 	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
 
-// PromptVersion 提示词历史版本快照。
+// Deprecated: PromptVersion 无外部引用。
 type PromptVersion struct {
 	ID              int        `db:"id" json:"id"`
 	PromptKey       string     `db:"prompt_key" json:"prompt_key"`
@@ -137,7 +137,7 @@ type CommandCard struct {
 	RunCount  int        `db:"run_count" json:"run_count"`
 }
 
-// CommandCardVersion 命令卡历史版本快照。
+// Deprecated: CommandCardVersion 无外部引用。
 type CommandCardVersion struct {
 	ID              int        `db:"id" json:"id"`
 	CardKey         string     `db:"card_key" json:"card_key"`

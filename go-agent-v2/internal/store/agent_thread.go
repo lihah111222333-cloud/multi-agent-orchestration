@@ -27,14 +27,14 @@ type AgentThread struct {
 // AgentThreadStore agent_threads 存储。
 type AgentThreadStore struct{ BaseStore }
 
-// NewAgentThreadStore 创建。
+// Deprecated: NewAgentThreadStore 无外部调用者，整个 AgentThreadStore 构造函数未被使用。
 func NewAgentThreadStore(pool *pgxpool.Pool) *AgentThreadStore {
 	return &AgentThreadStore{NewBaseStore(pool)}
 }
 
 const atCols = "thread_id, prompt, model, cwd, status, port, pid, created_at, updated_at, finished_at, last_event_type, error_message"
 
-// Register 注册线程 (codex 启动后调用)。
+// Deprecated: Register 无外部调用者。
 func (s *AgentThreadStore) Register(ctx context.Context, t *AgentThread) error {
 	now := time.Now().Unix()
 	t.CreatedAt = now
@@ -57,7 +57,7 @@ func (s *AgentThreadStore) FindByPort(ctx context.Context, port int) (*AgentThre
 	return s.findRunning(ctx, "port", port)
 }
 
-// FindByPID 按 PID 查找运行中的线程。
+// Deprecated: FindByPID 无外部调用者。
 func (s *AgentThreadStore) FindByPID(ctx context.Context, pid int) (*AgentThread, error) {
 	return s.findRunning(ctx, "pid", pid)
 }
@@ -82,7 +82,7 @@ func (s *AgentThreadStore) ListRunning(ctx context.Context) ([]AgentThread, erro
 	return collectRows[AgentThread](rows)
 }
 
-// UpdateStatus 更新线程状态 (参数化 SQL, 无注入风险)。
+// Deprecated: UpdateStatus 无外部调用者。
 func (s *AgentThreadStore) UpdateStatus(ctx context.Context, threadID, status string, errMsg string) error {
 	now := time.Now().Unix()
 	if status == "stopped" || status == "error" {
@@ -97,7 +97,7 @@ func (s *AgentThreadStore) UpdateStatus(ctx context.Context, threadID, status st
 	return err
 }
 
-// UpdateLastEvent 更新最后事件类型。
+// Deprecated: UpdateLastEvent 无外部调用者。
 func (s *AgentThreadStore) UpdateLastEvent(ctx context.Context, threadID, eventType string) error {
 	_, err := s.pool.Exec(ctx,
 		"UPDATE agent_threads SET last_event_type=$1, updated_at=$2 WHERE thread_id=$3",

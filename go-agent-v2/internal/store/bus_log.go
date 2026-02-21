@@ -15,7 +15,7 @@ type BusLogStore struct{ BaseStore }
 // NewBusLogStore 创建总线异常日志存储。
 func NewBusLogStore(pool *pgxpool.Pool) *BusLogStore { return &BusLogStore{NewBaseStore(pool)} }
 
-// Record 记录异常 (写入失败仅 debug 日志，不影响主流程)。
+// Deprecated: Record 无外部调用者。
 func (s *BusLogStore) Record(ctx context.Context, e *BusException) error {
 	extraJSON := mustMarshalJSON(e.Extra)
 	_, err := s.pool.Exec(ctx,

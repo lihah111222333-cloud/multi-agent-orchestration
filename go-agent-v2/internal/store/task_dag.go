@@ -102,7 +102,7 @@ func (s *TaskDAGStore) UpdateNodeStatus(ctx context.Context, dagKey, nodeKey, st
 	return collectOne[TaskDAGNode](rows)
 }
 
-// ListNodes 按 dag_key 查询所有节点。
+// Deprecated: ListNodes 无外部调用者 (仅 GetDAGDetail 内部调用)。
 func (s *TaskDAGStore) ListNodes(ctx context.Context, dagKey string) ([]TaskDAGNode, error) {
 	rows, err := s.pool.Query(ctx,
 		"SELECT "+nodeCols+" FROM task_dag_nodes WHERE dag_key = $1 ORDER BY created_at", dagKey)

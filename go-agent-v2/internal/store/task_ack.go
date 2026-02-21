@@ -62,7 +62,7 @@ func (s *TaskAckStore) List(ctx context.Context, keyword, status, priority, assi
 	return collectRows[TaskAck](rows)
 }
 
-// UpdateStatus 更新 ACK 状态 (对应 Python update_task_ack_status, 含自动时间戳)。
+// Deprecated: UpdateStatus 无外部调用者。
 func (s *TaskAckStore) UpdateStatus(ctx context.Context, ackKey, status string, progress *int, ackMessage, resultSummary string) (*TaskAck, error) {
 	sets := []string{"status = $1", "updated_at = NOW()"}
 	params := []any{status}

@@ -62,7 +62,7 @@ func (s *TopologyApprovalStore) GetPending(ctx context.Context) ([]TopologyAppro
 	return collectRows[TopologyApproval](rows)
 }
 
-// ListRecent 查询最近审批。
+// Deprecated: ListRecent 无外部调用者。
 func (s *TopologyApprovalStore) ListRecent(ctx context.Context, limit int) ([]TopologyApproval, error) {
 	q := NewQueryBuilder()
 	sql, params := q.Build(

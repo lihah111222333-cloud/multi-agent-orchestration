@@ -1,12 +1,14 @@
 import { computed, watch, nextTick, ref } from '../../lib/vue.esm-browser.prod.js';
 import { parseUnifiedDiff, diffStats } from '../services/diff.js';
 import { logDebug, logInfo, logWarn } from '../services/log.js';
+import { renderAssistantMarkdown } from '../utils/assistant-markdown.js';
 
 export const DiffPanel = {
   name: 'DiffPanel',
   props: {
     diffText: { type: String, default: '' },
     mediaPreview: { type: Object, default: null },
+    markdownPreview: { type: Object, default: null },
     focusFile: { type: String, default: '' },
     focusLine: { type: Number, default: 0 },
   },
@@ -49,6 +51,42 @@ export const DiffPanel = {
       if (mediaBytes.value > 0) parts.push(formatBytes(mediaBytes.value));
       return parts.join(' · ');
     });
+    const hasMarkdownPreview = computed(() => {
+      const text = (props.markdownPreview?.text || '').toString();
+      return Boolean(text.trim());
+    });
+    const markdownPath = computed(() => (props.markdownPreview?.path || '').toString().trim());
+    const markdownMeta = computed(() => {
+      if (!hasMarkdownPreview.value) return '';
+      const startLineRaw = Number(props.markdownPreview?.startLine);
+      const endLineRaw = Number(props.markdownPreview?.endLine);
+      const totalLinesRaw = Number(props.markdownPreview?.totalLines);
+      const startLine = Number.isFinite(startLineRaw) && startLineRaw > 0 ? Math.floor(startLineRaw) : 0;
+      const endLine = Number.isFinite(endLineRaw) && endLineRaw >= startLine ? Math.floor(endLineRaw) : 0;
+      const totalLines = Number.isFinite(totalLinesRaw) && totalLinesRaw > 0 ? Math.floor(totalLinesRaw) : 0;
+      if (startLine <= 0 || endLine < startLine) return '';
+      const range = startLine === endLine
+        ? `第 ${startLine} 行`
+        : `第 ${startLine}-${endLine} 行`;
+      if (totalLines > 0 && endLine < totalLines) {
+        return `${range}（片段，共 ${totalLines} 行）`;
+      }
+      if (totalLines > 0) {
+        return `${range}（共 ${totalLines} 行）`;
+      }
+      return range;
+    });
+    const markdownHtml = computed(() => {
+      if (!hasMarkdownPreview.value) return '';
+      return renderAssistantMarkdown((props.markdownPreview?.text || '').toString());
+    });
+    const hasDiffPreview = computed(() => !hasMediaPreview.value && !hasMarkdownPreview.value);
+    const headerTitle = computed(() => (hasMarkdownPreview.value ? 'Markdown 预览' : '代码变更'));
+    const headerSubText = computed(() => (
+      hasMarkdownPreview.value
+        ? (markdownPath.value || 'markdown')
+        : fileCountText.value
+    ));
 
     const normalizedFocusFile = computed(() => normalizePath(props.focusFile));
     const normalizedFocusLine = computed(() => {
@@ -77,9 +115,9 @@ export const DiffPanel = {
     );
 
     watch(
-      () => [props.focusFile, props.focusLine, props.diffText, hasMediaPreview.value],
+      () => [props.focusFile, props.focusLine, props.diffText, hasMediaPreview.value, hasMarkdownPreview.value],
       () => {
-        if (hasMediaPreview.value) return;
+        if (!hasDiffPreview.value) return;
         const requestedPath = (props.focusFile || '').toString().trim();
         const requestedLine = Number(props.focusLine);
         if (requestedPath || (Number.isFinite(requestedLine) && requestedLine > 0)) {
@@ -141,7 +179,7 @@ export const DiffPanel = {
     }
 
     async function syncFocus() {
-      if (hasMediaPreview.value) return;
+      if (!hasDiffPreview.value) return;
       if (!panelRef.value) {
         logWarn('ui', 'chat.diff.panel.focus.no_panel', {
           focus_file: normalizedFocusFile.value,
@@ -225,6 +263,13 @@ export const DiffPanel = {
       fileCountText,
       totals,
       hasMediaPreview,
+      hasMarkdownPreview,
+      hasDiffPreview,
+      markdownPath,
+      markdownMeta,
+      markdownHtml,
+      headerTitle,
+      headerSubText,
       mediaThumbSrc,
       mediaFullSrc,
       mediaPath,
@@ -242,10 +287,10 @@ export const DiffPanel = {
     <div id="diff-panel" ref="panelRef">
       <div class="diff-header">
         <div class="diff-header-main">
-          <strong>代码变更</strong>
-          <small>{{ fileCountText }}</small>
+          <strong>{{ headerTitle }}</strong>
+          <small>{{ headerSubText }}</small>
         </div>
-        <div class="diff-header-metrics">
+        <div v-if="hasDiffPreview" class="diff-header-metrics">
           <span class="diff-metric add">+{{ totals.add }}</span>
           <span class="diff-metric del">-{{ totals.del }}</span>
         </div>
@@ -262,10 +307,22 @@ export const DiffPanel = {
           </div>
         </div>
 
-        <div v-if="files.length === 0 && !hasMediaPreview" class="diff-empty">暂无代码变更</div>
+        <div
+          v-else-if="hasMarkdownPreview"
+          class="diff-media-card chat-item-markdown codex-markdown-root"
+          style="font-family: -apple-system, 'SF Pro Text', sans-serif; font-size: 13px; line-height: 1.62;"
+        >
+          <div class="diff-media-caption">
+            <div class="diff-media-path" :title="markdownPath">{{ markdownPath || 'markdown' }}</div>
+            <div v-if="markdownMeta" class="diff-media-meta">{{ markdownMeta }}</div>
+          </div>
+          <div style="padding: 12px 14px 14px;" v-html="markdownHtml"></div>
+        </div>
+
+        <div v-if="files.length === 0 && hasDiffPreview" class="diff-empty">暂无代码变更</div>
 
         <div
-          v-if="!hasMediaPreview"
+          v-if="hasDiffPreview"
           v-for="file in files"
           :key="file.filename"
           class="diff-file-group"

@@ -75,6 +75,53 @@ func TestUICodeOpenTyped_ReturnsSnippetAroundLine(t *testing.T) {
 	}
 }
 
+func TestUICodeOpenTyped_MarkdownReturnsWholeFile(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	target := filepath.Join(root, "docs", "readme.md")
+	content := "# title\n\nline-1\nline-2\nline-3\nline-4\n"
+	if err := ensureTestFile(target, content); err != nil {
+		t.Fatalf("ensureTestFile failed: %v", err)
+	}
+
+	srv := New(Deps{})
+	out, err := srv.uiCodeOpenTyped(context.Background(), uiCodeOpenParams{
+		FilePath: "docs/readme.md",
+		Line:     4,
+		Context:  1,
+		Project:  root,
+	})
+	if err != nil {
+		t.Fatalf("uiCodeOpenTyped failed: %v", err)
+	}
+	result, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("result type = %T, want map[string]any", out)
+	}
+	if got := asString(result["language"]); got != "markdown" {
+		t.Fatalf("language = %q, want markdown", got)
+	}
+	if got := intFromAny(result["startLine"]); got != 1 {
+		t.Fatalf("startLine = %d, want 1", got)
+	}
+	if got := intFromAny(result["endLine"]); got != 7 {
+		t.Fatalf("endLine = %d, want 7", got)
+	}
+	snippet, ok := result["snippet"].([]map[string]any)
+	if !ok {
+		t.Fatalf("snippet type invalid: %T", result["snippet"])
+	}
+	if len(snippet) != 7 {
+		t.Fatalf("snippet length = %d, want 7", len(snippet))
+	}
+	if text := asString(snippet[0]["text"]); text != "# title" {
+		t.Fatalf("snippet[0] = %q, want # title", text)
+	}
+	if text := asString(snippet[6]["text"]); text != "" {
+		t.Fatalf("snippet[6] = %q, want empty trailing line", text)
+	}
+}
+
 func TestUICodeOpenTyped_LargeLogFile(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

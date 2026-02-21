@@ -344,6 +344,10 @@ func fileLanguageByPath(path string) string {
 	}
 }
 
+func isMarkdownFilePath(path string) bool {
+	return strings.EqualFold(strings.TrimPrefix(filepath.Ext(path), "."), "md")
+}
+
 func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, error) {
 	logger.Info("ui/code/open: begin",
 		"file_path", strings.TrimSpace(p.FilePath),
@@ -494,6 +498,11 @@ func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, er
 	endLine := targetLine + contextLines
 	if endLine > len(lines) {
 		endLine = len(lines)
+	}
+	if isMarkdownFilePath(resolvedPath) {
+		startLine = 1
+		endLine = len(lines)
+		contextLines = len(lines)
 	}
 
 	lspOpened := false

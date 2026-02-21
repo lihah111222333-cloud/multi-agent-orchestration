@@ -80,6 +80,8 @@ import { useComposerStore } from '../stores/composer.js';
  * @property {number} [sizeBytes]
  * @property {number} [startLine]
  * @property {number} [endLine]
+ * @property {number} [totalLines]
+ * @property {string} [language]
  * @property {string | CodeOpenSnippetLine[]} [snippet]
  */
 
@@ -90,6 +92,15 @@ import { useComposerStore } from '../stores/composer.js';
  * @property {string} path
  * @property {string} mediaType
  * @property {number} sizeBytes
+ */
+
+/**
+ * @typedef {Object} MarkdownPreviewState
+ * @property {string} path
+ * @property {string} text
+ * @property {number} startLine
+ * @property {number} endLine
+ * @property {number} totalLines
  */
 
 /**
@@ -264,9 +275,7 @@ function buildSyntheticDiffFromCodeOpen(codeOpenResult) {
   const path = (codeOpenResult?.relative || codeOpenResult?.filePath || '').toString().trim();
   if (!path) return '';
   const snippetRaw = codeOpenResult?.snippet;
-  const snippetLines = Array.isArray(snippetRaw)
-    ? snippetRaw.map((item) => (item?.text || '').toString())
-    : ((snippetRaw || '').toString().split('\n'));
+  const snippetLines = codeOpenSnippetLines(codeOpenResult);
   if (!Array.isArray(snippetLines) || snippetLines.length === 0) return '';
   const startLineRaw = Number(codeOpenResult?.startLine);
   const fallbackStartLine = Array.isArray(snippetRaw) ? Number(snippetRaw?.[0]?.line) : 0;
@@ -281,6 +290,65 @@ function buildSyntheticDiffFromCodeOpen(codeOpenResult) {
     `@@ -${startLine},${span} +${startLine},${span} @@`,
     ...snippetLines.map((line) => ` ${line}`),
   ].join('\n');
+}
+
+/**
+ * @param {CodeOpenResult | null | undefined} codeOpenResult
+ * @returns {string[]}
+ */
+function codeOpenSnippetLines(codeOpenResult) {
+  const snippetRaw = codeOpenResult?.snippet;
+  return Array.isArray(snippetRaw)
+    ? snippetRaw.map((item) => (item?.text || '').toString())
+    : ((snippetRaw || '').toString().split('\n'));
+}
+
+/**
+ * @param {string} path
+ * @returns {boolean}
+ */
+function isMarkdownPath(path) {
+  return /\.md$/i.test((path || '').toString().trim());
+}
+
+/**
+ * @param {CodeOpenResult | null | undefined} codeOpenResult
+ * @returns {MarkdownPreviewState | null}
+ */
+function buildMarkdownPreviewFromCodeOpen(codeOpenResult) {
+  if (!codeOpenResult || codeOpenResult.ok !== true) return null;
+  const language = (codeOpenResult.language || '').toString().trim().toLowerCase();
+  const resolvedPath = (codeOpenResult.relative || codeOpenResult.filePath || '').toString().trim();
+  if (language !== 'markdown' && !isMarkdownPath(resolvedPath)) return null;
+  const snippetLines = codeOpenSnippetLines(codeOpenResult);
+  if (!Array.isArray(snippetLines) || snippetLines.length === 0) return null;
+  const text = snippetLines.join('\n');
+  if (!text.trim()) return null;
+
+  const startLineRaw = Number(codeOpenResult?.startLine);
+  const fallbackStartLine = Array.isArray(codeOpenResult?.snippet)
+    ? Number(codeOpenResult?.snippet?.[0]?.line)
+    : 0;
+  const startLine = Number.isFinite(startLineRaw) && startLineRaw > 0
+    ? Math.floor(startLineRaw)
+    : (Number.isFinite(fallbackStartLine) && fallbackStartLine > 0 ? Math.floor(fallbackStartLine) : 1);
+  const endLineRaw = Number(codeOpenResult?.endLine);
+  const fallbackEndLine = startLine + Math.max(0, snippetLines.length - 1);
+  const endLine = Number.isFinite(endLineRaw) && endLineRaw >= startLine
+    ? Math.floor(endLineRaw)
+    : fallbackEndLine;
+  const totalLinesRaw = Number(codeOpenResult?.totalLines);
+  const totalLines = Number.isFinite(totalLinesRaw) && totalLinesRaw > 0
+    ? Math.floor(totalLinesRaw)
+    : Math.max(endLine, snippetLines.length);
+
+  return {
+    path: resolvedPath,
+    text,
+    startLine,
+    endLine,
+    totalLines,
+  };
 }
 
 /**
@@ -445,6 +513,7 @@ export const UnifiedChatPage = {
     const pendingFileRefFocus = /** @type {{ value: PendingFileRefFocus | null }} */ (ref(null));
     const fallbackDiffText = ref('');
     const fallbackMediaPreview = /** @type {{ value: ImagePreviewState | null }} */ (ref(null));
+    const fallbackMarkdownPreview = /** @type {{ value: MarkdownPreviewState | null }} */ (ref(null));
 
     const isCmd = computed(() => props.mode === 'cmd');
     const modeKey = computed(() => (isCmd.value ? 'cmd' : 'chat'));
@@ -530,8 +599,10 @@ export const UnifiedChatPage = {
     const activeTimeline = computed(() => props.threadStore.getThreadTimeline(selectedThreadId.value));
     const activeThreadDiffText = computed(() => props.threadStore.getThreadDiff(selectedThreadId.value));
     const activeMediaPreview = computed(() => fallbackMediaPreview.value);
+    const activeMarkdownPreview = computed(() => fallbackMarkdownPreview.value);
     const activeDiffText = computed(() => {
       if (activeMediaPreview.value?.src) return '';
+      if (activeMarkdownPreview.value?.text) return '';
       const rawDiffText = (activeThreadDiffText.value || '').toString();
       const targetPath = (focusedDiffPath.value || '').toString().trim();
       if (!targetPath) return rawDiffText;
@@ -1148,6 +1219,7 @@ export const UnifiedChatPage = {
         focusedDiffLine.value = 0;
         fallbackDiffText.value = '';
         fallbackMediaPreview.value = null;
+        fallbackMarkdownPreview.value = null;
         if (!id) return;
         shouldAutoScroll.value = true;
         try {
@@ -1545,18 +1617,24 @@ export const UnifiedChatPage = {
         return;
       }
 
-      const selection = buildFocusedDiffSelection(diffText, rawPath);
+      const preferMarkdownPreview = isMarkdownPath(rawPath);
+      const selection = preferMarkdownPreview
+        ? null
+        : buildFocusedDiffSelection(diffText, rawPath);
       if (!selection) {
-        const crossThreadSelection = findCrossThreadDiffSelection(
-          props.threadStore?.state?.diffTextByThread,
-          rawPath,
-          threadId,
-        );
+        const crossThreadSelection = preferMarkdownPreview
+          ? null
+          : findCrossThreadDiffSelection(
+            props.threadStore?.state?.diffTextByThread,
+            rawPath,
+            threadId,
+          );
         if (crossThreadSelection?.path) {
           const targetThreadId = (crossThreadSelection.threadId || '').toString().trim();
           if (targetThreadId && targetThreadId !== threadId) {
             fallbackDiffText.value = '';
             fallbackMediaPreview.value = null;
+            fallbackMarkdownPreview.value = null;
             pendingFileRefFocus.value = {
               threadId: targetThreadId,
               path: crossThreadSelection.path,
@@ -1575,6 +1653,7 @@ export const UnifiedChatPage = {
           }
           fallbackDiffText.value = '';
           fallbackMediaPreview.value = null;
+          fallbackMarkdownPreview.value = null;
           focusedDiffPath.value = crossThreadSelection.path;
           focusedDiffLine.value = line;
           logInfo('ui', 'chat.diff.focus.recovered', {
@@ -1623,6 +1702,7 @@ export const UnifiedChatPage = {
           if (imagePreview) {
             fallbackDiffText.value = '';
             fallbackMediaPreview.value = imagePreview;
+            fallbackMarkdownPreview.value = null;
             focusedDiffPath.value = imagePreview.path || rawPath;
             focusedDiffLine.value = 0;
             logInfo('ui', 'chat.diff.focus.image_preview_applied', {
@@ -1636,11 +1716,31 @@ export const UnifiedChatPage = {
             return;
           }
 
+          const markdownPreview = buildMarkdownPreviewFromCodeOpen(codeOpenResult);
+          if (markdownPreview) {
+            fallbackDiffText.value = '';
+            fallbackMediaPreview.value = null;
+            fallbackMarkdownPreview.value = markdownPreview;
+            focusedDiffPath.value = markdownPreview.path || rawPath;
+            focusedDiffLine.value = line;
+            logInfo('ui', 'chat.diff.focus.markdown_preview_applied', {
+              thread_id: threadId,
+              requested_path: rawPath,
+              open_input_path: codeOpenInputPath,
+              resolved_path: markdownPreview.path || rawPath,
+              start_line: markdownPreview.startLine,
+              end_line: markdownPreview.endLine,
+              total_lines: markdownPreview.totalLines,
+            });
+            return;
+          }
+
           const syntheticDiff = buildSyntheticDiffFromCodeOpen(codeOpenResult);
           const resolvedPath = (codeOpenResult?.relative || codeOpenResult?.filePath || codeOpenInputPath || rawPath).toString().trim();
           if (syntheticDiff && resolvedPath) {
             fallbackDiffText.value = syntheticDiff;
             fallbackMediaPreview.value = null;
+            fallbackMarkdownPreview.value = null;
             focusedDiffPath.value = resolvedPath;
             focusedDiffLine.value = line;
             logInfo('ui', 'chat.diff.focus.code_open_applied', {
@@ -1689,6 +1789,7 @@ export const UnifiedChatPage = {
         // 回退：即使没有精确命中，也尝试以原始路径触发右侧 diff 聚焦。
         fallbackDiffText.value = '';
         fallbackMediaPreview.value = null;
+        fallbackMarkdownPreview.value = null;
         focusedDiffPath.value = rawPath;
         focusedDiffLine.value = line;
         logInfo('ui', 'chat.diff.focus.fallback_applied', {
@@ -1701,6 +1802,7 @@ export const UnifiedChatPage = {
 
       fallbackDiffText.value = '';
       fallbackMediaPreview.value = null;
+      fallbackMarkdownPreview.value = null;
       focusedDiffPath.value = selection.filename;
       focusedDiffLine.value = line;
       logInfo('ui', 'chat.diff.focus.applied', {
@@ -1957,6 +2059,7 @@ export const UnifiedChatPage = {
       activeTimeline,
       activeDiffText,
       activeMediaPreview,
+      activeMarkdownPreview,
       activeDiffFocusFile,
       activeDiffFocusLine,
       activeStatus,
@@ -2350,6 +2453,7 @@ export const UnifiedChatPage = {
                 <DiffPanel
                   :diff-text="activeDiffText"
                   :media-preview="activeMediaPreview"
+                  :markdown-preview="activeMarkdownPreview"
                   :focus-file="activeDiffFocusFile"
                   :focus-line="activeDiffFocusLine"
                 />

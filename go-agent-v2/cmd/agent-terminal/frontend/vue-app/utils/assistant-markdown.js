@@ -4,11 +4,32 @@ const RAW_URL_RE = /https?:\/\/[^\s<]+/gi;
 const BOLD_RE = /\*\*([^*]+)\*\*/g;
 const ITALIC_RE = /(^|[\s(（\["'])\*([^*\n]+)\*(?=[\s).，。！？、\]"']|$)/g;
 const HR_RE = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
-const FILE_REF_RE = /^(?<path>(?:[a-zA-Z]:[\\/])?[^#:\n][^#\n]*?)(?::(?<line>\d+)(?::(?<column>\d+))?(?:[-–](?<endLine>\d+)(?::(?<endColumn>\d+))?)?|#L(?<line2>\d+)(?:C(?<column2>\d+))?(?:-L(?<endLine2>\d+)(?:C(?<endColumn2>\d+))?)?)$/;
-const INLINE_FILE_REF_RE = /(^|[\s(（\["'])([^\s<>()]+(?::\d+(?::\d+)?|#L\d+(?:C\d+)?))(?=$|[\s).，。！？、\]"'])/g;
+const FILE_REF_COLON_RE = /^(?<path>.*?):(?<line>\d+)(?::(?<column>\d+))?(?:[-–](?<endLine>\d+)(?::(?<endColumn>\d+))?)?$/;
+const FILE_REF_HASH_RE = /^(?<path>.*?)#L(?<line>\d+)(?:C(?<column>\d+))?(?:-L(?<endLine>\d+)(?:C(?<endColumn>\d+))?)?$/;
+const INLINE_FILE_REF_RE = /(^|[\s(（\["'])([A-Za-z0-9_./\\][^\s<>()]*)(?=$|[\s).，。！？、\]"'])/g;
 const TABLE_DELIMITER_CELL_RE = /^:?-{2,}:?$/;
 const TABLE_DELIMITER_ROW_RE = /^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*(?:\s*:?-{2,}:?\s*)?\|?\s*$/;
 const CALLOUT_RE = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i;
+const FILE_REF_TRAILING_PUNCTUATION_RE = /[),.!?;:'"。，、！？；：）】》]+$/;
+const LONG_EXTENSION_ALLOWLIST = new Set([
+  'bashrc',
+  'dockerignore',
+  'editorconfig',
+  'eslintrc',
+  'gitignore',
+  'gitattributes',
+  'npmignore',
+  'prettierignore',
+  'prettierrc',
+  'terraform',
+  'workspace',
+]);
+const BARE_FILENAME_ALLOWLIST = new Set([
+  'dockerfile',
+  'makefile',
+  'readme',
+  'license',
+]);
 
 function escapeHtml(value) {
   return (value || '')
@@ -75,30 +96,48 @@ function stripTrailingPunctuation(url) {
 }
 
 export function parseInlineFileReference(rawText) {
-  const text = (rawText || '').toString().trim();
+  const text = (rawText || '').toString().trim().replace(FILE_REF_TRAILING_PUNCTUATION_RE, '');
   if (!text) return null;
-  const match = text.match(FILE_REF_RE);
-  if (!match || !match.groups) return null;
+  let pathRaw = text;
+  let line = 0;
+  let column = 0;
+  let endLine = 0;
+  let endColumn = 0;
 
-  const pathRaw = (match.groups.path || '').toString().trim();
+  const colonMatch = text.match(FILE_REF_COLON_RE);
+  const hashMatch = text.match(FILE_REF_HASH_RE);
+  const match = colonMatch || hashMatch;
+  if (match && match.groups) {
+    pathRaw = (match.groups.path || '').toString().trim();
+    line = Number.parseInt(match.groups.line || '0', 10) || 0;
+    column = Number.parseInt(match.groups.column || '0', 10) || 0;
+    endLine = Number.parseInt(match.groups.endLine || '0', 10) || 0;
+    endColumn = Number.parseInt(match.groups.endColumn || '0', 10) || 0;
+  }
   if (!pathRaw) return null;
   if (/^https?:\/\//i.test(pathRaw)) return null;
+  if (/^www\./i.test(pathRaw)) return null;
+  if (/^(mailto|tel):/i.test(pathRaw)) return null;
+
+  const hasLocation = line > 0 || column > 0 || endLine > 0 || endColumn > 0;
 
   const hasPathSeparator = /[\\/]/.test(pathRaw);
   const hasRelativePrefix = /^\.{1,2}[\\/]/.test(pathRaw);
-  const hasCodeLikeExtension = /\.[a-zA-Z][a-zA-Z0-9_-]{0,10}$/.test(pathRaw);
-  if (!hasPathSeparator && !hasRelativePrefix && !hasCodeLikeExtension) return null;
-
-  const lineRaw = match.groups.line || match.groups.line2 || '';
-  const line = Number(lineRaw);
-  if (!Number.isFinite(line) || line <= 0) return null;
-
-  const columnRaw = match.groups.column || match.groups.column2 || '';
-  const column = Number.isFinite(Number(columnRaw)) && Number(columnRaw) > 0 ? Number(columnRaw) : 0;
-  const endLineRaw = match.groups.endLine || match.groups.endLine2 || '';
-  const endColumnRaw = match.groups.endColumn || match.groups.endColumn2 || '';
-  const endLine = Number.isFinite(Number(endLineRaw)) && Number(endLineRaw) > 0 ? Number(endLineRaw) : 0;
-  const endColumn = Number.isFinite(Number(endColumnRaw)) && Number(endColumnRaw) > 0 ? Number(endColumnRaw) : 0;
+  const filename = pathRaw.split(/[\\/]/).filter(Boolean).pop() || pathRaw;
+  const extension = filename.includes('.') ? (filename.split('.').pop() || '') : '';
+  const hasCodeLikeExtension = /^[a-zA-Z][a-zA-Z0-9_-]{0,20}$/.test(extension);
+  const hasKnownBareFilename = BARE_FILENAME_ALLOWLIST.has(filename.toLowerCase());
+  if (!hasLocation && !hasPathSeparator && !hasRelativePrefix && !hasCodeLikeExtension && !hasKnownBareFilename) {
+    return null;
+  }
+  if (!hasLocation && hasCodeLikeExtension) {
+    const extLower = extension.toLowerCase();
+    const hasLower = /[a-z]/.test(extension);
+    const hasUpperAfterFirst = /[A-Z]/.test(extension.slice(1));
+    if (!hasPathSeparator && hasLower && hasUpperAfterFirst) return null;
+    if (!hasPathSeparator && extLower.length > 10 && !LONG_EXTENSION_ALLOWLIST.has(extLower)) return null;
+  }
+  if (!hasLocation && !hasCodeLikeExtension && !hasKnownBareFilename) return null;
 
   return {
     path: pathRaw,
@@ -147,7 +186,9 @@ function renderFileRefCode(rawRef, parsedFileRef) {
     ? `${parsedFileRef.path} (${location})`
     : `${parsedFileRef.path}`;
   const label = formatFileRefLabel(parsedFileRef) || rawRef;
-  return `<code class="chat-md-inline-code chat-md-file-ref is-file-ref" data-file-path="${escapeHtml(parsedFileRef.path)}" data-file-line="${parsedFileRef.line}" data-file-column="${parsedFileRef.column}" title="定位 ${escapeHtml(titleText)}">${escapeHtml(label)}</code>`;
+  const line = Number(parsedFileRef?.line) > 0 ? Number(parsedFileRef.line) : 1;
+  const column = Number(parsedFileRef?.column) > 0 ? Number(parsedFileRef.column) : 0;
+  return `<code class="chat-md-inline-code chat-md-file-ref is-file-ref" data-file-path="${escapeHtml(parsedFileRef.path)}" data-file-line="${line}" data-file-column="${column}" title="定位 ${escapeHtml(titleText)}">${escapeHtml(label)}</code>`;
 }
 
 function renderInlineLine(raw) {

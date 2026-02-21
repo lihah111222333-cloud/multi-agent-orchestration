@@ -175,14 +175,25 @@ export const ChatTimeline = {
     }
 
     function onAssistantBodyClick(event) {
-      const target = event?.target;
-      if (!target || typeof target.closest !== 'function') return;
-      const refNode = target.closest('.chat-md-inline-code.is-file-ref, .chat-md-file-ref');
+      const rawTarget = event?.target || null;
+      const target = rawTarget && rawTarget.nodeType === 3 ? rawTarget.parentElement : rawTarget;
+      let refNode = null;
+      if (target && typeof target.closest === 'function') {
+        refNode = target.closest('.chat-md-inline-code.is-file-ref, .chat-md-file-ref');
+      }
+      if (!refNode && typeof event?.composedPath === 'function') {
+        const path = event.composedPath();
+        refNode = path.find((node) => {
+          if (!node || !node.classList || typeof node.classList.contains !== 'function') return false;
+          return node.classList.contains('is-file-ref') || node.classList.contains('chat-md-file-ref');
+        }) || null;
+      }
       if (!refNode) return;
       const path = (refNode.getAttribute('data-file-path') || '').toString().trim();
-      const line = Number(refNode.getAttribute('data-file-line') || 0);
+      const lineRaw = Number(refNode.getAttribute('data-file-line') || 0);
+      const line = Number.isFinite(lineRaw) && lineRaw > 0 ? Math.floor(lineRaw) : 1;
       const column = Number(refNode.getAttribute('data-file-column') || 0);
-      if (!path || !Number.isFinite(line) || line <= 0) return;
+      if (!path) return;
       if (typeof event.preventDefault === 'function') event.preventDefault();
       if (typeof event.stopPropagation === 'function') event.stopPropagation();
       emit('file-ref-click', {
@@ -271,13 +282,12 @@ export const ChatTimeline = {
               <time class="chat-item-time">{{ formatTime(item.ts) }}</time>
             </header>
             <template v-if="item.kind === 'assistant'">
-              <pre class="chat-item-body chat-item-source">{{ item.text }}</pre>
               <div v-if="!itemHasSpec(item.text)"
-                class="chat-item-body chat-item-markdown chat-item-rendered codex-markdown-root"
+                class="chat-item-body chat-item-markdown codex-markdown-root"
                 v-html="renderAssistantBody(item.text)"
                 @click="onAssistantBodyClick"
               ></div>
-              <div v-else class="chat-item-body chat-item-markdown chat-item-rendered codex-markdown-root jr-mixed" @click="onAssistantBodyClick">
+              <div v-else class="chat-item-body chat-item-markdown codex-markdown-root jr-mixed" @click="onAssistantBodyClick">
                 <template v-for="(part, pIdx) in splitBySpec(item.text)" :key="pIdx">
                   <div v-if="part.type === 'text'" v-html="renderAssistantBody(part.content)"></div>
                   <JsonRenderer v-else-if="part.spec" :spec="part.spec" />

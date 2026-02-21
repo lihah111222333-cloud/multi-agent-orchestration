@@ -59,10 +59,29 @@ export const DiffPanel = {
         .toLowerCase();
     }
 
+    function baseName(path) {
+      const normalized = normalizePath(path);
+      if (!normalized) return '';
+      const segments = normalized.split('/').filter(Boolean);
+      return segments[segments.length - 1] || '';
+    }
+
+    function fileMatchesTarget(filePath, targetPath) {
+      const file = normalizePath(filePath);
+      const target = normalizePath(targetPath);
+      if (!file || !target) return false;
+      if (file === target) return true;
+      if (file.endsWith(`/${target}`)) return true;
+      if (target.endsWith(`/${file}`)) return true;
+      const fileBase = baseName(file);
+      const targetBase = baseName(target);
+      return Boolean(fileBase && targetBase && fileBase === targetBase);
+    }
+
     function isFocusedFile(file) {
       const target = normalizedFocusFile.value;
       if (!target) return false;
-      return normalizePath(file?.filename) === target;
+      return fileMatchesTarget(file?.filename, target);
     }
 
     function isFocusedLine(file, line) {

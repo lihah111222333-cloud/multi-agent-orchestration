@@ -2001,23 +2001,6 @@ a,
   white-space: pre-wrap;
 }
 
-.chat-item-source {
-  white-space: pre-wrap;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: linear-gradient(180deg, rgba(20, 20, 20, 0.7) 0%, rgba(14, 14, 14, 0.52) 100%);
-  color: rgba(244, 246, 249, 0.92);
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.chat-item-rendered {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px dashed rgba(255, 255, 255, 0.22);
-}
-
 .chat-item-markdown {
   white-space: normal;
   display: block;

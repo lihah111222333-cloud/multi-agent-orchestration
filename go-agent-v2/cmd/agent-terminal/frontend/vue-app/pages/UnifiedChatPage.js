@@ -1128,8 +1128,9 @@ export const UnifiedChatPage = {
       const threadId = (selectedThreadId.value || '').toString().trim();
       if (!threadId) return;
       const rawPath = (payload?.path || '').toString().trim();
-      const line = Number(payload?.line);
-      if (!rawPath || !Number.isFinite(line) || line <= 0) return;
+      const lineRaw = Number(payload?.line);
+      const line = Number.isFinite(lineRaw) && lineRaw > 0 ? Math.floor(lineRaw) : 1;
+      if (!rawPath) return;
 
       const selection = buildFocusedDiffSelection(activeThreadDiffText.value, rawPath);
       if (!selection) {
@@ -1138,15 +1139,18 @@ export const UnifiedChatPage = {
           path: rawPath,
           line,
         });
+        // 回退：即使没有精确命中，也尝试以原始路径触发右侧 diff 聚焦。
+        focusedDiffPath.value = rawPath;
+        focusedDiffLine.value = line;
         return;
       }
 
       focusedDiffPath.value = selection.filename;
-      focusedDiffLine.value = Math.floor(line);
+      focusedDiffLine.value = line;
       logDebug('ui', 'chat.diff.focused', {
         thread_id: threadId,
         path: selection.filename,
-        line: Math.floor(line),
+        line,
       });
     }
 

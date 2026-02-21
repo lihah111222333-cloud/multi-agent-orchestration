@@ -14,6 +14,7 @@ test('UnifiedChatPage separates archive list from active thread list with explic
   assert.equal(src.includes('function toggleArchivedThreadList() {'), true);
   assert.equal(src.includes('class="thread-rail-kind-icon"'), true);
   assert.equal(src.includes('class="thread-rail-count-chip"'), true);
+  assert.equal(src.includes('<path d="M10 3V5"></path>'), true);
   assert.equal(src.includes(":aria-label=\"showArchivedThreadList ? '返回会话列表' : '打开归档列表'\""), true);
   assert.equal(src.includes('v-for="thread in visibleChatThreadCards"'), true);
 });

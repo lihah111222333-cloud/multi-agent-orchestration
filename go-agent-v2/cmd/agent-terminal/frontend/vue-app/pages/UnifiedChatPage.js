@@ -1130,12 +1130,6 @@ export const UnifiedChatPage = {
       }
     }
 
-    async function loadCurrentHistory() {
-      const threadId = selectedThreadId.value;
-      if (!threadId) return;
-      await requestHistoryLoad(props.threadStore, threadId, { force: true, limit: 300 });
-    }
-
     function selectThread(threadId) {
       selectedThreadId.value = threadId;
     }
@@ -1738,7 +1732,6 @@ export const UnifiedChatPage = {
       interruptCurrent,
       compactCurrent,
       forceCompleteCurrent,
-      loadCurrentHistory,
       setCmdLayout,
       setCmdCardCols,
       copySelectedThreadId,
@@ -1801,7 +1794,6 @@ export const UnifiedChatPage = {
             <path d="M7.6 2.6l1.8 1.8"></path>
           </svg>
         </button>
-        <button class="btn btn-ghost btn-toolbar-sm" @click="loadCurrentHistory">加载历史</button>
         <button class="btn btn-ghost btn-toolbar-sm" @click="refreshAll">刷新</button>
         <button
           v-if="!isCmd && selectedThreadId"

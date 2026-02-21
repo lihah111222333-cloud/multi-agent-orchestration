@@ -75,6 +75,7 @@ func (s *Server) registerMethods() {
 	s.methods["skills/list"] = s.skillsList
 	s.methods["skills/local/read"] = typedHandler(s.skillsLocalReadTyped)
 	s.methods["skills/local/importDir"] = typedHandler(s.skillsLocalImportDirTyped)
+	s.methods["skills/local/delete"] = typedHandler(s.skillsLocalDeleteTyped)
 	s.methods["skills/remote/read"] = typedHandler(s.skillsRemoteReadTyped)
 	s.methods["skills/remote/write"] = typedHandler(s.skillsRemoteWriteTyped)
 	s.methods["skills/config/read"] = typedHandler(s.skillsConfigReadTyped)

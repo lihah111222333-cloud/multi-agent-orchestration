@@ -166,6 +166,7 @@ export const SkillsPage = {
     const saving = ref(false);
     const uploading = ref(false);
     const binding = ref(false);
+    const deletingSkillName = ref('');
     const inlineSummarySkillName = ref('');
     const inlineSummaryDraft = ref('');
     const inlineSummarySavingName = ref('');
@@ -344,6 +345,48 @@ export const SkillsPage = {
       } catch (error) {
         logWarn('skills', 'load.savedSkill.failed', { error, path: skillPath });
         setNotice('error', `读取技能失败：${error?.message || error}`);
+      }
+    }
+
+    function isDeletingSkill(name) {
+      return (deletingSkillName.value || '').toLowerCase() === (name || '').toString().toLowerCase();
+    }
+
+    async function onDeleteSkill(item) {
+      const skillName = (item?.name || '').toString().trim();
+      if (!skillName || deletingSkillName.value) return;
+      const confirmed = typeof window === 'undefined'
+        ? true
+        : window.confirm(`确定删除技能 "${skillName}" 吗？\n该操作会删除技能目录及其资源文件。`);
+      if (!confirmed) return;
+      deletingSkillName.value = skillName;
+      try {
+        await callAPI('skills/local/delete', { name: skillName });
+        const skillKey = skillName.toLowerCase();
+        threadSkills.value = threadSkills.value
+          .map((itemName) => (itemName || '').toString().trim())
+          .filter((itemName) => itemName && itemName.toLowerCase() !== skillKey);
+        if ((selectedSkillName.value || '').toLowerCase() === skillKey) {
+          selectedSkillName.value = '';
+        }
+        if ((form.name || '').toLowerCase() === skillKey) {
+          form.name = '';
+          form.description = '';
+          form.summary = '';
+          form.triggerWordsText = '';
+          form.forceWordsText = '';
+          form.body = '';
+          summarySource.value = '';
+          sourcePath.value = '';
+        }
+        cancelInlineSummaryEdit();
+        emit('refresh-skills');
+        setNotice('success', `技能已删除：${skillName}`);
+      } catch (error) {
+        logWarn('skills', 'delete.failed', { error, skill: skillName });
+        setNotice('error', `删除技能失败：${error?.message || error}`);
+      } finally {
+        deletingSkillName.value = '';
       }
     }
 
@@ -542,6 +585,7 @@ export const SkillsPage = {
       saving,
       uploading,
       binding,
+      deletingSkillName,
       form,
       threadOptions,
       skillCards,
@@ -556,6 +600,8 @@ export const SkillsPage = {
       cancelInlineSummaryEdit,
       saveInlineSummary,
       onInlineSummaryKeydown,
+      isDeletingSkill,
+      onDeleteSkill,
       toggleThreadSkill,
       loadThreadSkills,
     };
@@ -640,6 +686,9 @@ export const SkillsPage = {
                   <button class="btn btn-ghost btn-xs" @click="onEditSkill(item)">编辑详情</button>
                   <button class="btn btn-ghost btn-xs" :disabled="binding" @click="toggleThreadSkill(item.name)">
                     {{ threadSkills.some((s) => s.toLowerCase() === item.name.toLowerCase()) ? '移出会话' : '加入会话' }}
+                  </button>
+                  <button class="btn btn-ghost btn-xs btn-warning" :disabled="Boolean(deletingSkillName)" @click="onDeleteSkill(item)">
+                    {{ isDeletingSkill(item.name) ? '删除中...' : '删除' }}
                   </button>
                 </div>
               </article>

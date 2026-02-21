@@ -13,7 +13,7 @@ func TestMainPathMethods_StillRegisteredWhenOffline52Enabled(t *testing.T) {
 		"turn/start", "turn/interrupt",
 		"ui/state/get", "ui/dashboard/get", "ui/preferences/get", "ui/preferences/set",
 		"ui/projects/get", "ui/projects/setActive",
-		"skills/local/read", "skills/local/importDir", "skills/config/read", "skills/config/write", "skills/match/preview",
+		"skills/local/read", "skills/local/importDir", "skills/local/delete", "skills/config/read", "skills/config/write", "skills/match/preview",
 		"config/lspPromptHint/read", "config/lspPromptHint/write",
 		"config/jsonRenderPrompt/read", "config/jsonRenderPrompt/write",
 	}

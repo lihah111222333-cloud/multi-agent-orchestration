@@ -810,6 +810,64 @@ func TestSkillsConfigReadAndLocalRead(t *testing.T) {
 	}
 }
 
+func TestSkillsLocalDeleteTypedRemovesDirectoryAndThreadBindings(t *testing.T) {
+	destRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(destRoot, "backend"), 0o755); err != nil {
+		t.Fatalf("mkdir backend dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destRoot, "backend", "SKILL.md"), []byte("# backend"), 0o644); err != nil {
+		t.Fatalf("write backend SKILL.md: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(destRoot, "ops"), 0o755); err != nil {
+		t.Fatalf("mkdir ops dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destRoot, "ops", "SKILL.md"), []byte("# ops"), 0o644); err != nil {
+		t.Fatalf("write ops SKILL.md: %v", err)
+	}
+
+	srv := &Server{
+		skillsDir: destRoot,
+		agentSkills: map[string][]string{
+			"thread-1": {"backend", "ops"},
+			"thread-2": {"BACKEND", "review"},
+			"thread-3": {"ops"},
+		},
+	}
+
+	raw, err := srv.skillsLocalDeleteTyped(context.Background(), skillsLocalDeleteParams{Name: "backend"})
+	if err != nil {
+		t.Fatalf("skillsLocalDeleteTyped error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	if ok, _ := resp["ok"].(bool); !ok {
+		t.Fatalf("delete response ok=%v, want=true", resp["ok"])
+	}
+	if removed, _ := resp["removed_agent_bindings"].(int); removed != 2 {
+		t.Fatalf("removed_agent_bindings=%v, want=2", resp["removed_agent_bindings"])
+	}
+
+	if _, err := os.Stat(filepath.Join(destRoot, "backend")); !os.IsNotExist(err) {
+		t.Fatalf("backend directory should be removed, stat err=%v", err)
+	}
+	if got := srv.GetAgentSkills("thread-1"); !reflect.DeepEqual(got, []string{"ops"}) {
+		t.Fatalf("thread-1 skills=%v, want=[ops]", got)
+	}
+	if got := srv.GetAgentSkills("thread-2"); !reflect.DeepEqual(got, []string{"review"}) {
+		t.Fatalf("thread-2 skills=%v, want=[review]", got)
+	}
+	if got := srv.GetAgentSkills("thread-3"); !reflect.DeepEqual(got, []string{"ops"}) {
+		t.Fatalf("thread-3 skills=%v, want=[ops]", got)
+	}
+}
+
+func TestSkillsLocalDeleteTypedReturnsNotFound(t *testing.T) {
+	srv := &Server{skillsDir: t.TempDir(), agentSkills: make(map[string][]string)}
+	_, err := srv.skillsLocalDeleteTyped(context.Background(), skillsLocalDeleteParams{Name: "missing"})
+	if err == nil {
+		t.Fatal("skillsLocalDeleteTyped should fail for missing skill")
+	}
+}
+
 func TestSkillsLocalImportDirCopiesWholeDirectory(t *testing.T) {
 	sourceRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(sourceRoot, "SKILL.md"), []byte("# Skill"), 0o644); err != nil {

@@ -60,7 +60,7 @@ func (s *Server) appList(_ context.Context, _ json.RawMessage) (any, error) {
 }
 
 // ========================================
-// skills/local/read, skills/local/importDir
+// skills/local/read, skills/local/importDir, skills/local/delete
 // ========================================
 
 type skillsLocalReadParams struct {
@@ -77,6 +77,10 @@ type skillsLocalImportDirParams struct {
 	Path  string   `json:"path"`
 	Paths []string `json:"paths,omitempty"`
 	Name  string   `json:"name,omitempty"`
+}
+
+type skillsLocalDeleteParams struct {
+	Name string `json:"name"`
 }
 
 type skillImportStats struct {
@@ -441,6 +445,67 @@ func (s *Server) skillsLocalImportDirTyped(_ context.Context, p skillsLocalImpor
 		},
 		"skills":   skillsPayload,
 		"failures": failuresPayload,
+	}, nil
+}
+
+func (s *Server) skillsLocalDeleteTyped(_ context.Context, p skillsLocalDeleteParams) (any, error) {
+	skillName, err := normalizeSkillName(p.Name)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsLocalDelete", "normalize skill name")
+	}
+	targetDir := filepath.Join(s.skillsDirectory(), skillName)
+	info, err := os.Stat(targetDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, apperrors.Newf("Server.skillsLocalDelete", "skill not found: %s", skillName)
+		}
+		return nil, apperrors.Wrap(err, "Server.skillsLocalDelete", "stat skill dir")
+	}
+	if !info.IsDir() {
+		return nil, apperrors.Newf("Server.skillsLocalDelete", "skill path is not directory: %s", targetDir)
+	}
+	if err := os.RemoveAll(targetDir); err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsLocalDelete", "remove skill dir")
+	}
+
+	removedBindings := 0
+	skillsKey := strings.ToLower(skillName)
+	s.skillsMu.Lock()
+	for agentID, skills := range s.agentSkills {
+		if len(skills) == 0 {
+			continue
+		}
+		next := make([]string, 0, len(skills))
+		changed := false
+		for _, item := range skills {
+			if strings.ToLower(strings.TrimSpace(item)) == skillsKey {
+				changed = true
+				continue
+			}
+			next = append(next, item)
+		}
+		if !changed {
+			continue
+		}
+		removedBindings++
+		if len(next) == 0 {
+			delete(s.agentSkills, agentID)
+			continue
+		}
+		s.agentSkills[agentID] = next
+	}
+	s.skillsMu.Unlock()
+
+	logger.Info("skills/local/delete: removed",
+		logger.FieldSkill, skillName,
+		logger.FieldPath, targetDir,
+		"removed_agent_bindings", removedBindings,
+	)
+	return map[string]any{
+		"ok":                     true,
+		"name":                   skillName,
+		"dir":                    targetDir,
+		"removed_agent_bindings": removedBindings,
 	}, nil
 }
 

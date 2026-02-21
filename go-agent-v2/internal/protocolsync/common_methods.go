@@ -28,18 +28,22 @@ func (c MethodCatalog) All() map[string]struct{} {
 	return out
 }
 
+// Deprecated: SortedServerRequests 无外部调用者。
 func (c MethodCatalog) SortedServerRequests() []string {
 	return sortedKeys(c.ServerRequests)
 }
 
+// Deprecated: SortedServerNotifications 无外部调用者。
 func (c MethodCatalog) SortedServerNotifications() []string {
 	return sortedKeys(c.ServerNotifications)
 }
 
+// Deprecated: SortedAll 无外部调用者。
 func (c MethodCatalog) SortedAll() []string {
 	return sortedKeys(c.All())
 }
 
+// Deprecated: LoadDefaultMethodCatalog 无外部调用者。
 func LoadDefaultMethodCatalog() (MethodCatalog, string, error) {
 	commonPath, err := FindProtocolCommonPath()
 	if err != nil {

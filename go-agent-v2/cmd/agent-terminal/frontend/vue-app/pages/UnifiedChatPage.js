@@ -36,21 +36,77 @@ import { useComposerStore } from '../stores/composer.js';
  */
 
 /**
+ * @typedef {Object} DiffLine
+ * @property {string} type
+ * @property {string} text
+ * @property {string | number} [oldNo]
+ * @property {string | number} [newNo]
+ */
+
+/**
+ * @typedef {Object} DiffFile
+ * @property {string} filename
+ * @property {DiffLine[]} lines
+ */
+
+/**
+ * @typedef {Object} FocusedDiffSelection
+ * @property {string} filename
+ * @property {string} diffText
+ */
+
+/**
+ * @typedef {Object} CrossThreadDiffSelection
+ * @property {string} threadId
+ * @property {string} path
+ */
+
+/**
+ * @typedef {Object} CodeOpenSnippetLine
+ * @property {number} [line]
+ * @property {string} [text]
+ */
+
+/**
+ * @typedef {Object} CodeOpenResult
+ * @property {boolean} [ok]
+ * @property {string} [relative]
+ * @property {string} [filePath]
+ * @property {number} [startLine]
+ * @property {number} [endLine]
+ * @property {string | CodeOpenSnippetLine[]} [snippet]
+ */
+
+/**
+ * @typedef {Object} PendingFileRefFocus
+ * @property {string} threadId
+ * @property {string} path
+ * @property {number} line
+ * @property {string} requestedPath
+ */
+
+/**
+ * @typedef {Object} ProcessActivityItem
+ * @property {string} id
+ * @property {string} time
+ * @property {string} message
+ * @property {'active' | 'done'} status
+ * @property {boolean} [multiline]
+ */
+
+/**
+ * @typedef {Object} ThreadIdentityInfo
+ * @property {string} [codexThreadId]
+ * @property {number | string | null} [port]
+ */
+
+/**
  * @param {{ loadMessages?: (threadId: string, limit?: number) => Promise<any>, getThreadTimeline?: (threadId: string) => any[] }} threadStore
  * @param {string} threadId
- * @param {{ force?: boolean, limit?: number }} [options]
  */
-export async function requestHistoryLoad(threadStore, threadId, options = {}) {
+export async function requestHistoryLoad(threadStore, threadId) {
   if (!threadId || typeof threadStore?.loadMessages !== 'function') {
     return false;
-  }
-
-  const opts = /** @type {{ force?: boolean, limit?: number }} */ (options || {});
-
-  if (opts.force) {
-    const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : 300;
-    await threadStore.loadMessages(threadId, limit);
-    return true;
   }
 
   // 如果 timeline 已有数据, 跳过重复加载
@@ -63,6 +119,10 @@ export async function requestHistoryLoad(threadStore, threadId, options = {}) {
   return true;
 }
 
+/**
+ * @param {string} rawPath
+ * @returns {string}
+ */
 function normalizeDiffPath(rawPath) {
   return (rawPath || '')
     .toString()
@@ -73,6 +133,10 @@ function normalizeDiffPath(rawPath) {
     .toLowerCase();
 }
 
+/**
+ * @param {string} path
+ * @returns {string}
+ */
 function basename(path) {
   const normalized = normalizeDiffPath(path);
   if (!normalized) return '';
@@ -80,9 +144,15 @@ function basename(path) {
   return segments[segments.length - 1] || '';
 }
 
+/**
+ * @param {DiffFile[] | null | undefined} files
+ * @param {string} targetPath
+ * @returns {DiffFile | null}
+ */
 function pickDiffFile(files, targetPath) {
   const target = normalizeDiffPath(targetPath);
   if (!target || !Array.isArray(files) || files.length === 0) return null;
+  /** @type {DiffFile | null} */
   let best = null;
   let bestScore = -1;
   files.forEach((file) => {
@@ -111,6 +181,10 @@ function pickDiffFile(files, targetPath) {
   return best;
 }
 
+/**
+ * @param {DiffFile | null | undefined} file
+ * @returns {string}
+ */
 function serializeDiffFile(file) {
   if (!file || typeof file !== 'object') return '';
   const filename = (file.filename || '').toString().trim();
@@ -147,6 +221,11 @@ function serializeDiffFile(file) {
   return out.join('\n');
 }
 
+/**
+ * @param {string} rawDiffText
+ * @param {string} targetPath
+ * @returns {FocusedDiffSelection | null}
+ */
 function buildFocusedDiffSelection(rawDiffText, targetPath) {
   const text = (rawDiffText || '').toString().trim();
   if (!text) return null;
@@ -161,6 +240,10 @@ function buildFocusedDiffSelection(rawDiffText, targetPath) {
   };
 }
 
+/**
+ * @param {CodeOpenResult | null | undefined} codeOpenResult
+ * @returns {string}
+ */
 function buildSyntheticDiffFromCodeOpen(codeOpenResult) {
   const path = (codeOpenResult?.relative || codeOpenResult?.filePath || '').toString().trim();
   if (!path) return '';
@@ -184,6 +267,11 @@ function buildSyntheticDiffFromCodeOpen(codeOpenResult) {
   ].join('\n');
 }
 
+/**
+ * @param {string} targetPath
+ * @param {string} candidatePath
+ * @returns {number}
+ */
 function scoreDiffPathMatch(targetPath, candidatePath) {
   const target = normalizeDiffPath(targetPath);
   const candidate = normalizeDiffPath(candidatePath);
@@ -199,9 +287,16 @@ function scoreDiffPathMatch(targetPath, candidatePath) {
   return -1;
 }
 
+/**
+ * @param {Record<string, string> | null | undefined} diffTextByThread
+ * @param {string} targetPath
+ * @param {string} [preferredThreadId]
+ * @returns {CrossThreadDiffSelection | null}
+ */
 function findCrossThreadDiffSelection(diffTextByThread, targetPath, preferredThreadId = '') {
   const target = normalizeDiffPath(targetPath);
   if (!target || !diffTextByThread || typeof diffTextByThread !== 'object') return null;
+  /** @type {CrossThreadDiffSelection | null} */
   let best = null;
   let bestScore = -1;
   for (const [threadIdRaw, rawDiffText] of Object.entries(diffTextByThread)) {
@@ -242,6 +337,13 @@ export const UnifiedChatPage = {
     threadStore: { type: Object, required: true },
     mode: { type: String, default: 'chat' },
   },
+  /**
+   * @param {{
+   *  projectStore: any,
+   *  threadStore: any,
+   *  mode?: string,
+   * }} props
+   */
   setup(props) {
     const composer = useComposerStore();
     const composerBarRef = ref(null);
@@ -250,7 +352,8 @@ export const UnifiedChatPage = {
     const composerSkillPreviewLoading = ref(false);
     let composerSkillPreviewTimer = 0;
     let composerSkillPreviewSeq = 0;
-    let composerSkillPreviewQueued = /** @type {SkillPreviewQueuedRequest | null} */ (null);
+    /** @type {SkillPreviewQueuedRequest | null} */
+    let composerSkillPreviewQueued = null;
     let composerSkillPreviewLastSignature = '';
     let composerSkillPreviewLastWarnAt = 0;
     const workspaceRef = ref(null);
@@ -264,7 +367,7 @@ export const UnifiedChatPage = {
     const renameInputRefByThread = new Map();
     const focusedDiffPath = ref('');
     const focusedDiffLine = ref(0);
-    const pendingFileRefFocus = ref(null);
+    const pendingFileRefFocus = /** @type {{ value: PendingFileRefFocus | null }} */ (ref(null));
     const fallbackDiffText = ref('');
 
     const isCmd = computed(() => props.mode === 'cmd');
@@ -272,13 +375,13 @@ export const UnifiedChatPage = {
 
     const layoutMode = computed({
       get: () => props.threadStore.getLayout(modeKey.value),
-      set: (value) => props.threadStore.setLayout(modeKey.value, value),
+      set: (/** @type {string} */ value) => props.threadStore.setLayout(modeKey.value, value),
     });
     const cmdCardCols = computed({
       get: () => (typeof props.threadStore.getCmdCardCols === 'function'
         ? props.threadStore.getCmdCardCols()
         : 3),
-      set: (value) => {
+      set: (/** @type {number} */ value) => {
         if (typeof props.threadStore.setCmdCardCols === 'function') {
           props.threadStore.setCmdCardCols(value);
         }
@@ -292,7 +395,7 @@ export const UnifiedChatPage = {
 
     const selectedThreadId = computed({
       get: () => props.threadStore.getCurrentThreadId(modeKey.value) || '',
-      set: (value) => {
+      set: (/** @type {string} */ value) => {
         if (isCmd.value) {
           props.threadStore.saveActiveCmdThread(value || '');
         } else {
@@ -301,14 +404,14 @@ export const UnifiedChatPage = {
       },
     });
 
-    const activeThread = computed(() => threads.value.find((item) => item.id === selectedThreadId.value) || null);
+    const activeThread = computed(() => threads.value.find((/** @type {any} */ item) => item.id === selectedThreadId.value) || null);
     const chatThreadOptions = computed(() => {
       if (isCmd.value) return [];
       return threads.value;
     });
     const chatThreadCards = computed(() => {
       if (isCmd.value) return [];
-      const cards = chatThreadOptions.value.map((thread) => {
+      const cards = chatThreadOptions.value.map((/** @type {any} */ thread) => {
         const threadID = thread.id;
         const displayName = (props.threadStore.displayName(thread) || '').toString().trim() || threadID;
         const pinnedAt = (typeof props.threadStore.getThreadPinnedAt === 'function')
@@ -333,20 +436,20 @@ export const UnifiedChatPage = {
           isMain: threadID === mainAgentId.value,
         };
       });
-      return cards.sort((left, right) => {
+      return cards.sort((/** @type {any} */ left, /** @type {any} */ right) => {
         const leftArchived = left.isArchived ? 1 : 0;
         const rightArchived = right.isArchived ? 1 : 0;
         return leftArchived - rightArchived;
       });
     });
     const showArchivedThreadList = ref(false);
-    const chatActiveThreadCards = computed(() => chatThreadCards.value.filter((thread) => !thread.isArchived));
-    const chatArchivedThreadCards = computed(() => chatThreadCards.value.filter((thread) => thread.isArchived));
+    const chatActiveThreadCards = computed(() => chatThreadCards.value.filter((/** @type {any} */ thread) => !thread.isArchived));
+    const chatArchivedThreadCards = computed(() => chatThreadCards.value.filter((/** @type {any} */ thread) => thread.isArchived));
     const visibleChatThreadCards = computed(() => (
       showArchivedThreadList.value ? chatArchivedThreadCards.value : chatActiveThreadCards.value
     ));
-    const activeChatThreadCount = computed(() => chatThreadCards.value.filter((thread) => !thread.isArchived).length);
-    const archivedChatThreadCount = computed(() => chatThreadCards.value.filter((thread) => thread.isArchived).length);
+    const activeChatThreadCount = computed(() => chatThreadCards.value.filter((/** @type {any} */ thread) => !thread.isArchived).length);
+    const archivedChatThreadCount = computed(() => chatThreadCards.value.filter((/** @type {any} */ thread) => thread.isArchived).length);
 
     const activeTimeline = computed(() => props.threadStore.getThreadTimeline(selectedThreadId.value));
     const activeThreadDiffText = computed(() => props.threadStore.getThreadDiff(selectedThreadId.value));
@@ -369,11 +472,19 @@ export const UnifiedChatPage = {
     });
     const activeStatus = computed(() => normalizeStatus(props.threadStore.getThreadStatus(selectedThreadId.value)));
     const dismissedPlanKeyByThread = ref({});
+    /**
+     * @param {string} threadId
+     * @returns {boolean}
+     */
     function isThreadInterruptible(threadId) {
       if (!threadId) return false;
       if (typeof props.threadStore.getThreadInterruptible !== 'function') return false;
       return Boolean(props.threadStore.getThreadInterruptible(threadId));
     }
+    /**
+     * @param {string} threadId
+     * @returns {string}
+     */
     function getThreadStatusHeader(threadId) {
       if (!threadId) return '';
       if (typeof props.threadStore.getThreadStatusHeader !== 'function') return '';
@@ -409,6 +520,10 @@ export const UnifiedChatPage = {
       if (typeof props.threadStore.getThreadAlerts !== 'function') return [];
       return props.threadStore.getThreadAlerts(selectedThreadId.value);
     });
+    /**
+     * @param {string | number | Date | null | undefined} ts
+     * @returns {string}
+     */
     function formatTimelineTime(ts) {
       const raw = (ts || '').toString().trim();
       if (!raw) return '';
@@ -419,6 +534,11 @@ export const UnifiedChatPage = {
         minute: '2-digit',
       });
     }
+    /**
+     * @param {any} item
+     * @param {number} index
+     * @returns {ProcessActivityItem | null}
+     */
     function toProcessActivityItem(item, index) {
       if (!item || typeof item !== 'object') return null;
       const kind = (item.kind || '').toString().trim();
@@ -455,7 +575,7 @@ export const UnifiedChatPage = {
     }
     const activeProcessActivity = computed(() => {
       const list = Array.isArray(activeTimeline.value) ? activeTimeline.value : [];
-      const items = [];
+      const items = /** @type {ProcessActivityItem[]} */ ([]);
       let lastSignature = '';
       for (let index = 0; index < list.length; index += 1) {
         const entry = toProcessActivityItem(list[index], index);
@@ -1136,10 +1256,6 @@ export const UnifiedChatPage = {
       selectedThreadId.value = threadId;
     }
 
-    function refreshAll() {
-      props.threadStore.refreshThreads();
-    }
-
     function stopSelected() {
       const threadId = (selectedThreadId.value || '').toString().trim();
       if (!threadId) return;
@@ -1376,8 +1492,10 @@ export const UnifiedChatPage = {
         if (!/[\\/]/.test(rawPath) && /\.log$/i.test(rawPath)) {
           codeOpenCandidates.push(`logs/${rawPath}`);
         }
+        /** @type {CodeOpenResult | null} */
         let codeOpenResult = null;
         let codeOpenInputPath = '';
+        /** @type {unknown} */
         let codeOpenError = null;
         for (const candidatePath of codeOpenCandidates) {
           try {
@@ -1475,8 +1593,9 @@ export const UnifiedChatPage = {
     async function copySelectedThreadId() {
       const threadId = (selectedThreadId.value || '').toString();
       if (!threadId) return;
-      const runtime = activeRuntime.value || {};
-      let resolved = /** @type {{ codexThreadId?: string, port?: number | string }} */ ({});
+      const runtime = /** @type {ThreadIdentityInfo} */ (activeRuntime.value || {});
+      /** @type {ThreadIdentityInfo} */
+      let resolved = {};
       const existingCodexThreadID = (runtime.codexThreadId || '').toString().trim();
       if (!existingCodexThreadID) {
         try {
@@ -1740,7 +1859,6 @@ export const UnifiedChatPage = {
       timelinePreview,
       diffPreview,
       onResizeStart,
-      refreshAll,
       stopSelected,
       renameSelected,
       setMainSelected,
@@ -1810,7 +1928,6 @@ export const UnifiedChatPage = {
             <path d="M7.6 2.6l1.8 1.8"></path>
           </svg>
         </button>
-        <button class="btn btn-ghost btn-toolbar-sm" @click="refreshAll">刷新</button>
         <button
           v-if="!isCmd && selectedThreadId"
           class="btn btn-ghost btn-xs"

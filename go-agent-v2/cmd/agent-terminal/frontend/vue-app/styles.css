@@ -3549,6 +3549,14 @@ a,
   white-space: nowrap;
 }
 
+.alert-msg-wrap {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .alert-line.alert-error .alert-icon,
 .alert-line.alert-error .alert-msg {
   color: var(--error);

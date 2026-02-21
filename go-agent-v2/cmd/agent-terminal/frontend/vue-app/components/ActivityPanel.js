@@ -14,7 +14,7 @@ export const ActivityPanel = {
     stats: { type: Object, default: () => ({}) },
     /** @type {Array<{ id: string, time: string, level: string, message: string }>} */
     alerts: { type: Array, default: () => [] },
-    /** @type {Array<{ id: string, time: string, message: string, status: string }>} */
+    /** @type {Array<{ id: string, time: string, message: string, status: string, multiline?: boolean }>} */
     processEvents: { type: Array, default: () => [] },
   },
   setup(props) {
@@ -134,7 +134,7 @@ export const ActivityPanel = {
           >
             <span class="alert-time">{{ entry.time }}</span>
             <span class="alert-icon">{{ processIcon(entry.status) }}</span>
-            <span class="alert-msg">{{ entry.message }}</span>
+            <span class="alert-msg" :class="{ 'alert-msg-wrap': Boolean(entry.multiline) }">{{ entry.message }}</span>
           </div>
         </template>
         <template v-if="hasAlerts">

@@ -434,12 +434,14 @@ export const UnifiedChatPage = {
       }
       if (kind === 'command') {
         const status = (item.status || '').toString().trim().toLowerCase();
+        const commandText = (item.command || '').toString().trim();
         if (status === 'running') {
           return {
             id: (item.id || `${kind}-${index}`).toString(),
             time: formatTimelineTime(item.ts),
-            message: '命令执行中',
+            message: commandText ? `命令执行中\n$ ${commandText}` : '命令执行中',
             status: 'active',
+            multiline: Boolean(commandText),
           };
         }
         return {

@@ -25,7 +25,7 @@ func (s *BusLogStore) Record(ctx context.Context, e *BusException) error {
 	if err != nil {
 		logger.Debugw("bus_log write failed", logger.FieldError, err)
 	}
-	return nil
+	return err
 }
 
 // List 查询异常日志。

@@ -116,16 +116,18 @@ type AppServerClient struct {
 	legacyMirrorDropCount atomic.Int64
 }
 
-const appServerStartupProbeTimeout = 30 * time.Second
-const appServerWriteTimeout = 10 * time.Second
-const appServerPingInterval = 25 * time.Second
-const appServerInterruptTimeout = 30 * time.Second
-const appServerListenerEnsureTimeout = 10 * time.Second
-const appServerReconnectBaseDelay = 300 * time.Millisecond
-const appServerReconnectMaxDelay = 3 * time.Second
-const defaultAppServerReadIdleTimeout = 600 * time.Second
-const defaultAppServerStreamMaxRetries = 5
-const maxAppServerStreamMaxRetries = 100
+const (
+	appServerStartupProbeTimeout     = 30 * time.Second
+	appServerWriteTimeout            = 10 * time.Second
+	appServerPingInterval            = 25 * time.Second
+	appServerInterruptTimeout        = 30 * time.Second
+	appServerListenerEnsureTimeout   = 10 * time.Second
+	appServerReconnectBaseDelay      = 300 * time.Millisecond
+	appServerReconnectMaxDelay       = 3 * time.Second
+	defaultAppServerReadIdleTimeout  = 600 * time.Second
+	defaultAppServerStreamMaxRetries = 5
+	maxAppServerStreamMaxRetries     = 100
+)
 
 var appServerReadIdleTimeout = appServerReadIdleTimeoutFromEnv()
 var appServerStreamMaxRetries = appServerStreamMaxRetriesFromEnv()

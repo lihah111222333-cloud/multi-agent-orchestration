@@ -46,10 +46,15 @@ func extractFirstString(payload map[string]any, keys ...string) string {
 	return ""
 }
 
-// handleApprovalRequest 处理审批事件: Server→Client 请求 → 等回复 → 回传 codex。
+// handleApprovalRequest 处理审批事件: 双通道模式。
+//
+// 优先尝试 WebSocket (SendRequestToAll) — 适用于 IDE 客户端。
+// 若无 WebSocket 连接, 降级为 Wails 模式:
+//  1. AllocPendingRequest 分配 pending ID
+//  2. broadcastNotification 推送审批请求 (→ notifyHook → Wails Event → 前端)
+//  3. 等待前端 CallAPI("approval/respond") → ResolvePendingRequest 写入 channel
 func (s *Server) handleApprovalRequest(agentID, method string, payload map[string]any, event codex.Event) {
 	// 心跳: 防止 stall 检测在等待审批期间误杀
-	// 使用 stallThreshold/6 而非 stallHeartbeat，确保在 stall 阈值内多次 touch。
 	heartbeatDone := make(chan struct{})
 	defer close(heartbeatDone)
 	hbInterval := s.stallThreshold / 6
@@ -73,14 +78,59 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 	})
 
 	approved := false
-	resp, err := s.SendRequestToAll(method, payload)
-	if err != nil {
-		logger.Warn("app-server: approval request failed", logger.FieldAgentID, agentID, logger.FieldError, err)
-	} else if resp != nil && resp.Result != nil {
+
+	// 尝试 WebSocket 通道 (IDE 客户端)
+	resp, wsErr := s.SendRequestToAll(method, payload)
+	if wsErr == nil && resp != nil && resp.Result != nil {
+		// WebSocket 客户端已回复
 		if m, ok := resp.Result.(map[string]any); ok {
 			if v, ok := m["approved"]; ok {
 				approved, _ = v.(bool)
 			}
+		}
+	} else {
+		// 降级: Wails 模式 — 通过 broadcastNotification + pending channel
+		// 仅在有 notifyHook (Wails 前端) 时才等待, 否则直接跳过 (approved=false → deny)
+		s.notifyHookMu.RLock()
+		hasHook := s.notifyHook != nil
+		s.notifyHookMu.RUnlock()
+
+		if hasHook {
+			logger.Info("app-server: approval via Wails mode (no WS client)",
+				logger.FieldAgentID, agentID, logger.FieldMethod, method)
+
+			reqID, ch, cleanup := s.AllocPendingRequest()
+			defer cleanup()
+
+			// 注入 requestId, 前端据此回复
+			if payload == nil {
+				payload = make(map[string]any)
+			}
+			payload["requestId"] = reqID
+
+			// 推送审批请求到前端 (→ notifyHook → Wails Event)
+			s.broadcastNotification(method, payload)
+
+			// 等待前端回复 (5 分钟超时)
+			timer := time.NewTimer(5 * time.Minute)
+			defer timer.Stop()
+			select {
+			case wailsResp := <-ch:
+				if wailsResp != nil && wailsResp.Result != nil {
+					if m, ok := wailsResp.Result.(map[string]any); ok {
+						if v, ok := m["approved"]; ok {
+							approved, _ = v.(bool)
+						}
+					}
+				}
+			case <-timer.C:
+				logger.Warn("app-server: approval timed out (Wails mode)",
+					logger.FieldAgentID, agentID, logger.FieldMethod, method)
+			}
+		} else {
+			// 无前端连接: 无法交互, 自动拒绝
+			logger.Warn("app-server: approval auto-denied — no WS client and no notifyHook",
+				logger.FieldAgentID, agentID, logger.FieldMethod, method)
 		}
 	}
 

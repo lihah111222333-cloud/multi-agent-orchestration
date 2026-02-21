@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Codex.app — UI Shell Preview</title>
+    <link rel="stylesheet" href="src/renderer/styles/index.css">
+    <style>
+        /* Shell-specific overrides for standalone preview */
+        body { overflow: hidden; }
+
+        /* Page tab bar */
+        .page-tabs {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 10000;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            padding: 0 12px;
+            background: #111113;
+            border-bottom: 1px solid var(--token-border);
+            font-size: 11px;
+            font-family: var(--font-sans);
+            user-select: none;
+        }
+        .page-tabs button {
+            padding: 4px 12px;
+            border: none;
+            background: transparent;
+            color: var(--token-description-foreground);
+            cursor: pointer;
+            border-radius: 4px 4px 0 0;
+            font-size: 11px;
+            font-family: var(--font-sans);
+            transition: all 150ms;
+        }
+        .page-tabs button:hover { color: var(--token-foreground); background: rgba(255,255,255,0.04); }
+        .page-tabs button.active { color: var(--token-foreground); background: var(--token-background); font-weight: 500; }
+        .page-tabs .tab-label { font-size: 11px; opacity: 0.5; margin-right: 8px; pointer-events: none; }
+
+        /* Theme toggle */
+        .theme-toggle {
+            margin-left: auto;
+            padding: 3px 10px;
+            font-size: 11px;
+            border-radius: 4px;
+            border: 1px solid var(--token-border);
+            background: transparent;
+            color: var(--token-description-foreground);
+            cursor: pointer;
+            font-family: var(--font-sans);
+        }
+        .theme-toggle:hover { color: var(--token-foreground); }
+
+        /* Shell container offset */
+        .shell-container {
+            margin-top: 32px;
+            height: calc(100% - 32px);
+        }
+
+        .page { display: none; height: 100%; }
+        .page.active { display: flex; flex-direction: column; }
+        .page-with-sidebar.active { display: flex; flex-direction: row; }
+
+        /* Chat bubble shimmer */
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+        .shimmer-line {
+            height: 12px;
+            border-radius: 6px;
+            background: linear-gradient(90deg, rgba(228,228,231,0.06) 25%, rgba(228,228,231,0.12) 50%, rgba(228,228,231,0.06) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s ease-in-out infinite;
+        }
+
+        /* Streaming cursor blink */
+        @keyframes cursor-blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+        .typing-cursor {
+            display: inline-block;
+            width: 2px; height: 14px;
+            background: var(--token-primary);
+            margin-left: 2px;
+            animation: cursor-blink 1s step-end infinite;
+            vertical-align: text-bottom;
+        }
+
+        /* Dot pulse for streaming indicator */
+        .dot-pulse { display: inline-flex; gap: 4px; align-items: center; }
+        .dot-pulse span {
+            width: 5px; height: 5px;
+            border-radius: 50%;
+            background: var(--token-primary);
+            animation: pulse 1.4s ease-in-out infinite;
+        }
+        .dot-pulse span:nth-child(2) { animation-delay: 0.2s; }
+        .dot-pulse span:nth-child(3) { animation-delay: 0.4s; }
+
+        /* Code block in chat */
+        .mock-code-block {
+            background: var(--token-editor-background);
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-family: var(--font-mono);
+            font-size: 13px;
+            line-height: 1.6;
+            overflow-x: auto;
+            margin: 8px 0;
+        }
+        .mock-code-block .kw { color: #c678dd; }
+        .mock-code-block .fn { color: #61afef; }
+        .mock-code-block .str { color: #98c379; }
+        .mock-code-block .cm { color: #5c6370; font-style: italic; }
+        .mock-code-block .num { color: #d19a66; }
+
+        /* Settings form elements */
+        .settings-select {
+            background: var(--token-input-background);
+            border: 1px solid var(--token-input-border);
+            border-radius: 6px;
+            padding: 6px 12px;
+            color: var(--token-input-foreground);
+            font-size: 13px;
+            font-family: var(--font-sans);
+            outline: none;
+            min-width: 200px;
+        }
+        .settings-select:focus { border-color: var(--token-focus-border); }
+
+        /* Toggle switch */
+        .toggle-track {
+            width: 36px; height: 20px;
+            border-radius: 999px;
+            background: var(--token-border);
+            position: relative;
+            cursor: pointer;
+            transition: background 150ms;
+            flex-shrink: 0;
+        }
+        .toggle-track.on { background: var(--token-primary); }
+        .toggle-track .toggle-thumb {
+            width: 16px; height: 16px;
+            border-radius: 50%;
+            background: #fff;
+            position: absolute;
+            top: 2px; left: 2px;
+            transition: transform 150ms;
+        }
+        .toggle-track.on .toggle-thumb { transform: translateX(16px); }
+
+        /* First Run wizard step dots */
+        .step-dots { display: flex; gap: 8px; }
+        .step-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--token-border);
+            transition: all 200ms;
+        }
+        .step-dot.active { background: var(--token-primary); transform: scale(1.25); }
+        .step-dot.done { background: var(--token-primary); opacity: 0.5; }
+    </style>
+</head>
+<body>
+    <!-- ============ Page Tabs ============ -->
+    <div class="page-tabs">
+        <span class="tab-label">Pages:</span>
+        <button class="active" onclick="showPage('home')">🏠 Home</button>
+        <button onclick="showPage('chat')">💬 Chat</button>
+        <button onclick="showPage('settings')">⚙️ Settings</button>
+        <button onclick="showPage('inbox')">📥 Inbox</button>
+        <button onclick="showPage('first-run')">🚀 First Run</button>
+        <button onclick="showPage('login')">🔑 Login</button>
+        <button class="theme-toggle" onclick="toggleTheme()">🌗 Toggle Theme</button>
+    </div>
+
+    <div class="shell-container h-full">
+
+        <!-- ═══════════════════════════════════════════════════════
+             PAGE: HOME  (Sidebar + Home)
+             ═══════════════════════════════════════════════════════ -->
+        <div id="page-home" class="page page-with-sidebar active">
+            <!-- Sidebar -->
+            <aside class="sidebar flex flex-col w-60 border-r bg-token-background-secondary h-full" style="border-right:1px solid var(--token-border)">
+                <div class="flex items-center gap-2 p-3" style="border-bottom:1px solid var(--token-border)">
+                    <button class="flex-1 flex items-center gap-2 px-3 py-1.5 text-sm text-token-foreground bg-token-background rounded-md transition-colors" style="border:none;cursor:pointer"
+                        onmouseover="this.style.background='rgba(228,228,231,0.05)'"
+                        onmouseout="this.style.background='var(--token-background)'">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+                        New conversation
+                    </button>
+                </div>
+
+                <div class="flex-1 overflow-y-auto">
+                    <div class="thread-list flex flex-col py-2">
+                        <div class="px-3 py-1">
+                            <span class="text-xs font-medium text-token-description-foreground uppercase">Pinned</span>
+                            <button class="w-full text-left px-2 py-1.5 text-sm text-token-foreground rounded transition-colors truncate" style="background:rgba(228,228,231,0.1);border:none;cursor:pointer;display:block;margin-top:4px">📌 Quantitative Engine Design</button>
+                            <button class="w-full text-left px-2 py-1.5 text-sm text-token-foreground rounded transition-colors truncate" style="background:transparent;border:none;cursor:pointer;display:block;margin-top:2px">📌 MCP Integration Plan</button>
+                        </div>
+                        <div class="px-3 py-1 mt-2">
+                            <span class="text-xs font-medium text-token-description-foreground uppercase">Recent</span>
+                            <button class="w-full text-left px-2 py-1.5 text-sm text-token-foreground rounded transition-colors truncate" style="background:transparent;border:none;cursor:pointer;display:block;margin-top:4px">LSP Tools Integration</button>
+                            <button class="w-full text-left px-2 py-1.5 text-sm text-token-foreground rounded transition-colors truncate" style="background:transparent;border:none;cursor:pointer;display:block;margin-top:2px">Codebase Readability Audit</button>
+                            <button class="w-full text-left px-2 py-1.5 text-sm text-token-foreground rounded transition-colors truncate" style="background:transparent;border:none;cursor:pointer;display:block;margin-top:2px">Bug Evidence Verification</button>
+                            <button class="w-full text-left px-2 py-1.5 text-sm text-token-foreground rounded transition-colors truncate" style="background:transparent;border:none;cursor:pointer;display:block;margin-top:2px">Go Performance Optimization</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex flex-col p-2" style="border-top:1px solid var(--token-border)">
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors" style="background:rgba(228,228,231,0.10);color:var(--token-foreground);border:none;cursor:pointer">
+                        <span>🏠</span><span>Home</span>
+                    </button>
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors" style="color:var(--token-description-foreground);background:transparent;border:none;cursor:pointer">
+                        <span>📥</span><span>Inbox</span>
+                    </button>
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors" style="color:var(--token-description-foreground);background:transparent;border:none;cursor:pointer">
+                        <span>🧰</span><span>Skills</span>
+                    </button>
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors" style="color:var(--token-description-foreground);background:transparent;border:none;cursor:pointer">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
+                        <span>Settings</span>
+                    </button>
+                </div>
+            </aside>
+
+            <!-- Main Content (Home) -->
+            <div class="flex-1 flex flex-col h-full">
+                <div class="toolbar h-toolbar flex items-center px-4" style="border-bottom:1px solid var(--token-border)">
+                    <span class="toolbar-title text-sm font-medium text-token-foreground truncate">Codex</span>
+                    <span style="margin-left:auto; font-size:11px; color:var(--token-description-foreground)">v1.0.0-dev</span>
+                </div>
+
+                <div class="flex-1 overflow-y-auto">
+                    <div class="text-center py-8">
+                        <div style="font-size:48px; margin-bottom:12px">✨</div>
+                        <div class="text-lg font-semibold text-token-foreground">Welcome to Codex</div>
+                        <div class="text-sm text-token-description-foreground mt-2">Start a new conversation below or pick up where you left off.</div>
+                    </div>
+                    <div class="thread-list flex flex-col py-2 px-4" style="max-width:600px;margin:0 auto">
+                        <h3 class="text-xs font-medium text-token-description-foreground uppercase mb-2">Recent</h3>
+                        <button class="w-full text-left px-3 py-2 text-sm text-token-foreground rounded-md truncate transition-colors" style="border:none;cursor:pointer;background:transparent">
+                            <span style="opacity:0.5;margin-right:6px">💬</span> LSP Tools Integration
+                        </button>
+                        <button class="w-full text-left px-3 py-2 text-sm text-token-foreground rounded-md truncate transition-colors" style="border:none;cursor:pointer;background:transparent">
+                            <span style="opacity:0.5;margin-right:6px">💬</span> Codebase Readability Audit
+                        </button>
+                        <button class="w-full text-left px-3 py-2 text-sm text-token-foreground rounded-md truncate transition-colors" style="border:none;cursor:pointer;background:transparent">
+                            <span style="opacity:0.5;margin-right:6px">💬</span> Bug Evidence Verification
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Composer -->
+                <div class="composer" style="border-top:1px solid var(--token-border);padding:12px 16px">
+                    <div class="flex items-end gap-2">
+                        <textarea class="composer-input flex-1 resize-none bg-transparent text-sm outline-none" style="color:var(--token-foreground);min-height:36px;max-height:200px;font-family:var(--font-sans);border:none" placeholder="How can Codex help?" rows="1"></textarea>
+                        <button class="send-button p-2 rounded-lg text-token-description-foreground" style="border:none;cursor:not-allowed;background:transparent">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M3 8L13 3L8 13L7 9L3 8Z"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             PAGE: CHAT  (Sidebar + Chat with messages)
+             ═══════════════════════════════════════════════════════ -->
+        <div id="page-chat" class="page page-with-sidebar">
+            <!-- Sidebar (same as home, abbreviated) -->
+            <aside class="sidebar flex flex-col w-60 border-r bg-token-background-secondary h-full" style="border-right:1px solid var(--token-border)">
+                <div class="flex items-center gap-2 p-3" style="border-bottom:1px solid var(--token-border)">
+                    <button class="flex-1 flex items-center gap-2 px-3 py-1.5 text-sm text-token-foreground bg-token-background rounded-md" style="border:none;cursor:pointer">
+                        <svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+                        New conversation
+                    </button>
+                </div>
+                <div class="flex-1 overflow-y-auto">
+                    <div class="flex flex-col py-2">
+                        <div class="px-3 py-1">
+                            <span class="text-xs font-medium text-token-description-foreground uppercase">Recent</span>
+                            <button class="w-full text-left px-2 py-1.5 text-sm text-token-foreground rounded truncate" style="background:rgba(99,102,241,0.1);border:none;cursor:pointer;display:block;margin-top:4px;font-weight:500">
+                                Go Engine Optimization ←
+                            </button>
+                            <button class="w-full text-left px-2 py-1.5 text-sm text-token-foreground rounded truncate" style="background:transparent;border:none;cursor:pointer;display:block;margin-top:2px">LSP Tools Integration</button>
+                            <button class="w-full text-left px-2 py-1.5 text-sm text-token-foreground rounded truncate" style="background:transparent;border:none;cursor:pointer;display:block;margin-top:2px">Readability Audit</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex flex-col p-2" style="border-top:1px solid var(--token-border)">
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md" style="color:var(--token-description-foreground);background:transparent;border:none;cursor:pointer"><span>🏠</span><span>Home</span></button>
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md" style="color:var(--token-description-foreground);background:transparent;border:none;cursor:pointer"><span>📥</span><span>Inbox</span></button>
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md" style="color:var(--token-description-foreground);background:transparent;border:none;cursor:pointer"><span>⚙️</span><span>Settings</span></button>
+                </div>
+            </aside>
+
+            <!-- Chat Main Area -->
+            <div class="flex-1 flex flex-col h-full">
+                <!-- Chat Toolbar -->
+                <div class="toolbar h-toolbar flex items-center px-4" style="border-bottom:1px solid var(--token-border)">
+                    <div class="flex items-center gap-3 flex-1 min-w-0">
+                        <span class="toolbar-title text-sm font-medium text-token-foreground truncate">Go Engine Optimization</span>
+                        <span class="text-xs text-token-description-foreground bg-token-background-secondary px-2 rounded" style="padding-top:2px;padding-bottom:2px">o3</span>
+                    </div>
+                    <div class="flex items-center gap-1 text-xs text-token-description-foreground">
+                        <span class="truncate font-mono" style="max-width:200px">~/Desktop/wj/engine</span>
+                    </div>
+                </div>
+
+                <!-- Conversation Panel -->
+                <div class="flex-1 overflow-y-auto">
+                    <div style="max-width:800px;margin:0 auto;padding:16px">
+
+                        <!-- Turn 1: User message -->
+                        <div class="py-4" style="border-bottom:1px solid rgba(63,63,70,0.5)">
+                            <div class="user-message flex justify-end py-2">
+                                <div style="background:rgba(99,102,241,0.10);border-radius:1rem;border-bottom-right-radius:0.125rem;padding:10px 16px;max-width:85%">
+                                    <span class="text-sm" style="white-space:pre-wrap">帮我优化 engine/backtest 的性能，目前跑 1 年日线回测需要 3 秒</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Turn 2: Assistant response -->
+                        <div class="py-4" style="border-bottom:1px solid rgba(63,63,70,0.5)">
+                            <!-- tool call -->
+                            <div class="py-1 text-xs text-token-description-foreground">
+                                <span class="font-mono bg-token-background-secondary rounded" style="padding:2px 6px">read_file(engine/backtest/runner.go)</span>
+                            </div>
+
+                            <!-- assistant message -->
+                            <div class="assistant-message py-2">
+                                <div class="prose" style="font-size:14px;line-height:1.7">
+                                    <p style="margin-bottom:12px">分析了 <code style="font-family:var(--font-mono);font-size:0.875em;background:var(--token-background-secondary);padding:2px 5px;border-radius:3px">runner.go</code> 后，发现主要瓶颈在以下几个方面：</p>
+                                    <p style="margin-bottom:8px"><strong>1. 内存分配过多</strong> — 每个 bar 都创建新的 slice</p>
+                                    <p style="margin-bottom:12px"><strong>2. Map 遍历非确定性</strong> — <code style="font-family:var(--font-mono);font-size:0.875em;background:var(--token-background-secondary);padding:2px 5px;border-radius:3px">ValsOfMap</code> 参考实现有序列化问题</p>
+                                </div>
+                            </div>
+
+                            <!-- File change -->
+                            <div class="flex items-center gap-2 py-1 text-sm">
+                                <span class="rounded text-xs font-medium" style="background:#dcfce7;color:#15803d;padding:2px 6px">create</span>
+                                <span class="font-mono text-token-foreground truncate">engine/backtest/pool.go</span>
+                            </div>
+                            <div class="flex items-center gap-2 py-1 text-sm">
+                                <span class="rounded text-xs font-medium" style="background:#fef9c3;color:#a16207;padding:2px 6px">modify</span>
+                                <span class="font-mono text-token-foreground truncate">engine/backtest/runner.go</span>
+                            </div>
+
+                            <!-- Terminal command -->
+                            <div class="font-mono text-sm bg-token-editor-background rounded my-1" style="padding:8px 12px">
+                                <span class="text-token-primary">$ </span>
+                                <span class="text-token-foreground">go test -bench=BenchmarkBacktest -benchmem ./engine/backtest/...</span>
+                            </div>
+
+                            <!-- Terminal output -->
+                            <div class="font-mono text-xs bg-token-editor-background rounded my-1 text-token-description-foreground" style="padding:8px 12px;max-height:200px;overflow:auto;white-space:pre">BenchmarkBacktest-10    1000    1,247,832 ns/op    2,048 B/op    12 allocs/op
+PASS
+ok   engine/backtest   1.382s</div>
+
+                            <div class="assistant-message py-2">
+                                <div class="prose" style="font-size:14px;line-height:1.7">
+                                    <p>优化后回测耗时从 <strong>3.2s</strong> 降低到 <strong>1.4s</strong>，内存分配减少了 <strong>87%</strong>。</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Turn 3: User follow-up -->
+                        <div class="py-4" style="border-bottom:1px solid rgba(63,63,70,0.5)">
+                            <div class="user-message flex justify-end py-2">
+                                <div style="background:rgba(99,102,241,0.10);border-radius:1rem;border-bottom-right-radius:0.125rem;padding:10px 16px;max-width:85%">
+                                    <span class="text-sm" style="white-space:pre-wrap">能再看看有没有可以并行化的地方？</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Turn 4: Streaming response -->
+                        <div class="py-4">
+                            <div class="assistant-message py-2">
+                                <div class="prose" style="font-size:14px;line-height:1.7">
+                                    <p>当然可以。在分析了数据依赖关系后，发现 <code style="font-family:var(--font-mono);font-size:0.875em;background:var(--token-background-secondary);padding:2px 5px;border-radius:3px">evaluateSignals</code> 阶段各策略之间没有依赖，可以用 <code style="font-family:var(--font-mono);font-size:0.875em;background:var(--token-background-secondary);padding:2px 5px;border-radius:3px">sync.WaitGroup</code> 并行评估：</p>
+                                </div>
+                                <div class="mock-code-block">
+<span class="kw">func</span> <span class="fn">evaluateParallel</span>(strategies []Strategy, bar Bar) []Signal {
+    <span class="cm">// Fan-out: 每个策略独立评估</span>
+    <span class="kw">var</span> wg sync.WaitGroup
+    results := <span class="fn">make</span>([]Signal, <span class="fn">len</span>(strategies))
+
+    <span class="kw">for</span> i, s := <span class="kw">range</span> strategies {
+        wg.<span class="fn">Add</span>(<span class="num">1</span>)
+        <span class="kw">go</span> <span class="kw">func</span>(idx <span class="kw">int</span>, strat Strategy) {
+            <span class="kw">defer</span> wg.<span class="fn">Done</span>()
+            results[idx] = strat.<span class="fn">Evaluate</span>(bar)
+        }(i, s)
+    }
+    wg.<span class="fn">Wait</span>()
+    <span class="kw">return</span> results
+}</div>
+                                <span class="typing-cursor"></span>
+                                <div style="margin-top:12px">
+                                    <div class="dot-pulse">
+                                        <span></span><span></span><span></span>
+                                        <span class="text-xs text-token-description-foreground" style="margin-left:6px">Thinking...</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Composer -->
+                <div class="composer" style="border-top:1px solid var(--token-border);padding:12px 16px">
+                    <div class="flex items-end gap-2">
+                        <textarea class="composer-input flex-1 resize-none bg-transparent text-sm outline-none" style="color:var(--token-foreground);min-height:36px;max-height:200px;font-family:var(--font-sans);border:none" placeholder="Send a message..." rows="1"></textarea>
+                        <button class="send-button p-2 rounded-lg" style="border:none;cursor:pointer;background:var(--token-primary);color:#fff">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M3 8L13 3L8 13L7 9L3 8Z"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             PAGE: SETTINGS
+             ═══════════════════════════════════════════════════════ -->
+        <div id="page-settings" class="page page-with-sidebar">
+            <!-- Sidebar -->
+            <aside class="sidebar flex flex-col w-60 border-r bg-token-background-secondary h-full" style="border-right:1px solid var(--token-border)">
+                <div class="flex items-center gap-2 p-3" style="border-bottom:1px solid var(--token-border)">
+                    <button class="flex-1 flex items-center gap-2 px-3 py-1.5 text-sm text-token-foreground bg-token-background rounded-md" style="border:none;cursor:pointer">
+                        <svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+                        New conversation
+                    </button>
+                </div>
+                <div class="flex-1"></div>
+                <div class="flex flex-col p-2" style="border-top:1px solid var(--token-border)">
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md" style="color:var(--token-description-foreground);background:transparent;border:none;cursor:pointer"><span>🏠</span><span>Home</span></button>
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md" style="color:var(--token-description-foreground);background:transparent;border:none;cursor:pointer"><span>📥</span><span>Inbox</span></button>
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md" style="background:rgba(228,228,231,0.10);color:var(--token-foreground);border:none;cursor:pointer">
+                        <span>⚙️</span><span>Settings</span>
+                    </button>
+                </div>
+            </aside>
+
+            <!-- Settings Main -->
+            <div class="flex-1 flex flex-col h-full">
+                <div class="toolbar h-toolbar flex items-center px-4" style="border-bottom:1px solid var(--token-border)">
+                    <span class="toolbar-title text-sm font-medium text-token-foreground">Settings</span>
+                </div>
+                <div class="settings-layout flex flex-1 overflow-hidden">
+                    <!-- Settings sidebar -->
+                    <nav class="w-56 overflow-y-auto" style="border-right:1px solid var(--token-border)">
+                        <button class="w-full text-left px-4 text-sm font-medium text-token-foreground" style="padding-top:10px;padding-bottom:10px;background:rgba(228,228,231,0.10);border:none;cursor:pointer">Agent</button>
+                        <button class="w-full text-left px-4 text-sm text-token-description-foreground" style="padding-top:10px;padding-bottom:10px;background:transparent;border:none;cursor:pointer">MCP Servers</button>
+                        <button class="w-full text-left px-4 text-sm text-token-description-foreground" style="padding-top:10px;padding-bottom:10px;background:transparent;border:none;cursor:pointer">Git</button>
+                        <button class="w-full text-left px-4 text-sm text-token-description-foreground" style="padding-top:10px;padding-bottom:10px;background:transparent;border:none;cursor:pointer">Personalization</button>
+                        <button class="w-full text-left px-4 text-sm text-token-description-foreground" style="padding-top:10px;padding-bottom:10px;background:transparent;border:none;cursor:pointer">Local Environments</button>
+                        <button class="w-full text-left px-4 text-sm text-token-description-foreground" style="padding-top:10px;padding-bottom:10px;background:transparent;border:none;cursor:pointer">Worktrees</button>
+                        <button class="w-full text-left px-4 text-sm text-token-description-foreground" style="padding-top:10px;padding-bottom:10px;background:transparent;border:none;cursor:pointer">Skills</button>
+                        <button class="w-full text-left px-4 text-sm text-token-description-foreground" style="padding-top:10px;padding-bottom:10px;background:transparent;border:none;cursor:pointer">Data Controls</button>
+                        <div style="border-top:1px solid var(--token-border);margin-top:8px;padding-top:8px">
+                            <button class="w-full text-left px-4 text-sm text-token-description-foreground" style="padding-top:10px;padding-bottom:10px;background:transparent;border:none;cursor:pointer">Open Source Licenses</button>
+                        </div>
+                    </nav>
+                    <!-- Settings content -->
+                    <div class="flex-1 overflow-y-auto p-6">
+                        <div style="max-width:600px">
+                            <h2 class="text-lg font-semibold text-token-foreground mb-4">Agent Settings</h2>
+
+                            <!-- Model -->
+                            <div class="mb-4">
+                                <label class="text-sm font-medium text-token-foreground block mb-1">Model</label>
+                                <p class="text-xs text-token-description-foreground mb-2">Choose the AI model for conversations</p>
+                                <select class="settings-select">
+                                    <option>o3</option>
+                                    <option>o4-mini</option>
+                                    <option>gpt-4.1</option>
+                                    <option>codex-mini-latest</option>
+                                </select>
+                            </div>
+
+                            <!-- Approval Policy -->
+                            <div class="mb-4" style="border-top:1px solid var(--token-border);padding-top:16px">
+                                <label class="text-sm font-medium text-token-foreground block mb-1">Approval Policy</label>
+                                <p class="text-xs text-token-description-foreground mb-2">When to ask for approval before executing commands</p>
+                                <div class="flex flex-col gap-2">
+                                    <label class="flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer" style="background:rgba(99,102,241,0.05);border:1px solid var(--token-primary)">
+                                        <input type="radio" name="policy" checked style="accent-color:var(--token-primary)">
+                                        <div>
+                                            <div class="text-sm font-medium text-token-foreground">On Failure</div>
+                                            <div class="text-xs text-token-description-foreground">Auto-approve, but ask on errors</div>
+                                        </div>
+                                    </label>
+                                    <label class="flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer" style="border:1px solid var(--token-border)">
+                                        <input type="radio" name="policy" style="accent-color:var(--token-primary)">
+                                        <div>
+                                            <div class="text-sm font-medium text-token-foreground">Always Ask</div>
+                                            <div class="text-xs text-token-description-foreground">Ask before every action</div>
+                                        </div>
+                                    </label>
+                                    <label class="flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer" style="border:1px solid var(--token-border)">
+                                        <input type="radio" name="policy" style="accent-color:var(--token-primary)">
+                                        <div>
+                                            <div class="text-sm font-medium text-token-foreground">Full Auto</div>
+                                            <div class="text-xs text-token-description-foreground">Never ask for approval</div>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- Sandbox  -->
+                            <div class="mb-4" style="border-top:1px solid var(--token-border);padding-top:16px">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <label class="text-sm font-medium text-token-foreground block">Sandbox Mode</label>
+                                        <p class="text-xs text-token-description-foreground mt-0.5">Run commands in a sandboxed environment</p>
+                                    </div>
+                                    <div class="toggle-track on" onclick="this.classList.toggle('on')">
+                                        <div class="toggle-thumb"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Notifications -->
+                            <div class="mb-4" style="border-top:1px solid var(--token-border);padding-top:16px">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <label class="text-sm font-medium text-token-foreground block">Notifications</label>
+                                        <p class="text-xs text-token-description-foreground mt-0.5">Show desktop notifications for task completion</p>
+                                    </div>
+                                    <div class="toggle-track" onclick="this.classList.toggle('on')">
+                                        <div class="toggle-thumb"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             PAGE: INBOX
+             ═══════════════════════════════════════════════════════ -->
+        <div id="page-inbox" class="page page-with-sidebar">
+            <aside class="sidebar flex flex-col w-60 border-r bg-token-background-secondary h-full" style="border-right:1px solid var(--token-border)">
+                <div class="flex items-center gap-2 p-3" style="border-bottom:1px solid var(--token-border)">
+                    <button class="flex-1 flex items-center gap-2 px-3 py-1.5 text-sm text-token-foreground bg-token-background rounded-md" style="border:none;cursor:pointer">
+                        <svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+                        New conversation
+                    </button>
+                </div>
+                <div class="flex-1"></div>
+                <div class="flex flex-col p-2" style="border-top:1px solid var(--token-border)">
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md" style="color:var(--token-description-foreground);background:transparent;border:none;cursor:pointer"><span>🏠</span><span>Home</span></button>
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md" style="background:rgba(228,228,231,0.10);color:var(--token-foreground);border:none;cursor:pointer"><span>📥</span><span>Inbox</span></button>
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm rounded-md" style="color:var(--token-description-foreground);background:transparent;border:none;cursor:pointer"><span>⚙️</span><span>Settings</span></button>
+                </div>
+            </aside>
+
+            <div class="flex-1 flex flex-col h-full">
+                <div class="toolbar h-toolbar flex items-center px-4" style="border-bottom:1px solid var(--token-border)">
+                    <span class="toolbar-title text-sm font-medium text-token-foreground">Inbox</span>
+                    <span style="margin-left:auto" class="text-xs text-token-description-foreground">3 tasks</span>
+                </div>
+                <div class="flex-1 overflow-y-auto p-4">
+                    <div style="max-width:700px;margin:0 auto">
+                        <!-- Task item 1 -->
+                        <div class="flex items-center gap-3 p-3 rounded-lg mb-2 cursor-pointer transition-colors" style="border:1px solid var(--token-border)">
+                            <div style="width:8px;height:8px;border-radius:50%;background:#22c55e;flex-shrink:0"></div>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-sm font-medium text-token-foreground truncate">Refactor engine/portfolio module</div>
+                                <div class="text-xs text-token-description-foreground mt-0.5">Completed · 2 minutes ago</div>
+                            </div>
+                            <span class="text-xs rounded px-2 py-0.5" style="background:#dcfce7;color:#15803d">completed</span>
+                        </div>
+                        <!-- Task item 2 -->
+                        <div class="flex items-center gap-3 p-3 rounded-lg mb-2 cursor-pointer transition-colors" style="border:1px solid var(--token-border)">
+                            <div style="width:8px;height:8px;border-radius:50%;background:#eab308;flex-shrink:0" class="animate-pulse"></div>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-sm font-medium text-token-foreground truncate">Add unit tests for MCP client</div>
+                                <div class="text-xs text-token-description-foreground mt-0.5">Running · started 5 minutes ago</div>
+                            </div>
+                            <span class="text-xs rounded px-2 py-0.5" style="background:#fef9c3;color:#a16207">running</span>
+                        </div>
+                        <!-- Task item 3 -->
+                        <div class="flex items-center gap-3 p-3 rounded-lg mb-2 cursor-pointer transition-colors" style="border:1px solid var(--token-border)">
+                            <div style="width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0"></div>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-sm font-medium text-token-foreground truncate">Deploy staging build for review</div>
+                                <div class="text-xs text-token-description-foreground mt-0.5">Failed · 12 minutes ago</div>
+                            </div>
+                            <span class="text-xs rounded px-2 py-0.5" style="background:#fee2e2;color:#b91c1c">failed</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             PAGE: FIRST RUN
+             ═══════════════════════════════════════════════════════ -->
+        <div id="page-first-run" class="page">
+            <div class="h-full flex items-center justify-center" style="background:var(--token-background)">
+                <div class="text-center animate-fadeIn" style="max-width:420px;padding:48px 32px">
+                    <div style="font-size:56px;margin-bottom:16px">🧬</div>
+                    <h1 class="text-xl font-bold text-token-foreground mb-3" style="font-size:24px">Welcome to Codex</h1>
+                    <p class="text-sm text-token-description-foreground mb-6" style="line-height:1.7">
+                        Codex is your AI-powered coding assistant. Let's get you set up in just a few steps.
+                    </p>
+
+                    <!-- Step content -->
+                    <div class="rounded-lg p-4 mb-6" style="border:1px solid var(--token-border);text-align:left">
+                        <div class="text-sm font-medium text-token-foreground mb-2">Choose your workspace</div>
+                        <div class="text-xs text-token-description-foreground mb-3">Select the directory where your project lives</div>
+                        <div class="flex items-center gap-2 p-3 rounded-md" style="background:var(--token-background-secondary);border:1px dashed var(--token-border)">
+                            <span style="font-size:20px">📁</span>
+                            <div>
+                                <div class="text-sm text-token-foreground font-mono">~/Desktop/wj/engine</div>
+                                <div class="text-xs text-token-description-foreground">Go project · 142 files</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step dots -->
+                    <div class="step-dots" style="justify-content:center;margin-bottom:24px">
+                        <div class="step-dot done"></div>
+                        <div class="step-dot active"></div>
+                        <div class="step-dot"></div>
+                    </div>
+
+                    <button style="background:var(--token-primary);color:#fff;border:none;padding:10px 32px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;transition:background 150ms;font-family:var(--font-sans)"
+                        onmouseover="this.style.background='var(--token-primary-hover)'"
+                        onmouseout="this.style.background='var(--token-primary)'">
+                        Continue →
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             PAGE: LOGIN
+             ═══════════════════════════════════════════════════════ -->
+        <div id="page-login" class="page">
+            <div class="h-full flex items-center justify-center" style="background:var(--token-background)">
+                <div class="text-center animate-fadeIn" style="max-width:360px;padding:48px 32px">
+                    <div style="font-size:48px;margin-bottom:16px">🔐</div>
+                    <h1 class="text-xl font-bold text-token-foreground mb-2">Sign in to Codex</h1>
+                    <p class="text-sm text-token-description-foreground mb-6">Connect your account to unlock all features</p>
+
+                    <button style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:var(--token-primary);color:#fff;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;font-family:var(--font-sans);margin-bottom:12px"
+                        onmouseover="this.style.background='var(--token-primary-hover)'"
+                        onmouseout="this.style.background='var(--token-primary)'">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4v4l3 2" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+                        Sign in with OpenAI
+                    </button>
+
+                    <button style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:transparent;color:var(--token-foreground);border:1px solid var(--token-border);padding:12px 24px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;font-family:var(--font-sans)">
+                        Use API Key
+                    </button>
+
+                    <p class="text-xs text-token-description-foreground mt-4" style="line-height:1.6">
+                        By signing in, you agree to our Terms of Service.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ============ Page Switch Script ============ -->
+    <script>
+        function showPage(name) {
+            // Hide all pages
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            // Show target page
+            document.getElementById('page-' + name).classList.add('active');
+            // Update tab buttons
+            document.querySelectorAll('.page-tabs button:not(.theme-toggle)').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+        }
+
+        function toggleTheme() {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme');
+            if (current === 'light') {
+                html.removeAttribute('data-theme');
+            } else {
+                html.setAttribute('data-theme', 'light');
+            }
+        }
+
+        // Make toggle switches interactive
+        document.querySelectorAll('.toggle-track').forEach(t => {
+            t.addEventListener('click', () => t.classList.toggle('on'));
+        });
+    </script>
+</body>
+</html>

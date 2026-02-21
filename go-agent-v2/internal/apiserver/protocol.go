@@ -108,6 +108,13 @@ func noopHandler() Handler {
 	}
 }
 
+// stubHandler 返回固定值的 handler (前端兼容 — 空数据占位)。
+func stubHandler(result any) Handler {
+	return func(_ context.Context, _ json.RawMessage) (any, error) {
+		return result, nil
+	}
+}
+
 // ========================================
 // 动态工具 JSON 输出辅助 (原 tool_helpers.go)
 // ========================================

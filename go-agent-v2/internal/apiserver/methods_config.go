@@ -25,7 +25,22 @@ func (s *Server) modelList(_ context.Context, _ json.RawMessage) (any, error) {
 }
 
 func (s *Server) configRead(_ context.Context, _ json.RawMessage) (any, error) {
-	return map[string]any{"config": s.cfg}, nil
+	model := "o4-mini"
+	if s.cfg != nil && s.cfg.LLMModel != "" {
+		model = s.cfg.LLMModel
+	}
+	cwd, _ := os.Getwd()
+	return map[string]any{
+		"model":                 model,
+		"modelProvider":         nil,
+		"cwd":                   cwd,
+		"approvalPolicy":        "on-failure",
+		"sandbox":               nil,
+		"config":                nil,
+		"baseInstructions":      nil,
+		"developerInstructions": nil,
+		"personality":           nil,
+	}, nil
 }
 
 // configEnvAllowPrefixes 允许通过 JSON-RPC 设置的环境变量前缀。

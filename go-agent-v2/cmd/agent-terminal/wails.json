@@ -3,6 +3,10 @@
     "name": "agent-terminal",
     "outputfilename": "agent-terminal",
     "frontend:dir": "frontend",
+    "frontend:install": "npm install",
+    "frontend:build": "npm run build:react",
+    "frontend:dev:watcher": "npm run dev",
+    "frontend:dev:serverUrl": "http://localhost:5173",
     "wailsjsdir": "frontend",
     "author": {
         "name": "multi-agent"

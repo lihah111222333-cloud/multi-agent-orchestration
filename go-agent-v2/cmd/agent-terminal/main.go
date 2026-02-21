@@ -15,6 +15,8 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"io/fs"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -37,11 +39,21 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-//go:embed frontend/*
+//go:embed frontend/dist/*
 var assets embed.FS
 
 //go:embed assets/appicon.png
 var appIcon []byte
+
+// frontendAssets 返回前端静态资源 FS, 去掉 "frontend/dist" 前缀。
+func frontendAssets() http.FileSystem {
+	sub, err := fs.Sub(assets, "frontend/dist")
+	if err != nil {
+		logger.Error("embed: failed to sub frontend/dist", logger.FieldError, err)
+		return http.FS(assets)
+	}
+	return http.FS(sub)
+}
 
 // loadEnvFile 从当前目录向上搜索 .env 文件并加载到环境变量。
 // 不覆盖已有的环境变量 — 只填充未设置的。
@@ -68,11 +80,14 @@ func loadEnvFile() {
 				key := strings.TrimSpace(parts[0])
 				val := strings.TrimSpace(parts[1])
 				if _, exists := os.LookupEnv(key); !exists {
-					os.Setenv(key, val)
+					if err := os.Setenv(key, val); err != nil {
+						logger.Warn("loadEnvFile: setenv failed", "key", key, logger.FieldError, err)
+						continue
+					}
 					count++
 				}
 			}
-			f.Close()
+			_ = f.Close()
 			logger.Info("loaded .env file", logger.FieldPath, envPath, logger.FieldVarsSet, count)
 			return
 		}
@@ -119,6 +134,8 @@ func main() {
 
 	// ─── 数据库 ───
 	cfg := config.Load()
+	// Wails 桌面 App 需要全部 JSON-RPC 方法 (config/read, model/list 等)
+	cfg.DisableOffline52Methods = false
 	pool := setupDatabase(ctx, cfg)
 
 	// ─── 内嵌 apiserver ───
@@ -153,7 +170,7 @@ func main() {
 		Name: "Agent Orchestrator",
 		Icon: appIcon,
 		Assets: application.AssetOptions{
-			Handler: application.BundledAssetFileServer(assets),
+			Handler: http.FileServer(frontendAssets()),
 		},
 		Services: []application.Service{
 			application.NewService(appSvc),

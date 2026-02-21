@@ -109,7 +109,7 @@ func copyRegularFile(srcPath, dstPath string, mode fs.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer srcFile.Close()
+	defer func() { _ = srcFile.Close() }()
 	if mode == 0 {
 		mode = 0o644
 	}
@@ -572,7 +572,7 @@ func (s *Server) skillsRemoteReadTyped(_ context.Context, p skillsRemoteReadPara
 		logger.Warn("skills/remote/read: fetch failed", logger.FieldURL, p.URL, logger.FieldError, err)
 		return nil, apperrors.Wrap(err, "Server.skillsRemoteRead", "fetch remote skill")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 		return nil, apperrors.Newf(

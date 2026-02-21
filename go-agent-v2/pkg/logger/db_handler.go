@@ -96,9 +96,9 @@ func (h *DBHandler) Handle(_ context.Context, r slog.Record) error {
 	// 非阻塞推入 — chan 满时 drop
 	func() {
 		defer func() {
-			if recover() != nil {
-				// shutdown 期间通道被关闭: 丢弃该条日志，避免 panic 影响主流程。
-			}
+			// 静默恢复: shutdown 期间通道被关闭时丢弃该条日志,
+			// 避免 send-on-closed-channel panic 影响主流程。
+			recover() //nolint:errcheck // 恢复值无需处理
 		}()
 		select {
 		case h.buf <- entry:

@@ -295,3 +295,63 @@ func TestBindingWarning(t *testing.T) {
 		t.Errorf("binding_warning = %q, want 'session expired'", snap.BindingWarning)
 	}
 }
+
+// ========================================
+// P1-2: MessageBus.Seq() 并发读不阻塞写
+// ========================================
+
+// TestSeq_ConcurrentReadsDoNotBlockPublish 验证 Seq() 作为只读操作不阻塞 Publish。
+//
+// 如果 Seq() 使用写锁 (Mutex.Lock), 则高频 Seq() 调用会与 Publish 产生竞争。
+// 改用 atomic 或 RWMutex.RLock 后, 此测试应无 timeout。
+func TestSeq_ConcurrentReadsDoNotBlockPublish(t *testing.T) {
+	b := NewMessageBus()
+
+	const n = 1000
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+
+	// 并发 Publish
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < n; i++ {
+			b.Publish(Message{Topic: "seq-test", Type: "ping"})
+		}
+	}()
+
+	// 并发 Seq() 读 (大量)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < n*10; i++ {
+			s := b.Seq()
+			_ = s
+		}
+	}()
+
+	// 并发 SubscriberCount() 读
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < n*10; i++ {
+			c := b.SubscriberCount()
+			_ = c
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("TIMEOUT: concurrent Seq()/SubscriberCount() blocked by Publish")
+	}
+
+	if b.Seq() != n {
+		t.Errorf("seq = %d, want %d", b.Seq(), n)
+	}
+}

@@ -17,7 +17,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-
 func (c *AppServerClient) readLoop() {
 	defer func() {
 		c.wsMu.Lock()
@@ -627,16 +626,7 @@ func normalizeErrorNotificationPayload(raw json.RawMessage) json.RawMessage {
 		}
 	}
 
-	if _, exists := payload["willRetry"]; !exists {
-		if value, ok := payload["will_retry"]; ok {
-			payload["willRetry"] = value
-		}
-	}
-	if _, exists := payload["will_retry"]; !exists {
-		if value, ok := payload["willRetry"]; ok {
-			payload["will_retry"] = value
-		}
-	}
+	syncKeys(payload, "willRetry", "will_retry")
 
 	normalized, err := json.Marshal(payload)
 	if err != nil {
@@ -648,6 +638,21 @@ func normalizeErrorNotificationPayload(raw json.RawMessage) json.RawMessage {
 // ========================================
 // 辅助
 // ========================================
+
+// syncKeys 双向同步 map 中的两个键: 若 k1 缺失则从 k2 复制, 反之亦然。
+// 用于 camelCase/snake_case 键兼容 (如 willRetry / will_retry)。
+func syncKeys(m map[string]any, k1, k2 string) {
+	if _, exists := m[k1]; !exists {
+		if v, ok := m[k2]; ok {
+			m[k1] = v
+		}
+	}
+	if _, exists := m[k2]; !exists {
+		if v, ok := m[k1]; ok {
+			m[k2] = v
+		}
+	}
+}
 
 // truncateBytes 截断 []byte 用于日志展示, 避免超长。
 func truncateBytes(b []byte, max int) string {

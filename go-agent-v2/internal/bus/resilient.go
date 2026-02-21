@@ -195,17 +195,7 @@ func (rp *ResilientPublisher) recoverPending(ctx context.Context) {
 //	rp.PublishTo(TopicTask, "task-42", MsgTaskComplete, resultPayload)
 //	rp.PublishTo(TopicLock, "file:main.go", MsgLockAcquire, lockPayload)
 func (rp *ResilientPublisher) PublishTo(topicPrefix, id, msgType string, payload any) {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		logger.Error("bus: marshal payload failed", logger.FieldTopic, topicPrefix+"."+id, logger.FieldError, err)
-		return
-	}
-	rp.Publish(Message{
-		Topic:   topicPrefix + "." + id,
-		From:    "system",
-		Type:    msgType,
-		Payload: data,
-	})
+	rp.publishInternal(topicPrefix, id, "system", msgType, payload)
 }
 
 // PublishFrom 发布来自指定 Agent 的事件。
@@ -217,6 +207,11 @@ func (rp *ResilientPublisher) PublishTo(topicPrefix, id, msgType string, payload
 //	rp.PublishFrom(TopicApproval, "req-1", agentID, MsgApprovalRequest, reqPayload)
 //	rp.PublishFrom(TopicHeartbeat, agentID, agentID, MsgHeartbeat, nil)
 func (rp *ResilientPublisher) PublishFrom(topicPrefix, id, from, msgType string, payload any) {
+	rp.publishInternal(topicPrefix, id, from, msgType, payload)
+}
+
+// publishInternal 共享发布逻辑: marshal payload → 构造 Message → Publish。
+func (rp *ResilientPublisher) publishInternal(topicPrefix, id, from, msgType string, payload any) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		logger.Error("bus: marshal payload failed", logger.FieldTopic, topicPrefix+"."+id, logger.FieldError, err)

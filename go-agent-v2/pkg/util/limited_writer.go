@@ -30,3 +30,9 @@ func (lw *LimitedWriter) Write(p []byte) (int, error) {
 	lw.written += n
 	return n, err
 }
+
+// Overflow 返回写入是否已超出限制 (后续写入被静默丢弃)。
+func (lw *LimitedWriter) Overflow() bool { return lw.written >= lw.limit }
+
+// Written 返回实际已写入的字节数。
+func (lw *LimitedWriter) Written() int { return lw.written }

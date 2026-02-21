@@ -1,0 +1,17 @@
+// Codex.app — public/index.html
+// 原始位置: webview/index.html
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Codex</title>
+    <script type="module" crossorigin src="./assets/index.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index.css">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' https: data: blob:; child-src 'self' blob:; frame-src 'self' blob:; worker-src 'self' blob:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://ab.chatgpt.com https://cdn.openai.com;">
+  </head>
+  <body tabindex="0" style="outline: none">
+    <div id="root"></div>
+  </body>
+</html>

@@ -15,6 +15,46 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
+func (s *Server) skillsDirectory() string {
+	dir := strings.TrimSpace(s.skillsDir)
+	if dir == "" {
+		return ".agent/skills"
+	}
+	return dir
+}
+
+// registerDynamicTools 注册所有动态工具处理函数。
+//
+// 新增工具只需一行: s.dynTools["tool_name"] = s.toolHandler
+func (s *Server) registerDynamicTools() {
+	// LSP 工具
+	s.dynTools["lsp_hover"] = s.lspHover
+	s.dynTools["lsp_open_file"] = s.lspOpenFile
+	s.dynTools["lsp_diagnostics"] = s.lspDiagnostics
+
+	// 编排工具
+	s.dynTools["orchestration_list_agents"] = func(_ json.RawMessage) string { return s.orchestrationListAgents() }
+	s.dynTools["orchestration_send_message"] = s.orchestrationSendMessage
+	s.dynTools["orchestration_launch_agent"] = s.orchestrationLaunchAgent
+	s.dynTools["orchestration_stop_agent"] = s.orchestrationStopAgent
+
+	// 资源工具
+	s.dynTools["task_create_dag"] = s.resourceTaskCreateDAG
+	s.dynTools["task_get_dag"] = s.resourceTaskGetDAG
+	s.dynTools["task_update_node"] = s.resourceTaskUpdateNode
+	s.dynTools["command_list"] = s.resourceCommandList
+	s.dynTools["command_get"] = s.resourceCommandGet
+	s.dynTools["prompt_list"] = s.resourcePromptList
+	s.dynTools["prompt_get"] = s.resourcePromptGet
+	s.dynTools["shared_file_read"] = s.resourceSharedFileRead
+	s.dynTools["shared_file_write"] = s.resourceSharedFileWrite
+	s.dynTools["workspace_create_run"] = s.resourceWorkspaceCreateRun
+	s.dynTools["workspace_get_run"] = s.resourceWorkspaceGetRun
+	s.dynTools["workspace_list_runs"] = s.resourceWorkspaceListRuns
+	s.dynTools["workspace_merge_run"] = s.resourceWorkspaceMergeRun
+	s.dynTools["workspace_abort_run"] = s.resourceWorkspaceAbortRun
+}
+
 // SetupLSP 初始化 LSP 事件转发: 诊断缓存 + 广播。
 func (s *Server) SetupLSP(rootDir string) {
 	if s.lsp == nil {

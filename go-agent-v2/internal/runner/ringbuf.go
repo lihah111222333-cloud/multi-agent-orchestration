@@ -18,7 +18,7 @@ func NewRingBuffer(maxLines int) *RingBuffer {
 	}
 }
 
-// Write 追加数据，超出容量则丢弃旧数据。
+// Write 追加数据，超出容量则丢弃旧数据 (复用底层数组, 避免 GC 分配)。
 func (rb *RingBuffer) Write(p []byte) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
@@ -26,11 +26,9 @@ func (rb *RingBuffer) Write(p []byte) {
 	rb.data = append(rb.data, p...)
 	if len(rb.data) > rb.limit {
 		excess := len(rb.data) - rb.limit
-		trimmed := rb.data[excess:]
-		// copy 到新 slice，释放旧底层数组，避免内存泄漏
-		fresh := make([]byte, len(trimmed))
-		copy(fresh, trimmed)
-		rb.data = fresh
+		// copy 左移, 截断 — 复用底层数组, 无新分配
+		n := copy(rb.data, rb.data[excess:])
+		rb.data = rb.data[:n]
 	}
 }
 

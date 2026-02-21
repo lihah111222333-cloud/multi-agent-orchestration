@@ -91,7 +91,7 @@ type threadResumeResponse struct {
 
 func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (any, error) {
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		candidates := buildResumeCandidates(p.ThreadID, s.resolveHistoricalCodexThreadIDs(ctx, p.ThreadID))
+		candidates := buildResumeCandidates(p.ThreadID, s.resolveCodexThreadCandidates(ctx, p.ThreadID))
 		logger.Info("thread/resume: resolved candidates",
 			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 			"candidate_count", len(candidates),
@@ -442,7 +442,7 @@ func (s *Server) threadResolveTyped(ctx context.Context, p threadIDParams) (any,
 	}
 
 	if codexThreadID == "" {
-		codexThreadID = strings.TrimSpace(s.resolveHistoricalCodexThreadID(ctx, id))
+		codexThreadID = strings.TrimSpace(s.resolvePrimaryCodexThreadID(ctx, id))
 	}
 	if codexThreadID != "" {
 		result["codexThreadId"] = codexThreadID

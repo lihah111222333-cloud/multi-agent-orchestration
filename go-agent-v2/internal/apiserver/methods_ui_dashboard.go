@@ -66,16 +66,14 @@ func (s *Server) buildAgentFallbackFromThreads(ctx context.Context) []any {
 	if !ok {
 		if ptr, ok := out.(*threadListResponse); ok && ptr != nil {
 			resp = *ptr
-			ok = true
-		}
-	}
-	if !ok {
-		raw, marshalErr := json.Marshal(out)
-		if marshalErr != nil {
-			return nil
-		}
-		if unmarshalErr := json.Unmarshal(raw, &resp); unmarshalErr != nil {
-			return nil
+		} else {
+			raw, marshalErr := json.Marshal(out)
+			if marshalErr != nil {
+				return nil
+			}
+			if unmarshalErr := json.Unmarshal(raw, &resp); unmarshalErr != nil {
+				return nil
+			}
 		}
 	}
 	if len(resp.Threads) == 0 {

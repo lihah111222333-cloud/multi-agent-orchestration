@@ -340,7 +340,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 		if isLikelyCodexThreadID(id) {
 			resumeCandidates = append(resumeCandidates, id)
 		} else {
-			resumeCandidates = append(resumeCandidates, s.resolveHistoricalCodexThreadIDs(ctx, id)...)
+			resumeCandidates = append(resumeCandidates, s.resolveCodexThreadCandidates(ctx, id)...)
 		}
 	}
 
@@ -923,14 +923,4 @@ func (s *Server) debugForceGC(_ context.Context, _ json.RawMessage) (any, error)
 		"freedObjects": int64(before.HeapObjects) - int64(after.HeapObjects),
 		"gcCycles":     after.NumGC,
 	}, nil
-}
-
-// resolveHistoricalCodexThreadID 向后兼容别名。
-func (s *Server) resolveHistoricalCodexThreadID(ctx context.Context, agentID string) string {
-	return s.resolvePrimaryCodexThreadID(ctx, agentID)
-}
-
-// resolveHistoricalCodexThreadIDs 向后兼容别名。
-func (s *Server) resolveHistoricalCodexThreadIDs(ctx context.Context, agentID string) []string {
-	return s.resolveCodexThreadCandidates(ctx, agentID)
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -47,4 +48,82 @@ func TestRecoverPending_LoadError_LogsWarn(t *testing.T) {
 	if !strings.Contains(logOutput, "load pending failed") {
 		t.Fatalf("expected 'load pending failed' in log, got:\n%s", logOutput)
 	}
+}
+
+// ========================================
+// P1-1: PublishTo / PublishFrom 共享 publishInternal
+// ========================================
+
+// TestPublishTo_DeliversCorrectTopicAndFrom 验证 PublishTo 构造正确的 topic 和 from。
+func TestPublishTo_DeliversCorrectTopicAndFrom(t *testing.T) {
+	bus := NewMessageBus()
+	sub := bus.Subscribe("test-sub", "*")
+	rp := NewResilientPublisher(bus, errStore{})
+
+	type payload struct {
+		Key string `json:"key"`
+	}
+	rp.PublishTo(TopicDAG, "run-1", MsgDAGNodeStart, payload{Key: "v1"})
+
+	select {
+	case msg := <-sub.Ch:
+		if msg.Topic != "dag.run-1" {
+			t.Errorf("topic = %q, want %q", msg.Topic, "dag.run-1")
+		}
+		if msg.From != "system" {
+			t.Errorf("from = %q, want %q", msg.From, "system")
+		}
+		if msg.Type != MsgDAGNodeStart {
+			t.Errorf("type = %q, want %q", msg.Type, MsgDAGNodeStart)
+		}
+	case <-timeoutCh():
+		t.Fatal("timeout waiting for PublishTo message")
+	}
+}
+
+// TestPublishFrom_DeliversCorrectFrom 验证 PublishFrom 设置正确的 from 字段。
+func TestPublishFrom_DeliversCorrectFrom(t *testing.T) {
+	bus := NewMessageBus()
+	sub := bus.Subscribe("test-sub", "*")
+	rp := NewResilientPublisher(bus, errStore{})
+
+	rp.PublishFrom(TopicApproval, "req-1", "agent-007", MsgApprovalRequest, map[string]string{"action": "deploy"})
+
+	select {
+	case msg := <-sub.Ch:
+		if msg.Topic != "approval.req-1" {
+			t.Errorf("topic = %q, want %q", msg.Topic, "approval.req-1")
+		}
+		if msg.From != "agent-007" {
+			t.Errorf("from = %q, want %q", msg.From, "agent-007")
+		}
+		if msg.Type != MsgApprovalRequest {
+			t.Errorf("type = %q, want %q", msg.Type, MsgApprovalRequest)
+		}
+	case <-timeoutCh():
+		t.Fatal("timeout waiting for PublishFrom message")
+	}
+}
+
+// TestPublishTo_NilPayload_DoesNotPanic 验证 nil payload 不 panic。
+func TestPublishTo_NilPayload_DoesNotPanic(t *testing.T) {
+	bus := NewMessageBus()
+	sub := bus.Subscribe("test-sub", "*")
+	rp := NewResilientPublisher(bus, errStore{})
+
+	// nil payload 应该不 panic
+	rp.PublishTo(TopicTask, "t1", MsgTaskComplete, nil)
+
+	select {
+	case msg := <-sub.Ch:
+		if msg.Topic != "task.t1" {
+			t.Errorf("topic = %q, want %q", msg.Topic, "task.t1")
+		}
+	case <-timeoutCh():
+		t.Fatal("timeout waiting for nil payload message")
+	}
+}
+
+func timeoutCh() <-chan time.Time {
+	return time.After(200 * time.Millisecond)
 }

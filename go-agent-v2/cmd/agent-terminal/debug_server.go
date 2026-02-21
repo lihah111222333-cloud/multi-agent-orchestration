@@ -235,6 +235,14 @@ func startDebugServer(ctx context.Context, uiPort int, apiBaseURL string) {
 		logger.Error("debug: frontend directory not found")
 		return
 	}
+	// 使用 dist/ 子目录 (Vite 构建产物)
+	distDir := filepath.Join(frontendDir, "dist")
+	if info, err := os.Stat(distDir); err != nil || !info.IsDir() {
+		logger.Error("debug: frontend/dist not found — run 'npm run build:react' first",
+			logger.FieldPath, distDir)
+		return
+	}
+	logger.Info("debug: serving frontend from dist/", logger.FieldPath, distDir)
 	debugBridgeEnabled.Store(true)
 
 	mux := http.NewServeMux()
@@ -245,37 +253,48 @@ func startDebugServer(ctx context.Context, uiPort int, apiBaseURL string) {
 	mux.HandleFunc("/wails/runtime.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
-		fmt.Fprint(w, debugWailsRuntimeModule)
+		_, _ = fmt.Fprint(w, debugWailsRuntimeModule)
 	})
 
 	// 注入 shim 的 index.html handler
+	// serveIndexWithShim 读取 dist/index.html 并注入 shim 脚本
+	serveIndexWithShim := func(w http.ResponseWriter, r *http.Request) {
+		data, err := os.ReadFile(filepath.Join(distDir, "index.html"))
+		if err != nil {
+			http.Error(w, "dist/index.html not found — run 'npm run build:react'", 404)
+			return
+		}
+		html := string(data)
+		shimScript := buildDebugShimScript(apiBaseURL)
+		html = strings.Replace(html, "</head>", shimScript+"\n</head>", 1)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(w, html)
+	}
+
+	// SPA 路由回退: 静态文件优先, 不存在则返回 index.html
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Debug UI 一律禁用静态资源缓存，避免前端回滚/重构后浏览器继续使用旧模块。
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("Expires", "0")
 
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
-			data, err := os.ReadFile(filepath.Join(frontendDir, "index.html"))
-			if err != nil {
-				http.Error(w, "index.html not found", 404)
-				return
-			}
-			html := string(data)
-			shimScript := buildDebugShimScript(apiBaseURL)
-			// 在 </head> 前注入 shim
-			html = strings.Replace(html, "</head>", shimScript+"\n</head>", 1)
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprint(w, html)
+			serveIndexWithShim(w, r)
 			return
 		}
-		// 其他静态文件
-		http.FileServer(http.Dir(frontendDir)).ServeHTTP(w, r)
+		// 尝试 dist/ 中的静态文件
+		filePath := filepath.Join(distDir, filepath.Clean(r.URL.Path))
+		if _, err := os.Stat(filePath); err == nil {
+			http.FileServer(http.Dir(distDir)).ServeHTTP(w, r)
+			return
+		}
+		// SPA fallback: 路径不匹配静态文件 → 返回 index.html (React Router 处理)
+		serveIndexWithShim(w, r)
 	})
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf("127.0.0.1:%d", uiPort),
-		Handler: mux,
+		Addr:              fmt.Sprintf("127.0.0.1:%d", uiPort),
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	util.SafeGo(func() {
@@ -289,7 +308,9 @@ func startDebugServer(ctx context.Context, uiPort int, apiBaseURL string) {
 
 	util.SafeGo(func() {
 		<-ctx.Done()
-		server.Close()
+		if err := server.Close(); err != nil {
+			logger.Warn("debug: server close error", logger.FieldError, err)
+		}
 	})
 }
 

@@ -210,6 +210,8 @@ func (a *App) CallAPI(method string, params any) (result any, callErr error) {
 		result, callErr = a.handleUIBuildInfo()
 	case "ui/copyText":
 		result, callErr = a.handleUICopyText(normalizedParams)
+	case "approval/respond":
+		result, callErr = a.handleApprovalRespond(normalizedParams)
 	default:
 		// 通用 JSON-RPC 调用
 		if a.srv == nil {
@@ -266,6 +268,29 @@ func (a *App) handleUICopyText(params map[string]any) (any, error) {
 	logger.Info("ui: copied text to clipboard", logger.FieldSource, "ui",
 		logger.FieldComponent, "clipboard", "length", len(text))
 	return map[string]any{"ok": true}, nil
+}
+
+// handleApprovalRespond 处理前端审批回复。
+//
+// 前端调用: window.go.main.App.CallAPI("approval/respond", { requestId: 123, approved: true })
+// 将审批结果注入 apiserver 的 pending channel, 让 handleApprovalRequest 继续执行。
+func (a *App) handleApprovalRespond(params map[string]any) (any, error) {
+	requestID, _ := params["requestId"].(float64) // JSON number → float64
+	approved, _ := params["approved"].(bool)
+
+	if requestID == 0 {
+		return nil, apperrors.Newf("App.handleApprovalRespond", "requestId is required")
+	}
+
+	ok := a.srv.ResolvePendingRequest(int64(requestID), map[string]any{"approved": approved})
+	if !ok {
+		logger.Warn("ui: approval respond — no pending request",
+			logger.FieldSource, "ui", logger.FieldID, int64(requestID))
+	} else {
+		logger.Info("ui: approval respond",
+			logger.FieldSource, "ui", logger.FieldID, int64(requestID), "approved", approved)
+	}
+	return map[string]any{"ok": ok}, nil
 }
 
 // ========================================
@@ -595,7 +620,7 @@ func (a *App) SaveClipboardImage(base64Data string) (string, error) {
 	if err != nil {
 		return "", apperrors.Wrap(err, "App.SaveClipboardImage", "create temp file")
 	}
-	defer tmpFile.Close()
+	defer func() { _ = tmpFile.Close() }()
 
 	if _, err := tmpFile.Write(data); err != nil {
 		return "", apperrors.Wrap(err, "App.SaveClipboardImage", "write temp file")

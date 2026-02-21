@@ -205,7 +205,7 @@ func (c *Client) scanForPort(ctx context.Context) int {
 
 		var hr HealthResponse
 		err = json.NewDecoder(resp.Body).Decode(&hr)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if err != nil {
 			continue
 		}
@@ -273,7 +273,7 @@ func (c *Client) Health() error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return apperrors.Newf("Client.Health", "health status %d", resp.StatusCode)
 	}
@@ -340,7 +340,7 @@ func (c *Client) postJSON(path string, reqBody any, out any, okStatus ...int) er
 	if err != nil {
 		return apperrors.Wrapf(err, "Client.postJSON", "POST %s", path)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if !statusOK(resp.StatusCode, okStatus) {
 		body, _ := io.ReadAll(resp.Body)
 		return apperrors.Newf("Client.postJSON", "POST %s status %d: %s", path, resp.StatusCode, body)
@@ -357,7 +357,7 @@ func (c *Client) getJSON(path string, out any) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
@@ -368,7 +368,7 @@ func (c *Client) doRequest(method, path string, okStatus ...int) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if !statusOK(resp.StatusCode, okStatus) {
 		return apperrors.Newf("Client.doRequest", "%s %s status %d", method, path, resp.StatusCode)
 	}
@@ -412,7 +412,7 @@ func (c *Client) Submit(prompt string, images, files []string, outputSchema json
 	if err != nil {
 		return apperrors.Wrap(err, "Client.Submit", "submit http")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

@@ -151,10 +151,17 @@ func Error(msg string, args ...any) { getLogger().Error(msg, args...) }
 func Warn(msg string, args ...any)  { getLogger().Warn(msg, args...) }
 func Debug(msg string, args ...any) { getLogger().Debug(msg, args...) }
 
-// Infof/Errorf/Warnf/Debugf 记录格式化日志。
-func Infof(format string, args ...any)  { getLogger().Info(fmt.Sprintf(format, args...)) }
+// Deprecated: Infof 使用 fmt.Sprintf 拼消息，丢失 slog 结构化查询能力。
+// 请迁移至 Info(msg, key, value...) 获得结构化日志。
+func Infof(format string, args ...any) { getLogger().Info(fmt.Sprintf(format, args...)) }
+
+// Deprecated: Errorf 使用 fmt.Sprintf 拼消息，丢失 slog 结构化查询能力。
 func Errorf(format string, args ...any) { getLogger().Error(fmt.Sprintf(format, args...)) }
-func Warnf(format string, args ...any)  { getLogger().Warn(fmt.Sprintf(format, args...)) }
+
+// Deprecated: Warnf 使用 fmt.Sprintf 拼消息，丢失 slog 结构化查询能力。
+func Warnf(format string, args ...any) { getLogger().Warn(fmt.Sprintf(format, args...)) }
+
+// Deprecated: Debugf 使用 fmt.Sprintf 拼消息，丢失 slog 结构化查询能力。
 func Debugf(format string, args ...any) { getLogger().Debug(fmt.Sprintf(format, args...)) }
 
 // Fatal 记录致命错误, flush 异步日志缓冲后退出。
@@ -165,10 +172,16 @@ func Fatal(msg string, args ...any) {
 	exitFunc(1)
 }
 
-// Infow/Warnw/Errorw/Debugw 等同于 Info/Warn/Error/Debug (兼容别名)。
-func Infow(msg string, keysAndValues ...any)  { getLogger().Info(msg, keysAndValues...) }
-func Warnw(msg string, keysAndValues ...any)  { getLogger().Warn(msg, keysAndValues...) }
+// Deprecated: Infow 等同于 Info (zap 兼容别名)，slog 原生支持 key-value，无需区分。
+func Infow(msg string, keysAndValues ...any) { getLogger().Info(msg, keysAndValues...) }
+
+// Deprecated: Warnw 等同于 Warn (zap 兼容别名)。
+func Warnw(msg string, keysAndValues ...any) { getLogger().Warn(msg, keysAndValues...) }
+
+// Deprecated: Errorw 等同于 Error (zap 兼容别名)。
 func Errorw(msg string, keysAndValues ...any) { getLogger().Error(msg, keysAndValues...) }
+
+// Deprecated: Debugw 等同于 Debug (zap 兼容别名)。
 func Debugw(msg string, keysAndValues ...any) { getLogger().Debug(msg, keysAndValues...) }
 
 // With 返回带附加上下文的日志器。

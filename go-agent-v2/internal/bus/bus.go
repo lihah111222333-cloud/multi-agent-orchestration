@@ -12,7 +12,9 @@ package bus
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -215,12 +217,12 @@ type Subscriber struct {
 //   - 订阅 "*" → 收到所有消息
 //   - 发布 agent.a0.output → 匹配 "agent.a0", "agent.", "*" 的订阅者
 type MessageBus struct {
-	// mu 保护 subscribers map 和 seq 计数器。
-	// Publish 持锁递增 seq + 快照订阅者列表, 然后释放锁再 fan-out。
-	mu          sync.Mutex
+	// mu 保护 subscribers map 和 onPublish 回调。
+	// Publish 持锁快照订阅者列表, 然后释放锁再 fan-out。
+	mu          sync.RWMutex
 	subscribers map[string]*Subscriber // key = subscriber ID
-	seq         int64
-	onPublish   func(Message) // 可选: 每条消息的全局回调 (用于桥接 SSE/日志)
+	seq         atomic.Int64           // 全局序列号 (原子操作, 无需持锁)
+	onPublish   func(Message)          // 可选: 每条消息的全局回调 (用于桥接 SSE/日志)
 }
 
 // NewMessageBus 创建消息总线。
@@ -246,12 +248,12 @@ func (b *MessageBus) SetOnPublish(fn func(Message)) {
 // seq 在锁内分配, 保证全局唯一递增。fan-out 在锁外执行,
 // 不阻塞 Subscribe/Unsubscribe (避免慢消费者拖慢订阅管理)。
 func (b *MessageBus) Publish(msg Message) {
-	b.mu.Lock()
-	b.seq++
-	msg.Seq = b.seq
+	msg.Seq = b.seq.Add(1)
 	if msg.Timestamp.IsZero() {
 		msg.Timestamp = time.Now()
 	}
+
+	b.mu.RLock()
 	onPub := b.onPublish
 
 	// 快照匹配的订阅者
@@ -261,7 +263,7 @@ func (b *MessageBus) Publish(msg Message) {
 			matched = append(matched, sub)
 		}
 	}
-	b.mu.Unlock()
+	b.mu.RUnlock()
 
 	// fan-out 在锁外执行, 不阻塞 Subscribe/Unsubscribe
 	for _, sub := range matched {
@@ -308,18 +310,15 @@ func (b *MessageBus) Unsubscribe(id string) {
 
 // SubscriberCount 返回当前订阅者数量。
 func (b *MessageBus) SubscriberCount() int {
-	b.mu.Lock()
+	b.mu.RLock()
 	n := len(b.subscribers)
-	b.mu.Unlock()
+	b.mu.RUnlock()
 	return n
 }
 
-// Seq 返回当前序列号。
+// Seq 返回当前序列号 (原子读, 无锁)。
 func (b *MessageBus) Seq() int64 {
-	b.mu.Lock()
-	s := b.seq
-	b.mu.Unlock()
-	return s
+	return b.seq.Load()
 }
 
 // ========================================
@@ -334,5 +333,5 @@ func (b *MessageBus) Seq() int64 {
 //   - filter "system" 匹配 "system", "system.health"
 func matchTopic(filter, topic string) bool {
 	return filter == TopicAll || topic == filter ||
-		(len(topic) > len(filter) && topic[:len(filter)] == filter && topic[len(filter)] == '.')
+		strings.HasPrefix(topic, filter+".")
 }

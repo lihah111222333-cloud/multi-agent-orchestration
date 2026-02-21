@@ -472,9 +472,7 @@ func (m *AgentManager) KillAll() {
 		procs = append(procs, proc)
 	}
 	// 清空 map, 避免重复操作
-	for id := range m.agents {
-		delete(m.agents, id)
-	}
+	clear(m.agents)
 	m.mu.Unlock()
 
 	if len(procs) == 0 {

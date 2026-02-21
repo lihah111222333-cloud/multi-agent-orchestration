@@ -23,7 +23,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
 		os.Exit(1)
 	}
-	defer conn.Close(ctx)
+	defer func() {
+		if err := conn.Close(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: conn close: %v\n", err)
+		}
+	}()
 
 	files, err := filepath.Glob("migrations/*.sql")
 	if err != nil {

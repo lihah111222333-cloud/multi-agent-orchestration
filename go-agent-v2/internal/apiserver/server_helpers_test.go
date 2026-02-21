@@ -189,8 +189,9 @@ func TestReadLoopPanicRecovery_DisconnectsConn(t *testing.T) {
 // proc==nil 时 handleApprovalRequest 通过 event.DenyFunc 自动拒绝, 防止 codex turn 挂起。
 func TestHandleApprovalRequest_ProcNil_AutoDenies(t *testing.T) {
 	s := &Server{
-		mgr:   nil, // mgr==nil → proc 查不到
-		conns: map[string]*connEntry{},
+		mgr:     nil, // mgr==nil → proc 查不到
+		conns:   map[string]*connEntry{},
+		pending: make(map[int64]chan *Response), // Wails 模式需要
 	}
 
 	denied := false

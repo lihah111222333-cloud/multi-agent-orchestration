@@ -82,8 +82,9 @@ func TestHandleApprovalRequest_DenyFuncError_LogsWarn(t *testing.T) {
 	defer restore()
 
 	s := &Server{
-		mgr:   nil, // mgr==nil → 走 deny 路径
-		conns: map[string]*connEntry{},
+		mgr:     nil, // mgr==nil → 走 deny 路径
+		conns:   map[string]*connEntry{},
+		pending: make(map[int64]chan *Response), // Wails 模式需要
 	}
 
 	event := codex.Event{

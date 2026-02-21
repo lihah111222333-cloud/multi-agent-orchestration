@@ -1,4 +1,4 @@
-// server_payload.go — payload 提取、事件分发 & HTTP-RPC 兼容层。
+// server_payload.go — payload 提取、事件分发、通知广播、UI 状态同步 & HTTP-RPC 兼容层。
 package apiserver
 
 import (
@@ -6,12 +6,176 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
+
+// uiStateThrottleEntry 全局节流状态。
+type uiStateThrottleEntry struct {
+	lastEmit time.Time      // 上次实际发送时间
+	timer    *time.Timer    // trailing timer (保证最终一致)
+	pending  map[string]any // 最新 payload (合并)
+}
+
+// SetNotifyHook 设置 Notify 事件钩子。
+//
+// 用于桌面端桥接: apiserver 事件 -> Wails runtime event。
+func (s *Server) SetNotifyHook(h func(method string, params any)) {
+	s.notifyHookMu.Lock()
+	s.notifyHook = h
+	s.notifyHookMu.Unlock()
+}
+
+// Notify 向所有连接广播 JSON-RPC 通知 (WebSocket + SSE)。
+func (s *Server) Notify(method string, params any) {
+	s.syncUIRuntimeFromNotify(method, params)
+	payload := util.ToMapAny(params)
+	s.broadcastNotification(method, payload)
+
+	if shouldEmitUIStateChanged(method, payload) {
+		statePayload := map[string]any{"source": method}
+		if tid, _ := payload["threadId"].(string); tid != "" {
+			statePayload["threadId"] = tid
+		}
+		if aid, _ := payload["agent_id"].(string); aid != "" {
+			statePayload["agent_id"] = aid
+		}
+		s.throttledUIStateChanged(statePayload)
+	}
+}
+
+func shouldEmitUIStateChanged(method string, payload map[string]any) bool {
+	if method == "" || method == "ui/state/changed" {
+		return false
+	}
+	if strings.HasPrefix(method, "workspace/run/") {
+		return true
+	}
+	threadID, _ := payload["threadId"].(string)
+	if strings.TrimSpace(threadID) != "" {
+		return true
+	}
+	agentID, _ := payload["agent_id"].(string)
+	return strings.TrimSpace(agentID) != ""
+}
+
+// throttledUIStateChanged 全局节流发送 ui/state/changed。
+//
+// 使用全局统一节流 (不再 per-thread): 多 agent 并行时也只发一条,
+// 前端只需要一个信号触发 syncRuntimeState 拉取最新快照。
+func (s *Server) throttledUIStateChanged(payload map[string]any) {
+	key := "_global"
+
+	now := time.Now()
+	interval := time.Duration(uiStateThrottleMs) * time.Millisecond
+
+	s.uiThrottleMu.Lock()
+	if s.uiThrottleEntries == nil {
+		s.uiThrottleEntries = make(map[string]*uiStateThrottleEntry)
+	}
+	entry, ok := s.uiThrottleEntries[key]
+	if !ok {
+		entry = &uiStateThrottleEntry{}
+		s.uiThrottleEntries[key] = entry
+	}
+
+	// 保存最新 payload (合并/覆盖)
+	entry.pending = payload
+
+	// 节流窗口内: 只安排 trailing timer
+	if now.Sub(entry.lastEmit) < interval {
+		if entry.timer == nil {
+			entry.timer = time.AfterFunc(interval, func() {
+				s.flushUIStateChanged(key)
+			})
+		}
+		s.uiThrottleMu.Unlock()
+		return
+	}
+
+	// 节流窗口外: 立即发送
+	entry.lastEmit = now
+	pending := entry.pending
+	entry.pending = nil
+	// 取消 trailing timer (刚发了, 不需要了)
+	if entry.timer != nil {
+		entry.timer.Stop()
+		entry.timer = nil
+	}
+	s.uiThrottleMu.Unlock()
+
+	s.broadcastNotification("ui/state/changed", pending)
+}
+
+// flushUIStateChanged trailing timer 回调: 发送最后一个 pending payload。
+func (s *Server) flushUIStateChanged(key string) {
+	s.uiThrottleMu.Lock()
+	entry, ok := s.uiThrottleEntries[key]
+	if !ok || entry.pending == nil {
+		if ok {
+			entry.timer = nil
+		}
+		s.uiThrottleMu.Unlock()
+		return
+	}
+	entry.lastEmit = time.Now()
+	pending := entry.pending
+	entry.pending = nil
+	entry.timer = nil
+	s.uiThrottleMu.Unlock()
+
+	s.broadcastNotification("ui/state/changed", pending)
+}
+
+func (s *Server) syncUIRuntimeFromNotify(method string, params any) {
+	if s.uiRuntime == nil {
+		return
+	}
+	payload := util.ToMapAny(params)
+	switch method {
+	case "workspace/run/created", "workspace/run/aborted":
+		run := util.ToMapAny(payload["run"])
+		if len(run) == 0 {
+			return
+		}
+		s.uiRuntime.UpsertWorkspaceRun(run)
+	case "workspace/run/merged":
+		runKey, _ := payload["runKey"].(string)
+		result := util.ToMapAny(payload["result"])
+		if len(result) == 0 {
+			return
+		}
+		s.uiRuntime.ApplyWorkspaceMergeResult(runKey, result)
+	}
+	if shouldReplayThreadNotifyToUIRuntime(method, payload) {
+		threadID, _ := payload["threadId"].(string)
+		normalized := uistate.NormalizeEventFromPayload(method, method, payload)
+		s.uiRuntime.ApplyAgentEvent(strings.TrimSpace(threadID), normalized, payload)
+	}
+}
+
+func shouldReplayThreadNotifyToUIRuntime(method string, payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	if _, hasUIType := payload["uiType"]; hasUIType {
+		return false
+	}
+	threadID, _ := payload["threadId"].(string)
+	if strings.TrimSpace(threadID) == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "turn/completed", "turn/aborted", "error", "codex/event/stream_error":
+		return true
+	default:
+		return false
+	}
+}
 
 var payloadExtractKeys = []string{
 	// legacy fields
@@ -327,6 +491,13 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 
 		// 从 event.Data 提取前端常用字段到顶层 (含嵌套 msg/data/payload)。
 		mergePayloadFields(payload, event.Data)
+
+		// mergePayloadFields 可能用 Codex 原始 threadId (UUID) 覆盖了 agentID,
+		// 前端 ConversationManager 使用 Go agentID (thread-*) 作为 key, 必须还原。
+		if rawTID, _ := payload["threadId"].(string); rawTID != "" && rawTID != agentID {
+			payload["codexThreadId"] = rawTID
+		}
+		payload["threadId"] = agentID
 		s.enrichFileChangePayload(agentID, event.Type, method, payload)
 		s.captureAndInjectTurnSummary(agentID, event.Type, method, payload)
 		if method == "error" {
@@ -437,7 +608,9 @@ func (s *Server) handleHTTPRPC(w http.ResponseWriter, r *http.Request) {
 		"result":  result,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		logger.Debug("http-rpc: encode response", logger.FieldError, err)
+	}
 }
 
 // writeJSONRPCError 写 JSON-RPC 错误响应。
@@ -452,7 +625,9 @@ func writeJSONRPCError(w http.ResponseWriter, id any, code int, message string) 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK) // JSON-RPC 错误仍返回 200
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		logger.Debug("http-rpc: encode error response", logger.FieldError, err)
+	}
 }
 
 // recoveryMiddleware 捕获 HTTP handler panic，防止单个请求崩溃导致整个服务端退出。
@@ -517,7 +692,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case data := <-ch:
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 		case <-r.Context().Done():
 			logger.Info("sse: client disconnected", logger.FieldRemote, r.RemoteAddr)

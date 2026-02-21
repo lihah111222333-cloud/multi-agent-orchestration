@@ -14,8 +14,8 @@ func TestResolveEventFields_TextFallback(t *testing.T) {
 	}
 
 	result := resolveEventFields(normalized, payload)
-	if result.text != "from normalized" {
-		t.Fatalf("text = %q, want %q", result.text, "from normalized")
+	if result.text != " from normalized " {
+		t.Fatalf("text = %q, want %q", result.text, " from normalized ")
 	}
 }
 
@@ -1289,6 +1289,53 @@ func TestAssistantDone_AfterCommandBackfillsAtTail(t *testing.T) {
 	}
 	if timeline[2].Text != "再补总结。" {
 		t.Fatalf("timeline[2].Text = %q, want 再补总结。", timeline[2].Text)
+	}
+}
+
+func TestAssistantDone_AfterCommandBackfillsPreserveLeadingNewlines(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-assistant-done-tail-whitespace"
+
+	first := NormalizeEvent("agent_message_delta", "", mustRawJSON(`{"delta":"line1","uiText":"line1"}`))
+	mgr.ApplyAgentEvent(threadID, first, map[string]any{"delta": "line1"})
+
+	cmdStart := NormalizeEvent("exec_command_begin", "", mustRawJSON(`{"command":"echo hi","uiCommand":"echo hi"}`))
+	mgr.ApplyAgentEvent(threadID, cmdStart, map[string]any{"command": "echo hi"})
+
+	done := NormalizeEvent("agent_message", "", mustRawJSON(`{"text":"line1\n\n- item","uiText":"line1\n\n- item"}`))
+	mgr.ApplyAgentEvent(threadID, done, map[string]any{"text": "line1\n\n- item"})
+
+	timeline := mgr.ThreadTimeline(threadID)
+	if len(timeline) != 3 {
+		t.Fatalf("timeline len = %d, want 3", len(timeline))
+	}
+	if timeline[2].Kind != "assistant" {
+		t.Fatalf("timeline[2].Kind = %q, want assistant", timeline[2].Kind)
+	}
+	if timeline[2].Text != "\n\n- item" {
+		t.Fatalf("timeline[2].Text = %q, want %q", timeline[2].Text, "\n\n- item")
+	}
+}
+
+func TestCommandOutput_PreservesTrailingNewline(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-command-output-whitespace"
+
+	begin := NormalizeEvent("exec_command_begin", "", mustRawJSON(`{"command":"echo hi","uiCommand":"echo hi"}`))
+	mgr.ApplyAgentEvent(threadID, begin, map[string]any{"command": "echo hi"})
+
+	output := NormalizeEvent("exec_command_output_delta", "", mustRawJSON("{\"output\":\"line1\\n  line2\\n\"}"))
+	mgr.ApplyAgentEvent(threadID, output, map[string]any{"output": "line1\n  line2\n"})
+
+	timeline := mgr.ThreadTimeline(threadID)
+	if len(timeline) != 1 {
+		t.Fatalf("timeline len = %d, want 1", len(timeline))
+	}
+	if timeline[0].Kind != "command" {
+		t.Fatalf("timeline[0].Kind = %q, want command", timeline[0].Kind)
+	}
+	if timeline[0].Output != "line1\n  line2\n" {
+		t.Fatalf("timeline[0].Output = %q, want %q", timeline[0].Output, "line1\n  line2\n")
 	}
 }
 

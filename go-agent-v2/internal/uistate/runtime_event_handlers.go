@@ -42,7 +42,8 @@ var runtimeEventHandlers = map[UIType]runtimeEventHandler{
 
 func resolveEventFields(normalized NormalizedEvent, payload map[string]any) resolvedFields {
 	fields := resolvedFields{
-		text:    strings.TrimSpace(normalized.Text),
+		// Preserve streaming whitespace/newlines; trimming here breaks markdown/code formatting.
+		text:    normalized.Text,
 		command: strings.TrimSpace(normalized.Command),
 		file:    strings.TrimSpace(normalized.File),
 		files:   nil,
@@ -784,8 +785,8 @@ func handleAssistantDeltaEvent(m *RuntimeManager, threadID string, fields resolv
 }
 
 func handleAssistantDoneEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
-	doneText := strings.TrimSpace(fields.text)
-	if doneText != "" {
+	doneText := fields.text
+	if strings.TrimSpace(doneText) != "" {
 		backfillText := doneText
 		shouldBackfill := false
 
@@ -798,14 +799,14 @@ func handleAssistantDoneEvent(m *RuntimeManager, threadID string, fields resolve
 			if idx < 0 || idx >= len(timeline) {
 				shouldBackfill = true
 			} else {
-				current := strings.TrimSpace(timeline[idx].Text)
-				if current == "" {
+				current := timeline[idx].Text
+				if strings.TrimSpace(current) == "" {
 					shouldBackfill = true
 				} else if idx != len(timeline)-1 {
 					if doneText == current {
 						backfillText = ""
 					} else if strings.HasPrefix(doneText, current) {
-						backfillText = strings.TrimSpace(strings.TrimPrefix(doneText, current))
+						backfillText = strings.TrimPrefix(doneText, current)
 					}
 					if backfillText != "" {
 						m.finishAssistantLocked(threadID)

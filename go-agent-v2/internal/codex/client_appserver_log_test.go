@@ -52,3 +52,31 @@ func TestShouldLogLegacyMirrorDrop_SampledOccurrence(t *testing.T) {
 		t.Fatal("every 100th occurrence should be logged")
 	}
 }
+
+// ── Bug 7 (TDD): truncateString UTF-8 安全截断 ──
+
+func TestTruncateString_UTF8Safety(t *testing.T) {
+	// 5 个中文字符 = 15 字节, 截断到 3 rune 应保持完整
+	input := "你好世界啊"
+	got := truncateString(input, 3)
+	want := "你好世...(truncated)"
+	if got != want {
+		t.Errorf("truncateString(%q, 3) = %q, want %q", input, got, want)
+	}
+}
+
+func TestTruncateString_NoTruncateWhenShort(t *testing.T) {
+	input := "hello"
+	got := truncateString(input, 10)
+	if got != input {
+		t.Errorf("truncateString(%q, 10) = %q, want %q", input, got, input)
+	}
+}
+
+func TestTruncateString_ZeroMaxReturnsOriginal(t *testing.T) {
+	input := "hello"
+	got := truncateString(input, 0)
+	if got != input {
+		t.Errorf("truncateString(%q, 0) = %q, want %q", input, got, input)
+	}
+}

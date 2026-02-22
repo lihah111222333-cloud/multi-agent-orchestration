@@ -414,29 +414,48 @@ function sortChatThreadsByPinned(threads) {
 
 
 
-// 增量合并 helper: 只更新 string 值变化的 key
-function mergeStringMap(target, source) {
-  if (!source || typeof source !== 'object') return;
+// 增量合并 helper: 只更新 string 值变化的 key (原子草稿版)
+function mergeStringMapAtomic(current, source) {
+  if (!source || typeof source !== 'object') {
+    return { next: current, changed: false };
+  }
+  let next = current;
+  let changed = false;
   for (const [key, value] of Object.entries(source)) {
     const str = (value || '').toString();
-    if (target[key] !== str) target[key] = str;
+    if (next[key] === str) continue;
+    if (!changed) {
+      next = { ...(next || {}) };
+      changed = true;
+    }
+    next[key] = str;
   }
+  return { next, changed };
 }
 
-// 增量合并 helper: 用 JSON.stringify 对比的 object map
-function mergeObjectMap(target, source) {
-  if (!source || typeof source !== 'object') return;
-  for (const [key, value] of Object.entries(source)) {
-    const next = value && typeof value === 'object' ? value : {};
-    if (JSON.stringify(target[key]) !== JSON.stringify(next)) {
-      Object.freeze(next);
-      target[key] = next;
-    }
+// 增量合并 helper: 用 JSON.stringify 对比的 object map (原子草稿版)
+function mergeObjectMapAtomic(current, source) {
+  if (!source || typeof source !== 'object') {
+    return { next: current, changed: false };
   }
+  let next = current;
+  let changed = false;
+  for (const [key, value] of Object.entries(source)) {
+    const normalized = value && typeof value === 'object' ? value : {};
+    if (JSON.stringify(next[key]) === JSON.stringify(normalized)) continue;
+    if (!changed) {
+      next = { ...(next || {}) };
+      changed = true;
+    }
+    Object.freeze(normalized);
+    next[key] = normalized;
+  }
+  return { next, changed };
 }
 
 function applyRuntimeSnapshot(snapshot) {
   const data = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  const patch = {};
 
   // --- threads: 首次出现顺序固定，且仅在 ID 集变化时替换 ---
   const unorderedThreads = Array.isArray(data.threads)
@@ -446,39 +465,60 @@ function applyRuntimeSnapshot(snapshot) {
   const oldIds = state.threads.map((t) => t.id).join(',');
   const newIds = nextThreads.map((t) => t.id).join(',');
   if (oldIds !== newIds) {
-    state.threads = nextThreads;
+    patch.threads = nextThreads;
   }
 
   // --- statuses: 增量合并, 只更新变化的 key ---
+  let nextStatuses = state.statuses;
+  let statusesChanged = false;
   if (data.statuses && typeof data.statuses === 'object') {
     for (const [key, value] of Object.entries(data.statuses)) {
       const normalized = normalizeStatus(value);
-      if (state.statuses[key] !== normalized) {
-        state.statuses[key] = normalized;
+      if (nextStatuses[key] === normalized) continue;
+      if (!statusesChanged) {
+        nextStatuses = { ...nextStatuses };
+        statusesChanged = true;
       }
+      nextStatuses[key] = normalized;
     }
   }
   for (const thread of nextThreads) {
-    if (!state.statuses[thread.id]) {
-      state.statuses[thread.id] = normalizeStatus(thread.state || 'idle');
+    if (nextStatuses[thread.id]) continue;
+    if (!statusesChanged) {
+      nextStatuses = { ...nextStatuses };
+      statusesChanged = true;
     }
+    nextStatuses[thread.id] = normalizeStatus(thread.state || 'idle');
+  }
+  if (statusesChanged) {
+    patch.statuses = nextStatuses;
   }
 
   // --- interruptibleByThread: 增量合并 ---
+  let nextInterruptibleByThread = state.interruptibleByThread;
+  let interruptibleChanged = false;
   if (data.interruptibleByThread && typeof data.interruptibleByThread === 'object') {
     for (const [key, value] of Object.entries(data.interruptibleByThread)) {
       const b = Boolean(value);
-      if (state.interruptibleByThread[key] !== b) {
-        state.interruptibleByThread[key] = b;
+      if (nextInterruptibleByThread[key] === b) continue;
+      if (!interruptibleChanged) {
+        nextInterruptibleByThread = { ...nextInterruptibleByThread };
+        interruptibleChanged = true;
       }
+      nextInterruptibleByThread[key] = b;
     }
+  }
+  if (interruptibleChanged) {
+    patch.interruptibleByThread = nextInterruptibleByThread;
   }
 
   // --- timelinesByThread: freeze items + 只在变化时替换 ---
+  let nextTimelinesByThread = state.timelinesByThread;
+  let timelinesChanged = false;
   if (data.timelinesByThread && typeof data.timelinesByThread === 'object') {
     for (const [key, value] of Object.entries(data.timelinesByThread)) {
       const newItems = Array.isArray(value) ? value : [];
-      const oldItems = state.timelinesByThread[key];
+      const oldItems = nextTimelinesByThread[key];
       // 快速对比: 长度相同 + 最后一条 item 的 id/text长度/output长度/command/status/done 都相同 → 跳过
       if (
         oldItems &&
@@ -504,59 +544,105 @@ function applyRuntimeSnapshot(snapshot) {
           Object.freeze(newItems[i]);
         }
       }
-      state.timelinesByThread[key] = Object.freeze(newItems);
+      if (!timelinesChanged) {
+        nextTimelinesByThread = { ...nextTimelinesByThread };
+        timelinesChanged = true;
+      }
+      nextTimelinesByThread[key] = Object.freeze(newItems);
     }
+  }
+  if (timelinesChanged) {
+    patch.timelinesByThread = nextTimelinesByThread;
   }
 
   // --- diffTextByThread: 增量合并 ---
+  let nextDiffTextByThread = state.diffTextByThread;
+  let diffChanged = false;
   if (data.diffTextByThread && typeof data.diffTextByThread === 'object') {
     for (const [key, value] of Object.entries(data.diffTextByThread)) {
       const str = (value || '').toString();
-      if (state.diffTextByThread[key] !== str) {
-        state.diffTextByThread[key] = str;
+      if (nextDiffTextByThread[key] === str) continue;
+      if (!diffChanged) {
+        nextDiffTextByThread = { ...nextDiffTextByThread };
+        diffChanged = true;
       }
+      nextDiffTextByThread[key] = str;
     }
+  }
+  if (diffChanged) {
+    patch.diffTextByThread = nextDiffTextByThread;
   }
 
   // --- 轻量 string 字段: 增量合并 ---
-  mergeStringMap(state.statusHeadersByThread, data.statusHeadersByThread);
-  mergeStringMap(state.statusDetailsByThread, data.statusDetailsByThread);
+  const mergedStatusHeaders = mergeStringMapAtomic(state.statusHeadersByThread, data.statusHeadersByThread);
+  if (mergedStatusHeaders.changed) {
+    patch.statusHeadersByThread = mergedStatusHeaders.next;
+  }
+  const mergedStatusDetails = mergeStringMapAtomic(state.statusDetailsByThread, data.statusDetailsByThread);
+  if (mergedStatusDetails.changed) {
+    patch.statusDetailsByThread = mergedStatusDetails.next;
+  }
 
   // --- 对象字段: JSON.stringify 对比后赋值 ---
-  mergeObjectMap(state.tokenUsageByThread, data.tokenUsageByThread);
-  mergeObjectMap(state.agentMetaById, data.agentMetaById);
-  mergeObjectMap(state.agentRuntimeById, data.agentRuntimeById);
-  mergeObjectMap(state.activityStatsByThread, data.activityStatsByThread);
-  mergeObjectMap(state.alertsByThread, data.alertsByThread);
+  const mergedTokenUsage = mergeObjectMapAtomic(state.tokenUsageByThread, data.tokenUsageByThread);
+  if (mergedTokenUsage.changed) {
+    patch.tokenUsageByThread = mergedTokenUsage.next;
+  }
+  const mergedAgentMeta = mergeObjectMapAtomic(state.agentMetaById, data.agentMetaById);
+  if (mergedAgentMeta.changed) {
+    patch.agentMetaById = mergedAgentMeta.next;
+  }
+  const mergedAgentRuntime = mergeObjectMapAtomic(state.agentRuntimeById, data.agentRuntimeById);
+  if (mergedAgentRuntime.changed) {
+    patch.agentRuntimeById = mergedAgentRuntime.next;
+  }
+  const mergedActivityStats = mergeObjectMapAtomic(state.activityStatsByThread, data.activityStatsByThread);
+  if (mergedActivityStats.changed) {
+    patch.activityStatsByThread = mergedActivityStats.next;
+  }
+  const mergedAlerts = mergeObjectMapAtomic(state.alertsByThread, data.alertsByThread);
+  if (mergedAlerts.changed) {
+    patch.alertsByThread = mergedAlerts.next;
+  }
 
   if (Object.prototype.hasOwnProperty.call(data, PREF_ACTIVE_THREAD_ID)) {
     const next = (data[PREF_ACTIVE_THREAD_ID] || '').toString();
-    if (state.activeThreadId !== next) state.activeThreadId = next;
+    if (state.activeThreadId !== next) patch.activeThreadId = next;
   }
   if (Object.prototype.hasOwnProperty.call(data, PREF_ACTIVE_CMD_THREAD_ID)) {
     const next = (data[PREF_ACTIVE_CMD_THREAD_ID] || '').toString();
-    if (state.activeCmdThreadId !== next) state.activeCmdThreadId = next;
+    if (state.activeCmdThreadId !== next) patch.activeCmdThreadId = next;
   }
   if (Object.prototype.hasOwnProperty.call(data, PREF_MAIN_AGENT_ID)) {
     const next = (data[PREF_MAIN_AGENT_ID] || '').toString();
-    if (state.mainAgentId !== next) state.mainAgentId = next;
+    if (state.mainAgentId !== next) patch.mainAgentId = next;
   }
   if (Object.prototype.hasOwnProperty.call(data, PREF_PINNED_THREADS_CHAT)) {
     const pinnedMap = normalizePinnedThreadMap(data[PREF_PINNED_THREADS_CHAT]);
     for (const id of Object.keys(pinnedMap)) {
       ensureThreadOrderIndex(id);
     }
-    state.pinnedThreadAtById = pinnedMap;
+    patch.pinnedThreadAtById = pinnedMap;
   }
   if (Object.prototype.hasOwnProperty.call(data, PREF_ARCHIVED_THREADS_CHAT)) {
     const archivedMap = normalizeArchivedThreadMap(data[PREF_ARCHIVED_THREADS_CHAT]);
     for (const id of Object.keys(archivedMap)) {
       ensureThreadOrderIndex(id);
     }
-    state.archivedThreadAtById = archivedMap;
+    patch.archivedThreadAtById = archivedMap;
   }
-  state.viewPrefsChat = normalizeChatPrefs(data[PREF_VIEW_CHAT]);
-  state.viewPrefsCmd = normalizeCmdPrefs(data[PREF_VIEW_CMD]);
+  const nextViewPrefsChat = normalizeChatPrefs(data[PREF_VIEW_CHAT]);
+  if (JSON.stringify(nextViewPrefsChat) !== JSON.stringify(state.viewPrefsChat)) {
+    patch.viewPrefsChat = nextViewPrefsChat;
+  }
+  const nextViewPrefsCmd = normalizeCmdPrefs(data[PREF_VIEW_CMD]);
+  if (JSON.stringify(nextViewPrefsCmd) !== JSON.stringify(state.viewPrefsCmd)) {
+    patch.viewPrefsCmd = nextViewPrefsCmd;
+  }
+
+  if (Object.keys(patch).length > 0) {
+    Object.assign(state, patch);
+  }
 }
 
 async function syncRuntimeState() {

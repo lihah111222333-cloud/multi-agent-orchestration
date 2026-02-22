@@ -88,6 +88,100 @@ aliases:
 	}
 }
 
+func TestListSkillsAddsExplicitTriggerFromFrontmatterName(t *testing.T) {
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "go-backend-tdd")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := `---
+name: "测试驱动开发"
+description: "tdd skill"
+aliases: ["@TDD", "@测试驱动"]
+---
+# TDD`
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	svc := NewSkillService(tmp)
+	skills, err := svc.ListSkills()
+	if err != nil {
+		t.Fatalf("ListSkills error: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("len(skills)=%d, want=1", len(skills))
+	}
+	got := skills[0]
+	wantWords := []string{"@TDD", "@测试驱动", "@测试驱动开发", "[skill:测试驱动开发]"}
+	if !reflect.DeepEqual(got.TriggerWords, wantWords) {
+		t.Fatalf("trigger_words=%v, want=%v", got.TriggerWords, wantWords)
+	}
+}
+
+func TestListSkillsUsesFrontmatterNameAsDisplayName(t *testing.T) {
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "go-backend-development")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := `---
+name: "测试驱动开发"
+description: "tdd skill"
+---
+# TDD`
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	svc := NewSkillService(tmp)
+	skills, err := svc.ListSkills()
+	if err != nil {
+		t.Fatalf("ListSkills error: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("len(skills)=%d, want=1", len(skills))
+	}
+	if skills[0].Name != "测试驱动开发" {
+		t.Fatalf("skill name=%q, want=%q", skills[0].Name, "测试驱动开发")
+	}
+}
+
+func TestReadSkillContentResolvesFrontmatterName(t *testing.T) {
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "go-backend-development")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := `---
+name: "测试驱动开发"
+description: "tdd skill"
+---
+# TDD
+Body`
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	svc := NewSkillService(tmp)
+
+	got, err := svc.ReadSkillContent("测试驱动开发")
+	if err != nil {
+		t.Fatalf("ReadSkillContent by frontmatter name error: %v", err)
+	}
+	if !strings.Contains(got, "# TDD") {
+		t.Fatalf("content=%q, want include # TDD", got)
+	}
+
+	got, err = svc.ReadSkillContent("go-backend-development")
+	if err != nil {
+		t.Fatalf("ReadSkillContent by dir name error: %v", err)
+	}
+	if !strings.Contains(got, "Body") {
+		t.Fatalf("content=%q, want include Body", got)
+	}
+}
+
 func TestReadSkillDigestIncludesSectionRefs(t *testing.T) {
 	tmp := t.TempDir()
 	dir := filepath.Join(tmp, "brand")

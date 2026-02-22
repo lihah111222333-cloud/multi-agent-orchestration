@@ -44,13 +44,18 @@ type SkillService struct {
 	dir string
 }
 
+type skillDirEntry struct {
+	DirName string
+	DirPath string
+	Meta    skillMetadata
+}
+
 // NewSkillService 创建 SkillService。
 func NewSkillService(dir string) *SkillService {
 	return &SkillService{dir: dir}
 }
 
-// ListSkills 扫描目录并返回所有 Skill 信息。
-func (s *SkillService) ListSkills() ([]SkillInfo, error) {
+func (s *SkillService) scanSkillDirEntries() ([]skillDirEntry, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -59,16 +64,73 @@ func (s *SkillService) ListSkills() ([]SkillInfo, error) {
 		return nil, err
 	}
 
-	var skills []SkillInfo
+	out := make([]skillDirEntry, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		skillPath := filepath.Join(s.dir, entry.Name(), "SKILL.md")
-		meta := extractSkillMetadata(skillPath)
+		dirName := entry.Name()
+		dirPath := filepath.Join(s.dir, dirName)
+		meta := extractSkillMetadata(filepath.Join(dirPath, "SKILL.md"))
+		out = append(out, skillDirEntry{
+			DirName: dirName,
+			DirPath: dirPath,
+			Meta:    meta,
+		})
+	}
+	return out, nil
+}
+
+func skillDisplayName(dirName string, meta skillMetadata) string {
+	if name := strings.TrimSpace(meta.Name); name != "" {
+		return name
+	}
+	return dirName
+}
+
+func matchSkillName(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+func (s *SkillService) resolveSkillDirName(name string) (string, error) {
+	requested := strings.TrimSpace(name)
+	if err := validateSkillName(requested); err != nil {
+		return "", apperrors.Wrap(err, "SkillService.resolveSkillDirName", "validate skill name")
+	}
+	list, err := s.scanSkillDirEntries()
+	if err != nil {
+		return "", err
+	}
+	if len(list) == 0 {
+		return "", os.ErrNotExist
+	}
+
+	for _, item := range list {
+		if matchSkillName(item.DirName, requested) {
+			return item.DirName, nil
+		}
+	}
+	for _, item := range list {
+		if matchSkillName(item.Meta.Name, requested) {
+			return item.DirName, nil
+		}
+	}
+	return "", os.ErrNotExist
+}
+
+// ListSkills 扫描目录并返回所有 Skill 信息。
+func (s *SkillService) ListSkills() ([]SkillInfo, error) {
+	entries, err := s.scanSkillDirEntries()
+	if err != nil {
+		return nil, err
+	}
+
+	skills := make([]SkillInfo, 0, len(entries))
+	for _, entry := range entries {
+		meta := entry.Meta
 		info := SkillInfo{
-			Name: entry.Name(),
-			Dir:  filepath.Join(s.dir, entry.Name()),
+			Name: skillDisplayName(entry.DirName, meta),
+			Dir:  entry.DirPath,
 			// 尝试读取 SKILL.md frontmatter 元数据
 			Description:  meta.Description,
 			Summary:      meta.Summary,
@@ -84,10 +146,11 @@ func (s *SkillService) ListSkills() ([]SkillInfo, error) {
 //
 // 含路径遍历防护: 拒绝包含 "/", "\", ".." 的名称。
 func (s *SkillService) ReadSkillContent(name string) (string, error) {
-	if err := validateSkillName(name); err != nil {
-		return "", apperrors.Wrap(err, "SkillService.ReadSkillContent", "validate skill name")
+	dirName, err := s.resolveSkillDirName(name)
+	if err != nil {
+		return "", err
 	}
-	path := filepath.Join(s.dir, name, "SKILL.md")
+	path := filepath.Join(s.dir, dirName, "SKILL.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -123,6 +186,7 @@ func (s *SkillService) ReadSkillDigest(name string) (SkillDigest, error) {
 }
 
 type skillMetadata struct {
+	Name          string
 	Description   string
 	Summary       string
 	SummarySource string
@@ -155,6 +219,8 @@ func parseSkillMetadata(content string) skillMetadata {
 			key := strings.ToLower(strings.TrimSpace(line[:colon]))
 			value := strings.TrimSpace(line[colon+1:])
 			switch key {
+			case "name":
+				meta.Name = parseFrontmatterScalar(value)
 			case "description":
 				meta.Description = parseFrontmatterScalar(value)
 			case "summary", "digest":
@@ -176,6 +242,16 @@ func parseSkillMetadata(content string) skillMetadata {
 				idx += consumed
 			}
 		}
+	}
+
+	name := strings.TrimSpace(meta.Name)
+	if name != "" {
+		// Frontmatter name should be reachable via explicit @mention even when
+		// directory name differs from display name.
+		meta.TriggerWords = append(meta.TriggerWords,
+			"@"+name,
+			"[skill:"+name+"]",
+		)
 	}
 
 	meta.Description = truncateRunes(meta.Description, 120)

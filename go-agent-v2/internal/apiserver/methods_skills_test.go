@@ -207,23 +207,11 @@ FULL TDD DETAIL SHOULD NOT INJECT`)
 		{Type: "skill", Name: "tdd", Content: "manual tdd"},
 	}
 	prompt, count := srv.buildConfiguredSkillPrompt("thread-1", input)
-	if count != 1 {
-		t.Fatalf("configured skill count=%d, want=1", count)
+	if count != 0 {
+		t.Fatalf("configured skill count=%d, want=0", count)
 	}
-	if !strings.Contains(prompt, "[skill:backend]") {
-		t.Fatalf("expected backend skill in prompt, got=%q", prompt)
-	}
-	if !strings.Contains(prompt, "摘要: backend-summary") {
-		t.Fatalf("expected backend summary in prompt, got=%q", prompt)
-	}
-	if strings.Contains(prompt, "FULL BACKEND DETAIL SHOULD NOT INJECT") {
-		t.Fatalf("full skill body should not be injected, got=%q", prompt)
-	}
-	if strings.Contains(prompt, "[skill:tdd]") {
-		t.Fatalf("input skill should skip configured duplicate, got=%q", prompt)
-	}
-	if strings.Contains(prompt, "[skill:missing]") {
-		t.Fatalf("missing skill should be skipped, got=%q", prompt)
+	if strings.TrimSpace(prompt) != "" {
+		t.Fatalf("configured skill prompt should be disabled, got=%q", prompt)
 	}
 }
 
@@ -259,20 +247,11 @@ FULL TDD DETAIL SHOULD NOT INJECT`)
 		{Type: "skill", Name: "tdd", Content: "manual tdd"},
 	}
 	prompt, count := srv.buildSelectedSkillPrompt([]string{"backend", "tdd", "missing"}, input)
-	if count != 1 {
-		t.Fatalf("selected skill count=%d, want=1", count)
+	if count != 0 {
+		t.Fatalf("selected skill count=%d, want=0", count)
 	}
-	if !strings.Contains(prompt, "[skill:backend]") {
-		t.Fatalf("expected backend selected skill in prompt, got=%q", prompt)
-	}
-	if !strings.Contains(prompt, "摘要: backend-summary") {
-		t.Fatalf("expected backend summary in prompt, got=%q", prompt)
-	}
-	if strings.Contains(prompt, "FULL BACKEND DETAIL SHOULD NOT INJECT") {
-		t.Fatalf("full skill body should not be injected, got=%q", prompt)
-	}
-	if strings.Contains(prompt, "[skill:tdd]") {
-		t.Fatalf("input skill should skip selected duplicate, got=%q", prompt)
+	if strings.TrimSpace(prompt) != "" {
+		t.Fatalf("selected skill prompt should be disabled, got=%q", prompt)
 	}
 }
 
@@ -316,11 +295,14 @@ tdd skill`)
 	if !strings.Contains(prompt, "[skill:tdd]") {
 		t.Fatalf("expected tdd skill in auto matched prompt, got=%q", prompt)
 	}
-	if !strings.Contains(prompt, "摘要: test helper") {
-		t.Fatalf("expected summary-based auto matched prompt, got=%q", prompt)
+	if !strings.Contains(prompt, "强制触发词: test") {
+		t.Fatalf("expected force instruction in auto matched prompt, got=%q", prompt)
 	}
-	if strings.Contains(prompt, "tdd skill") {
-		t.Fatalf("full skill body should not be injected, got=%q", prompt)
+	if !strings.Contains(prompt, "tdd skill") {
+		t.Fatalf("force matched skill should inject full skill body, got=%q", prompt)
+	}
+	if strings.Contains(prompt, "摘要: test helper") {
+		t.Fatalf("force matched skill should not inject digest, got=%q", prompt)
 	}
 	if strings.Contains(prompt, "[skill:backend]") {
 		t.Fatalf("configured skill should be skipped in auto match, got=%q", prompt)
@@ -446,8 +428,8 @@ FULL BACKEND DETAIL SHOULD NOT INJECT`)
 	if !strings.Contains(prompt, "执行要求: 本轮必须遵循该技能。") {
 		t.Fatalf("expected mandatory instruction, got=%q", prompt)
 	}
-	if strings.Contains(prompt, "FULL BACKEND DETAIL SHOULD NOT INJECT") {
-		t.Fatalf("full skill body should not be injected, got=%q", prompt)
+	if !strings.Contains(prompt, "FULL BACKEND DETAIL SHOULD NOT INJECT") {
+		t.Fatalf("force matched skill should inject full body even when configured, got=%q", prompt)
 	}
 }
 

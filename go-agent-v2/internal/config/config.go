@@ -59,6 +59,10 @@ type Config struct {
 	// 日志
 	LogLevel string `env:"LOG_LEVEL" default:"INFO"`
 
+	// HTTP 服务
+	GinMode        string `env:"GIN_MODE" default:"release"`          // release / debug / test
+	TrustedProxies string `env:"TRUSTED_PROXIES" default:"127.0.0.1"` // 逗号分隔 IP 列表
+
 	// 运行时
 	ACPBusSingletonEnabled bool `env:"ACP_BUS_SINGLETON_ENABLED" default:"false"`
 	AgentDBExecuteEnabled  bool `env:"AGENT_DB_EXECUTE_ENABLED" default:"true"`

@@ -12,7 +12,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/monitor"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
-	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 func main() {
@@ -49,21 +48,14 @@ func main() {
 		DBQuery:          store.NewDBQueryStore(pool),
 	}
 
-	srv := dashboard.NewServer(stores)
+	srv := dashboard.NewServer(stores, cfg)
 
 	// 启动巡检
 	patrol := monitor.NewPatrol(stores.AgentStatus, srv.Bus())
 	patrol.Start(ctx)
 
 	port := ":8080"
-	logger.Infow("dashboard starting", logger.FieldPort, port)
-
-	util.SafeGo(func() {
-		if err := srv.Engine().Run(port); err != nil {
-			logger.Fatal("server failed", logger.Any(logger.FieldError, err))
-		}
-	})
-
-	<-ctx.Done()
-	logger.Info("shutting down")
+	if err := srv.ListenAndServe(ctx, port); err != nil {
+		logger.Fatal("server failed", logger.Any(logger.FieldError, err))
+	}
 }

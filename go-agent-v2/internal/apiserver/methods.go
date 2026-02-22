@@ -14,7 +14,15 @@ import (
 var codexThreadIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 const (
-	defaultLSPUsagePromptHint = "已注入LSP工具。凡是源代码的分析、定位、修改与解释，必须调用lsp_open_file、lsp_hover、lsp_diagnostics；未使用上述工具前，不得基于猜测给出结论"
+	defaultLSPUsagePromptHint = "已注入LSP代码智能工具。使用规则：\n" +
+		"1. 分析/修改源码前，必须先调 lsp_open_file 打开目标文件\n" +
+		"2. 查看类型/文档: lsp_hover (需 file_path + line + column)\n" +
+		"3. 查看错误/警告: lsp_diagnostics\n" +
+		"4. 跳转定义: lsp_definition — 精确定位符号定义位置\n" +
+		"5. 查找引用: lsp_references — 查找符号的所有使用点\n" +
+		"6. 文件大纲: lsp_document_symbol — 获取函数/类型/方法列表\n" +
+		"7. 安全重命名: lsp_rename — 跨文件重命名符号\n" +
+		"未使用上述工具前，不得基于猜测给出结论。禁止跳过 lsp_open_file 直接调用其他 LSP 工具。"
 	prefKeyLSPUsagePromptHint = "settings.lspUsagePromptHint"
 	maxLSPUsagePromptHintLen  = 4000
 

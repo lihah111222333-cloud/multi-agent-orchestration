@@ -20,6 +20,12 @@ export const ChatTimeline = {
   setup(props, { emit }) {
     let updateSeq = 0;
     let attachmentHoverHideTimer = 0;
+    let attachmentHoverShowTimer = 0;
+    let attachmentHoverPendingPreview = null;
+    const ATTACHMENT_HOVER_SHOW_DELAY_MS = 500;
+    const ATTACHMENT_HOVER_HIDE_DELAY_MS = 800;
+    const ATTACHMENT_HOVER_PREVIEW_LEAVE_DELAY_MS = 800;
+    const ATTACHMENT_HOVER_ZOOM_MIN = 1;
     const ATTACHMENT_HOVER_ZOOM_STEP = 0.25;
     const ATTACHMENT_HOVER_ZOOM_MAX = 3;
     const visibleCount = ref(VISIBLE_WINDOW);
@@ -215,13 +221,45 @@ export const ChatTimeline = {
       attachmentHoverHideTimer = 0;
     }
 
-    function scheduleAttachmentHoverHide(delayMS = 110) {
+    function clearAttachmentHoverShowTimer() {
+      if (attachmentHoverShowTimer) {
+        window.clearTimeout(attachmentHoverShowTimer);
+        attachmentHoverShowTimer = 0;
+      }
+      attachmentHoverPendingPreview = null;
+    }
+
+    function scheduleAttachmentHoverHide(delayMS = ATTACHMENT_HOVER_HIDE_DELAY_MS) {
       clearAttachmentHoverHideTimer();
       const delay = Number(delayMS);
       attachmentHoverHideTimer = window.setTimeout(() => {
         attachmentHoverPreview.value = null;
         attachmentHoverHideTimer = 0;
-      }, Number.isFinite(delay) ? Math.max(0, delay) : 110);
+      }, Number.isFinite(delay) ? Math.max(0, delay) : ATTACHMENT_HOVER_HIDE_DELAY_MS);
+    }
+
+    function applyAttachmentHoverPreview(nextPreview) {
+      const prev = attachmentHoverPreview.value;
+      const prevZoomRaw = Number(prev?.zoom);
+      const zoom = prev && prev.src === nextPreview.src && Number.isFinite(prevZoomRaw) && prevZoomRaw > 0
+        ? prevZoomRaw
+        : ATTACHMENT_HOVER_ZOOM_MIN;
+      attachmentHoverPreview.value = {
+        ...nextPreview,
+        zoom,
+      };
+    }
+
+    function scheduleAttachmentHoverShow(nextPreview) {
+      attachmentHoverPendingPreview = nextPreview;
+      if (attachmentHoverShowTimer) return;
+      attachmentHoverShowTimer = window.setTimeout(() => {
+        const pending = attachmentHoverPendingPreview;
+        attachmentHoverShowTimer = 0;
+        attachmentHoverPendingPreview = null;
+        if (!pending) return;
+        applyAttachmentHoverPreview(pending);
+      }, ATTACHMENT_HOVER_SHOW_DELAY_MS);
     }
 
     function attachmentHoverPosition(pointX, pointY) {
@@ -254,42 +292,53 @@ export const ChatTimeline = {
     function onAttachmentHoverMove(event, att) {
       const src = attachmentPreview(att);
       if (!src) {
+        clearAttachmentHoverShowTimer();
+        clearAttachmentHoverHideTimer();
         attachmentHoverPreview.value = null;
         return;
       }
       clearAttachmentHoverHideTimer();
       const point = attachmentHoverPoint(event);
       const pos = attachmentHoverPosition(point.x, point.y);
-      const prev = attachmentHoverPreview.value;
-      const prevZoomRaw = Number(prev?.zoom);
-      const zoom = prev && prev.src === src && Number.isFinite(prevZoomRaw) && prevZoomRaw > 0 ? prevZoomRaw : 1;
-      attachmentHoverPreview.value = {
+      const nextPreview = {
         src,
         alt: (att?.name || att?.path || 'image attachment').toString(),
         left: pos.left,
         top: pos.top,
         width: pos.width,
         maxHeight: pos.maxHeight,
-        zoom,
       };
+      const prev = attachmentHoverPreview.value;
+      if (prev && prev.src === src) {
+        clearAttachmentHoverShowTimer();
+        applyAttachmentHoverPreview(nextPreview);
+        return;
+      }
+      if (prev && prev.src !== src) {
+        attachmentHoverPreview.value = null;
+      }
+      scheduleAttachmentHoverShow(nextPreview);
     }
 
     function onAttachmentHoverLeave() {
+      clearAttachmentHoverShowTimer();
       scheduleAttachmentHoverHide();
     }
 
     function onAttachmentPreviewEnter() {
       clearAttachmentHoverHideTimer();
+      clearAttachmentHoverShowTimer();
     }
 
     function onAttachmentPreviewLeave() {
-      scheduleAttachmentHoverHide(80);
+      scheduleAttachmentHoverHide(ATTACHMENT_HOVER_PREVIEW_LEAVE_DELAY_MS);
     }
 
     function onAttachmentPreviewZoomIn(event) {
       event?.preventDefault?.();
       event?.stopPropagation?.();
       clearAttachmentHoverHideTimer();
+      clearAttachmentHoverShowTimer();
       const current = attachmentHoverPreview.value;
       if (!current) return;
       const zoomRaw = Number(current.zoom);
@@ -301,14 +350,69 @@ export const ChatTimeline = {
       attachmentHoverPreview.value = { ...current, zoom: nextZoom };
     }
 
-    function attachmentHoverImageStyle() {
+    function onAttachmentPreviewZoomOut(event) {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      clearAttachmentHoverHideTimer();
+      clearAttachmentHoverShowTimer();
       const current = attachmentHoverPreview.value;
-      const zoomRaw = Number(current?.zoom);
+      if (!current) return;
+      const zoomRaw = Number(current.zoom);
+      const zoom = Number.isFinite(zoomRaw) && zoomRaw > 0 ? zoomRaw : ATTACHMENT_HOVER_ZOOM_MIN;
+      const nextZoom = Math.max(
+        ATTACHMENT_HOVER_ZOOM_MIN,
+        Math.round((zoom - ATTACHMENT_HOVER_ZOOM_STEP) * 100) / 100,
+      );
+      attachmentHoverPreview.value = { ...current, zoom: nextZoom };
+    }
+
+    function onAttachmentPreviewResetZoom(event) {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      clearAttachmentHoverHideTimer();
+      clearAttachmentHoverShowTimer();
+      const current = attachmentHoverPreview.value;
+      if (!current) return;
+      attachmentHoverPreview.value = { ...current, zoom: ATTACHMENT_HOVER_ZOOM_MIN };
+    }
+
+    function attachmentCanZoomOut() {
+      const current = attachmentHoverPreview.value;
+      if (!current) return false;
+      const zoomRaw = Number(current.zoom);
+      const zoom = Number.isFinite(zoomRaw) && zoomRaw > 0 ? zoomRaw : ATTACHMENT_HOVER_ZOOM_MIN;
+      return zoom > ATTACHMENT_HOVER_ZOOM_MIN;
+    }
+
+    function attachmentHoverStyle() {
+      const current = attachmentHoverPreview.value;
+      if (!current) return null;
+      const zoomRaw = Number(current.zoom);
       const zoom = Number.isFinite(zoomRaw) && zoomRaw > 0 ? zoomRaw : 1;
-      if (zoom <= 1) return null;
+      const margin = 14;
+      const viewportWidth = window.innerWidth || 1280;
+      const viewportHeight = window.innerHeight || 800;
+      const width = Math.min(
+        Math.max(220, Math.round(Number(current.width || 0) * zoom)),
+        Math.max(220, viewportWidth - margin * 2),
+      );
+      const maxHeight = Math.min(
+        Math.max(180, Math.round(Number(current.maxHeight || 0) * zoom)),
+        Math.max(180, viewportHeight - margin * 2),
+      );
+      let left = Number(current.left || margin);
+      let top = Number(current.top || margin);
+      if (left + width > viewportWidth - margin) {
+        left = Math.max(margin, viewportWidth - margin - width);
+      }
+      if (top + maxHeight > viewportHeight - margin) {
+        top = Math.max(margin, viewportHeight - margin - maxHeight);
+      }
       return {
-        width: `${Math.round(zoom * 100)}%`,
-        maxHeight: 'none',
+        left: `${Math.round(left)}px`,
+        top: `${Math.round(top)}px`,
+        width: `${width}px`,
+        maxHeight: `${maxHeight}px`,
       };
     }
 
@@ -511,7 +615,10 @@ export const ChatTimeline = {
       onAttachmentPreviewEnter,
       onAttachmentPreviewLeave,
       onAttachmentPreviewZoomIn,
-      attachmentHoverImageStyle,
+      onAttachmentPreviewZoomOut,
+      onAttachmentPreviewResetZoom,
+      attachmentCanZoomOut,
+      attachmentHoverStyle,
       attachmentHoverPreview,
       copyFilePath,
       itemHasSpec,
@@ -711,27 +818,39 @@ export const ChatTimeline = {
       <div
         v-if="attachmentHoverPreview"
         class="chat-attachment-hover-preview"
-        :style="{
-          left: attachmentHoverPreview.left + 'px',
-          top: attachmentHoverPreview.top + 'px',
-          width: attachmentHoverPreview.width + 'px',
-          maxHeight: attachmentHoverPreview.maxHeight + 'px',
-        }"
+        :style="attachmentHoverStyle()"
         @mouseenter="onAttachmentPreviewEnter"
         @mouseleave="onAttachmentPreviewLeave"
         aria-hidden="true"
       >
-        <button
-          class="chat-attachment-preview-zoom-btn"
-          type="button"
-          title="继续放大"
-          aria-label="继续放大"
-          @click="onAttachmentPreviewZoomIn"
-        >+</button>
+        <div class="chat-attachment-preview-zoom-controls">
+          <button
+            class="chat-attachment-preview-zoom-btn is-minus"
+            type="button"
+            title="缩小"
+            aria-label="缩小"
+            :disabled="!attachmentCanZoomOut()"
+            @click="onAttachmentPreviewZoomOut"
+          >-</button>
+          <button
+            class="chat-attachment-preview-zoom-btn is-reset"
+            type="button"
+            title="重置为 1:1"
+            aria-label="重置为 1:1"
+            :disabled="!attachmentCanZoomOut()"
+            @click="onAttachmentPreviewResetZoom"
+          >1:1</button>
+          <button
+            class="chat-attachment-preview-zoom-btn is-plus"
+            type="button"
+            title="继续放大"
+            aria-label="继续放大"
+            @click="onAttachmentPreviewZoomIn"
+          >+</button>
+        </div>
         <img
           :src="attachmentHoverPreview.src"
           :alt="attachmentHoverPreview.alt"
-          :style="attachmentHoverImageStyle()"
         />
       </div>
       <div v-if="showAgentPresence" class="chat-presence-row">

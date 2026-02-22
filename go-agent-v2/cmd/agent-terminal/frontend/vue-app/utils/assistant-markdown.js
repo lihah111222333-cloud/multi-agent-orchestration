@@ -28,19 +28,25 @@ const LONG_EXTENSION_ALLOWLIST = new Set([
   'workspace',
 ]);
 const KNOWN_FILE_EXT_ALLOWLIST = new Set([
+  'avif',
+  'bmp',
   'c',
   'cc',
   'cpp',
   'cs',
   'css',
   'csv',
+  'gif',
   'go',
   'h',
   'hpp',
   'html',
+  'ico',
   'ini',
   'java',
   'js',
+  'jpeg',
+  'jpg',
   'json',
   'jsx',
   'kt',
@@ -52,6 +58,7 @@ const KNOWN_FILE_EXT_ALLOWLIST = new Set([
   'mjs',
   'mm',
   'php',
+  'png',
   'pl',
   'properties',
   'proto',
@@ -63,6 +70,7 @@ const KNOWN_FILE_EXT_ALLOWLIST = new Set([
   'scala',
   'scss',
   'sh',
+  'svg',
   'sql',
   'swift',
   'toml',
@@ -70,6 +78,7 @@ const KNOWN_FILE_EXT_ALLOWLIST = new Set([
   'tsx',
   'txt',
   'vue',
+  'webp',
   'xml',
   'yaml',
   'yml',
@@ -770,6 +779,23 @@ function parseMarkdownBlocks(rawText) {
   let quoteLines = [];
   let listType = '';
   let listItems = [];
+  const unorderedListItemRe = /^\s*[-*]\s+(.+)$/;
+  const orderedListItemRe = /^\s*\d+\.\s+(.+)$/;
+
+  function listTypeOfLine(rawLine) {
+    if (unorderedListItemRe.test(rawLine || '')) return 'ul';
+    if (orderedListItemRe.test(rawLine || '')) return 'ol';
+    return '';
+  }
+
+  function nextNonEmptyLineType(fromIndex) {
+    for (let i = fromIndex; i < lines.length; i += 1) {
+      const candidate = (lines[i] || '').toString();
+      if (!candidate.trim()) continue;
+      return listTypeOfLine(candidate);
+    }
+    return '';
+  }
 
   function flushParagraph() {
     const out = renderParagraph(paragraphLines);
@@ -812,7 +838,10 @@ function parseMarkdownBlocks(rawText) {
     if (!trimmed) {
       flushParagraph();
       flushQuote();
-      flushList();
+      if (listType) {
+        const nextType = nextNonEmptyLineType(index + 1);
+        if (nextType !== listType) flushList();
+      }
       continue;
     }
 
@@ -865,7 +894,7 @@ function parseMarkdownBlocks(rawText) {
     }
     flushQuote();
 
-    const unordered = line.match(/^\s*[-*]\s+(.+)$/);
+    const unordered = line.match(unorderedListItemRe);
     if (unordered) {
       flushParagraph();
       if (listType && listType !== 'ul') flushList();
@@ -874,7 +903,7 @@ function parseMarkdownBlocks(rawText) {
       continue;
     }
 
-    const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+    const ordered = line.match(orderedListItemRe);
     if (ordered) {
       flushParagraph();
       if (listType && listType !== 'ol') flushList();

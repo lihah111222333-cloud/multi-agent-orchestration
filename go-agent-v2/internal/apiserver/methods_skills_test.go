@@ -80,6 +80,48 @@ summary: "tdd summary"
 	}
 }
 
+func TestThreadSkillsListUsesLocalSkillService(t *testing.T) {
+	tmp := t.TempDir()
+	svc := service.NewSkillService(tmp)
+	if _, err := svc.WriteSkillContent("backend", "# backend"); err != nil {
+		t.Fatalf("WriteSkillContent backend: %v", err)
+	}
+	if _, err := svc.WriteSkillContent("ops", "# ops"); err != nil {
+		t.Fatalf("WriteSkillContent ops: %v", err)
+	}
+
+	srv := &Server{skillSvc: svc}
+	raw, err := srv.threadSkillsList(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("threadSkillsList error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	skills, ok := resp["skills"].([]string)
+	if !ok {
+		t.Fatalf("skills type=%T, want []string", resp["skills"])
+	}
+	want := []string{"backend", "ops"}
+	if !reflect.DeepEqual(skills, want) {
+		t.Fatalf("threadSkillsList skills=%v, want=%v", skills, want)
+	}
+}
+
+func TestThreadSkillsListWithoutServiceReturnsEmpty(t *testing.T) {
+	srv := &Server{}
+	raw, err := srv.threadSkillsList(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("threadSkillsList error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	skills, ok := resp["skills"].([]string)
+	if !ok {
+		t.Fatalf("skills type=%T, want []string", resp["skills"])
+	}
+	if len(skills) != 0 {
+		t.Fatalf("threadSkillsList empty skills=%v, want=[]", skills)
+	}
+}
+
 func TestSkillsDirectoryDefaultsToAppCache(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
@@ -1131,6 +1173,58 @@ func TestSkillsLocalImportDirRequiresSkillFile(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("skillsLocalImportDirTyped should fail when SKILL.md is missing")
+	}
+}
+
+func TestSkillsLocalImportDirExpandsParentDirectory(t *testing.T) {
+	sourceRoot := t.TempDir()
+	sourceA := filepath.Join(sourceRoot, "backend")
+	if err := os.MkdirAll(sourceA, 0o755); err != nil {
+		t.Fatalf("mkdir sourceA: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceA, "SKILL.md"), []byte("# backend"), 0o644); err != nil {
+		t.Fatalf("write sourceA SKILL.md: %v", err)
+	}
+	sourceB := filepath.Join(sourceRoot, "testing")
+	if err := os.MkdirAll(sourceB, 0o755); err != nil {
+		t.Fatalf("mkdir sourceB: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceB, "SKILL.md"), []byte("# testing"), 0o644); err != nil {
+		t.Fatalf("write sourceB SKILL.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "README.md"), []byte("root"), 0o644); err != nil {
+		t.Fatalf("write root README.md: %v", err)
+	}
+
+	destRoot := t.TempDir()
+	srv := &Server{
+		skillsDir: destRoot,
+		skillSvc:  service.NewSkillService(destRoot),
+	}
+	raw, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
+		Path: sourceRoot,
+	})
+	if err != nil {
+		t.Fatalf("skillsLocalImportDirTyped parent dir error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	ok, _ := resp["ok"].(bool)
+	if !ok {
+		t.Fatalf("parent directory import should be ok=true, got=%v", resp["ok"])
+	}
+	summary := resp["summary"].(map[string]int)
+	if summary["requested"] != 2 || summary["imported"] != 2 || summary["failed"] != 0 {
+		t.Fatalf("unexpected summary: %v", summary)
+	}
+	skills := resp["skills"].([]map[string]any)
+	if len(skills) != 2 {
+		t.Fatalf("expected 2 imported skills, got=%d", len(skills))
+	}
+	for _, skill := range skills {
+		targetDir, _ := skill["dir"].(string)
+		if _, err := os.Stat(filepath.Join(targetDir, "SKILL.md")); err != nil {
+			t.Fatalf("imported skill missing SKILL.md: %v", err)
+		}
 	}
 }
 

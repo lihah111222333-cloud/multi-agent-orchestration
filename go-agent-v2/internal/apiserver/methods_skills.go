@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -120,6 +121,56 @@ func collectSkillImportSources(path string, paths []string) []string {
 	return out
 }
 
+func sourceDirHasSkillFile(source string) (bool, error) {
+	info, err := os.Stat(filepath.Join(source, "SKILL.md"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return !info.IsDir(), nil
+}
+
+func expandSkillImportSource(source string) ([]string, error) {
+	info, err := os.Stat(source)
+	if err != nil || !info.IsDir() {
+		return []string{source}, nil
+	}
+
+	hasSkillFile, err := sourceDirHasSkillFile(source)
+	if err != nil {
+		return nil, err
+	}
+	if hasSkillFile {
+		return []string{source}, nil
+	}
+
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return nil, err
+	}
+	children := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		child := filepath.Join(source, entry.Name())
+		childHasSkillFile, statErr := sourceDirHasSkillFile(child)
+		if statErr != nil {
+			return nil, statErr
+		}
+		if childHasSkillFile {
+			children = append(children, child)
+		}
+	}
+	if len(children) == 0 {
+		return []string{source}, nil
+	}
+	sort.Strings(children)
+	return children, nil
+}
+
 func (s *Server) importSingleSkillDirectory(sourceDir, name string) (skillImportResult, error) {
 	if s.skillSvc == nil {
 		return skillImportResult{}, apperrors.New("Server.importSingleSkillDirectory", "skill service unavailable")
@@ -181,10 +232,19 @@ func (s *Server) skillsLocalReadTyped(_ context.Context, p skillsLocalReadParams
 }
 
 func (s *Server) skillsLocalImportDirTyped(_ context.Context, p skillsLocalImportDirParams) (any, error) {
-	sources := collectSkillImportSources(p.Path, p.Paths)
-	if len(sources) == 0 {
+	requestedSources := collectSkillImportSources(p.Path, p.Paths)
+	if len(requestedSources) == 0 {
 		return nil, apperrors.New("Server.skillsLocalImportDir", "path or paths is required")
 	}
+	expandedSources := make([]string, 0, len(requestedSources))
+	for _, source := range requestedSources {
+		resolved, err := expandSkillImportSource(source)
+		if err != nil {
+			return nil, apperrors.Wrap(err, "Server.skillsLocalImportDir", "expand import source")
+		}
+		expandedSources = append(expandedSources, resolved...)
+	}
+	sources := collectSkillImportSources("", expandedSources)
 
 	if len(sources) == 1 {
 		result, err := s.importSingleSkillDirectory(sources[0], p.Name)

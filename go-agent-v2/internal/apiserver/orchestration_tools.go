@@ -195,13 +195,6 @@ func (s *Server) orchestrationStopAgent(args json.RawMessage) string {
 	}
 	s.clearAgentWorkDir(p.AgentID)
 
-	// 共生共灭: agent 停止 → 解除 codexThreadId 绑定。
-	if s.bindingStore != nil {
-		if ubErr := s.bindingStore.Unbind(context.Background(), p.AgentID); ubErr != nil {
-			logger.Warn("orchestration: unbind failed on stop", logger.FieldAgentID, p.AgentID, logger.FieldError, ubErr)
-		}
-	}
-
 	logger.Info("orchestration: agent stopped", logger.FieldID, p.AgentID)
 	return toolJSON(map[string]any{"success": true, "agent_id": p.AgentID})
 }

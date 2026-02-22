@@ -11,6 +11,7 @@ test('UnifiedChatPage exposes dismissible top-right pinned plan tag', async () =
   assert.equal(src.includes("if (item?.kind !== 'plan') continue;"), true);
   assert.equal(src.includes('function dismissPinnedPlan() {'), true);
   assert.equal(src.includes('function pinnedPlanCardSpec(plan) {'), true);
+  assert.equal(src.includes("id: ((item?.id ?? '') || key).toString(),"), true);
   assert.equal(src.includes('class="chat-plan-pin"'), true);
   assert.equal(src.includes('class="chat-plan-pin-body ran-plan-card-json"'), true);
   assert.equal(src.includes('<JsonRenderer :spec="pinnedPlanCardSpec(activePinnedPlan)" />'), true);

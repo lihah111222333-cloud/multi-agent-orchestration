@@ -74,3 +74,68 @@ func TestStopAll_ThenReload_Works(t *testing.T) {
 		t.Fatal("context should be valid after StopAll+Reload")
 	}
 }
+
+func TestEffectiveRootURI_UsesWorkspaceFallback(t *testing.T) {
+	workspace := t.TempDir()
+
+	got := effectiveRootURI("", workspace)
+	want := pathToURI(workspace)
+	if got != want {
+		t.Fatalf("effectiveRootURI fallback = %q, want %q", got, want)
+	}
+
+	explicit := "file:///tmp/explicit-root"
+	if got := effectiveRootURI(explicit, workspace); got != explicit {
+		t.Fatalf("effectiveRootURI should keep explicit root: got %q, want %q", got, explicit)
+	}
+}
+
+func TestSetRootURI_ChangeClearsClientsAndResetsDocumentState(t *testing.T) {
+	m := NewManager(nil)
+
+	m.mu.Lock()
+	m.rootURI = "file:///tmp/old-root"
+	m.clients["go"] = NewClient("go")
+	m.mu.Unlock()
+
+	uri := pathToURI("/tmp/test.go")
+	state := m.documentState(uri)
+	state.Open = true
+	state.Version = 9
+
+	m.SetRootURI("file:///tmp/new-root")
+
+	m.mu.RLock()
+	gotRoot := m.rootURI
+	clientCount := len(m.clients)
+	m.mu.RUnlock()
+	if gotRoot != "file:///tmp/new-root" {
+		t.Fatalf("rootURI = %q, want %q", gotRoot, "file:///tmp/new-root")
+	}
+	if clientCount != 0 {
+		t.Fatalf("expected clients to be cleared on rootURI change, got %d", clientCount)
+	}
+	if state.Open {
+		t.Fatal("document state should be marked closed after rootURI change")
+	}
+	if state.Version != 0 {
+		t.Fatalf("document state version = %d, want 0 after rootURI change", state.Version)
+	}
+}
+
+func TestSetRootURI_SameValueKeepsClients(t *testing.T) {
+	m := NewManager(nil)
+
+	m.mu.Lock()
+	m.rootURI = "file:///tmp/same-root"
+	m.clients["go"] = NewClient("go")
+	m.mu.Unlock()
+
+	m.SetRootURI("file:///tmp/same-root")
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.clients) != 1 {
+		t.Fatalf("expected clients to stay unchanged when rootURI is same, got %d", len(m.clients))
+	}
+}

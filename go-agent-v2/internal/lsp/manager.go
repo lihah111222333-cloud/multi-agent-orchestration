@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 // ServerConfig 语言服务器配置。
@@ -138,8 +139,51 @@ func NewManager(configs []ServerConfig) *Manager {
 // SetRootURI 设置项目根目录 (file:// URI)。
 func (m *Manager) SetRootURI(rootURI string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.rootURI = rootURI
+	resolvedRootURI := effectiveRootURI(rootURI, m.workspaceID)
+	if m.rootURI == resolvedRootURI {
+		m.mu.Unlock()
+		return
+	}
+	previousRootURI := m.rootURI
+	m.rootURI = resolvedRootURI
+
+	clientsToRestart := make(map[string]*Client, len(m.clients))
+	for lang, client := range m.clients {
+		clientsToRestart[lang] = client
+		delete(m.clients, lang)
+	}
+	handler := m.onStatus
+	m.mu.Unlock()
+
+	for language, client := range clientsToRestart {
+		if client == nil {
+			continue
+		}
+		if err := client.Stop(); err != nil {
+			logger.Warn("lsp: failed to stop client after rootURI change",
+				logger.FieldLanguage, language,
+				logger.FieldError, err,
+			)
+		}
+	}
+
+	m.docMu.Lock()
+	for _, st := range m.docStates {
+		st.Open = false
+		st.Version = 0
+	}
+	m.docMu.Unlock()
+
+	if len(clientsToRestart) > 0 {
+		logger.Warn("lsp: rootURI changed, clients will restart on next request",
+			"old_root_uri", previousRootURI,
+			"new_root_uri", resolvedRootURI,
+			"client_count", len(clientsToRestart),
+		)
+	}
+	if handler != nil {
+		handler(m.Statuses())
+	}
 }
 
 // SetDiagnosticHandler 注册诊断回调 (所有语言共享)。
@@ -397,7 +441,10 @@ func (m *Manager) ensureClient(cfg *ServerConfig) (*Client, error) {
 		client.SetDiagnosticHandler(m.onDiag)
 	}
 
-	rootURI := m.rootURI
+	rootURI := effectiveRootURI(m.rootURI, m.workspaceID)
+	if m.rootURI == "" && rootURI != "" {
+		m.rootURI = rootURI
+	}
 	m.mu.Unlock()
 
 	// Start 可能阻塞 (等待 initialize 响应)，不持锁
@@ -417,6 +464,21 @@ func (m *Manager) ensureClient(cfg *ServerConfig) (*Client, error) {
 	}
 
 	return client, nil
+}
+
+func effectiveRootURI(rootURI, workspaceID string) string {
+	resolved := strings.TrimSpace(rootURI)
+	if resolved != "" {
+		return resolved
+	}
+	workspace := strings.TrimSpace(workspaceID)
+	if workspace == "" || workspace == "default-workspace" {
+		return ""
+	}
+	if strings.HasPrefix(workspace, "file://") {
+		return workspace
+	}
+	return pathToURI(workspace)
 }
 
 // pathToURI 将文件路径转为 file:// URI。

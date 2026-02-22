@@ -321,11 +321,24 @@ type RenameParams struct {
 
 // WorkspaceEdit 工作区编辑 (rename 返回值)。
 type WorkspaceEdit struct {
-	Changes map[string][]TextEdit `json:"changes,omitempty"` // URI → edits
+	Changes         map[string][]TextEdit `json:"changes,omitempty"`         // URI → edits
+	DocumentChanges []TextDocumentEdit    `json:"documentChanges,omitempty"` // 更常见于 gopls
 }
 
 // TextEdit 单条文本编辑。
 type TextEdit struct {
 	Range   Range  `json:"range"`
 	NewText string `json:"newText"`
+}
+
+// TextDocumentEdit 文档级编辑集合。
+type TextDocumentEdit struct {
+	TextDocument OptionalVersionedTextDocumentIdentifier `json:"textDocument"`
+	Edits        []TextEdit                              `json:"edits"`
+}
+
+// OptionalVersionedTextDocumentIdentifier 支持 version 为 null 或缺失。
+type OptionalVersionedTextDocumentIdentifier struct {
+	URI     string `json:"uri"`
+	Version *int   `json:"version,omitempty"`
 }

@@ -397,7 +397,7 @@ function renderParagraph(lines) {
   return `<p>${valid.map((line) => renderInlineLine(line)).join('<br>')}</p>`;
 }
 
-function renderList(type, items) {
+function renderList(type, items, orderedStart = 1) {
   if (!items.length) return '';
   const body = items.map((item) => {
     const lines = (Array.isArray(item) ? item : [item])
@@ -406,7 +406,9 @@ function renderList(type, items) {
     const content = lines.map((line) => renderInlineLine(line)).join('<br>');
     return `<li>${content}</li>`;
   }).join('');
-  return `<${type}>${body}</${type}>`;
+  const start = Number.isFinite(orderedStart) ? Math.max(1, Math.trunc(orderedStart)) : 1;
+  const startAttr = type === 'ol' && start > 1 ? ` start="${start}"` : '';
+  return `<${type}${startAttr}>${body}</${type}>`;
 }
 
 function renderBlockQuote(lines) {
@@ -784,9 +786,10 @@ function parseMarkdownBlocks(rawText) {
   let paragraphLines = [];
   let quoteLines = [];
   let listType = '';
+  let listStartNumber = 1;
   let listItems = [];
   const unorderedListItemRe = /^\s*[-*]\s+(.+)$/;
-  const orderedListItemRe = /^\s*\d+\.\s+(.+)$/;
+  const orderedListItemRe = /^\s*(\d+)\.\s+(.+)$/;
 
   function listTypeOfLine(rawLine) {
     if (unorderedListItemRe.test(rawLine || '')) return 'ul';
@@ -816,9 +819,10 @@ function parseMarkdownBlocks(rawText) {
   }
 
   function flushList() {
-    const out = renderList(listType, listItems);
+    const out = renderList(listType, listItems, listStartNumber);
     if (out) html.push(out);
     listType = '';
+    listStartNumber = 1;
     listItems = [];
   }
 
@@ -909,7 +913,10 @@ function parseMarkdownBlocks(rawText) {
     if (unordered) {
       flushParagraph();
       if (listType && listType !== 'ul') flushList();
-      listType = 'ul';
+      if (listType !== 'ul') {
+        listType = 'ul';
+        listStartNumber = 1;
+      }
       listItems.push([unordered[1]]);
       continue;
     }
@@ -918,8 +925,15 @@ function parseMarkdownBlocks(rawText) {
     if (ordered) {
       flushParagraph();
       if (listType && listType !== 'ol') flushList();
-      listType = 'ol';
-      listItems.push([ordered[1]]);
+      let markerNumber = Number.parseInt(ordered[1], 10);
+      if (!Number.isFinite(markerNumber) || markerNumber <= 0) {
+        markerNumber = 1;
+      }
+      if (listType !== 'ol') {
+        listType = 'ol';
+        listStartNumber = markerNumber;
+      }
+      listItems.push([ordered[2]]);
       continue;
     }
 

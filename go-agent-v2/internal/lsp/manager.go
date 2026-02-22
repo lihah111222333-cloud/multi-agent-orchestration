@@ -13,6 +13,7 @@ package lsp
 import (
 	"context"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -82,14 +83,21 @@ type Manager struct {
 	// (client.Start 内部使用 Client.mu), 不嵌套。
 	// ========================================
 
-	mu       sync.RWMutex
-	configs  map[string]*ServerConfig // ext → config
-	clients  map[string]*Client       // language → client
-	rootURI  string
-	ctx      context.Context
-	cancel   context.CancelFunc
-	onDiag   DiagnosticHandler
-	onStatus func(statuses []ServerStatus) // 状态变更回调
+	mu          sync.RWMutex
+	configs     map[string]*ServerConfig // ext → config
+	languages   map[string]*ServerConfig // language(normalized) → config
+	clients     map[string]*Client       // language → client
+	rootURI     string
+	workspaceID string
+	ctx         context.Context
+	cancel      context.CancelFunc
+	onDiag      DiagnosticHandler
+	onStatus    func(statuses []ServerStatus) // 状态变更回调
+
+	docMu     sync.Mutex
+	docStates map[string]*documentSyncState // uri → state
+	docLocks  map[string]*sync.Mutex        // uri → lock
+	cache     *lspCacheStore
 }
 
 // NewManager 创建管理器。configs 为 nil 时使用 DefaultServers。
@@ -98,14 +106,28 @@ func NewManager(configs []ServerConfig) *Manager {
 		configs = DefaultServers
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	workspaceID := "default-workspace"
+	if cwd, err := os.Getwd(); err == nil {
+		if abs, absErr := filepath.Abs(cwd); absErr == nil {
+			workspaceID = abs
+		} else {
+			workspaceID = cwd
+		}
+	}
 	m := &Manager{
-		configs: make(map[string]*ServerConfig, len(configs)*3),
-		clients: make(map[string]*Client),
-		ctx:     ctx,
-		cancel:  cancel,
+		configs:     make(map[string]*ServerConfig, len(configs)*3),
+		languages:   make(map[string]*ServerConfig, len(configs)),
+		clients:     make(map[string]*Client),
+		docStates:   make(map[string]*documentSyncState),
+		docLocks:    make(map[string]*sync.Mutex),
+		cache:       newLSPCacheStoreFromEnv(),
+		workspaceID: workspaceID,
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 	for i := range configs {
 		cfg := &configs[i]
+		m.languages[normalizeLanguage(cfg.Language)] = cfg
 		for _, ext := range cfg.Extensions {
 			m.configs[ext] = cfg
 		}
@@ -136,133 +158,140 @@ func (m *Manager) SetStatusHandler(h func([]ServerStatus)) {
 
 // OpenFile 打开文件 — 自动选择语言服务器并发送 didOpen。
 func (m *Manager) OpenFile(filePath, content string) error {
-	ext := strings.TrimPrefix(filepath.Ext(filePath), ".")
-	if ext == "" {
-		return nil
-	}
-
-	m.mu.RLock()
-	cfg, ok := m.configs[ext]
-	m.mu.RUnlock()
-	if !ok {
-		return nil // 不支持的语言，静默忽略
-	}
-
-	client, err := m.ensureClient(cfg)
-	if err != nil {
-		return err
-	}
-
-	uri := pathToURI(filePath)
-	return client.DidOpen(uri, cfg.Language, content)
+	return m.openDocument(filePath, content)
 }
 
 // CloseFile 关闭文件。
 func (m *Manager) CloseFile(filePath string) error {
-	ext := strings.TrimPrefix(filepath.Ext(filePath), ".")
-	m.mu.RLock()
-	cfg, ok := m.configs[ext]
-	if !ok {
-		m.mu.RUnlock()
-		return nil
-	}
-	client, exists := m.clients[cfg.Language]
-	m.mu.RUnlock()
-	if !exists || !client.Running() {
-		return nil
-	}
-	return client.DidClose(pathToURI(filePath))
+	return m.closeDocument(filePath)
 }
 
-// ChangeFile 更新已打开文件内容 (didChange)。
+// ChangeFile 更新文件内容 (didChange)，未打开文档会自动引导同步。
 func (m *Manager) ChangeFile(filePath string, version int, newContent string) error {
-	client, err := m.clientForFile(filePath)
-	if client == nil || err != nil {
-		return err
-	}
-	return client.DidChange(pathToURI(filePath), version, newContent)
+	return m.changeDocument(filePath, version, newContent)
 }
 
 // Hover 获取 hover 信息。
 func (m *Manager) Hover(filePath string, line, character int) (*HoverResult, error) {
-	ext := strings.TrimPrefix(filepath.Ext(filePath), ".")
-	m.mu.RLock()
-	cfg, ok := m.configs[ext]
-	if !ok {
-		m.mu.RUnlock()
-		return nil, nil
-	}
-	client, exists := m.clients[cfg.Language]
-	m.mu.RUnlock()
-	if !exists || !client.Running() {
-		return nil, nil
-	}
-	return client.Hover(m.ctx, pathToURI(filePath), line, character)
+	var out *HoverResult
+	err := m.withBootstrappedDocument(filePath, func(client *Client, uri string) error {
+		result, err := client.Hover(m.ctx, uri, line, character)
+		if err != nil {
+			return err
+		}
+		out = result
+		return nil
+	})
+	return out, err
 }
 
 // Definition 跳转定义。
 func (m *Manager) Definition(filePath string, line, character int) ([]Location, error) {
-	client, err := m.clientForFile(filePath)
-	if client == nil || err != nil {
-		return nil, err
-	}
-	return client.Definition(m.ctx, pathToURI(filePath), line, character)
+	var out []Location
+	err := m.withBootstrappedDocument(filePath, func(client *Client, uri string) error {
+		result, err := client.Definition(m.ctx, uri, line, character)
+		if err != nil {
+			return err
+		}
+		out = result
+		return nil
+	})
+	return out, err
 }
 
 // References 查找引用。
 func (m *Manager) References(filePath string, line, character int, includeDecl bool) ([]Location, error) {
-	client, err := m.clientForFile(filePath)
-	if client == nil || err != nil {
-		return nil, err
-	}
-	return client.References(m.ctx, pathToURI(filePath), line, character, includeDecl)
+	var out []Location
+	err := m.withBootstrappedDocument(filePath, func(client *Client, uri string) error {
+		result, err := client.References(m.ctx, uri, line, character, includeDecl)
+		if err != nil {
+			return err
+		}
+		out = result
+		return nil
+	})
+	return out, err
 }
 
 // DocumentSymbol 获取文件大纲。
 func (m *Manager) DocumentSymbol(filePath string) ([]DocumentSymbol, error) {
-	client, err := m.clientForFile(filePath)
-	if client == nil || err != nil {
-		return nil, err
-	}
-	return client.DocumentSymbol(m.ctx, pathToURI(filePath))
+	var out []DocumentSymbol
+	err := m.withBootstrappedDocument(filePath, func(client *Client, uri string) error {
+		result, err := client.DocumentSymbol(m.ctx, uri)
+		if err != nil {
+			return err
+		}
+		out = result
+		return nil
+	})
+	return out, err
 }
 
 // Completion 获取补全候选。
 func (m *Manager) Completion(filePath string, line, character int) ([]CompletionItem, error) {
-	client, err := m.clientForFile(filePath)
-	if client == nil || err != nil {
-		return nil, err
-	}
-	return client.Completion(m.ctx, pathToURI(filePath), line, character)
+	var out []CompletionItem
+	err := m.withBootstrappedDocument(filePath, func(client *Client, uri string) error {
+		result, err := client.Completion(m.ctx, uri, line, character)
+		if err != nil {
+			return err
+		}
+		out = result
+		return nil
+	})
+	return out, err
 }
 
 // Rename 重命名符号。
 func (m *Manager) Rename(filePath string, line, character int, newName string) (*WorkspaceEdit, error) {
-	client, err := m.clientForFile(filePath)
-	if client == nil || err != nil {
-		return nil, err
-	}
-	return client.Rename(m.ctx, pathToURI(filePath), line, character, newName)
+	var out *WorkspaceEdit
+	err := m.withBootstrappedDocument(filePath, func(client *Client, uri string) error {
+		result, err := client.Rename(m.ctx, uri, line, character, newName)
+		if err != nil {
+			return err
+		}
+		out = result
+		return nil
+	})
+	return out, err
 }
 
-// clientForFile 根据文件扩展名查找已运行的 LSP client (不自动启动)。
-func (m *Manager) clientForFile(filePath string) (*Client, error) {
-	ext := strings.TrimPrefix(filepath.Ext(filePath), ".")
-	if ext == "" {
-		return nil, nil
+// WorkspaceSymbol 在工作区范围内按 query 查符号。
+// 参数规则：
+//   - 二选一：仅 language 或仅 file_path。
+func (m *Manager) WorkspaceSymbol(filePath, language, query string) ([]WorkspaceSymbolResult, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, apperrors.Newf("LSP.WorkspaceSymbol", "query is required")
 	}
+
+	path := strings.TrimSpace(filePath)
+	resolvedLanguage, err := m.resolveWorkspaceSymbolLanguage(path, language)
+	if err != nil {
+		return nil, err
+	}
+
+	if path != "" {
+		if err := m.BootstrapLanguageFromFile(path); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := m.BootstrapLanguage(resolvedLanguage); err != nil {
+			return nil, err
+		}
+	}
+
 	m.mu.RLock()
-	cfg, ok := m.configs[ext]
-	if !ok {
-		m.mu.RUnlock()
-		return nil, nil
+	cfg := m.languages[resolvedLanguage]
+	var client *Client
+	if cfg != nil {
+		client = m.clients[cfg.Language]
 	}
-	client, exists := m.clients[cfg.Language]
 	m.mu.RUnlock()
-	if !exists || !client.Running() {
-		return nil, nil
+
+	if client == nil || !client.Running() {
+		return nil, apperrors.Newf("LSP.WorkspaceSymbol", "language client is not running: %s", resolvedLanguage)
 	}
-	return client, nil
+
+	return client.WorkspaceSymbol(m.ctx, query)
 }
 
 // Statuses 返回所有配置的语言服务器状态。
@@ -304,6 +333,13 @@ func (m *Manager) StopAll() {
 	}
 	// 重建 context — 与 Reload 保持一致，使 Manager 在 StopAll 后仍可复用
 	m.ctx, m.cancel = context.WithCancel(context.Background())
+
+	m.docMu.Lock()
+	for _, st := range m.docStates {
+		st.Open = false
+		st.Version = 0
+	}
+	m.docMu.Unlock()
 }
 
 // Reload 重载所有语言服务器 (先关闭, 下次使用时自动重启)。
@@ -318,6 +354,13 @@ func (m *Manager) Reload() {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	handler := m.onStatus
 	m.mu.Unlock()
+
+	m.docMu.Lock()
+	for _, st := range m.docStates {
+		st.Open = false
+		st.Version = 0
+	}
+	m.docMu.Unlock()
 
 	if handler != nil {
 		handler(m.Statuses())

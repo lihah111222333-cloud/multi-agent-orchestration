@@ -1,7 +1,6 @@
 package service
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,22 +120,6 @@ func (s *SkillService) ReadSkillDigest(name string) (SkillDigest, error) {
 		digest.Summary = "未提供摘要"
 	}
 	return digest, nil
-}
-
-// ReadSkillDigestContent 返回运行时注入内容（不含 [skill:name] 前缀）。
-func (s *SkillService) ReadSkillDigestContent(name string) (string, error) {
-	digest, err := s.ReadSkillDigest(name)
-	if err != nil {
-		return "", err
-	}
-	lines := make([]string, 0, 3)
-	lines = append(lines, "摘要: "+digest.Summary)
-	sectionLabels := formatSkillDigestSectionLabels(digest)
-	if len(sectionLabels) > 0 {
-		lines = append(lines, "可选段落: "+strings.Join(sectionLabels, " | "))
-	}
-	lines = append(lines, "使用方式: 按任务选择相关段落，忽略无关内容。")
-	return strings.Join(lines, "\n"), nil
 }
 
 type skillMetadata struct {
@@ -419,36 +402,6 @@ func extractSkillSections(content string, limit int) []SkillDigestEntry {
 		return nil
 	}
 	return sections
-}
-
-func formatSkillDigestSectionLabels(digest SkillDigest) []string {
-	if len(digest.SectionRefs) == 0 {
-		if len(digest.Sections) == 0 {
-			return nil
-		}
-		return append([]string(nil), digest.Sections...)
-	}
-
-	labels := make([]string, 0, len(digest.SectionRefs))
-	for _, item := range digest.SectionRefs {
-		title := strings.TrimSpace(item.Title)
-		if title == "" {
-			continue
-		}
-		file := strings.TrimSpace(item.File)
-		switch {
-		case file != "" && item.Line > 0:
-			labels = append(labels, fmt.Sprintf("%s (%s:%d)", title, file, item.Line))
-		case file != "":
-			labels = append(labels, fmt.Sprintf("%s (%s)", title, file))
-		default:
-			labels = append(labels, title)
-		}
-	}
-	if len(labels) == 0 {
-		return nil
-	}
-	return labels
 }
 
 func validateSkillName(name string) error {

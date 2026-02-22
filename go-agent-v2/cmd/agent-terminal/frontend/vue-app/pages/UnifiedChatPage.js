@@ -508,16 +508,20 @@ export const UnifiedChatPage = {
     let composerSkillPreviewLastWarnAt = 0;
     const workspaceRef = ref(null);
     const dragging = ref(false);
+    const threadRailDragging = ref(false);
     const activityPanelDragging = ref(false);
     const copyState = ref('idle');
     let scrollTimer = 0;
     let copyStateTimer = 0;
     let offFilesDropped = () => { };
+    let clearThreadRailResizeListeners = () => { };
     let clearActivityPanelResizeListeners = () => { };
     const editingThreadId = ref('');
     const editingAlias = ref('');
     const renamingThreadId = ref('');
     const renameInputRefByThread = new Map();
+    const renameEnterAtByThread = new Map();
+    const INLINE_RENAME_DOUBLE_ENTER_GAP_MS = 800;
     const focusedDiffPath = ref('');
     const focusedDiffLine = ref(0);
     const pendingFileRefFocus = /** @type {{ value: PendingFileRefFocus | null }} */ (ref(null));
@@ -544,6 +548,12 @@ export const UnifiedChatPage = {
     });
 
     const splitRatio = ref(props.threadStore.getSplitRatio(modeKey.value));
+    const THREAD_RAIL_DEFAULT_WIDTH = 232;
+    const threadRailWidth = ref(
+      typeof props.threadStore.getThreadRailWidth === 'function'
+        ? props.threadStore.getThreadRailWidth()
+        : THREAD_RAIL_DEFAULT_WIDTH,
+    );
     const ACTIVITY_PANEL_DEFAULT_HEIGHT = 124;
     const ACTIVITY_PANEL_MIN_HEIGHT = 124;
     const ACTIVITY_PANEL_MAX_HEIGHT = 460;
@@ -837,6 +847,20 @@ export const UnifiedChatPage = {
     });
 
     const showWorkspace = computed(() => true);
+    function clampThreadRailWidth(value) {
+      const number = Number(value);
+      const fallback = THREAD_RAIL_DEFAULT_WIDTH;
+      const normalized = Number.isFinite(number) ? Math.round(number) : fallback;
+      return Math.max(188, Math.min(420, normalized));
+    }
+    const threadRailStyle = computed(() => {
+      if (isCmd.value) return {};
+      const width = clampThreadRailWidth(threadRailWidth.value);
+      return {
+        width: `${width}px`,
+        flex: `0 0 ${width}px`,
+      };
+    });
     const chatComposerShellStyle = computed(() => {
       if (isCmd.value) return {};
       const ratio = Math.max(30, Math.min(75, Math.round(Number(splitRatio.value) || 60)));
@@ -1320,6 +1344,9 @@ export const UnifiedChatPage = {
       () => modeKey.value,
       () => {
         splitRatio.value = props.threadStore.getSplitRatio(modeKey.value);
+        if (typeof props.threadStore.getThreadRailWidth === 'function') {
+          threadRailWidth.value = props.threadStore.getThreadRailWidth();
+        }
       },
       { immediate: true },
     );
@@ -1328,6 +1355,20 @@ export const UnifiedChatPage = {
       () => splitRatio.value,
       (value) => {
         props.threadStore.setSplitRatio(modeKey.value, value);
+      },
+    );
+
+    watch(
+      () => threadRailWidth.value,
+      (value) => {
+        const next = clampThreadRailWidth(value);
+        if (next !== value) {
+          threadRailWidth.value = next;
+          return;
+        }
+        if (typeof props.threadStore.setThreadRailWidth === 'function') {
+          props.threadStore.setThreadRailWidth(next);
+        }
       },
     );
 
@@ -1625,6 +1666,15 @@ export const UnifiedChatPage = {
       renameInputRefByThread.set(id, el);
     }
 
+    function clearInlineRenameEnterState(threadId = '') {
+      const id = (threadId || '').toString().trim();
+      if (!id) {
+        renameEnterAtByThread.clear();
+        return;
+      }
+      renameEnterAtByThread.delete(id);
+    }
+
     function beginInlineRename(threadId) {
       const id = (threadId || '').toString().trim();
       if (!id) return;
@@ -1633,6 +1683,7 @@ export const UnifiedChatPage = {
       editingThreadId.value = id;
       editingAlias.value = current;
       renamingThreadId.value = '';
+      clearInlineRenameEnterState(id);
       selectThread(id);
       nextTick(() => {
         const input = renameInputRefByThread.get(id);
@@ -1645,14 +1696,34 @@ export const UnifiedChatPage = {
     function cancelInlineRename(threadId = '') {
       const id = (threadId || editingThreadId.value || '').toString().trim();
       if (!id || editingThreadId.value !== id) return;
+      clearInlineRenameEnterState(id);
       editingThreadId.value = '';
       editingAlias.value = '';
       renamingThreadId.value = '';
     }
 
+    function handleInlineRenameEnter(event, threadId) {
+      const id = (threadId || editingThreadId.value || '').toString().trim();
+      if (!id || editingThreadId.value !== id) return;
+      const isComposing = Boolean(event?.isComposing || event?.keyCode === 229 || event?.which === 229);
+      if (isComposing) return;
+      if (typeof event?.preventDefault === 'function') {
+        event.preventDefault();
+      }
+      const now = Date.now();
+      const lastEnterAt = Number(renameEnterAtByThread.get(id)) || 0;
+      if (lastEnterAt > 0 && (now - lastEnterAt) <= INLINE_RENAME_DOUBLE_ENTER_GAP_MS) {
+        clearInlineRenameEnterState(id);
+        submitInlineRename(id);
+        return;
+      }
+      renameEnterAtByThread.set(id, now);
+    }
+
     async function submitInlineRename(threadId) {
       const id = (threadId || editingThreadId.value || '').toString().trim();
       if (!id || editingThreadId.value !== id || renamingThreadId.value === id) return;
+      clearInlineRenameEnterState(id);
 
       const target = chatThreadCards.value.find((item) => item.id === id);
       const current = (target?.name || id).toString().trim() || id;
@@ -1685,10 +1756,13 @@ export const UnifiedChatPage = {
       }
     }
 
-    function handleInlineRenameBlur(threadId) {
+    function handleInlineRenameBlur(event, threadId) {
       const id = (threadId || '').toString().trim();
       if (!id || editingThreadId.value !== id) return;
-      submitInlineRename(id);
+      const related = event?.relatedTarget;
+      const keepForSaveButton = ((related?.dataset?.renameSaveButtonFor || '').toString().trim() === id);
+      if (keepForSaveButton) return;
+      cancelInlineRename(id);
     }
 
     function getDisplayName(thread) {
@@ -2064,6 +2138,40 @@ export const UnifiedChatPage = {
       ].join('\n');
     }
 
+    function onThreadRailResizeStart(event) {
+      if (isCmd.value) return;
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      document.body.classList.add('is-col-resizing');
+      threadRailDragging.value = true;
+      clearThreadRailResizeListeners();
+
+      const startX = event.clientX;
+      const startWidth = clampThreadRailWidth(threadRailWidth.value);
+
+      const onMove = (e) => {
+        const delta = e.clientX - startX;
+        threadRailWidth.value = clampThreadRailWidth(startWidth + delta);
+      };
+
+      const onUp = () => {
+        threadRailDragging.value = false;
+        document.body.classList.remove('is-col-resizing');
+        clearThreadRailResizeListeners();
+      };
+
+      clearThreadRailResizeListeners = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        window.removeEventListener('blur', onUp);
+      };
+
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+      window.addEventListener('blur', onUp);
+    }
+
     function onResizeStart(event) {
       if (!showWorkspace.value) return;
       if (event.button !== 0) return;
@@ -2191,9 +2299,12 @@ export const UnifiedChatPage = {
       offFilesDropped();
       offFilesDropped = () => { };
       dragging.value = false;
+      threadRailDragging.value = false;
       activityPanelDragging.value = false;
       document.body.classList.remove('is-col-resizing');
       document.body.classList.remove('is-row-resizing');
+      clearThreadRailResizeListeners();
+      clearThreadRailResizeListeners = () => { };
       clearActivityPanelResizeListeners();
       clearActivityPanelResizeListeners = () => { };
       clearComposerSkillPreviewTimer();
@@ -2245,6 +2356,7 @@ export const UnifiedChatPage = {
       layoutMode,
       cmdCardCols,
       splitRatio,
+      threadRailStyle,
       showOverview,
       showWorkspace,
       chatComposerShellStyle,
@@ -2263,6 +2375,7 @@ export const UnifiedChatPage = {
       composerSkillMatchClass,
       composerSkillMatchReason,
       dragging,
+      threadRailDragging,
       activityPanelDragging,
       composerBarRef,
       workspaceRef,
@@ -2280,6 +2393,7 @@ export const UnifiedChatPage = {
       copySelectedThreadId,
       timelinePreview,
       diffPreview,
+      onThreadRailResizeStart,
       onResizeStart,
       onActivityResizeStart,
       stopSelected,
@@ -2297,6 +2411,7 @@ export const UnifiedChatPage = {
       setRenameInputRef,
       beginInlineRename,
       submitInlineRename,
+      handleInlineRenameEnter,
       cancelInlineRename,
       handleInlineRenameBlur,
       getDisplayName,
@@ -2425,6 +2540,8 @@ export const UnifiedChatPage = {
         <aside
           v-if="!isCmd"
           class="thread-rail"
+          :class="{ dragging: threadRailDragging }"
+          :style="threadRailStyle"
           data-testid="thread-rail"
           :aria-label="showArchivedThreadList ? '归档会话列表' : '会话列表'"
         >
@@ -2507,19 +2624,29 @@ export const UnifiedChatPage = {
                     <path d="M6 10L2.5 13.5" stroke-linecap="round"></path>
                   </svg>
                 </button>
-                <input
-                  v-if="editingThreadId === thread.id"
-                  :ref="(el) => setRenameInputRef(thread.id, el)"
-                  v-model="editingAlias"
-                  class="thread-rail-alias-input"
-                  type="text"
-                  maxlength="64"
-                  :disabled="renamingThreadId === thread.id"
-                  @click.stop
-                  @keydown.enter.prevent="submitInlineRename(thread.id)"
-                  @keydown.esc.prevent="cancelInlineRename(thread.id)"
-                  @blur="handleInlineRenameBlur(thread.id)"
-                >
+                <template v-if="editingThreadId === thread.id">
+                  <input
+                    :ref="(el) => setRenameInputRef(thread.id, el)"
+                    v-model="editingAlias"
+                    class="thread-rail-alias-input"
+                    type="text"
+                    maxlength="64"
+                    :disabled="renamingThreadId === thread.id"
+                    @click.stop
+                    @keydown.enter="handleInlineRenameEnter($event, thread.id)"
+                    @keydown.esc.prevent="cancelInlineRename(thread.id)"
+                    @blur="handleInlineRenameBlur($event, thread.id)"
+                  >
+                  <button
+                    type="button"
+                    class="thread-rail-save-btn"
+                    :data-rename-save-button-for="thread.id"
+                    :disabled="renamingThreadId === thread.id"
+                    @mousedown.prevent
+                    @click.stop="submitInlineRename(thread.id)"
+                    @dblclick.stop.prevent="submitInlineRename(thread.id)"
+                  >保存</button>
+                </template>
                 <strong
                   v-else
                   class="thread-rail-name"
@@ -2549,6 +2676,15 @@ export const UnifiedChatPage = {
             </button>
           </div>
         </aside>
+        <div
+          v-if="!isCmd"
+          class="thread-rail-resizer"
+          :class="{ dragging: threadRailDragging }"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整会话列表宽度"
+          @mousedown="onThreadRailResizeStart"
+        ></div>
         <div class="unified-center">
           <section v-if="isCmd" class="cmd-card-panel">
             <div class="overview-metrics">

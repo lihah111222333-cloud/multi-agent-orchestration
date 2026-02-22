@@ -37,6 +37,7 @@ func (s *Server) registerDynamicTools() {
 	s.dynTools["lsp_rename"] = s.lspRename
 	s.dynTools["lsp_completion"] = s.lspCompletion
 	s.dynTools["lsp_did_change"] = s.lspDidChange
+	s.registerExtendedLSPDynamicTools()
 
 	// 编排工具
 	s.dynTools["orchestration_list_agents"] = func(_ json.RawMessage) string { return s.orchestrationListAgents() }
@@ -112,7 +113,7 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 		logger.Info("lsp dynamic tools disabled: no language server available on PATH")
 		return nil
 	}
-	return []codex.DynamicTool{
+	tools := []codex.DynamicTool{
 		{
 			Name:        "lsp_hover",
 			Description: "Get type info and documentation for a symbol at a specific position in a file via LSP hover.",
@@ -139,7 +140,7 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 		},
 		{
 			Name:        "lsp_diagnostics",
-			Description: "Get current diagnostics (errors, warnings) for a file. The file should be opened with lsp_open_file first.",
+			Description: "Get current diagnostics (errors, warnings) for a file. If file_path is provided and the file was not opened, it will be auto-synchronized first.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -149,7 +150,7 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 		},
 		{
 			Name:        "lsp_definition",
-			Description: "Go to definition. Returns the location(s) where a symbol is defined. The file must be opened with lsp_open_file first.",
+			Description: "Go to definition. Returns the location(s) where a symbol is defined. The document is auto-bootstrapped if not opened yet.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -162,7 +163,7 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 		},
 		{
 			Name:        "lsp_references",
-			Description: "Find all references to a symbol. Returns locations where the symbol is used. The file must be opened with lsp_open_file first.",
+			Description: "Find all references to a symbol. Returns locations where the symbol is used. The document is auto-bootstrapped if not opened yet.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -176,7 +177,7 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 		},
 		{
 			Name:        "lsp_document_symbol",
-			Description: "Get file outline (all symbols: functions, types, methods, constants). Returns a hierarchical symbol tree. The file must be opened with lsp_open_file first.",
+			Description: "Get file outline (all symbols: functions, types, methods, constants). Returns a hierarchical symbol tree. The document is auto-bootstrapped if not opened yet.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -187,7 +188,7 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 		},
 		{
 			Name:        "lsp_rename",
-			Description: "Rename a symbol across all files. Returns all edits needed. The file must be opened with lsp_open_file first.",
+			Description: "Rename a symbol across all files. Returns all edits needed. The document is auto-bootstrapped if not opened yet.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -201,7 +202,7 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 		},
 		{
 			Name:        "lsp_completion",
-			Description: "Get code completion suggestions at a position. Returns candidate items with labels and kinds. The file must be opened with lsp_open_file first.",
+			Description: "Get code completion suggestions at a position. Returns candidate items with labels and kinds. The document is auto-bootstrapped if not opened yet.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -214,7 +215,7 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 		},
 		{
 			Name:        "lsp_did_change",
-			Description: "Notify the language server that file content has changed. Use after editing a file to keep LSP in sync. The file must be opened with lsp_open_file first.",
+			Description: "Notify the language server that file content has changed. Use after editing a file to keep LSP in sync. Supports unopened files via automatic bootstrap and fail-closed sync.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -226,6 +227,8 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 			},
 		},
 	}
+	tools = append(tools, s.buildExtendedLSPDynamicTools()...)
+	return tools
 }
 
 // handleDynamicToolCall 处理 codex 发回的动态工具调用 — 调 LSP 并回传结果。
@@ -309,6 +312,11 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 
 	if call.Tool == "orchestration_send_message" {
 		result = s.orchestrationSendMessageFrom(agentID, call.Arguments)
+	} else if call.Tool == "code_run" {
+		// code_run / code_run_test: 需要 agentID + callID, 在此硬编码分支。
+		result = s.codeRunWithAgent(agentID, call.CallID, call.Arguments)
+	} else if call.Tool == "code_run_test" {
+		result = s.codeRunTestWithAgent(agentID, call.CallID, call.Arguments)
 	} else if handler, ok := s.dynTools[call.Tool]; ok {
 		result = handler(call.Arguments)
 	} else {
@@ -460,6 +468,15 @@ func (s *Server) lspDiagnostics(args json.RawMessage) string {
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "error: unmarshal diagnostics params: " + err.Error()
+	}
+	p.FilePath = strings.TrimSpace(p.FilePath)
+
+	if p.FilePath != "" && s.lsp != nil {
+		if err := s.lsp.BootstrapDocument(p.FilePath); err != nil {
+			return "error: " + err.Error()
+		}
+		// 诊断由 server→client 通知异步到达，短暂等待一次以提高首查命中率。
+		time.Sleep(120 * time.Millisecond)
 	}
 
 	s.diagMu.RLock()

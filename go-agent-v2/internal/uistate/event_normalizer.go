@@ -64,9 +64,12 @@ var classifyMap = map[string]classifyResult{
 	"idle":                      {UITypeTurnComplete},
 
 	// Plan / Diff
-	"plan_delta":  {UITypePlanDelta},
-	"plan_update": {UITypePlanDelta},
-	"turn_diff":   {UITypeDiffUpdate},
+	"plan_delta":             {UITypePlanDelta},
+	"plan_update":            {UITypePlanDelta},
+	"turn_plan":              {UITypePlanDelta},
+	"item/plan/delta":        {UITypePlanDelta},
+	"codex/event/plan_delta": {UITypePlanDelta},
+	"turn_diff":              {UITypeDiffUpdate},
 
 	// User Message
 	"user_message": {UITypeUserMessage},
@@ -107,6 +110,9 @@ var classifyMap = map[string]classifyResult{
 var classifyMethodMap = map[string]classifyResult{
 	"turn/started":                              {UITypeTurnStarted},
 	"turn/completed":                            {UITypeTurnComplete},
+	"turn/plan/updated":                         {UITypePlanDelta},
+	"item/plan/delta":                           {UITypePlanDelta},
+	"codex/event/plan_delta":                    {UITypePlanDelta},
 	"codex/event/task_started":                  {UITypeTurnStarted},
 	"codex/event/task_complete":                 {UITypeTurnComplete},
 	"item/commandExecution/terminalInteraction": {UITypeSystem},

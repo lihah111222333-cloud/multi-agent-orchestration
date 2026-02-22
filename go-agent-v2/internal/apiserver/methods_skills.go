@@ -469,32 +469,6 @@ func (s *Server) skillsLocalDeleteTyped(_ context.Context, p skillsLocalDeletePa
 	}
 
 	removedBindings := 0
-	skillsKey := strings.ToLower(skillName)
-	s.skillsMu.Lock()
-	for agentID, skills := range s.agentSkills {
-		if len(skills) == 0 {
-			continue
-		}
-		next := make([]string, 0, len(skills))
-		changed := false
-		for _, item := range skills {
-			if strings.ToLower(strings.TrimSpace(item)) == skillsKey {
-				changed = true
-				continue
-			}
-			next = append(next, item)
-		}
-		if !changed {
-			continue
-		}
-		removedBindings++
-		if len(next) == 0 {
-			delete(s.agentSkills, agentID)
-			continue
-		}
-		s.agentSkills[agentID] = next
-	}
-	s.skillsMu.Unlock()
 
 	logger.Info("skills/local/delete: removed",
 		logger.FieldSkill, skillName,
@@ -517,12 +491,12 @@ func (s *Server) skillsLocalDeleteTyped(_ context.Context, p skillsLocalDeletePa
 //
 // 两种模式:
 //  1. 写入 SKILL.md 文件: {"name": "skill_name", "content": "..."}
-//  2. 为会话配置技能列表: {"agent_id": "thread-xxx", "skills": ["s1", "s2"]}
+//  2. 兼容旧参数（已不绑定会话）: {"agent_id": "thread-xxx", "skills": ["s1", "s2"]}
 type skillsConfigWriteParams struct {
 	// 模式 1: 写文件
 	Name    string `json:"name"`
 	Content string `json:"content"`
-	// 模式 2: per-session 技能配置
+	// 模式 2: 兼容旧参数（不再绑定会话）
 	AgentID string   `json:"agent_id"`
 	Skills  []string `json:"skills"`
 }
@@ -591,28 +565,27 @@ func (s *Server) skillsConfigReadTyped(_ context.Context, p skillsConfigReadPara
 		return nil, apperrors.New("Server.skillsConfigRead", "agent_id is required")
 	}
 	return map[string]any{
-		"agent_id": agentID,
-		"skills":   s.GetAgentSkills(agentID),
+		"agent_id":      agentID,
+		"skills":        []string{},
+		"session_bound": false,
 	}, nil
 }
 
 func (s *Server) skillsConfigWriteTyped(_ context.Context, p skillsConfigWriteParams) (any, error) {
-	// 模式 2: 为指定 agent/session 配置技能列表
+	// 模式 2: 兼容旧入参, 不再做会话绑定。
 	if p.AgentID != "" {
 		normalizedSkills, err := normalizeSkillNames(p.Skills)
 		if err != nil {
 			return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "normalize skills")
 		}
-		s.skillsMu.Lock()
-		if len(normalizedSkills) == 0 {
-			delete(s.agentSkills, p.AgentID)
-		} else {
-			s.agentSkills[p.AgentID] = normalizedSkills
-		}
-		s.skillsMu.Unlock()
-		logger.Info("skills/config/write: agent skills configured",
+		logger.Info("skills/config/write: ignore deprecated agent binding",
 			logger.FieldAgentID, p.AgentID, "skills", normalizedSkills)
-		return map[string]any{"ok": true, "agent_id": p.AgentID, "skills": normalizedSkills}, nil
+		return map[string]any{
+			"ok":            true,
+			"agent_id":      p.AgentID,
+			"skills":        normalizedSkills,
+			"session_bound": false,
+		}, nil
 	}
 
 	// 模式 1: 写 SKILL.md 文件

@@ -162,6 +162,38 @@ func TestApplyAgentEvent_PlanUpdateReplacesExistingPlan(t *testing.T) {
 	}
 }
 
+func TestApplyAgentEvent_TurnPlanEventProducesPlanTimeline(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-plan-event"
+	payload := map[string]any{
+		"plan": []any{
+			map[string]any{"step": "步骤一", "status": "in_progress"},
+			map[string]any{"step": "步骤二", "status": "pending"},
+		},
+	}
+
+	normalized := NormalizeEventFromPayload("turn_plan", "turn/plan/updated", payload)
+	if normalized.UIType != UITypePlanDelta {
+		t.Fatalf("uiType = %q, want %q", normalized.UIType, UITypePlanDelta)
+	}
+	mgr.ApplyAgentEvent(threadID, normalized, payload)
+
+	timeline := mgr.Snapshot().TimelinesByThread[threadID]
+	if len(timeline) != 1 {
+		t.Fatalf("timeline len = %d, want 1", len(timeline))
+	}
+	item := timeline[0]
+	if item.Kind != "plan" {
+		t.Fatalf("kind = %q, want plan", item.Kind)
+	}
+	if item.Done {
+		t.Fatal("plan item done = true, want false")
+	}
+	if !strings.Contains(item.Text, "步骤一") || !strings.Contains(item.Text, "步骤二") {
+		t.Fatalf("plan text = %q, want steps included", item.Text)
+	}
+}
+
 func TestExtractUserAttachmentsFromPayload(t *testing.T) {
 	payload := map[string]any{
 		"input": []any{

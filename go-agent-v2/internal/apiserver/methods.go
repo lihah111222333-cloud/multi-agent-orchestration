@@ -15,7 +15,7 @@ var codexThreadIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]
 
 const (
 	defaultLSPUsagePromptHint = "已注入LSP代码智能工具。使用规则：\n" +
-		"1. 分析/修改源码前，必须先调 lsp_open_file 打开目标文件\n" +
+		"1. 分析/修改源码前，建议先调 lsp_open_file 打开目标文件（未先调用时工具会自动同步）\n" +
 		"2. 查看类型/文档: lsp_hover (需 file_path + line + column)\n" +
 		"3. 查看错误/警告: lsp_diagnostics\n" +
 		"4. 跳转定义: lsp_definition — 精确定位符号定义位置\n" +
@@ -24,7 +24,8 @@ const (
 		"7. 安全重命名: lsp_rename — 跨文件重命名符号\n" +
 		"8. 代码补全: lsp_completion — 获取补全候选项\n" +
 		"9. 文件同步: lsp_did_change — 编辑文件后通知 LSP 更新内容\n" +
-		"凡是源代码的分析、定位、修改与解释，须优先调用上述 9 个 LSP 工具增强代码理解能力。未使用上述工具前，不得基于猜测给出结论。禁止跳过 lsp_open_file 直接调用其他 LSP 工具。"
+		"10-19. 另含 workspace_symbol/implementation/call_hierarchy/code_action/type_definition/signature_help/format/type_hierarchy/semantic_tokens/folding_range\n" +
+		"凡是源代码的分析、定位、修改与解释，须优先调用上述 19 个 LSP 工具增强代码理解能力。未使用上述工具前，不得基于猜测给出结论。建议先调用 lsp_open_file，未先调用时工具会自动同步文件。"
 	prefKeyLSPUsagePromptHint = "settings.lspUsagePromptHint"
 	maxLSPUsagePromptHintLen  = 4000
 
@@ -42,6 +43,17 @@ const (
 		"优先使用 playwright CLI，复杂场景再写脚本。使用完毕后确保关闭浏览器释放资源。"
 	prefKeyBrowserPrompt = "settings.browserPrompt"
 	maxBrowserPromptLen  = 4000
+
+	defaultCodeRunPrompt = "已注入代码执行工具。使用规则：\n" +
+		"1. 运行代码片段: code_run (mode=run) — 支持 Go, JavaScript, TypeScript\n" +
+		"  - Go 代码默认 auto_wrap=true, 自动补全 package main 和 imports\n" +
+		"  - JS/TS 代码直接执行, 无需额外配置\n" +
+		"2. 执行测试: code_run_test — go test -v -run ^TestFunc$ [package]\n" +
+		"3. 项目命令: code_run (mode=project_cmd) — 执行 shell 命令 (需要用户审批)\n" +
+		"安全约束: 输出上限 512KB, 默认超时 30s, 代码在临时目录隔离执行。\n" +
+		"优先使用 code_run 验证代码逻辑, 使用 code_run_test 验证测试结果。"
+	prefKeyCodeRunPrompt = "settings.codeRunPrompt"
+	maxCodeRunPromptLen  = 4000
 )
 
 // registerMethods 注册所有 JSON-RPC 方法 (完整对标 APP-SERVER-PROTOCOL.md)。
@@ -107,6 +119,8 @@ func (s *Server) registerMethods() {
 	s.methods["config/jsonRenderPrompt/write"] = typedHandler(s.configJsonRenderPromptWriteTyped)
 	s.methods["config/browserPrompt/read"] = s.configBrowserPromptRead
 	s.methods["config/browserPrompt/write"] = typedHandler(s.configBrowserPromptWriteTyped)
+	s.methods["config/codeRunPrompt/read"] = s.configCodeRunPromptRead
+	s.methods["config/codeRunPrompt/write"] = typedHandler(s.configCodeRunPromptWriteTyped)
 	s.methods["configRequirements/read"] = s.configRequirementsRead
 
 	// § 7. 账号 (5 methods)

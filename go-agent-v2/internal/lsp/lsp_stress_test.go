@@ -1,3 +1,6 @@
+//go:build lspstress
+// +build lspstress
+
 // lsp_stress_test.go — LSP 大规模冒烟测试（严格验收版）。
 //
 // 对 3 个真实项目执行全链路 LSP 操作:
@@ -6,7 +9,7 @@
 //
 // 运行:
 //
-//	go test -v -run TestLSP_Stress -timeout 600s ./internal/lsp/
+//	go test -tags lspstress -v -run TestLSP_Stress -timeout 600s ./internal/lsp/
 package lsp
 
 import (
@@ -603,7 +606,7 @@ func prepareRustWorkspace(t *testing.T, rustRoot string) (string, []string) {
 }
 
 func runStressGo(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	goRoot := filepath.Join(testCorpusDir, "go")
 	mgr := NewManager(nil)
@@ -654,7 +657,7 @@ func runStressGo(t *testing.T) {
 }
 
 func runStressJS(t *testing.T) {
-	skipIfNotAvailable(t, "typescript-language-server")
+	requireServerOrSkip(t, "typescript")
 
 	jsRoot := filepath.Join(testCorpusDir, "js")
 	mgr := NewManager(nil)
@@ -700,7 +703,7 @@ func runStressJS(t *testing.T) {
 }
 
 func runStressRust(t *testing.T) {
-	skipIfNotAvailable(t, "rust-analyzer")
+	requireServerOrSkip(t, "rust")
 
 	rustRoot := filepath.Join(testCorpusDir, "rust")
 	workspaceRoot, files := prepareRustWorkspace(t, rustRoot)
@@ -858,7 +861,7 @@ func TestLSP_Stress_Rust(t *testing.T) {
 }
 
 func TestLSP_Stress_Rename(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	goRoot := filepath.Join(testCorpusDir, "go")
 	mgr := NewManager(nil)
@@ -996,6 +999,14 @@ func (ls *LatencyStats) Report(t *testing.T) {
 }
 
 func commandAvailable(cmd string) bool {
+	switch cmd {
+	case "gopls":
+		return probeLanguageServerCompatibility("go") == nil
+	case "typescript-language-server":
+		return probeLanguageServerCompatibility("typescript") == nil
+	case "rust-analyzer":
+		return probeLanguageServerCompatibility("rust") == nil
+	}
 	_, err := exec.LookPath(cmd)
 	return err == nil
 }
@@ -1212,7 +1223,7 @@ func runningByLanguage(statuses []ServerStatus) map[string]bool {
 }
 
 func TestLSP_Stress_CrossFileDefinition(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	goRoot := filepath.Join(testCorpusDir, "go")
 	mgr := NewManager(nil)
@@ -1274,7 +1285,7 @@ nextFile:
 }
 
 func TestLSP_Stress_RenameApply(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	goRoot := filepath.Join(testCorpusDir, "go")
 	mgr := NewManager(nil)
@@ -1355,7 +1366,7 @@ func TestLSP_Stress_RenameApply(t *testing.T) {
 }
 
 func TestLSP_Stress_Latency(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	goRoot := filepath.Join(testCorpusDir, "go")
 	mgr := NewManager(nil)
@@ -1384,7 +1395,7 @@ func TestLSP_Stress_Latency(t *testing.T) {
 }
 
 func TestLSP_Stress_Concurrent(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	goRoot := filepath.Join(testCorpusDir, "go")
 	mgr := NewManager(nil)
@@ -1462,7 +1473,7 @@ func TestLSP_Stress_Concurrent(t *testing.T) {
 }
 
 func TestLSP_Stress_SymbolDepth(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	goRoot := filepath.Join(testCorpusDir, "go")
 	mgr := NewManager(nil)
@@ -1518,7 +1529,7 @@ func TestLSP_Stress_SymbolDepth(t *testing.T) {
 }
 
 func TestLSP_Stress_Completion(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	tmpDir := t.TempDir()
 	must(t, os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module completiontest\ngo 1.22\n"), 0644))
@@ -1556,7 +1567,7 @@ func TestLSP_Stress_Completion(t *testing.T) {
 }
 
 func TestLSP_Stress_DidChange(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	tmpDir := t.TempDir()
 	must(t, os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module changetest\ngo 1.22\n"), 0644))
@@ -1607,7 +1618,7 @@ func TestLSP_Stress_DidChange(t *testing.T) {
 }
 
 func TestLSP_Stress_ErrorRecovery(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	goRoot := filepath.Join(testCorpusDir, "go")
 	mgr := NewManager(nil)
@@ -1673,7 +1684,7 @@ func TestLSP_Stress_ErrorRecovery(t *testing.T) {
 }
 
 func TestLSP_Stress_Lifecycle(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	goRoot := filepath.Join(testCorpusDir, "go")
 	goFiles := collectFiles(t, goRoot, ".go")
@@ -1734,7 +1745,7 @@ func TestLSP_Stress_Lifecycle(t *testing.T) {
 }
 
 func TestLSP_Stress_OpenCloseIdempotent(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	goRoot := filepath.Join(testCorpusDir, "go")
 	goFiles := collectFiles(t, goRoot, ".go")
@@ -1834,21 +1845,21 @@ func TestLSP_Stress_UnsupportedExtension(t *testing.T) {
 	txtFile := filepath.Join(tmpDir, "note.txt")
 	mdFile := filepath.Join(tmpDir, "note.md")
 
-	if err := mgr.OpenFile(txtFile, "hello"); err != nil {
-		t.Fatalf(".txt should be ignored without error: %v", err)
+	if err := mgr.OpenFile(txtFile, "hello"); err == nil {
+		t.Fatal("expected error for .txt unsupported extension")
 	}
-	if err := mgr.OpenFile(mdFile, "# hello"); err != nil {
-		t.Fatalf(".md should be ignored without error: %v", err)
+	if err := mgr.OpenFile(mdFile, "# hello"); err == nil {
+		t.Fatal("expected error for .md unsupported extension")
 	}
 	if err := mgr.CloseFile(txtFile); err != nil {
-		t.Fatalf("close .txt should be ignored without error: %v", err)
+		t.Fatalf("close .txt should remain safe/no-op: %v", err)
 	}
 }
 
 func TestLSP_Stress_MultiLanguageIsolation(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
-	skipIfNotAvailable(t, "typescript-language-server")
-	skipIfNotAvailable(t, "rust-analyzer")
+	requireServerOrSkip(t, "go")
+	requireServerOrSkip(t, "typescript")
+	requireServerOrSkip(t, "rust")
 
 	workRoot := t.TempDir()
 	goFile := filepath.Join(workRoot, "main.go")
@@ -2032,7 +2043,7 @@ func TestLSP_Stress_DiagnosticsQuality(t *testing.T) {
 }
 
 func TestLSP_Stress_UnicodePath(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "工程 空间", "模块A")

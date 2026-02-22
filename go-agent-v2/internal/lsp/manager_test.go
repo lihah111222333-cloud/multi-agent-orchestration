@@ -61,8 +61,8 @@ func TestNewManager_DefaultConfigs(t *testing.T) {
 
 func TestManager_OpenFileUnsupportedExt(t *testing.T) {
 	m := NewManager(nil)
-	if err := m.OpenFile("/tmp/test.xyz", "content"); err != nil {
-		t.Fatalf("expected nil for unsupported ext, got: %v", err)
+	if err := m.OpenFile("/tmp/test.xyz", "content"); err == nil {
+		t.Fatal("expected error for unsupported ext, got nil")
 	}
 }
 

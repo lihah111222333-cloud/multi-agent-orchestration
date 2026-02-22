@@ -55,7 +55,7 @@ summary: "tdd summary"
 }
 
 func TestSkillsConfigWriteAgentSkillsLifecycle(t *testing.T) {
-	srv := &Server{agentSkills: make(map[string][]string)}
+	srv := &Server{}
 	ctx := context.Background()
 
 	raw, err := srv.skillsConfigWriteTyped(ctx, skillsConfigWriteParams{
@@ -71,12 +71,11 @@ func TestSkillsConfigWriteAgentSkillsLifecycle(t *testing.T) {
 	if !reflect.DeepEqual(gotSkills, wantSkills) {
 		t.Fatalf("configured skills=%v, want=%v", gotSkills, wantSkills)
 	}
-
-	readonly := srv.GetAgentSkills("thread-1")
-	readonly[0] = "mutated"
-	after := srv.GetAgentSkills("thread-1")
-	if !reflect.DeepEqual(after, wantSkills) {
-		t.Fatalf("GetAgentSkills should return copy, got=%v", after)
+	if bound, _ := resp["session_bound"].(bool); bound {
+		t.Fatalf("session_bound=%v, want=false", resp["session_bound"])
+	}
+	if got := srv.GetAgentSkills("thread-1"); len(got) != 0 {
+		t.Fatalf("agent binding should be disabled, got=%v", got)
 	}
 
 	_, err = srv.skillsConfigWriteTyped(ctx, skillsConfigWriteParams{
@@ -87,7 +86,7 @@ func TestSkillsConfigWriteAgentSkillsLifecycle(t *testing.T) {
 		t.Fatalf("skillsConfigWriteTyped clear error: %v", err)
 	}
 	if got := srv.GetAgentSkills("thread-1"); len(got) != 0 {
-		t.Fatalf("skills should be cleared, got=%v", got)
+		t.Fatalf("agent binding should stay empty, got=%v", got)
 	}
 }
 
@@ -194,6 +193,11 @@ summary: "tdd-summary"
 ---
 # tdd
 FULL TDD DETAIL SHOULD NOT INJECT`)
+	writeSkill("ops", `---
+summary: "ops-summary"
+---
+# ops
+FULL OPS DETAIL SHOULD NOT INJECT`)
 
 	srv := &Server{
 		skillSvc:  service.NewSkillService(tmp),
@@ -238,20 +242,34 @@ summary: "tdd-summary"
 ---
 # tdd
 FULL TDD DETAIL SHOULD NOT INJECT`)
+	writeSkill("ops", `---
+summary: "ops-summary"
+---
+# ops
+FULL OPS DETAIL SHOULD NOT INJECT`)
 
 	srv := &Server{
 		skillSvc:  service.NewSkillService(tmp),
 		skillsDir: tmp,
 	}
-	input := []UserInput{
-		{Type: "skill", Name: "tdd", Content: "manual tdd"},
+	prompt, count := srv.buildSelectedSkillPrompt([]string{"backend", "tdd", "missing"})
+	if count != 2 {
+		t.Fatalf("selected skill count=%d, want=2", count)
 	}
-	prompt, count := srv.buildSelectedSkillPrompt([]string{"backend", "tdd", "missing"}, input)
-	if count != 0 {
-		t.Fatalf("selected skill count=%d, want=0", count)
+	if !strings.Contains(prompt, "[skill:backend]") {
+		t.Fatalf("expected backend skill prompt, got=%q", prompt)
 	}
-	if strings.TrimSpace(prompt) != "" {
-		t.Fatalf("selected skill prompt should be disabled, got=%q", prompt)
+	if !strings.Contains(prompt, "[skill:tdd]") {
+		t.Fatalf("expected tdd skill prompt, got=%q", prompt)
+	}
+	if !strings.Contains(prompt, "FULL BACKEND DETAIL SHOULD NOT INJECT") {
+		t.Fatalf("selected skill should inject full content, got=%q", prompt)
+	}
+	if !strings.Contains(prompt, "FULL TDD DETAIL SHOULD NOT INJECT") {
+		t.Fatalf("selected skill should inject full content, got=%q", prompt)
+	}
+	if strings.Contains(prompt, "[skill:ops]") {
+		t.Fatalf("non-selected skill should not be injected, got=%q", prompt)
 	}
 }
 
@@ -475,8 +493,8 @@ api helper`)
 	if strings.Contains(prompt, "[skill:api-helper]") {
 		t.Fatalf("trigger-only skill should be skipped in manual mode, got=%q", prompt)
 	}
-	if strings.Contains(prompt, "FULL BACKEND DETAIL SHOULD NOT INJECT") {
-		t.Fatalf("full skill body should not be injected, got=%q", prompt)
+	if !strings.Contains(prompt, "FULL BACKEND DETAIL SHOULD NOT INJECT") {
+		t.Fatalf("full skill body should be injected, got=%q", prompt)
 	}
 }
 
@@ -756,9 +774,6 @@ func TestSkillsConfigReadAndLocalRead(t *testing.T) {
 
 	srv := &Server{
 		skillsDir: tmp,
-		agentSkills: map[string][]string{
-			"thread-1": {"backend"},
-		},
 	}
 	ctx := context.Background()
 
@@ -768,8 +783,11 @@ func TestSkillsConfigReadAndLocalRead(t *testing.T) {
 	}
 	resp := raw.(map[string]any)
 	gotSkills := resp["skills"].([]string)
-	if !reflect.DeepEqual(gotSkills, []string{"backend"}) {
+	if len(gotSkills) != 0 {
 		t.Fatalf("skillsConfigReadTyped skills=%v", gotSkills)
+	}
+	if bound, _ := resp["session_bound"].(bool); bound {
+		t.Fatalf("skillsConfigReadTyped session_bound=%v, want=false", resp["session_bound"])
 	}
 
 	localRaw, err := srv.skillsLocalReadTyped(ctx, skillsLocalReadParams{Path: localFile})
@@ -809,11 +827,6 @@ func TestSkillsLocalDeleteTypedRemovesDirectoryAndThreadBindings(t *testing.T) {
 
 	srv := &Server{
 		skillsDir: destRoot,
-		agentSkills: map[string][]string{
-			"thread-1": {"backend", "ops"},
-			"thread-2": {"BACKEND", "review"},
-			"thread-3": {"ops"},
-		},
 	}
 
 	raw, err := srv.skillsLocalDeleteTyped(context.Background(), skillsLocalDeleteParams{Name: "backend"})
@@ -824,21 +837,12 @@ func TestSkillsLocalDeleteTypedRemovesDirectoryAndThreadBindings(t *testing.T) {
 	if ok, _ := resp["ok"].(bool); !ok {
 		t.Fatalf("delete response ok=%v, want=true", resp["ok"])
 	}
-	if removed, _ := resp["removed_agent_bindings"].(int); removed != 2 {
-		t.Fatalf("removed_agent_bindings=%v, want=2", resp["removed_agent_bindings"])
+	if removed, _ := resp["removed_agent_bindings"].(int); removed != 0 {
+		t.Fatalf("removed_agent_bindings=%v, want=0", resp["removed_agent_bindings"])
 	}
 
 	if _, err := os.Stat(filepath.Join(destRoot, "backend")); !os.IsNotExist(err) {
 		t.Fatalf("backend directory should be removed, stat err=%v", err)
-	}
-	if got := srv.GetAgentSkills("thread-1"); !reflect.DeepEqual(got, []string{"ops"}) {
-		t.Fatalf("thread-1 skills=%v, want=[ops]", got)
-	}
-	if got := srv.GetAgentSkills("thread-2"); !reflect.DeepEqual(got, []string{"review"}) {
-		t.Fatalf("thread-2 skills=%v, want=[review]", got)
-	}
-	if got := srv.GetAgentSkills("thread-3"); !reflect.DeepEqual(got, []string{"ops"}) {
-		t.Fatalf("thread-3 skills=%v, want=[ops]", got)
 	}
 }
 

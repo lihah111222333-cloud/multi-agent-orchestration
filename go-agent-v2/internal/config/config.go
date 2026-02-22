@@ -21,6 +21,15 @@ type Config struct {
 	LLMTimeout     int     `env:"LLM_TIMEOUT" default:"120" min:"1"`
 	LLMMaxRetries  int     `env:"LLM_MAX_RETRIES" default:"3" min:"0"`
 
+	// Dynamic Tool Routing (V2)
+	DynToolRoutingMode               string  `env:"DYN_TOOL_ROUTING_MODE" default:"legacy"`
+	DynToolRouterModel               string  `env:"DYN_TOOL_ROUTER_MODEL"`
+	DynToolRouterProvider            string  `env:"DYN_TOOL_ROUTER_PROVIDER" default:"openai_compatible"`
+	DynToolRouterBaseURL             string  `env:"DYN_TOOL_ROUTER_BASE_URL"`
+	DynToolRouterAPIKey              string  `env:"DYN_TOOL_ROUTER_API_KEY"`
+	DynToolRouterConfidenceThreshold float64 `env:"DYN_TOOL_ROUTER_CONFIDENCE_THRESHOLD" default:"0.65" min:"0"`
+	DynToolRouterTimeoutSec          int     `env:"DYN_TOOL_ROUTER_TIMEOUT_SEC" default:"8" min:"1"`
+
 	// Gateway
 	GatewayTimeout         int `env:"GATEWAY_TIMEOUT" default:"240" min:"1"`
 	GatewayMaxAttempts     int `env:"GATEWAY_MAX_ATTEMPTS" default:"2" min:"1"`

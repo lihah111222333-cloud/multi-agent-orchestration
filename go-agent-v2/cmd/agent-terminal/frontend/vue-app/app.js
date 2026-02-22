@@ -286,7 +286,6 @@ export const AppRoot = {
         <SkillsPage
           v-else-if="page === 'skills'"
           :skills="dashboard.skills"
-          :thread-store="threadStore"
           @refresh-skills="refreshDashboardByPage('skills')"
         />
 

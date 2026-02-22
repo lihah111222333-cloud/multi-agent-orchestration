@@ -51,6 +51,49 @@ test('ordered list keeps sequential numbering when items have detail lines', () 
   );
 });
 
+test('ordered list keeps explicit start number', () => {
+  const html = renderAssistantMarkdown('3. third\n4. fourth');
+  assert.equal(html, '<ol start="3"><li>third</li><li>fourth</li></ol>');
+});
+
+test('ordered list preserves numbering when split by unordered details', () => {
+  const md = [
+    '1. protocol.go + 新增',
+    '- 第一条',
+    '- 第二条',
+    '',
+    '2. client.go',
+    '- 第三条',
+    '',
+    '3. manager.go',
+    '- 第四条',
+  ].join('\n');
+  const html = renderAssistantMarkdown(md);
+  assert.equal((html.match(/<ol/g) || []).length, 3);
+  assert.equal(html.includes('<ol start="2">'), true);
+  assert.equal(html.includes('<ol start="3">'), true);
+  assert.equal(html.includes('<ul><li>第一条</li><li>第二条</li></ul>'), true);
+  assert.equal(html.includes('<ul><li>第三条</li></ul>'), true);
+  assert.equal(html.includes('<ul><li>第四条</li></ul>'), true);
+});
+
+test('ordered list keeps explicit restart number for 1/ul/1 pattern', () => {
+  const md = [
+    '1. 第一阶段',
+    '- 说明 A',
+    '',
+    '1. 第二阶段',
+    '- 说明 B',
+    '',
+    '1. 第三阶段',
+    '- 说明 C',
+  ].join('\n');
+  const html = renderAssistantMarkdown(md);
+  assert.equal((html.match(/<ol/g) || []).length, 3);
+  assert.equal(html.includes('<ol start="2">'), false);
+  assert.equal(html.includes('<ol start="3">'), false);
+});
+
 test('unordered list keeps one ul across blank lines', () => {
   const html = renderAssistantMarkdown('- first\n\n- second\n\n- third');
   assert.equal(html, '<ul><li>first</li><li>second</li><li>third</li></ul>');

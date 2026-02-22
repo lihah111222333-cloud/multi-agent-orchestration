@@ -183,16 +183,60 @@ func (s *Server) appendBrowserHint(ctx context.Context, prompt string) string {
 	return mergePromptText(prompt, s.resolveBrowserPrompt(ctx))
 }
 
+func (s *Server) appendCodeRunHint(ctx context.Context, prompt string) string {
+	if s.codeRunner == nil {
+		return prompt
+	}
+	return mergePromptText(prompt, s.resolveCodeRunPrompt(ctx))
+}
+
 func (s *Server) buildConfiguredSkillPrompt(agentID string, input []UserInput) (string, int) {
 	_ = agentID
 	_ = input
 	return "", 0
 }
 
-func (s *Server) buildSelectedSkillPrompt(selectedSkills []string, input []UserInput) (string, int) {
-	_ = selectedSkills
-	_ = input
-	return "", 0
+func (s *Server) buildSelectedSkillPrompt(selectedSkills []string) (string, int) {
+	if s.skillSvc == nil {
+		return "", 0
+	}
+	ordered := make([]string, 0, len(selectedSkills))
+	seen := make(map[string]struct{}, len(selectedSkills))
+	appendName := func(raw string) {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			return
+		}
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		ordered = append(ordered, name)
+	}
+	for _, name := range selectedSkills {
+		appendName(name)
+	}
+	if len(ordered) == 0 {
+		return "", 0
+	}
+
+	texts := make([]string, 0, len(ordered))
+	for _, skillName := range ordered {
+		content, err := s.skillSvc.ReadSkillContent(skillName)
+		if err != nil {
+			logger.Warn("turn/start: selected skill unavailable, skip",
+				logger.FieldSkill, skillName,
+				logger.FieldError, err,
+			)
+			continue
+		}
+		texts = append(texts, skillInputText(skillName, content))
+	}
+	if len(texts) == 0 {
+		return "", 0
+	}
+	return strings.Join(texts, "\n"), len(texts)
 }
 
 func lowerMatchedTerms(text string, candidates []string) []string {
@@ -406,11 +450,7 @@ func (s *Server) renderAutoMatchedSkillPrompt(agentID string, matches []autoMatc
 			content string
 			readErr error
 		)
-		if match.MatchedBy == "force" {
-			content, readErr = s.skillSvc.ReadSkillContent(skillName)
-		} else {
-			content, readErr = s.skillSvc.ReadSkillDigestContent(skillName)
-		}
+		content, readErr = s.skillSvc.ReadSkillContent(skillName)
 		if readErr != nil {
 			logger.Warn("turn/start: auto-matched skill unavailable, skip",
 				logger.FieldAgentID, agentID, logger.FieldThreadID, agentID,
@@ -448,33 +488,27 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 		"codex_thread_id", strings.TrimSpace(proc.Client.GetThreadID()),
 	)
 
-	if _, err := normalizeSkillNames(p.SelectedSkills); err != nil {
+	selectedSkills, err := normalizeSkillNames(p.SelectedSkills)
+	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.turnStart", "normalize selected skills")
 	}
 
 	prompt, images, files := extractInputs(p.Input)
-	configuredSkillCount := 0
-	selectedSkillCount := 0
-	autoMatchedSkillPrompt := ""
-	autoMatchedSkillCount := 0
-	if p.ManualSkillSelection {
-		autoMatchedSkillPrompt, autoMatchedSkillCount = s.buildForcedOrExplicitMatchedSkillPrompt(p.ThreadID, prompt, p.Input)
-	} else {
-		autoMatchedSkillPrompt, autoMatchedSkillCount = s.buildAutoMatchedSkillPrompt(p.ThreadID, prompt, p.Input)
-	}
-	submitPrompt := mergePromptText(prompt, autoMatchedSkillPrompt)
+	selectedSkillPrompt, selectedSkillCount := s.buildSelectedSkillPrompt(selectedSkills)
+	submitPrompt := mergePromptText(prompt, selectedSkillPrompt)
 	submitPrompt = s.appendLSPUsageHint(ctx, submitPrompt)
 	submitPrompt = s.appendJsonRenderHint(ctx, submitPrompt)
 	submitPrompt = s.appendBrowserHint(ctx, submitPrompt)
+	submitPrompt = s.appendCodeRunHint(ctx, submitPrompt)
 	logger.Info("turn/start: input prepared",
 		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 		"text_len", len(prompt),
 		"images", len(images),
 		"files", len(files),
-		"configured_skills", configuredSkillCount,
-		"selected_skills", selectedSkillCount,
+		"selected_skills_requested", len(selectedSkills),
+		"selected_skills_injected", selectedSkillCount,
 		"manual_skill_selection", p.ManualSkillSelection,
-		"auto_matched_skills", autoMatchedSkillCount,
+		"auto_matched_skills", 0,
 	)
 	if err := proc.Client.Submit(submitPrompt, images, files, p.OutputSchema); err != nil {
 		return nil, apperrors.Wrap(err, "Server.turnStart", "submit prompt")
@@ -508,20 +542,17 @@ type turnSteerParams struct {
 
 func (s *Server) turnSteerTyped(ctx context.Context, p turnSteerParams) (any, error) {
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		if _, err := normalizeSkillNames(p.SelectedSkills); err != nil {
+		selectedSkills, err := normalizeSkillNames(p.SelectedSkills)
+		if err != nil {
 			return nil, apperrors.Wrap(err, "Server.turnSteer", "normalize selected skills")
 		}
 		prompt, images, files := extractInputs(p.Input)
-		autoMatchedSkillPrompt := ""
-		if p.ManualSkillSelection {
-			autoMatchedSkillPrompt, _ = s.buildForcedOrExplicitMatchedSkillPrompt(p.ThreadID, prompt, p.Input)
-		} else {
-			autoMatchedSkillPrompt, _ = s.buildAutoMatchedSkillPrompt(p.ThreadID, prompt, p.Input)
-		}
-		submitPrompt := mergePromptText(prompt, autoMatchedSkillPrompt)
+		selectedSkillPrompt, _ := s.buildSelectedSkillPrompt(selectedSkills)
+		submitPrompt := mergePromptText(prompt, selectedSkillPrompt)
 		submitPrompt = s.appendLSPUsageHint(ctx, submitPrompt)
 		submitPrompt = s.appendJsonRenderHint(ctx, submitPrompt)
 		submitPrompt = s.appendBrowserHint(ctx, submitPrompt)
+		submitPrompt = s.appendCodeRunHint(ctx, submitPrompt)
 		if err := proc.Client.Submit(submitPrompt, images, files, nil); err != nil {
 			return nil, err
 		}

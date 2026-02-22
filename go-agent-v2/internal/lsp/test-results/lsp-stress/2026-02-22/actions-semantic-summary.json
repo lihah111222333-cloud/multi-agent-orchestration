@@ -1,0 +1,116 @@
+{
+  "stage": "P2",
+  "generated_at": "2026-02-23T03:14:31+08:00",
+  "gate_passed": false,
+  "thresholds": {
+    "format_idempotence": true,
+    "positive_sample_each_tool": true
+  },
+  "tool_stats": {
+    "lsp_code_action": {
+      "attempts": 1,
+      "successes": 1,
+      "success_rate": 1
+    },
+    "lsp_folding_range": {
+      "attempts": 1,
+      "successes": 1,
+      "success_rate": 1
+    },
+    "lsp_format_document": {
+      "attempts": 1,
+      "successes": 1,
+      "success_rate": 1
+    },
+    "lsp_open_file": {
+      "attempts": 1,
+      "successes": 1,
+      "success_rate": 1
+    },
+    "lsp_semantic_tokens": {
+      "attempts": 1,
+      "successes": 1,
+      "success_rate": 1
+    }
+  },
+  "language_stats": {
+    "go": {
+      "attempts": 5,
+      "successes": 5,
+      "success_rate": 1
+    }
+  },
+  "tool_language_success": {
+    "lsp_code_action": {
+      "go": 1
+    },
+    "lsp_folding_range": {
+      "go": 1
+    },
+    "lsp_format_document": {
+      "go": 1
+    },
+    "lsp_open_file": {
+      "go": 1
+    },
+    "lsp_semantic_tokens": {
+      "go": 1
+    }
+  },
+  "results": [
+    {
+      "stage": "P2",
+      "tool": "lsp_open_file",
+      "language": "go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke4136661697/001/main.go",
+      "duration_ms": 38,
+      "success": true
+    },
+    {
+      "stage": "P2",
+      "tool": "lsp_code_action",
+      "language": "go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke4136661697/001/main.go",
+      "duration_ms": 4,
+      "success": true
+    },
+    {
+      "stage": "P2",
+      "tool": "lsp_format_document",
+      "language": "go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke4136661697/001/main.go",
+      "duration_ms": 803,
+      "success": true,
+      "note": "format idempotence"
+    },
+    {
+      "stage": "P2",
+      "tool": "lsp_semantic_tokens",
+      "language": "go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke4136661697/001/main.go",
+      "duration_ms": 0,
+      "success": true
+    },
+    {
+      "stage": "P2",
+      "tool": "lsp_folding_range",
+      "language": "go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke4136661697/001/main.go",
+      "duration_ms": 0,
+      "success": true
+    }
+  ],
+  "notes": [
+    "lsp_semantic_tokens no positive sample",
+    "lsp_signature_help no positive sample"
+  ],
+  "extra": {
+    "positive_tools": {
+      "lsp_code_action": true,
+      "lsp_folding_range": true,
+      "lsp_format_document": true,
+      "lsp_semantic_tokens": false,
+      "lsp_signature_help": false
+    }
+  }
+}

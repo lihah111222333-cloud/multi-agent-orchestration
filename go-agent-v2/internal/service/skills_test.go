@@ -88,45 +88,6 @@ aliases:
 	}
 }
 
-func TestReadSkillDigestContentUsesSummaryAndSectionTitles(t *testing.T) {
-	tmp := t.TempDir()
-	dir := filepath.Join(tmp, "swagger")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	content := `---
-description: "swagger helper"
-summary: "仅注入摘要，不注入全文。"
----
-# Swagger 文档规范
-
-## 何时使用
-
-这里是正文细节，不应被全文注入。
-
-## 常见陷阱
-
-更多正文内容。`
-	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
-		t.Fatalf("write SKILL.md: %v", err)
-	}
-
-	svc := NewSkillService(tmp)
-	digest, err := svc.ReadSkillDigestContent("swagger")
-	if err != nil {
-		t.Fatalf("ReadSkillDigestContent error: %v", err)
-	}
-	if !strings.Contains(digest, "摘要: 仅注入摘要，不注入全文。") {
-		t.Fatalf("digest=%q", digest)
-	}
-	if !strings.Contains(digest, "可选段落: Swagger 文档规范 (SKILL.md:5) | 何时使用 (SKILL.md:7) | 常见陷阱 (SKILL.md:11)") {
-		t.Fatalf("digest sections=%q", digest)
-	}
-	if strings.Contains(digest, "这里是正文细节，不应被全文注入。") {
-		t.Fatalf("digest should not include full body, got=%q", digest)
-	}
-}
-
 func TestReadSkillDigestIncludesSectionRefs(t *testing.T) {
 	tmp := t.TempDir()
 	dir := filepath.Join(tmp, "brand")

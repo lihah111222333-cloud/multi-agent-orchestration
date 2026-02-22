@@ -15,3 +15,10 @@ func TestMapEventToMethod_StreamErrorUsesErrorChannel(t *testing.T) {
 		t.Fatalf("mapEventToMethod(stream_error) = %q, want error", got)
 	}
 }
+
+func TestMapEventToMethod_TurnPlanUpdated(t *testing.T) {
+	got := mapEventToMethod("turn_plan")
+	if got != "turn/plan/updated" {
+		t.Fatalf("mapEventToMethod(turn_plan) = %q, want turn/plan/updated", got)
+	}
+}

@@ -58,6 +58,9 @@ func TestClassifyEvent_AllKnownTypes(t *testing.T) {
 		// Plan / Diff
 		{"plan_delta", UITypePlanDelta},
 		{"plan_update", UITypePlanDelta},
+		{"turn_plan", UITypePlanDelta},
+		{"item/plan/delta", UITypePlanDelta},
+		{"codex/event/plan_delta", UITypePlanDelta},
 		{"turn_diff", UITypeDiffUpdate},
 		// User Message
 		{"user_message", UITypeUserMessage},
@@ -129,6 +132,16 @@ func TestClassifyEventWithMethod_Fallback(t *testing.T) {
 	gotType = classifyEventWithMethod("unmapped_event", "codex/event/background_event")
 	if gotType != UITypeSystem {
 		t.Fatalf("classifyEventWithMethod background event = %q, want %q", gotType, UITypeSystem)
+	}
+
+	gotType = classifyEventWithMethod("unmapped_event", "turn/plan/updated")
+	if gotType != UITypePlanDelta {
+		t.Fatalf("classifyEventWithMethod turn plan updated = %q, want %q", gotType, UITypePlanDelta)
+	}
+
+	gotType = classifyEventWithMethod("unmapped_event", "item/plan/delta")
+	if gotType != UITypePlanDelta {
+		t.Fatalf("classifyEventWithMethod item plan delta = %q, want %q", gotType, UITypePlanDelta)
 	}
 }
 

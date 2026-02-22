@@ -108,6 +108,15 @@ type ClientCapabilities struct {
 type TextDocumentClientCapabilities struct {
 	PublishDiagnostics *PublishDiagnosticsCapability `json:"publishDiagnostics,omitempty"`
 	Hover              *HoverCapability              `json:"hover,omitempty"`
+	Completion         *CompletionClientCapability   `json:"completion,omitempty"`
+	Rename             *RenameClientCapability       `json:"rename,omitempty"`
+	CallHierarchy      *CallHierarchyCapability      `json:"callHierarchy,omitempty"`
+	TypeHierarchy      *TypeHierarchyCapability      `json:"typeHierarchy,omitempty"`
+	CodeAction         *CodeActionCapability         `json:"codeAction,omitempty"`
+	SignatureHelp      *SignatureHelpCapability      `json:"signatureHelp,omitempty"`
+	Formatting         *FormattingCapability         `json:"formatting,omitempty"`
+	FoldingRange       *FoldingRangeCapability       `json:"foldingRange,omitempty"`
+	SemanticTokens     *SemanticTokensCapability     `json:"semanticTokens,omitempty"`
 }
 
 // PublishDiagnosticsCapability 诊断能力。
@@ -120,6 +129,67 @@ type HoverCapability struct {
 	ContentFormat []string `json:"contentFormat,omitempty"`
 }
 
+// CompletionClientCapability completion 能力。
+type CompletionClientCapability struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+}
+
+// RenameClientCapability rename 能力。
+type RenameClientCapability struct {
+	PrepareSupport bool `json:"prepareSupport,omitempty"`
+}
+
+// CallHierarchyCapability call hierarchy 能力。
+type CallHierarchyCapability struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+}
+
+// TypeHierarchyCapability type hierarchy 能力。
+type TypeHierarchyCapability struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+}
+
+// CodeActionCapability code action 能力。
+type CodeActionCapability struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+}
+
+// SignatureHelpCapability signature help 能力。
+type SignatureHelpCapability struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+}
+
+// FormattingCapability formatting 能力。
+type FormattingCapability struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+}
+
+// FoldingRangeCapability folding range 能力。
+type FoldingRangeCapability struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+}
+
+// SemanticTokensCapability semantic tokens 能力。
+type SemanticTokensCapability struct {
+	DynamicRegistration bool                              `json:"dynamicRegistration,omitempty"`
+	Requests            *SemanticTokensRequestsCapability `json:"requests,omitempty"`
+	TokenTypes          []string                          `json:"tokenTypes,omitempty"`
+	TokenModifiers      []string                          `json:"tokenModifiers,omitempty"`
+	Formats             []string                          `json:"formats,omitempty"`
+}
+
+// SemanticTokensRequestsCapability semantic tokens 请求能力。
+// range/full 按 LSP 3.17 支持 bool 或对象联合类型。
+type SemanticTokensRequestsCapability struct {
+	Range any `json:"range,omitempty"` // bool | object
+	Full  any `json:"full,omitempty"`  // bool | object
+}
+
+// SemanticTokensFullRequestsCapability semantic tokens full 请求能力。
+type SemanticTokensFullRequestsCapability struct {
+	Delta bool `json:"delta,omitempty"`
+}
+
 // InitializeResult initialize 响应结果。
 type InitializeResult struct {
 	Capabilities ServerCapabilities `json:"capabilities"`
@@ -127,13 +197,24 @@ type InitializeResult struct {
 
 // ServerCapabilities 服务端能力。
 type ServerCapabilities struct {
-	TextDocumentSync       any  `json:"textDocumentSync,omitempty"`
-	HoverProvider          bool `json:"hoverProvider,omitempty"`
-	DefinitionProvider     bool `json:"definitionProvider,omitempty"`
-	ReferencesProvider     bool `json:"referencesProvider,omitempty"`
-	DocumentSymbolProvider bool `json:"documentSymbolProvider,omitempty"`
-	RenameProvider         any  `json:"renameProvider,omitempty"` // bool 或 RenameOptions
-	DiagnosticProvider     any  `json:"diagnosticProvider,omitempty"`
+	TextDocumentSync           any `json:"textDocumentSync,omitempty"`
+	HoverProvider              any `json:"hoverProvider,omitempty"`
+	DefinitionProvider         any `json:"definitionProvider,omitempty"`
+	ReferencesProvider         any `json:"referencesProvider,omitempty"`
+	DocumentSymbolProvider     any `json:"documentSymbolProvider,omitempty"`
+	RenameProvider             any `json:"renameProvider,omitempty"` // bool 或 RenameOptions
+	DiagnosticProvider         any `json:"diagnosticProvider,omitempty"`
+	CompletionProvider         any `json:"completionProvider,omitempty"`
+	WorkspaceSymbolProvider    any `json:"workspaceSymbolProvider,omitempty"`
+	ImplementationProvider     any `json:"implementationProvider,omitempty"`
+	TypeDefinitionProvider     any `json:"typeDefinitionProvider,omitempty"`
+	CallHierarchyProvider      any `json:"callHierarchyProvider,omitempty"`
+	TypeHierarchyProvider      any `json:"typeHierarchyProvider,omitempty"`
+	CodeActionProvider         any `json:"codeActionProvider,omitempty"`
+	SignatureHelpProvider      any `json:"signatureHelpProvider,omitempty"`
+	DocumentFormattingProvider any `json:"documentFormattingProvider,omitempty"`
+	FoldingRangeProvider       any `json:"foldingRangeProvider,omitempty"`
+	SemanticTokensProvider     any `json:"semanticTokensProvider,omitempty"`
 }
 
 // ========================================

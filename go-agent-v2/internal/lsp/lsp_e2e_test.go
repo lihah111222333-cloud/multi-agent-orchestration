@@ -10,7 +10,6 @@ package lsp
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -107,17 +106,10 @@ func must(t *testing.T, err error) {
 	}
 }
 
-func skipIfNotAvailable(t *testing.T, cmd string) {
-	t.Helper()
-	if _, err := exec.LookPath(cmd); err != nil {
-		t.Skipf("%s not found, skipping", cmd)
-	}
-}
-
 // ─── 主测试 ───
 
 func TestLSP_E2E_Go(t *testing.T) {
-	skipIfNotAvailable(t, "gopls")
+	requireServerOrSkip(t, "go")
 	dir := setupTestDir(t)
 
 	mgr := NewManager(nil)
@@ -226,7 +218,7 @@ func TestLSP_E2E_Go(t *testing.T) {
 }
 
 func TestLSP_E2E_Rust(t *testing.T) {
-	skipIfNotAvailable(t, "rust-analyzer")
+	requireServerOrSkip(t, "rust")
 	dir := setupTestDir(t)
 
 	mgr := NewManager(nil)
@@ -283,7 +275,7 @@ func TestLSP_E2E_Rust(t *testing.T) {
 }
 
 func TestLSP_E2E_JS(t *testing.T) {
-	skipIfNotAvailable(t, "typescript-language-server")
+	requireServerOrSkip(t, "typescript")
 	dir := setupTestDir(t)
 
 	mgr := NewManager(nil)
@@ -357,7 +349,7 @@ func TestLSP_E2E_JS(t *testing.T) {
 // ─── 被废弃的旧测试能力不应回归 ───
 
 func TestLSP_E2E_GracefulDegradation(t *testing.T) {
-	// 测试: 未 open 的文件，新方法应返回 nil (不 panic, 不 error)
+	// 测试: 不可读文件应 fail-closed 返回错误，避免给旧结果。
 	mgr := NewManager(nil)
 	defer mgr.StopAll()
 
@@ -365,30 +357,23 @@ func TestLSP_E2E_GracefulDegradation(t *testing.T) {
 	defer cancel()
 
 	// 对未打开的文件调用新方法
-	locs, err := mgr.Definition("/nonexistent/file.go", 0, 0)
-	if err != nil {
-		t.Fatalf("unexpected error on nonexistent file: %v", err)
-	}
-	if locs != nil {
-		t.Fatalf("expected nil, got %v", locs)
+	if _, err := mgr.Definition("/nonexistent/file.go", 0, 0); err == nil {
+		t.Fatal("expected error for Definition on nonexistent file")
 	}
 
-	refs, err := mgr.References("/nonexistent/file.go", 0, 0, true)
-	if err != nil || refs != nil {
-		t.Fatal("expected nil/nil for References on nonexistent file")
+	if _, err := mgr.References("/nonexistent/file.go", 0, 0, true); err == nil {
+		t.Fatal("expected error for References on nonexistent file")
 	}
 
-	syms, err := mgr.DocumentSymbol("/nonexistent/file.go")
-	if err != nil || syms != nil {
-		t.Fatal("expected nil/nil for DocumentSymbol on nonexistent file")
+	if _, err := mgr.DocumentSymbol("/nonexistent/file.go"); err == nil {
+		t.Fatal("expected error for DocumentSymbol on nonexistent file")
 	}
 
-	edit, err := mgr.Rename("/nonexistent/file.go", 0, 0, "foo")
-	if err != nil || edit != nil {
-		t.Fatal("expected nil/nil for Rename on nonexistent file")
+	if _, err := mgr.Rename("/nonexistent/file.go", 0, 0, "foo"); err == nil {
+		t.Fatal("expected error for Rename on nonexistent file")
 	}
 
-	t.Log("GracefulDegradation: all methods return nil for nonexistent/unsupported files ✓")
+	t.Log("GracefulDegradation: nonexistent files now return fail-closed errors ✓")
 }
 
 func min(a, b int) int {

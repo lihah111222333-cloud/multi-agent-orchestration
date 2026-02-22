@@ -44,6 +44,10 @@ type Client struct {
 	onDiag   DiagnosticHandler
 	stopped  atomic.Bool
 	language string
+
+	capsMu               sync.RWMutex
+	initializeResult     InitializeResult
+	semanticTokensLegend *SemanticTokensLegend
 }
 
 // NewClient 创建客户端 (不启动进程)。
@@ -88,7 +92,7 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 		return apperrors.Wrapf(err, "LSP.Start", "start %s", command)
 	}
 
-	logger.Infow("lsp: process started",
+	logger.Info("lsp: process started",
 		logger.FieldLanguage, c.language,
 		logger.FieldCommand, command,
 		logger.FieldPID, c.cmd.Process.Pid,
@@ -115,6 +119,32 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 				Hover: &HoverCapability{
 					ContentFormat: []string{"markdown", "plaintext"},
 				},
+				Completion:    &CompletionClientCapability{DynamicRegistration: true},
+				Rename:        &RenameClientCapability{PrepareSupport: true},
+				CallHierarchy: &CallHierarchyCapability{DynamicRegistration: true},
+				TypeHierarchy: &TypeHierarchyCapability{DynamicRegistration: true},
+				CodeAction:    &CodeActionCapability{DynamicRegistration: true},
+				SignatureHelp: &SignatureHelpCapability{DynamicRegistration: true},
+				Formatting:    &FormattingCapability{DynamicRegistration: true},
+				FoldingRange:  &FoldingRangeCapability{DynamicRegistration: true},
+				SemanticTokens: &SemanticTokensCapability{
+					DynamicRegistration: true,
+					Requests: &SemanticTokensRequestsCapability{
+						Range: true,
+						Full:  &SemanticTokensFullRequestsCapability{Delta: true},
+					},
+					TokenTypes: []string{
+						"namespace", "type", "class", "enum", "interface", "struct", "typeParameter",
+						"parameter", "variable", "property", "enumMember", "event", "function",
+						"method", "macro", "keyword", "modifier", "comment", "string", "number",
+						"regexp", "operator",
+					},
+					TokenModifiers: []string{
+						"declaration", "definition", "readonly", "static", "deprecated",
+						"abstract", "async", "modification", "documentation", "defaultLibrary",
+					},
+					Formats: []string{"relative"},
+				},
 			},
 		},
 	}
@@ -125,14 +155,39 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 		return apperrors.Wrap(err, "LSP.Start", "initialize")
 	}
 
+	c.capsMu.Lock()
+	c.initializeResult = initResult
+	c.semanticTokensLegend = decodeSemanticTokensLegend(initResult.Capabilities.SemanticTokensProvider)
+	c.capsMu.Unlock()
+
 	// initialized 通知 (无响应)
 	if err := c.notify("initialized", struct{}{}); err != nil {
 		_ = c.Stop()
 		return apperrors.Wrap(err, "LSP.Start", "initialized notify")
 	}
 
-	logger.Infow("lsp: initialize handshake complete", logger.FieldLanguage, c.language)
+	logger.Info("lsp: initialize handshake complete", logger.FieldLanguage, c.language)
 	return nil
+}
+
+// InitializeResult 返回 initialize 响应缓存。
+func (c *Client) InitializeResult() InitializeResult {
+	c.capsMu.RLock()
+	defer c.capsMu.RUnlock()
+	return c.initializeResult
+}
+
+// SemanticTokensLegend 返回 initialize 缓存的 semantic tokens legend。
+func (c *Client) SemanticTokensLegend() *SemanticTokensLegend {
+	c.capsMu.RLock()
+	defer c.capsMu.RUnlock()
+	if c.semanticTokensLegend == nil {
+		return nil
+	}
+	legend := *c.semanticTokensLegend
+	legend.TokenTypes = append([]string(nil), c.semanticTokensLegend.TokenTypes...)
+	legend.TokenModifiers = append([]string(nil), c.semanticTokensLegend.TokenModifiers...)
+	return &legend
 }
 
 // Running 返回客户端是否正在运行。
@@ -142,11 +197,19 @@ func (c *Client) Running() bool {
 
 // DidOpen 通知服务器打开了文件。
 func (c *Client) DidOpen(uri, languageID, text string) error {
+	return c.DidOpenVersioned(uri, languageID, 1, text)
+}
+
+// DidOpenVersioned 通知服务器打开了文件（可指定文档版本）。
+func (c *Client) DidOpenVersioned(uri, languageID string, version int, text string) error {
+	if version <= 0 {
+		version = 1
+	}
 	return c.notify("textDocument/didOpen", DidOpenTextDocumentParams{
 		TextDocument: TextDocumentItem{
 			URI:        uri,
 			LanguageID: languageID,
-			Version:    1,
+			Version:    version,
 			Text:       text,
 		},
 	})
@@ -207,20 +270,24 @@ func (c *Client) Definition(ctx context.Context, uri string, line, character int
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) == 0 || string(raw) == "null" {
+	decoded, err := decodeLocationsLike(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(decoded) == 0 {
 		return nil, nil
 	}
-	// 尝试解析为 []Location
-	var locs []Location
-	if err := json.Unmarshal(raw, &locs); err == nil {
-		return locs, nil
+
+	out := make([]Location, 0, len(decoded))
+	for _, item := range decoded {
+		if loc := item.PrimaryLocation(); loc != nil {
+			out = append(out, *loc)
+		}
 	}
-	// 回退: 解析为单个 Location
-	var loc Location
-	if err := json.Unmarshal(raw, &loc); err == nil {
-		return []Location{loc}, nil
+	if len(out) == 0 {
+		return nil, nil
 	}
-	return nil, nil
+	return out, nil
 }
 
 // References 查找引用 — 返回符号的所有引用位置。
@@ -245,14 +312,14 @@ func (c *Client) DocumentSymbol(ctx context.Context, uri string) ([]DocumentSymb
 	if !c.Running() {
 		return nil, fmt.Errorf("lsp client not running")
 	}
-	var result []DocumentSymbol
+	var raw json.RawMessage
 	err := c.call("textDocument/documentSymbol", DocumentSymbolParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
-	}, &result)
+	}, &raw)
 	if err != nil {
 		return nil, err
 	}
-	return result, nil
+	return decodeDocumentSymbols(raw)
 }
 
 // Completion 代码补全 — 返回补全列表。
@@ -270,20 +337,7 @@ func (c *Client) Completion(ctx context.Context, uri string, line, character int
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
-	}
-
-	var list CompletionList
-	if err := json.Unmarshal(raw, &list); err == nil {
-		return list.Items, nil
-	}
-
-	var items []CompletionItem
-	if err := json.Unmarshal(raw, &items); err == nil {
-		return items, nil
-	}
-	return nil, nil
+	return decodeCompletionItems(raw)
 }
 
 // Rename 重命名 — 返回重命名所需的全部编辑。
@@ -303,13 +357,28 @@ func (c *Client) Rename(ctx context.Context, uri string, line, character int, ne
 	return &result, nil
 }
 
+// WorkspaceSymbol 工作区符号检索。
+func (c *Client) WorkspaceSymbol(ctx context.Context, query string) ([]WorkspaceSymbolResult, error) {
+	if !c.Running() {
+		return nil, fmt.Errorf("lsp client not running")
+	}
+	var raw json.RawMessage
+	err := c.call("workspace/symbol", WorkspaceSymbolParams{
+		Query: query,
+	}, &raw)
+	if err != nil {
+		return nil, err
+	}
+	return decodeWorkspaceSymbols(raw)
+}
+
 // Stop 优雅关闭: shutdown → exit → wait。
 func (c *Client) Stop() error {
 	if c.stopped.Load() {
 		return nil // 已停止
 	}
 
-	logger.Infow("lsp: stopping", logger.FieldLanguage, c.language)
+	logger.Info("lsp: stopping", logger.FieldLanguage, c.language)
 
 	if c.stderrCollector != nil {
 		_ = c.stderrCollector.Close()
@@ -518,8 +587,8 @@ func (c *Client) readFrame() ([]byte, error) {
 		if line == "" {
 			break // 空行标志头部结束
 		}
-		if strings.HasPrefix(line, "Content-Length:") {
-			numStr := strings.TrimSpace(strings.TrimPrefix(line, "Content-Length:"))
+		if numStr, ok := strings.CutPrefix(line, "Content-Length:"); ok {
+			numStr = strings.TrimSpace(numStr)
 			var atoiErr error
 			contentLen, atoiErr = strconv.Atoi(numStr)
 			if atoiErr != nil {

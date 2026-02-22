@@ -230,6 +230,12 @@ function normalizeSplitRatio(value) {
   return Math.max(30, Math.min(75, Math.round(n)));
 }
 
+function normalizeThreadRailWidth(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 232;
+  return Math.max(188, Math.min(420, Math.round(n)));
+}
+
 function normalizeCmdCardCols(value) {
   return Number(value) === 2 ? 2 : 3;
 }
@@ -239,6 +245,7 @@ function normalizeChatPrefs(value) {
   return {
     layout: normalizeChatLayout(input.layout || defaultLayoutForMode('chat')),
     splitRatio: normalizeSplitRatio(input.splitRatio),
+    threadRailWidth: normalizeThreadRailWidth(input.threadRailWidth),
   };
 }
 
@@ -315,6 +322,23 @@ function setSplitRatio(mode, ratio) {
   }, {
     mode: 'chat',
     field: 'splitRatio',
+  });
+}
+
+function getThreadRailWidth() {
+  return readChatPrefs().threadRailWidth;
+}
+
+function setThreadRailWidth(width) {
+  const next = normalizeThreadRailWidth(width);
+  const current = readChatPrefs();
+  if (current.threadRailWidth === next) return;
+  persistPreferenceAndSync(PREF_VIEW_CHAT, {
+    ...current,
+    threadRailWidth: next,
+  }, {
+    mode: 'chat',
+    field: 'threadRailWidth',
   });
 }
 
@@ -1241,6 +1265,8 @@ export function useThreadStore() {
     setLayout,
     getSplitRatio,
     setSplitRatio,
+    getThreadRailWidth,
+    setThreadRailWidth,
     getCmdCardCols,
     setCmdCardCols,
     getThreadsByMode,

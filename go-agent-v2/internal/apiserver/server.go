@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multi-agent/go-agent-v2/internal/config"
+	"github.com/multi-agent/go-agent-v2/internal/executor"
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/service"
@@ -63,11 +65,12 @@ type Server struct {
 	// notifyHookMu: notifyHook (桌面端通知钩子)
 	// turnMu:       activeTurns (turn 生命周期跟踪)
 	// ========================================
-	mgr      *runner.AgentManager
-	lsp      *lsp.Manager
-	cfg      *config.Config
-	methods  map[string]Handler
-	dynTools map[string]func(json.RawMessage) string // 动态工具注册表
+	mgr        *runner.AgentManager
+	lsp        *lsp.Manager
+	cfg        *config.Config
+	codeRunner *executor.CodeRunner // 代码块执行引擎
+	methods    map[string]Handler
+	dynTools   map[string]func(json.RawMessage) string // 动态工具注册表
 	// submitAgentMessage 统一消息下发入口，便于测试替换。
 	submitAgentMessage func(agentID, prompt string, images, files []string) error
 
@@ -251,6 +254,14 @@ func New(deps Deps) *Server {
 		if deps.Config.StallHeartbeatSec > 0 {
 			s.stallHeartbeat = time.Duration(deps.Config.StallHeartbeatSec) * time.Second
 		}
+	}
+
+	// 代码执行引擎 (无外部依赖, 仅需 workDir)
+	workDir, _ := os.Getwd()
+	if cr, crErr := executor.NewCodeRunner(workDir); crErr != nil {
+		logger.Warn("app-server: code runner unavailable", logger.FieldError, crErr)
+	} else {
+		s.codeRunner = cr
 	}
 
 	s.registerDynamicTools()

@@ -30,6 +30,32 @@ func (s *Server) configRead(_ context.Context, _ json.RawMessage) (any, error) {
 	if s.cfg != nil && s.cfg.LLMModel != "" {
 		model = s.cfg.LLMModel
 	}
+	toolRoutingMode := "legacy"
+	toolRouterProvider := "openai_compatible"
+	toolRouterModel := ""
+	toolRouterBaseURL := ""
+	toolRouterConfidenceThreshold := 0.65
+	toolRouterTimeoutSec := 8
+	toolRouterHasAPIKey := false
+	if s.cfg != nil {
+		if strings.TrimSpace(s.cfg.DynToolRoutingMode) != "" {
+			toolRoutingMode = strings.TrimSpace(s.cfg.DynToolRoutingMode)
+		}
+		if strings.TrimSpace(s.cfg.DynToolRouterProvider) != "" {
+			toolRouterProvider = strings.TrimSpace(s.cfg.DynToolRouterProvider)
+		}
+		toolRouterModel = strings.TrimSpace(s.cfg.DynToolRouterModel)
+		toolRouterBaseURL = strings.TrimSpace(s.cfg.DynToolRouterBaseURL)
+		toolRouterConfidenceThreshold = s.cfg.DynToolRouterConfidenceThreshold
+		if toolRouterConfidenceThreshold <= 0 {
+			toolRouterConfidenceThreshold = 0.65
+		}
+		toolRouterTimeoutSec = s.cfg.DynToolRouterTimeoutSec
+		if toolRouterTimeoutSec <= 0 {
+			toolRouterTimeoutSec = 8
+		}
+		toolRouterHasAPIKey = strings.TrimSpace(s.cfg.DynToolRouterAPIKey) != ""
+	}
 	cwd, _ := os.Getwd()
 	return map[string]any{
 		"model":                 model,
@@ -41,6 +67,15 @@ func (s *Server) configRead(_ context.Context, _ json.RawMessage) (any, error) {
 		"baseInstructions":      nil,
 		"developerInstructions": nil,
 		"personality":           nil,
+		"toolRouting": map[string]any{
+			"mode":                toolRoutingMode,
+			"routerModel":         toolRouterModel,
+			"routerProvider":      toolRouterProvider,
+			"routerBaseURL":       toolRouterBaseURL,
+			"routerHasAPIKey":     toolRouterHasAPIKey,
+			"confidenceThreshold": toolRouterConfidenceThreshold,
+			"timeoutSec":          toolRouterTimeoutSec,
+		},
 	}, nil
 }
 
@@ -51,6 +86,7 @@ var configEnvAllowPrefixes = []string{
 	"OPENAI_",
 	"ANTHROPIC_",
 	"CODEX_",
+	"DYN_TOOL_",
 	"MODEL",
 	"LOG_LEVEL",
 	"AGENT_",
@@ -232,6 +268,60 @@ func (s *Server) configBrowserPromptWriteTyped(ctx context.Context, p configBrow
 	}, nil
 }
 
+// ========================================
+// Code Run Prompt 配置
+// ========================================
+
+func (s *Server) configCodeRunPromptRead(ctx context.Context, _ json.RawMessage) (any, error) {
+	return map[string]any{
+		"prompt":        s.resolveCodeRunPrompt(ctx),
+		"defaultPrompt": defaultCodeRunPrompt,
+		"prefKey":       prefKeyCodeRunPrompt,
+	}, nil
+}
+
+type configCodeRunPromptWriteParams struct {
+	Prompt string `json:"prompt"`
+}
+
+func (s *Server) configCodeRunPromptWriteTyped(ctx context.Context, p configCodeRunPromptWriteParams) (any, error) {
+	if s.prefManager == nil {
+		return nil, apperrors.New("Server.configCodeRunPromptWrite", "preference manager not initialized")
+	}
+	normalized := strings.TrimSpace(p.Prompt)
+	if len(normalized) > maxCodeRunPromptLen {
+		return nil, apperrors.Newf("Server.configCodeRunPromptWrite", "prompt length exceeds %d", maxCodeRunPromptLen)
+	}
+	if err := s.prefManager.Set(ctx, prefKeyCodeRunPrompt, normalized); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":           true,
+		"prompt":       s.resolveCodeRunPrompt(ctx),
+		"usingDefault": normalized == "",
+	}, nil
+}
+
+func (s *Server) resolveCodeRunPrompt(ctx context.Context) string {
+	if s.prefManager == nil {
+		return defaultCodeRunPrompt
+	}
+	value, err := s.prefManager.Get(ctx, prefKeyCodeRunPrompt)
+	if err != nil {
+		logger.Warn("code-run prompt: load preference failed", logger.FieldError, err)
+		return defaultCodeRunPrompt
+	}
+	prompt := strings.TrimSpace(asString(value))
+	if prompt == "" {
+		return defaultCodeRunPrompt
+	}
+	if len(prompt) > maxCodeRunPromptLen {
+		logger.Warn("code-run prompt: invalid preference fallback to default", "length", len(prompt))
+		return defaultCodeRunPrompt
+	}
+	return prompt
+}
+
 func (s *Server) mcpServerStatusList(_ context.Context, _ json.RawMessage) (any, error) {
 	if s.lsp == nil {
 		return map[string]any{"servers": []map[string]any{}}, nil
@@ -326,10 +416,17 @@ func (s *Server) experimentalFeatureList(_ context.Context, _ json.RawMessage) (
 
 // configRequirementsRead 读取配置需求。
 func (s *Server) configRequirementsRead(_ context.Context, _ json.RawMessage) (any, error) {
+	routerModel := strings.TrimSpace(os.Getenv("DYN_TOOL_ROUTER_MODEL"))
+	routerBaseURL := strings.TrimSpace(os.Getenv("DYN_TOOL_ROUTER_BASE_URL"))
+	routerConfigured := routerModel == "" || routerBaseURL != ""
 	return map[string]any{"requirements": map[string]any{
 		"apiKey": map[string]string{
 			"status":  boolToStatus(os.Getenv("OPENAI_API_KEY") != ""),
 			"message": "OPENAI_API_KEY environment variable",
+		},
+		"toolRouterEndpoint": map[string]string{
+			"status":  boolToStatus(routerConfigured),
+			"message": "When DYN_TOOL_ROUTER_MODEL is set, DYN_TOOL_ROUTER_BASE_URL is required",
 		},
 	}}, nil
 }

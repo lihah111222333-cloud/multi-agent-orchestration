@@ -198,11 +198,12 @@ func (s *Server) orchestrationStopAgent(args json.RawMessage) string {
 	return toolJSON(map[string]any{"success": true, "agent_id": p.AgentID})
 }
 
-// buildAllDynamicTools 构建全部动态工具列表 (LSP + 编排 + 资源)。
+// buildAllDynamicTools 构建全部动态工具列表 (LSP + 编排 + 资源 + 代码执行)。
 func (s *Server) buildAllDynamicTools() []codex.DynamicTool {
 	var tools []codex.DynamicTool
 	tools = append(tools, s.buildLSPDynamicTools()...)
 	tools = append(tools, s.buildOrchestrationTools()...)
 	tools = append(tools, s.buildResourceTools()...)
+	tools = append(tools, s.buildCodeRunTools()...)
 	return tools
 }

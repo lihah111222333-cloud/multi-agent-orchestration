@@ -32,6 +32,9 @@ make run
 | `POSTGRES_CONNECTION_STRING` | PG 连接串 | — |
 | `LOG_LEVEL` | 日志级别 | `INFO` |
 | `LLM_MODEL` | 模型名称 | `gpt-4o` |
+| `DYN_TOOL_ROUTING_MODE` | 动态工具路由模式 (`legacy`/`v2`) | `legacy` |
+| `DYN_TOOL_ROUTER_MODEL` | 路由小模型名称（为空=仅规则路由） | — |
+| `DYN_TOOL_ROUTER_BASE_URL` | 路由模型网关（支持本地 OpenAI 兼容地址） | — |
 | `DISABLE_OFFLINE_52_METHODS` | 下线 52 个低频 RPC 入口（`1`=下线，`0`=回滚恢复） | `1` |
 
 完整列表见 `internal/config/config.go`。

@@ -1,0 +1,110 @@
+{
+  "stage": "P0-A",
+  "generated_at": "2026-02-23T03:14:10+08:00",
+  "gate_passed": true,
+  "thresholds": {
+    "smoke": "open-\u003edocumentSymbol"
+  },
+  "tool_stats": {
+    "lsp_document_symbol": {
+      "attempts": 3,
+      "successes": 3,
+      "success_rate": 1
+    },
+    "lsp_open_file": {
+      "attempts": 3,
+      "successes": 3,
+      "success_rate": 1
+    }
+  },
+  "language_stats": {
+    "go": {
+      "attempts": 2,
+      "successes": 2,
+      "success_rate": 1
+    },
+    "rust": {
+      "attempts": 2,
+      "successes": 2,
+      "success_rate": 1
+    },
+    "typescript": {
+      "attempts": 2,
+      "successes": 2,
+      "success_rate": 1
+    }
+  },
+  "tool_language_success": {
+    "lsp_document_symbol": {
+      "go": 1,
+      "rust": 1,
+      "typescript": 1
+    },
+    "lsp_open_file": {
+      "go": 1,
+      "rust": 1,
+      "typescript": 1
+    }
+  },
+  "results": [
+    {
+      "stage": "P0-A",
+      "tool": "lsp_open_file",
+      "language": "go",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/go/attribution/backtest_combo_e2e_test.go",
+      "duration_ms": 46,
+      "success": true,
+      "note": "smoke open"
+    },
+    {
+      "stage": "P0-A",
+      "tool": "lsp_document_symbol",
+      "language": "go",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/go/attribution/backtest_combo_e2e_test.go",
+      "duration_ms": 320,
+      "success": true,
+      "note": "smoke open-\u003edocumentSymbol"
+    },
+    {
+      "stage": "P0-A",
+      "tool": "lsp_open_file",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/eslint.config.js",
+      "duration_ms": 90,
+      "success": true,
+      "note": "smoke open"
+    },
+    {
+      "stage": "P0-A",
+      "tool": "lsp_document_symbol",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/eslint.config.js",
+      "duration_ms": 276,
+      "success": true,
+      "note": "smoke open-\u003edocumentSymbol"
+    },
+    {
+      "stage": "P0-A",
+      "tool": "lsp_open_file",
+      "language": "rust",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/bespoke_event_handling.rs",
+      "duration_ms": 7,
+      "success": true,
+      "note": "smoke open"
+    },
+    {
+      "stage": "P0-A",
+      "tool": "lsp_document_symbol",
+      "language": "rust",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/bespoke_event_handling.rs",
+      "duration_ms": 234,
+      "success": true,
+      "note": "smoke open-\u003edocumentSymbol"
+    }
+  ],
+  "notes": [
+    "probe ok: go \u003c- /Users/mima0000/Desktop/wj/e2e测试/go (corpus-infer)",
+    "probe ok: rust \u003c- /Users/mima0000/Desktop/wj/e2e测试/rust (corpus-infer)",
+    "probe ok: typescript \u003c- /Users/mima0000/Desktop/wj/e2e测试/js (corpus-infer)"
+  ]
+}

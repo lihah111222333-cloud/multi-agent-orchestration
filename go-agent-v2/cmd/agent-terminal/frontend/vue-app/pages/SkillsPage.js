@@ -152,20 +152,16 @@ export const SkillsPage = {
   name: 'SkillsPage',
   props: {
     skills: { type: Array, default: () => [] },
-    threadStore: { type: Object, required: true },
   },
   emits: ['refresh-skills'],
   setup(props, { emit }) {
     const selectedSkillName = ref('');
-    const selectedThreadId = ref('');
-    const threadSkills = ref([]);
     const summarySource = ref('');
     const sourcePath = ref('');
     const importFailures = ref([]);
     const notice = reactive({ level: 'info', message: '' });
     const saving = ref(false);
     const uploading = ref(false);
-    const binding = ref(false);
     const deletingSkillName = ref('');
     const inlineSummarySkillName = ref('');
     const inlineSummaryDraft = ref('');
@@ -180,17 +176,6 @@ export const SkillsPage = {
       body: '',
     });
 
-    const threadOptions = computed(() => {
-      const list = props.threadStore?.state?.threads;
-      if (!Array.isArray(list)) return [];
-      return list.map((item) => ({
-        id: (item?.id || '').toString(),
-        name: (item?.name || item?.id || '').toString(),
-      })).filter((item) => item.id);
-    });
-
-    const activeThreadId = computed(() => (props.threadStore?.state?.activeThreadId || '').toString());
-
     const skillCards = computed(() => {
       const list = Array.isArray(props.skills) ? props.skills : [];
       return list.map((item) => ({
@@ -201,12 +186,6 @@ export const SkillsPage = {
         triggerWords: Array.isArray(item?.trigger_words) ? item.trigger_words : [],
         forceWords: Array.isArray(item?.force_words) ? item.force_words : [],
       }));
-    });
-
-    const currentSkillInThread = computed(() => {
-      const target = (form.name || '').trim().toLowerCase();
-      if (!target) return false;
-      return threadSkills.value.some((item) => item.toLowerCase() === target);
     });
 
     const summarySourceLabel = computed(() => {
@@ -355,7 +334,7 @@ export const SkillsPage = {
     async function onDeleteSkill(item) {
       const skillName = (item?.name || '').toString().trim();
       if (!skillName || deletingSkillName.value) return;
-      const confirmed = typeof window === 'undefined'
+      const confirmed = typeof window === 'undefined' || typeof window.confirm !== 'function'
         ? true
         : window.confirm(`确定删除技能 "${skillName}" 吗？\n该操作会删除技能目录及其资源文件。`);
       if (!confirmed) return;
@@ -363,9 +342,6 @@ export const SkillsPage = {
       try {
         await callAPI('skills/local/delete', { name: skillName });
         const skillKey = skillName.toLowerCase();
-        threadSkills.value = threadSkills.value
-          .map((itemName) => (itemName || '').toString().trim())
-          .filter((itemName) => itemName && itemName.toLowerCase() !== skillKey);
         if ((selectedSkillName.value || '').toLowerCase() === skillKey) {
           selectedSkillName.value = '';
         }
@@ -464,65 +440,6 @@ export const SkillsPage = {
       }
     }
 
-    async function loadThreadSkills(options = {}) {
-      const silent = Boolean(options?.silent);
-      let threadId = (selectedThreadId.value || '').trim();
-      if (!threadId) {
-        const active = (activeThreadId.value || '').trim();
-        if (active) {
-          selectedThreadId.value = active;
-          threadId = active;
-        }
-      }
-      if (!threadId) {
-        threadSkills.value = [];
-        if (!silent) {
-          setNotice('info', '请先选择会话，再刷新绑定');
-        }
-        return;
-      }
-      try {
-        const raw = await callAPI('skills/config/read', { agent_id: threadId });
-        threadSkills.value = Array.isArray(raw?.skills) ? raw.skills : [];
-        if (!silent) {
-          setNotice('success', `会话绑定已刷新（${threadSkills.value.length} 个技能）`);
-        }
-      } catch (error) {
-        logWarn('skills', 'threadSkills.load.failed', { thread_id: threadId, error });
-        setNotice('error', `读取会话技能失败：${error?.message || error}`);
-      }
-    }
-
-    async function saveThreadSkills(nextSkills) {
-      const threadId = (selectedThreadId.value || '').trim();
-      if (!threadId) return;
-      binding.value = true;
-      try {
-        const normalized = normalizeWordList((nextSkills || []).join(','));
-        await callAPI('skills/config/write', {
-          agent_id: threadId,
-          skills: normalized,
-        });
-        threadSkills.value = normalized;
-      } catch (error) {
-        logWarn('skills', 'threadSkills.save.failed', { thread_id: threadId, error });
-        setNotice('error', `设置会话技能失败：${error?.message || error}`);
-      } finally {
-        binding.value = false;
-      }
-    }
-
-    async function toggleThreadSkill(skillName) {
-      const name = (skillName || '').trim();
-      if (!name) return;
-      const exists = threadSkills.value.some((item) => item.toLowerCase() === name.toLowerCase());
-      const next = exists
-        ? threadSkills.value.filter((item) => item.toLowerCase() !== name.toLowerCase())
-        : [...threadSkills.value, name];
-      await saveThreadSkills(next);
-      setNotice('success', exists ? `已从会话移除 ${name}` : `已加入会话技能 ${name}`);
-    }
-
     async function onSaveSkill() {
       const name = (form.name || '').trim();
       if (!name) {
@@ -545,16 +462,6 @@ export const SkillsPage = {
       }
     }
 
-    watch(activeThreadId, (next) => {
-      if (!selectedThreadId.value && next) {
-        selectedThreadId.value = next;
-      }
-    }, { immediate: true });
-
-    watch(selectedThreadId, () => {
-      loadThreadSkills({ silent: true }).catch(() => { });
-    }, { immediate: true });
-
     watch(skillCards, (nextCards) => {
       const current = selectedSkillName.value;
       if (!current) return;
@@ -575,8 +482,6 @@ export const SkillsPage = {
 
     return {
       selectedSkillName,
-      selectedThreadId,
-      threadSkills,
       summarySource,
       summarySourceLabel,
       sourcePath,
@@ -584,12 +489,9 @@ export const SkillsPage = {
       notice,
       saving,
       uploading,
-      binding,
       deletingSkillName,
       form,
-      threadOptions,
       skillCards,
-      currentSkillInThread,
       onUploadSkill,
       onEditSkill,
       onSaveSkill,
@@ -602,8 +504,6 @@ export const SkillsPage = {
       onInlineSummaryKeydown,
       isDeletingSkill,
       onDeleteSkill,
-      toggleThreadSkill,
-      loadThreadSkills,
     };
   },
   template: `
@@ -620,7 +520,6 @@ export const SkillsPage = {
               <button class="btn btn-secondary" data-testid="skills-import-button" :disabled="uploading" @click="onUploadSkill">
                 {{ uploading ? '导入中...' : '批量导入技能目录' }}
               </button>
-              <button class="btn btn-ghost" data-testid="skills-refresh-binding-button" @click="loadThreadSkills">刷新会话绑定</button>
             </div>
             <div v-if="skillCards.length === 0" class="empty-state" data-testid="skills-empty-state">
               <div class="es-icon">S</div>
@@ -685,9 +584,6 @@ export const SkillsPage = {
                 </div>
                 <div class="data-actions-vue skill-actions">
                   <button class="btn btn-ghost btn-xs" :data-testid="'skills-edit-button-' + idx" @click="onEditSkill(item)">编辑详情</button>
-                  <button class="btn btn-ghost btn-xs" :data-testid="'skills-toggle-thread-button-' + idx" :disabled="binding" @click="toggleThreadSkill(item.name)">
-                    {{ threadSkills.some((s) => s.toLowerCase() === item.name.toLowerCase()) ? '移出会话' : '加入会话' }}
-                  </button>
                   <button class="btn btn-ghost btn-xs btn-warning" :data-testid="'skills-delete-button-' + idx" :disabled="Boolean(deletingSkillName)" @click="onDeleteSkill(item)">
                     {{ isDeletingSkill(item.name) ? '删除中...' : '删除' }}
                   </button>
@@ -725,18 +621,6 @@ export const SkillsPage = {
               </div>
             </div>
             <div class="skills-field">
-              <label>绑定会话</label>
-              <select v-model="selectedThreadId" class="project-selector" data-testid="skills-editor-thread-select">
-                <option value="">未选择会话</option>
-                <option v-for="item in threadOptions" :key="item.id" :value="item.id">
-                  {{ item.name }} ({{ item.id }})
-                </option>
-              </select>
-              <div class="skills-inline-tip">
-                当前技能{{ currentSkillInThread ? '已' : '未' }}加入该会话
-              </div>
-            </div>
-            <div class="skills-field">
               <label>SKILL 内容（默认自动解析 MD，可手动编辑）</label>
               <textarea v-model="form.body" class="modal-input skills-body-input" data-testid="skills-editor-body-input" placeholder="输入技能正文 Markdown"></textarea>
               <div v-if="sourcePath" class="skills-inline-tip">来源文件：{{ sourcePath }}</div>
@@ -744,9 +628,6 @@ export const SkillsPage = {
             <div class="skills-actions-row" data-testid="skills-editor-actions">
               <button class="btn btn-primary" data-testid="skills-save-button" :disabled="saving" @click="onSaveSkill">
                 {{ saving ? '保存中...' : '保存 Skill' }}
-              </button>
-              <button class="btn btn-secondary" data-testid="skills-toggle-current-thread-button" :disabled="binding || !form.name" @click="toggleThreadSkill(form.name)">
-                {{ currentSkillInThread ? '从当前会话移除' : '加入当前会话' }}
               </button>
             </div>
             <div v-if="notice.message" class="skills-notice" data-testid="skills-notice" :class="'is-' + notice.level">

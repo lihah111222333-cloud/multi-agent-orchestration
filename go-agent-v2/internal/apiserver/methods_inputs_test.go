@@ -54,6 +54,22 @@ func TestExtractInputs(t *testing.T) {
 	}
 }
 
+func TestExtractInputs_SkillContentIsIgnored(t *testing.T) {
+	prompt, images, files := extractInputs([]UserInput{
+		{Type: "text", Text: "主问题"},
+		{Type: "skill", Name: "backend", Content: "摘要: 不应透传"},
+	})
+	if prompt != "主问题" {
+		t.Fatalf("prompt = %q, want 主问题", prompt)
+	}
+	if len(images) != 0 {
+		t.Fatalf("images = %#v, want empty", images)
+	}
+	if len(files) != 0 {
+		t.Fatalf("files = %#v, want empty", files)
+	}
+}
+
 func TestBuildUserTimelineAttachmentsFromInputs_PreferLocalImageURL(t *testing.T) {
 	attachments := buildUserTimelineAttachmentsFromInputs([]UserInput{
 		{

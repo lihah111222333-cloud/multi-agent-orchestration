@@ -15,7 +15,7 @@ import (
 // 常量 & 编译时正则
 // ========================================
 
-//nolint:unused // 预留给 Master 编排器调度逻辑 (对应 Python master.py 常量)
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑 (对应 Python master.py 常量)
 const (
 	defaultTaskMaxChars       = 2000
 	defaultArchMaxChars       = 6000
@@ -23,17 +23,17 @@ const (
 	minQualityScore           = 25
 )
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 var summaryUnitRe = regexp.MustCompile(`[A-Za-z0-9_]+|[\x{4e00}-\x{9fff}]`)
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 var assignmentListPrefixRe = regexp.MustCompile(`^\s*(?:[-*+]|(?:\d+)[.\)])\s*`)
 
 // ========================================
 // trimTaskText (对应 Python _trim_task_text)
 // ========================================
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func trimTaskText(task string, maxChars int) string {
 	text := strings.TrimSpace(task)
 	if maxChars <= 0 {
@@ -49,7 +49,7 @@ func trimTaskText(task string, maxChars int) string {
 // extractJSON (对应 Python _extract_json)
 // ========================================
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func extractJSON(text string) map[string]any {
 	src := strings.TrimSpace(text)
 	if src == "" {
@@ -261,7 +261,7 @@ func extractStringSlice(v any) []string {
 // scoreOutputQuality (对应 Python _score_output_quality)
 // ========================================
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func scoreOutputQuality(text string) int {
 	value := strings.TrimSpace(text)
 	if value == "" {
@@ -315,7 +315,7 @@ func penalizeErrorKeywords(lower string) int {
 	return 0
 }
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func scoreDiversityDim(value string) int {
 	tokens := summaryUnitRe.FindAllString(value, -1)
 	uniqueTokens := map[string]bool{}
@@ -339,7 +339,7 @@ func scoreDiversityDim(value string) int {
 	return score
 }
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func penalizeLineRepetition(lines []string) int {
 	if len(lines) < 4 {
 		return 0
@@ -359,7 +359,7 @@ func penalizeLineRepetition(lines []string) int {
 	return 0
 }
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func normalizeWhitespace(s string) string {
 	fields := strings.Fields(s)
 	return strings.Join(fields, " ")
@@ -369,7 +369,7 @@ func normalizeWhitespace(s string) string {
 // normalizeAssignmentLine (对应 Python _normalize_assignment_line)
 // ========================================
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func normalizeAssignmentLine(line string) string {
 	text := strings.TrimSpace(line)
 	if text == "" || strings.HasPrefix(text, "```") {
@@ -396,7 +396,7 @@ func normalizeAssignmentLine(line string) string {
 // parseAssignments (对应 Python _parse_assignments)
 // ========================================
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func parseAssignments(text string, gateways map[string]bool) map[string]string {
 	assignments := map[string]string{}
 	for _, rawLine := range strings.Split(text, "\n") {
@@ -424,7 +424,7 @@ func parseAssignments(text string, gateways map[string]bool) map[string]string {
 // truncateSummaryText (对应 Python _truncate_summary_text)
 // ========================================
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func truncateSummaryText(text string, maxUnits int) string {
 	normalized := strings.TrimSpace(text)
 	if normalized == "" || maxUnits <= 0 {
@@ -445,7 +445,7 @@ func truncateSummaryText(text string, maxUnits int) string {
 // degradedTask (对应 Python _degraded_task)
 // ========================================
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func degradedTask(task string) string {
 	return task + "\n\n[降级模式] Dispatcher 失败，请尽量给出互补信息并避免重复结论。"
 }
@@ -454,7 +454,7 @@ func degradedTask(task string) string {
 // fallbackAssignments (对应 Python _fallback_assignments)
 // ========================================
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func fallbackAssignments(task string, gateways map[string]bool) map[string]string {
 	assignments := map[string]string{}
 	for gwID := range gateways {
@@ -467,7 +467,7 @@ func fallbackAssignments(task string, gateways map[string]bool) map[string]strin
 // gatewayPromptBrief (对应 Python _gateway_prompt_brief)
 // ========================================
 
-//nolint:unused // 预留给 Master 编排器调度逻辑
+//nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func gatewayPromptBrief(gwID string, gw map[string]any) string {
 	desc := fmt.Sprint(gw["description"])
 	if desc == "<nil>" {

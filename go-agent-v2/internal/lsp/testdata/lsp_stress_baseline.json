@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "languages": {
+    "go": {
+      "open_rate": 0.95,
+      "symbol_rate": 0.8,
+      "definition_rate": 0.5,
+      "reference_rate": 0.5,
+      "hover_rate": 0.6,
+      "error_rate": 0.4,
+      "p95_ms": {
+        "document_symbol": 4000,
+        "definition": 5000,
+        "references": 6000,
+        "hover": 4000
+      }
+    },
+    "typescript": {
+      "open_rate": 0.9,
+      "symbol_rate": 0.7,
+      "definition_rate": 0.4,
+      "reference_rate": 0.4,
+      "hover_rate": 0.5,
+      "error_rate": 0.4
+    },
+    "rust": {
+      "open_rate": 0.9,
+      "symbol_rate": 0.7,
+      "definition_rate": 0.4,
+      "reference_rate": 0.3,
+      "hover_rate": 0.5,
+      "error_rate": 0.5
+    }
+  }
+}

@@ -1,6 +1,6 @@
 {
   "stage": "P0-A",
-  "generated_at": "2026-02-23T04:01:01+08:00",
+  "generated_at": "2026-02-23T05:02:10+08:00",
   "gate_passed": true,
   "thresholds": {
     "smoke": "open-\u003edocumentSymbol"
@@ -52,7 +52,7 @@
       "tool": "lsp_open_file",
       "language": "go",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/go/attribution/backtest_combo_e2e_test.go",
-      "duration_ms": 46,
+      "duration_ms": 49,
       "success": true,
       "note": "smoke open"
     },
@@ -61,7 +61,7 @@
       "tool": "lsp_document_symbol",
       "language": "go",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/go/attribution/backtest_combo_e2e_test.go",
-      "duration_ms": 345,
+      "duration_ms": 337,
       "success": true,
       "note": "smoke open-\u003edocumentSymbol"
     },
@@ -70,7 +70,7 @@
       "tool": "lsp_open_file",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/eslint.config.js",
-      "duration_ms": 118,
+      "duration_ms": 102,
       "success": true,
       "note": "smoke open"
     },
@@ -79,7 +79,7 @@
       "tool": "lsp_document_symbol",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/eslint.config.js",
-      "duration_ms": 427,
+      "duration_ms": 281,
       "success": true,
       "note": "smoke open-\u003edocumentSymbol"
     },
@@ -88,7 +88,7 @@
       "tool": "lsp_open_file",
       "language": "rust",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/bespoke_event_handling.rs",
-      "duration_ms": 12,
+      "duration_ms": 7,
       "success": true,
       "note": "smoke open"
     },
@@ -97,7 +97,7 @@
       "tool": "lsp_document_symbol",
       "language": "rust",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/bespoke_event_handling.rs",
-      "duration_ms": 23,
+      "duration_ms": 7,
       "success": true,
       "note": "smoke open-\u003edocumentSymbol"
     }

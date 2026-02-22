@@ -1,10 +1,69 @@
 import { computed, ref } from '../../lib/vue.esm-browser.prod.js';
 
+const LSP_TOOL_NAMES = [
+  'lsp_open_file',
+  'lsp_hover',
+  'lsp_definition',
+  'lsp_references',
+  'lsp_document_symbol',
+  'lsp_diagnostics',
+  'lsp_workspace_symbol',
+  'lsp_implementation',
+  'lsp_type_definition',
+  'lsp_rename',
+  'lsp_did_change',
+  'lsp_signature_help',
+  'lsp_code_action',
+  'lsp_call_hierarchy',
+  'lsp_type_hierarchy',
+  'lsp_completion',
+  'lsp_format',
+  'lsp_semantic_tokens',
+  'lsp_folding_range',
+];
+const JSON_RENDER_TOOL_NAMES = ['json_render'];
+const GO_RUN_TOOL_NAMES = ['go_run', 'code_run', 'code_run_test'];
+const PLAYWRIGHT_TOOL_PREFIXES = ['mcp__playwright__', 'playwright_', 'browser_'];
+
+/**
+ * @param {unknown} name
+ * @returns {string}
+ */
+function normalizeToolName(name) {
+  return (name || '').toString().trim().toLowerCase().replace(/[/-]+/g, '_');
+}
+
+/**
+ * @param {Record<string, number>} toolMap
+ * @param {(name: string) => boolean} matcher
+ * @returns {number}
+ */
+function sumToolCallsByMatcher(toolMap, matcher) {
+  let sum = 0;
+  for (const [rawName, value] of Object.entries(toolMap || {})) {
+    const name = normalizeToolName(rawName);
+    if (!name || !matcher(name)) continue;
+    sum += Number(value) || 0;
+  }
+  return sum;
+}
+
+/**
+ * @param {Record<string, number>} toolMap
+ * @param {string[]} names
+ * @returns {number}
+ */
+function sumToolCallsByNames(toolMap, names) {
+  const expected = new Set((names || []).map((name) => normalizeToolName(name)).filter(Boolean));
+  if (expected.size === 0) return 0;
+  return sumToolCallsByMatcher(toolMap, (name) => expected.has(name));
+}
+
 /**
  * ActivityPanel — 右下角活动面板，与 ComposerBar 等高。
  *
  * 两个区域:
- *   - 行为记录 (stats): LSP / 命令 / 文件 / 工具 的累计调用次数
+ *   - 行为记录 (stats): LSP(19) / JSON-Render / Playwright / go-run / 命令 / 文件 / 工具
  *   - 告警日志 (alerts): 只显示高优先级事件 (error / stall / abort)
  */
 export const ActivityPanel = {
@@ -20,10 +79,20 @@ export const ActivityPanel = {
   setup(props) {
     const expanded = ref(false);
 
-    const lspCount = computed(() => Number(props.stats?.lspCalls) || 0);
+    const toolCallMap = computed(() => props.stats?.toolCalls || {});
+    const lspCount = computed(() => {
+      const byList = sumToolCallsByNames(toolCallMap.value, LSP_TOOL_NAMES);
+      if (byList > 0) return byList;
+      return Number(props.stats?.lspCalls) || 0;
+    });
+    const jsonRenderCount = computed(() => sumToolCallsByNames(toolCallMap.value, JSON_RENDER_TOOL_NAMES));
+    const playwrightCount = computed(() => sumToolCallsByMatcher(
+      toolCallMap.value,
+      (name) => PLAYWRIGHT_TOOL_PREFIXES.some((prefix) => name.startsWith(prefix)),
+    ));
+    const goRunCount = computed(() => sumToolCallsByNames(toolCallMap.value, GO_RUN_TOOL_NAMES));
     const cmdCount = computed(() => Number(props.stats?.commands) || 0);
     const fileCount = computed(() => Number(props.stats?.fileEdits) || 0);
-    const toolCallMap = computed(() => props.stats?.toolCalls || {});
     const totalTools = computed(() => {
       const map = toolCallMap.value;
       let sum = 0;
@@ -35,15 +104,10 @@ export const ActivityPanel = {
 
     const toolCallEntries = computed(() => {
       const map = toolCallMap.value;
-      const entries = [];
-      for (const [key, v] of Object.entries(map)) {
-        const count = Number(v) || 0;
-        if (count > 0) {
-          entries.push({ name: key, count });
-        }
-      }
-      entries.sort((a, b) => b.count - a.count);
-      return entries;
+      return Object.entries(map)
+        .map(([name, value]) => ({ name, count: Number(value) || 0 }))
+        .filter((entry) => entry.count > 0)
+        .sort((a, b) => b.count - a.count);
     });
 
     const recentAlerts = computed(() => {
@@ -159,6 +223,9 @@ export const ActivityPanel = {
     return {
       expanded,
       lspCount,
+      jsonRenderCount,
+      playwrightCount,
+      goRunCount,
       cmdCount,
       fileCount,
       totalTools,
@@ -185,6 +252,12 @@ export const ActivityPanel = {
     <div class="activity-panel" :class="{ expanded }">
       <div class="activity-stats" @click="toggleExpand" title="点击展开工具详情">
         <span class="stat stat-lsp">LSP:<strong>{{ lspCount }}</strong></span>
+        <span class="stat-sep">·</span>
+        <span class="stat stat-json-render">JSON-Render:<strong>{{ jsonRenderCount }}</strong></span>
+        <span class="stat-sep">·</span>
+        <span class="stat stat-playwright">Playwright:<strong>{{ playwrightCount }}</strong></span>
+        <span class="stat-sep">·</span>
+        <span class="stat stat-go-run">go-run:<strong>{{ goRunCount }}</strong></span>
         <span class="stat-sep">·</span>
         <span class="stat stat-cmd">命令:<strong>{{ cmdCount }}</strong></span>
         <span class="stat-sep">·</span>

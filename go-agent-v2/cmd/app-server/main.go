@@ -55,7 +55,7 @@ func main() {
 	}
 	if err := database.Migrate(ctx, dbPool, migrationsDir); err != nil {
 		if cfg.MigrationNonFatal {
-			logger.Warnw("migration failed (non-fatal by config)", logger.FieldError, err, logger.FieldPath, migrationsDir)
+			logger.Warn("migration failed (non-fatal by config)", logger.FieldError, err, logger.FieldPath, migrationsDir)
 		} else {
 			logger.Fatal("migration failed", logger.FieldError, err, logger.FieldPath, migrationsDir)
 		}
@@ -79,7 +79,7 @@ func main() {
 	cwd, _ := os.Getwd()
 	srv.SetupLSP(cwd)
 
-	logger.Infow("app-server starting", logger.FieldListen, *listen)
+	logger.Info("app-server starting", logger.FieldListen, *listen)
 
 	if err := srv.ListenAndServe(ctx, *listen); err != nil {
 		logger.Fatal("app-server failed", logger.Any(logger.FieldError, err))

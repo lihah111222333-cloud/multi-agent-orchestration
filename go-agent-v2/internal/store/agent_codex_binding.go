@@ -12,6 +12,8 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -38,19 +40,45 @@ func NewAgentCodexBindingStore(pool *pgxpool.Pool) *AgentCodexBindingStore {
 
 const acbCols = "agent_id, codex_thread_id, rollout_path, created_at, updated_at"
 
-// Bind 创建 1:1 绑定 (幂等: 同一 agent_id 重复绑定同一 codex_thread_id 不报错)。
+// Bind 创建 1:1 绑定。
 //
-// 如果 agent_id 已绑定不同的 codex_thread_id, 会被 PK 约束拦截 → 返回错误。
-// 调用方需要先 Unbind 旧绑定再 Bind 新的 (显式操作, 有审计痕迹)。
+// 约束:
+//   - agent_id 与 codex_thread_id 的关系一旦建立不可改写；
+//   - 若同一 agent_id 再次绑定到不同 codex_thread_id，直接返回错误；
+//   - 仅允许在关系不变时补充 rollout_path 元数据。
 func (s *AgentCodexBindingStore) Bind(ctx context.Context, agentID, codexThreadID, rolloutPath string) error {
+	agentID = strings.TrimSpace(agentID)
+	codexThreadID = strings.TrimSpace(codexThreadID)
+	rolloutPath = strings.TrimSpace(rolloutPath)
+	if agentID == "" || codexThreadID == "" {
+		return fmt.Errorf("bind requires non-empty agent_id and codex_thread_id")
+	}
+
+	existing, err := s.FindByAgentID(ctx, agentID)
+	if err != nil {
+		return err
+	}
 	now := time.Now().Unix()
-	_, err := s.pool.Exec(ctx,
+	if existing != nil {
+		if strings.TrimSpace(existing.CodexThreadID) != codexThreadID {
+			return fmt.Errorf("immutable binding violation: agent %q already bound to %q, cannot bind to %q",
+				agentID, strings.TrimSpace(existing.CodexThreadID), codexThreadID)
+		}
+		// 关系未变化时允许补写/刷新 rollout_path，避免归档后历史入口丢失。
+		if rolloutPath != "" && rolloutPath != strings.TrimSpace(existing.RolloutPath) {
+			_, err = s.pool.Exec(ctx,
+				`UPDATE agent_codex_binding
+				 SET rollout_path = $1, updated_at = $2
+				 WHERE agent_id = $3 AND codex_thread_id = $4`,
+				rolloutPath, now, agentID, codexThreadID)
+			return err
+		}
+		return nil
+	}
+
+	_, err = s.pool.Exec(ctx,
 		`INSERT INTO agent_codex_binding (agent_id, codex_thread_id, rollout_path, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT (agent_id) DO UPDATE SET
-		   codex_thread_id = EXCLUDED.codex_thread_id,
-		   rollout_path    = EXCLUDED.rollout_path,
-		   updated_at      = EXCLUDED.updated_at`,
+		 VALUES ($1, $2, $3, $4, $5)`,
 		agentID, codexThreadID, rolloutPath, now, now)
 	return err
 }

@@ -24,6 +24,15 @@ const LSP_TOOL_NAMES = [
 const JSON_RENDER_TOOL_NAMES = ['json_render'];
 const GO_RUN_TOOL_NAMES = ['go_run', 'code_run', 'code_run_test'];
 const PLAYWRIGHT_TOOL_PREFIXES = ['mcp__playwright__', 'playwright_', 'browser_'];
+const STAT_ICON_PATHS = {
+  lsp: 'M8 7 3 12l5 5M16 7l5 5-5 5M13 4l-2 16',
+  jsonRender: 'M9 5c-1.6 0-2 1.1-2 2.8V9c0 .9-.4 1.6-1 2 .6.4 1 1.1 1 2v1.2C7 15.9 7.4 17 9 17M15 5c1.6 0 2 1.1 2 2.8V9c0 .9.4 1.6 1 2-.6.4-1 1.1-1 2v1.2c0 1.7-.4 2.8-2 2.8',
+  playwright: 'M3 6h18v12H3zM3 10h18M8 8h.01M12 8h.01M16 8h.01',
+  goRun: 'M4 6h16v12H4zM10 9l5 3-5 3',
+  command: 'M4 7h16v10H4zM8 11l2 2-2 2M12 15h4',
+  file: 'M8 3h7l3 3v15H6V3h2zM15 3v4h4M9 13h6M9 17h6',
+  tool: 'M14.5 6.5a3.4 3.4 0 0 0-4.7 4.7L4 17l3 3 5.8-5.8a3.4 3.4 0 0 0 4.7-4.7l-2.3 2.3-2.4-2.4 2.2-2.4z',
+};
 
 /**
  * @param {unknown} name
@@ -122,9 +131,29 @@ export const ActivityPanel = {
 
     const hasAlerts = computed(() => recentAlerts.value.length > 0);
     const hasProcessEvents = computed(() => recentProcessEvents.value.length > 0);
+    const statItems = computed(() => ([
+      { key: 'lsp', label: 'LSP (19 tools)', className: 'stat-lsp', value: lspCount.value },
+      { key: 'jsonRender', label: 'JSON-Render', className: 'stat-json-render', value: jsonRenderCount.value },
+      { key: 'playwright', label: 'Playwright', className: 'stat-playwright', value: playwrightCount.value },
+      { key: 'goRun', label: 'go-run', className: 'stat-go-run', value: goRunCount.value },
+      { key: 'command', label: '命令', className: 'stat-cmd', value: cmdCount.value },
+      { key: 'file', label: '文件', className: 'stat-file', value: fileCount.value },
+      { key: 'tool', label: '工具', className: 'stat-tool', value: totalTools.value },
+    ]));
 
     function toggleExpand() {
       expanded.value = !expanded.value;
+    }
+
+    function statIconPath(key) {
+      const name = (key || '').toString().trim();
+      return STAT_ICON_PATHS[name] || STAT_ICON_PATHS.tool;
+    }
+
+    function statTooltip(item) {
+      const label = (item?.label || '').toString().trim();
+      const value = Number(item?.value) || 0;
+      return `${label}: ${value}`;
     }
 
     function alertIcon(level) {
@@ -234,7 +263,10 @@ export const ActivityPanel = {
       recentProcessEvents,
       hasAlerts,
       hasProcessEvents,
+      statItems,
       toggleExpand,
+      statIconPath,
+      statTooltip,
       alertIcon,
       alertClass,
       processIcon,
@@ -251,19 +283,19 @@ export const ActivityPanel = {
   template: `
     <div class="activity-panel" :class="{ expanded }">
       <div class="activity-stats" @click="toggleExpand" title="点击展开工具详情">
-        <span class="stat stat-lsp">LSP:<strong>{{ lspCount }}</strong></span>
-        <span class="stat-sep">·</span>
-        <span class="stat stat-json-render">JSON-Render:<strong>{{ jsonRenderCount }}</strong></span>
-        <span class="stat-sep">·</span>
-        <span class="stat stat-playwright">Playwright:<strong>{{ playwrightCount }}</strong></span>
-        <span class="stat-sep">·</span>
-        <span class="stat stat-go-run">go-run:<strong>{{ goRunCount }}</strong></span>
-        <span class="stat-sep">·</span>
-        <span class="stat stat-cmd">命令:<strong>{{ cmdCount }}</strong></span>
-        <span class="stat-sep">·</span>
-        <span class="stat stat-file">文件:<strong>{{ fileCount }}</strong></span>
-        <span class="stat-sep">·</span>
-        <span class="stat stat-tool">工具:<strong>{{ totalTools }}</strong></span>
+        <span
+          v-for="item in statItems"
+          :key="item.key"
+          class="stat stat-icon-item"
+          :class="item.className"
+        >
+          <span class="stat-icon" :title="statTooltip(item)" role="img" :aria-label="item.label">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path :d="statIconPath(item.key)"></path>
+            </svg>
+          </span>
+          <strong>{{ item.value }}</strong>
+        </span>
       </div>
 
       <div v-if="expanded && toolCallEntries.length > 0" class="activity-tool-detail">

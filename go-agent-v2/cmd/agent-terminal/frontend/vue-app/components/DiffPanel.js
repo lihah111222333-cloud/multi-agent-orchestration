@@ -3,6 +3,11 @@ import { parseUnifiedDiff, diffStats } from '../services/diff.js';
 import { logDebug, logInfo, logWarn } from '../services/log.js';
 import { renderAssistantMarkdown } from '../utils/assistant-markdown.js';
 
+const DIFF_HEADER_ICON_PATHS = {
+  change: 'M4 7h16v10H4zM8 11l2 2-2 2M12 15h4',
+  files: 'M8 3h7l3 3v15H6V3h2zM15 3v4h4M9 13h6M9 17h6',
+};
+
 export const DiffPanel = {
   name: 'DiffPanel',
   props: {
@@ -15,6 +20,8 @@ export const DiffPanel = {
   setup(props) {
     const panelRef = ref(null);
     const lightboxOpen = ref(false);
+    const copiedPath = ref('');
+    let copyResetTimer = null;
     const files = computed(() => parseUnifiedDiff(props.diffText));
     const fileCountText = computed(() => `${files.value.length} file${files.value.length === 1 ? '' : 's'}`);
     const totals = computed(() => files.value.reduce(
@@ -87,6 +94,80 @@ export const DiffPanel = {
         ? (markdownPath.value || 'markdown')
         : fileCountText.value
     ));
+    const fileCountValue = computed(() => files.value.length);
+
+    function headerIconPath(kind) {
+      const key = (kind || '').toString().trim();
+      return DIFF_HEADER_ICON_PATHS[key] || DIFF_HEADER_ICON_PATHS.change;
+    }
+
+    function headerIconTooltip(kind) {
+      const key = (kind || '').toString().trim();
+      if (key === 'files') return headerSubText.value;
+      return headerTitle.value;
+    }
+
+    function stripCodePathPrefix(value) {
+      const raw = (value || '').toString().trim();
+      if (!raw) return '';
+      return raw
+        .replace(/^\.\/+/, '')
+        .replace(/^cmd\//i, '');
+    }
+
+    function displayFilePath(file) {
+      const raw = (file?.filename || '').toString();
+      const stripped = stripCodePathPrefix(raw);
+      return stripped || raw;
+    }
+
+    function isCopiedFile(file) {
+      const path = displayFilePath(file);
+      return Boolean(path) && path === copiedPath.value;
+    }
+
+    async function copyFilePath(file) {
+      const path = displayFilePath(file);
+      if (!path) return;
+      let copied = false;
+
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(path);
+          copied = true;
+        } catch (_) {
+          copied = false;
+        }
+      }
+
+      if (!copied && typeof document !== 'undefined' && document.body) {
+        const textarea = document.createElement('textarea');
+        textarea.value = path;
+        textarea.setAttribute('readonly', 'readonly');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.left = '-9999px';
+        textarea.style.top = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        try {
+          copied = document.execCommand('copy');
+        } catch (_) {
+          copied = false;
+        } finally {
+          document.body.removeChild(textarea);
+        }
+      }
+
+      if (!copied) return;
+      copiedPath.value = path;
+      if (copyResetTimer) clearTimeout(copyResetTimer);
+      copyResetTimer = setTimeout(() => {
+        copiedPath.value = '';
+        copyResetTimer = null;
+      }, 1500);
+    }
 
     const normalizedFocusFile = computed(() => normalizePath(props.focusFile));
     const normalizedFocusLine = computed(() => {
@@ -270,6 +351,12 @@ export const DiffPanel = {
       markdownHtml,
       headerTitle,
       headerSubText,
+      fileCountValue,
+      headerIconPath,
+      headerIconTooltip,
+      displayFilePath,
+      isCopiedFile,
+      copyFilePath,
       mediaThumbSrc,
       mediaFullSrc,
       mediaPath,
@@ -286,9 +373,28 @@ export const DiffPanel = {
   template: `
     <div id="diff-panel" ref="panelRef">
       <div class="diff-header">
-        <div class="diff-header-main">
-          <strong>{{ headerTitle }}</strong>
-          <small>{{ headerSubText }}</small>
+        <div class="diff-header-main" :class="{ 'diff-header-main--icon': hasDiffPreview }">
+          <template v-if="hasDiffPreview">
+            <span class="diff-header-chip diff-header-chip--title">
+              <span class="diff-header-icon" :title="headerIconTooltip('change')" role="img" :aria-label="headerTitle">
+                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <path :d="headerIconPath('change')"></path>
+                </svg>
+              </span>
+            </span>
+            <span class="diff-header-chip diff-header-chip--files">
+              <span class="diff-header-icon" :title="headerIconTooltip('files')" role="img" :aria-label="headerSubText">
+                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <path :d="headerIconPath('files')"></path>
+                </svg>
+              </span>
+              <strong class="diff-header-chip-count">{{ fileCountValue }}</strong>
+            </span>
+          </template>
+          <template v-else>
+            <strong>{{ headerTitle }}</strong>
+            <small>{{ headerSubText }}</small>
+          </template>
         </div>
         <div v-if="hasDiffPreview" class="diff-header-metrics">
           <span class="diff-metric add">+{{ totals.add }}</span>
@@ -331,7 +437,19 @@ export const DiffPanel = {
           <div class="diff-file-header">
             <div class="diff-file-title">
               <span class="diff-file-caret">▾</span>
-              <span class="diff-file-name">{{ file.filename }}</span>
+              <span class="diff-file-name" :title="displayFilePath(file)">{{ displayFilePath(file) }}</span>
+              <button
+                class="diff-file-copy-btn"
+                type="button"
+                @click="copyFilePath(file)"
+                :title="isCopiedFile(file) ? '已复制路径' : '复制路径'"
+                :aria-label="isCopiedFile(file) ? '已复制路径' : '复制路径'"
+              >
+                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <path v-if="isCopiedFile(file)" d="M5 12l4 4 10-10"></path>
+                  <path v-else d="M9 9h10v12H9zM5 3h10v12"></path>
+                </svg>
+              </button>
             </div>
             <div class="diff-file-stats">
               <span class="diff-metric add">+{{ diffStats(file).add }}</span>

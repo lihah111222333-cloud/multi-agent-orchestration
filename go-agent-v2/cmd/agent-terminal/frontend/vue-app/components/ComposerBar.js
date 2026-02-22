@@ -475,36 +475,36 @@ export const ComposerBar = {
           @keydown.enter.exact="onSend"
           @keydown.esc.exact="onEscape"
         ></textarea>
+        <div class="composer-top-actions">
+          <button
+            class="composer-compact-btn"
+            data-testid="composer-compact-button"
+            :class="{ loading: compacting }"
+            type="button"
+            :title="compacting ? '压缩中…' : (interruptible ? '将先暂停再压缩上下文' : '压缩上下文')"
+            :aria-label="compacting ? '压缩中…' : (interruptible ? '将先暂停再压缩上下文' : '压缩上下文')"
+            :disabled="disabled || !threadId || compacting"
+            @click="onCompact"
+          >
+            <svg class="composer-compact-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M9 5l-4 4 4 4M15 5l4 4-4 4M9 19l-4-4 4-4M15 19l4-4-4-4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <span
+            v-if="tokenInline || compacting"
+            class="composer-token-chip"
+            :class="{ loading: compacting }"
+            :title="compacting ? '正在暂停并压缩上下文，等待 token 使用量刷新' : tokenTooltip"
+          ><span :class="{ 'loading-shimmer': compacting }">{{ compacting ? 'CTX 更新中…' : ('CTX ' + tokenInline) }}</span></span>
+        </div>
         <div class="composer-action-stack">
-          <div class="composer-top-actions">
-            <button
-              class="composer-compact-btn"
-              data-testid="composer-compact-button"
-              :class="{ loading: compacting }"
-              type="button"
-              :title="compacting ? '压缩中…' : (interruptible ? '将先暂停再压缩上下文' : '压缩上下文')"
-              :aria-label="compacting ? '压缩中…' : (interruptible ? '将先暂停再压缩上下文' : '压缩上下文')"
-              :disabled="disabled || !threadId || compacting"
-              @click="onCompact"
-            >
-              <svg class="composer-compact-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M9 5l-4 4 4 4M15 5l4 4-4 4M9 19l-4-4 4-4M15 19l4-4-4-4"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.9"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-            <span
-              v-if="tokenInline || compacting"
-              class="composer-token-chip"
-              :class="{ loading: compacting }"
-              :title="compacting ? '正在暂停并压缩上下文，等待 token 使用量刷新' : tokenTooltip"
-            ><span :class="{ 'loading-shimmer': compacting }">{{ compacting ? 'CTX 更新中…' : ('CTX ' + tokenInline) }}</span></span>
-          </div>
           <button
             id="btnSend"
             class="btn btn-primary"

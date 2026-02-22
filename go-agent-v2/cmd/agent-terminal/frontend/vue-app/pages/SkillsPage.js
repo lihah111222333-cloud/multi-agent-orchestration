@@ -8,7 +8,7 @@ function normalizeWordList(text) {
   const normalized = raw
     .replace(/[，、；;\n]/g, ',')
     .split(',')
-    .map((item) => item.trim())
+    .map((item) => cleanScalar(item))
     .filter(Boolean);
   const dedup = [];
   const seen = new Set();
@@ -61,7 +61,7 @@ function parseFrontmatter(content) {
     if (!line || line.startsWith('#')) continue;
     const idx = line.indexOf(':');
     if (idx <= 0) continue;
-    const key = line.slice(0, idx).trim().toLowerCase();
+    const key = line.slice(0, idx).trim().toLowerCase().replace(/-/g, '_');
     const value = line.slice(idx + 1).trim();
     if (value) {
       attrs[key] = value;
@@ -108,11 +108,16 @@ function parseSkillMarkdown(content, fallbackName = '') {
   const name = cleanScalar(attrs.name) || fallbackName;
   const description = cleanScalar(attrs.description);
   const summary = cleanScalar(attrs.summary ?? attrs.digest ?? '');
-  const triggerWords = parseWordsValue(
-    attrs.trigger_words ?? attrs.triggerwords ?? attrs.triggers ?? '',
-  );
+  const triggerWords = normalizeWordList([
+    ...parseWordsValue(
+      attrs.trigger_words ?? attrs.triggerwords ?? attrs.trigger_words_list ?? attrs.triggers ?? '',
+    ),
+    ...parseWordsValue(
+      attrs.aliases ?? attrs.alias ?? attrs.tags ?? attrs.tag ?? attrs.keywords ?? attrs.keyword ?? '',
+    ),
+  ].join(','));
   const forceWords = parseWordsValue(
-    attrs.force_words ?? attrs.forcewords ?? attrs.mandatory_words ?? '',
+    attrs.force_words ?? attrs.forcewords ?? attrs.mandatory_words ?? attrs.must_words ?? '',
   );
   return {
     name,
@@ -163,9 +168,8 @@ export const SkillsPage = {
     const saving = ref(false);
     const uploading = ref(false);
     const deletingSkillName = ref('');
-    const inlineSummarySkillName = ref('');
-    const inlineSummaryDraft = ref('');
-    const inlineSummarySavingName = ref('');
+    const searchQuery = ref('');
+    const isEditorOpen = ref(false);
 
     const form = reactive({
       name: '',
@@ -186,6 +190,24 @@ export const SkillsPage = {
         triggerWords: Array.isArray(item?.trigger_words) ? item.trigger_words : [],
         forceWords: Array.isArray(item?.force_words) ? item.force_words : [],
       }));
+    });
+
+    const filteredSkillCards = computed(() => {
+      const keyword = (searchQuery.value || '').toString().trim().toLowerCase();
+      if (!keyword) return skillCards.value;
+      return skillCards.value.filter((item) => {
+        const haystack = [
+          item.name,
+          item.description,
+          item.summary,
+          item.dir,
+          ...(Array.isArray(item.triggerWords) ? item.triggerWords : []),
+          ...(Array.isArray(item.forceWords) ? item.forceWords : []),
+        ]
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(keyword);
+      });
     });
 
     const summarySourceLabel = computed(() => {
@@ -313,13 +335,27 @@ export const SkillsPage = {
       }
     }
 
+    function onCreateSkill() {
+      selectedSkillName.value = '';
+      summarySource.value = '';
+      sourcePath.value = '';
+      form.name = '';
+      form.description = '';
+      form.summary = '';
+      form.triggerWordsText = '';
+      form.forceWordsText = '';
+      form.body = '';
+      isEditorOpen.value = true;
+      setNotice('info', '已打开新建表单，填写后点击保存。');
+    }
+
     async function onEditSkill(item) {
       if (!item?.dir) return;
-      cancelInlineSummaryEdit();
       const skillPath = `${item.dir}/SKILL.md`;
       try {
         await readSkillFile(skillPath, item.name || '', item.summary || '', item.summary ? 'generated' : '');
         selectedSkillName.value = item.name || '';
+        isEditorOpen.value = true;
         setNotice('info', `已加载技能：${item.name || ''}`);
       } catch (error) {
         logWarn('skills', 'load.savedSkill.failed', { error, path: skillPath });
@@ -355,7 +391,9 @@ export const SkillsPage = {
           summarySource.value = '';
           sourcePath.value = '';
         }
-        cancelInlineSummaryEdit();
+        if (!selectedSkillName.value) {
+          isEditorOpen.value = false;
+        }
         emit('refresh-skills');
         setNotice('success', `技能已删除：${skillName}`);
       } catch (error) {
@@ -366,78 +404,8 @@ export const SkillsPage = {
       }
     }
 
-    function isInlineSummaryEditing(name) {
-      return (inlineSummarySkillName.value || '').toLowerCase() === (name || '').toString().toLowerCase();
-    }
-
-    function isInlineSummarySaving(name) {
-      return (inlineSummarySavingName.value || '').toLowerCase() === (name || '').toString().toLowerCase();
-    }
-
-    async function startInlineSummaryEdit(item) {
-      if (!item?.name || !item?.dir) return;
-      cancelInlineSummaryEdit();
-      const skillPath = `${item.dir}/SKILL.md`;
-      try {
-        await readSkillFile(skillPath, item.name || '', item.summary || '', item.summary ? 'generated' : '');
-        selectedSkillName.value = item.name || '';
-      } catch (error) {
-        logWarn('skills', 'summary.inline.load.failed', { error, path: skillPath });
-        setNotice('error', `读取技能失败：${error?.message || error}`);
-        return;
-      }
-      inlineSummarySkillName.value = item.name;
-      inlineSummaryDraft.value = (form.summary || item.summary || '').toString();
-      setNotice('info', `正在编辑摘要：${item.name}`);
-    }
-
-    function cancelInlineSummaryEdit() {
-      inlineSummarySkillName.value = '';
-      inlineSummaryDraft.value = '';
-    }
-
-    async function saveInlineSummary(item) {
-      if (!item?.name || !item?.dir || inlineSummarySavingName.value) return;
-      const skillName = (item.name || '').toString().trim();
-      if (!skillName) return;
-      const nextSummary = (inlineSummaryDraft.value || '').toString().trim();
-      const currentSummary = (item.summary || '').toString().trim();
-      if (nextSummary === currentSummary) {
-        cancelInlineSummaryEdit();
-        return;
-      }
-      inlineSummarySavingName.value = skillName;
-      try {
-        await callAPI('skills/summary/write', {
-          name: skillName,
-          summary: nextSummary,
-        });
-        if ((form.name || '').toLowerCase() === skillName.toLowerCase()) {
-          form.summary = nextSummary;
-          summarySource.value = nextSummary ? 'frontmatter' : 'generated';
-        }
-        cancelInlineSummaryEdit();
-        emit('refresh-skills');
-        setNotice('success', `摘要已保存：${skillName}`);
-      } catch (error) {
-        logWarn('skills', 'summary.inline.save.failed', { error, skill: skillName });
-        setNotice('error', `摘要保存失败：${error?.message || error}`);
-      } finally {
-        inlineSummarySavingName.value = '';
-      }
-    }
-
-    function onInlineSummaryKeydown(event, item) {
-      const key = (event?.key || '').toLowerCase();
-      if (key === 'escape') {
-        event.preventDefault();
-        cancelInlineSummaryEdit();
-        return;
-      }
-      if (key === 'enter' && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        saveInlineSummary(item);
-      }
+    function closeEditor() {
+      isEditorOpen.value = false;
     }
 
     async function onSaveSkill() {
@@ -468,13 +436,7 @@ export const SkillsPage = {
       const exists = nextCards.some((item) => item.name.toLowerCase() === current.toLowerCase());
       if (!exists) {
         selectedSkillName.value = '';
-      }
-      const inlineEditingName = inlineSummarySkillName.value;
-      if (inlineEditingName) {
-        const inlineExists = nextCards.some((item) => item.name.toLowerCase() === inlineEditingName.toLowerCase());
-        if (!inlineExists) {
-          cancelInlineSummaryEdit();
-        }
+        isEditorOpen.value = false;
       }
     });
 
@@ -490,18 +452,16 @@ export const SkillsPage = {
       saving,
       uploading,
       deletingSkillName,
+      searchQuery,
+      filteredSkillCards,
+      isEditorOpen,
       form,
       skillCards,
       onUploadSkill,
+      onCreateSkill,
       onEditSkill,
       onSaveSkill,
-      inlineSummaryDraft,
-      isInlineSummaryEditing,
-      isInlineSummarySaving,
-      startInlineSummaryEdit,
-      cancelInlineSummaryEdit,
-      saveInlineSummary,
-      onInlineSummaryKeydown,
+      closeEditor,
       isDeletingSkill,
       onDeleteSkill,
     };
@@ -520,82 +480,113 @@ export const SkillsPage = {
               <button class="btn btn-secondary" data-testid="skills-import-button" :disabled="uploading" @click="onUploadSkill">
                 {{ uploading ? '导入中...' : '批量导入技能目录' }}
               </button>
+              <button class="btn btn-ghost" data-testid="skills-create-button" @click="onCreateSkill">
+                新建 Skill
+              </button>
+              <div class="skills-search-wrap">
+                <input
+                  v-model="searchQuery"
+                  class="modal-input skills-search-input"
+                  data-testid="skills-search-input"
+                  placeholder="搜索技能名称、摘要、触发词..."
+                />
+              </div>
             </div>
             <div v-if="skillCards.length === 0" class="empty-state" data-testid="skills-empty-state">
               <div class="es-icon">S</div>
               <h3>暂无 Skill</h3>
               <p>支持一次导入多个目录（每个目录需包含 SKILL.md）</p>
             </div>
-            <div v-else class="data-list-vue" data-testid="skills-list">
+            <div v-else-if="filteredSkillCards.length === 0" class="empty-state" data-testid="skills-search-empty-state">
+              <div class="es-icon">?</div>
+              <h3>没有匹配技能</h3>
+              <p>尝试更换关键词，支持按名称、描述、摘要、触发词搜索</p>
+            </div>
+            <div v-else class="skills-card-grid" data-testid="skills-list">
               <article
-                v-for="(item, idx) in skillCards"
+                v-for="(item, idx) in filteredSkillCards"
                 :key="item.name"
-                class="data-card-vue skill-card"
+                class="data-card-vue skill-card skill-card-compact"
                 :class="{ active: selectedSkillName.toLowerCase() === item.name.toLowerCase() }"
                 :data-testid="'skills-card-' + idx"
               >
-                <div class="data-row-vue">
-                  <strong>技能</strong>
-                  <span>{{ item.name }}</span>
+                <div class="skill-card-header">
+                  <div class="skill-card-heading">
+                    <div class="skill-card-title">{{ item.name }}</div>
+                    <div class="skill-card-path" :title="item.dir">{{ item.dir || '-' }}</div>
+                  </div>
+                  <span v-if="selectedSkillName.toLowerCase() === item.name.toLowerCase()" class="skill-card-badge">编辑中</span>
                 </div>
-                <div class="data-row-vue">
-                  <strong>描述</strong>
-                  <span>{{ item.description || '-' }}</span>
-                </div>
-                <div class="data-row-vue skill-summary-row">
-                  <strong>摘要</strong>
-                  <div class="skill-summary-cell">
-                    <template v-if="isInlineSummaryEditing(item.name)">
-                      <textarea
-                        v-model="inlineSummaryDraft"
-                        class="modal-input skill-summary-input"
-                        rows="3"
-                        placeholder="用于运行时注入的摘要，建议 1-3 句"
-                        @keydown="onInlineSummaryKeydown($event, item)"
-                      ></textarea>
-                      <div class="skill-summary-actions">
-                        <button class="btn btn-primary btn-xs" :data-testid="'skills-summary-save-button-' + idx" :disabled="isInlineSummarySaving(item.name)" @click="saveInlineSummary(item)">
-                          {{ isInlineSummarySaving(item.name) ? '保存中...' : '保存' }}
-                        </button>
-                        <button class="btn btn-ghost btn-xs" :data-testid="'skills-summary-cancel-button-' + idx" :disabled="isInlineSummarySaving(item.name)" @click="cancelInlineSummaryEdit">
-                          取消
-                        </button>
-                      </div>
-                      <div class="skills-inline-tip">Cmd/Ctrl + Enter 保存，Esc 取消</div>
-                    </template>
-                    <button
-                      v-else
-                      type="button"
-                      class="skill-summary-text"
-                      :title="'点击编辑摘要：' + item.name"
-                      @click="startInlineSummaryEdit(item)"
-                    >
-                      {{ item.summary || '点击添加摘要' }}
-                    </button>
+                <div class="skill-card-description">{{ item.description || '暂无描述' }}</div>
+                <div class="skill-card-summary-preview">{{ item.summary || '暂无摘要，点击编辑补充。' }}</div>
+                <div class="skill-word-groups">
+                  <div v-if="(item.triggerWords || []).length > 0" class="skill-word-line">
+                    <strong>触发词</strong>
+                    <div class="skill-chip-row">
+                      <span
+                        v-for="(word, wordIdx) in item.triggerWords.slice(0, 4)"
+                        :key="'trigger-' + idx + '-' + wordIdx"
+                        class="skill-word-chip"
+                      >
+                        {{ word }}
+                      </span>
+                      <span v-if="item.triggerWords.length > 4" class="skill-word-chip muted">+{{ item.triggerWords.length - 4 }}</span>
+                    </div>
+                  </div>
+                  <div v-if="(item.forceWords || []).length > 0" class="skill-word-line">
+                    <strong>强制词</strong>
+                    <div class="skill-chip-row">
+                      <span
+                        v-for="(word, wordIdx) in item.forceWords.slice(0, 3)"
+                        :key="'force-' + idx + '-' + wordIdx"
+                        class="skill-word-chip skill-word-chip-force"
+                      >
+                        {{ word }}
+                      </span>
+                      <span v-if="item.forceWords.length > 3" class="skill-word-chip muted">+{{ item.forceWords.length - 3 }}</span>
+                    </div>
                   </div>
                 </div>
-                <div class="data-row-vue">
-                  <strong>触发词</strong>
-                  <span>{{ (item.triggerWords || []).join(', ') || '-' }}</span>
-                </div>
-                <div class="data-row-vue">
-                  <strong>强制词</strong>
-                  <span>{{ (item.forceWords || []).join(', ') || '-' }}</span>
-                </div>
                 <div class="data-actions-vue skill-actions">
-                  <button class="btn btn-ghost btn-xs" :data-testid="'skills-edit-button-' + idx" @click="onEditSkill(item)">编辑详情</button>
+                  <button class="btn btn-secondary btn-xs" :data-testid="'skills-edit-button-' + idx" @click="onEditSkill(item)">编辑详情</button>
                   <button class="btn btn-ghost btn-xs btn-warning" :data-testid="'skills-delete-button-' + idx" :disabled="Boolean(deletingSkillName)" @click="onDeleteSkill(item)">
                     {{ isDeletingSkill(item.name) ? '删除中...' : '删除' }}
                   </button>
                 </div>
               </article>
             </div>
+            <div v-if="skillCards.length > 0" class="skills-inline-tip">
+              显示 {{ filteredSkillCards.length }} / {{ skillCards.length }} 个技能
+            </div>
+            <div v-if="notice.message" class="skills-notice" data-testid="skills-notice" :class="'is-' + notice.level">
+              {{ notice.message }}
+            </div>
+            <ul v-if="importFailures.length > 0" class="skills-failure-list" data-testid="skills-failure-list">
+              <li v-for="item in importFailures.slice(0, 5)" :key="item">{{ item }}</li>
+            </ul>
+            <div v-if="importFailures.length > 5" class="skills-inline-tip">
+              还有 {{ importFailures.length - 5 }} 条失败项
+            </div>
           </div>
         </div>
-        <div class="split-divider"></div>
-        <div class="split-right" data-testid="skills-editor-right">
-          <div class="section-header">编辑器</div>
-          <div class="panel-body skills-editor-panel" data-testid="skills-editor-panel">
+      </div>
+      <div
+        v-if="isEditorOpen"
+        class="modal-overlay skills-editor-overlay"
+        data-testid="skills-editor-modal-overlay"
+        tabindex="0"
+        @click.self="closeEditor"
+        @keydown.esc.prevent="closeEditor"
+      >
+        <div class="modal-box skills-editor-modal" role="dialog" aria-modal="true" data-testid="skills-editor-panel">
+          <div class="skills-editor-modal-head">
+            <div>
+              <div class="modal-title">编辑技能</div>
+              <div class="skills-inline-tip">系统会先生成一版摘要；你可以直接修改并保存到 SKILL.md 的 frontmatter。</div>
+            </div>
+            <button class="btn btn-ghost" data-testid="skills-editor-close-button" @click="closeEditor">关闭</button>
+          </div>
+          <div class="skills-editor-panel">
             <div class="skills-field">
               <label>技能名称</label>
               <input v-model="form.name" class="modal-input" data-testid="skills-editor-name-input" placeholder="例如：backend" />
@@ -608,7 +599,6 @@ export const SkillsPage = {
               <label>摘要（注入内容）</label>
               <textarea v-model="form.summary" class="modal-input" data-testid="skills-editor-summary-input" rows="3" placeholder="用于运行时注入的摘要，建议 1-3 句"></textarea>
               <div class="skills-inline-tip">摘要来源：{{ summarySourceLabel }}</div>
-              <div class="skills-inline-tip">系统会先生成一版摘要；你可以直接修改并保存到 SKILL.md 的 frontmatter。</div>
             </div>
             <div class="skills-field two-col">
               <div>
@@ -626,18 +616,10 @@ export const SkillsPage = {
               <div v-if="sourcePath" class="skills-inline-tip">来源文件：{{ sourcePath }}</div>
             </div>
             <div class="skills-actions-row" data-testid="skills-editor-actions">
+              <button class="btn btn-ghost" data-testid="skills-editor-cancel-button" @click="closeEditor">取消</button>
               <button class="btn btn-primary" data-testid="skills-save-button" :disabled="saving" @click="onSaveSkill">
                 {{ saving ? '保存中...' : '保存 Skill' }}
               </button>
-            </div>
-            <div v-if="notice.message" class="skills-notice" data-testid="skills-notice" :class="'is-' + notice.level">
-              {{ notice.message }}
-            </div>
-            <ul v-if="importFailures.length > 0" class="skills-failure-list" data-testid="skills-failure-list">
-              <li v-for="item in importFailures.slice(0, 5)" :key="item">{{ item }}</li>
-            </ul>
-            <div v-if="importFailures.length > 5" class="skills-inline-tip">
-              还有 {{ importFailures.length - 5 }} 条失败项
             </div>
           </div>
         </div>

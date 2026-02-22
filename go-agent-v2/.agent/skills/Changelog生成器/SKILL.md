@@ -1,7 +1,6 @@
 ---
 name: "Changelog生成器"
 description: "从 Git 提交历史自动生成用户友好的更新日志。支持 Conventional Commits 格式，将技术提交转换为客户可读的发布说明。"
-summary: "从 Git 提交历史自动生成用户友好的更新日志。支持 Conventional Commits 格式，将技术提交转换为客户可读的发布说明。"
 trigger_words: ["*"]
 force_words: ["git历史"]
 ---

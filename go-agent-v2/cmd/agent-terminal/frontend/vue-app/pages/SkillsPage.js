@@ -1,6 +1,7 @@
-import { computed, reactive, ref, watch } from '../../lib/vue.esm-browser.prod.js';
+import { computed, nextTick, reactive, ref, watch } from '../../lib/vue.esm-browser.prod.js';
 import { callAPI, selectProjectDirs } from '../services/api.js';
 import { logDebug, logInfo, logWarn } from '../services/log.js';
+import { renderAssistantMarkdown } from '../utils/assistant-markdown.js';
 
 function normalizeWordList(text) {
   const raw = (text || '').toString().trim();
@@ -170,6 +171,9 @@ export const SkillsPage = {
     const deletingSkillName = ref('');
     const searchQuery = ref('');
     const isEditorOpen = ref(false);
+    const isBodyEditing = ref(false);
+    const bodyEditorFocused = ref(false);
+    const bodyInputRef = ref(null);
 
     const form = reactive({
       name: '',
@@ -216,6 +220,12 @@ export const SkillsPage = {
       if (source === 'description') return '系统生成（基于描述）';
       if (source === 'generated') return '系统生成（基于正文）';
       return '系统生成';
+    });
+
+    const skillBodyMarkdownHtml = computed(() => {
+      const text = (form.body || '').toString().trim();
+      if (!text) return '<p>暂无内容，点击“编辑正文”开始编写。</p>';
+      return renderAssistantMarkdown(text);
     });
 
     function setNotice(level, message) {
@@ -345,8 +355,14 @@ export const SkillsPage = {
       form.triggerWordsText = '';
       form.forceWordsText = '';
       form.body = '';
+      isBodyEditing.value = true;
+      bodyEditorFocused.value = false;
       isEditorOpen.value = true;
       setNotice('info', '已打开新建表单，填写后点击保存。');
+      nextTick(() => {
+        const node = bodyInputRef.value;
+        if (node && typeof node.focus === 'function') node.focus();
+      });
     }
 
     async function onEditSkill(item) {
@@ -355,6 +371,8 @@ export const SkillsPage = {
       try {
         await readSkillFile(skillPath, item.name || '', item.summary || '', item.summary ? 'generated' : '');
         selectedSkillName.value = item.name || '';
+        isBodyEditing.value = false;
+        bodyEditorFocused.value = false;
         isEditorOpen.value = true;
         setNotice('info', `已加载技能：${item.name || ''}`);
       } catch (error) {
@@ -406,6 +424,29 @@ export const SkillsPage = {
 
     function closeEditor() {
       isEditorOpen.value = false;
+      isBodyEditing.value = false;
+      bodyEditorFocused.value = false;
+    }
+
+    function startBodyEdit() {
+      isBodyEditing.value = true;
+      nextTick(() => {
+        const node = bodyInputRef.value;
+        if (node && typeof node.focus === 'function') node.focus();
+      });
+    }
+
+    function finishBodyEdit() {
+      isBodyEditing.value = false;
+      bodyEditorFocused.value = false;
+    }
+
+    function onBodyFocus() {
+      bodyEditorFocused.value = true;
+    }
+
+    function onBodyBlur() {
+      bodyEditorFocused.value = false;
     }
 
     async function onSaveSkill() {
@@ -455,13 +496,21 @@ export const SkillsPage = {
       searchQuery,
       filteredSkillCards,
       isEditorOpen,
+      isBodyEditing,
+      bodyEditorFocused,
+      bodyInputRef,
       form,
       skillCards,
       onUploadSkill,
       onCreateSkill,
       onEditSkill,
       onSaveSkill,
+      skillBodyMarkdownHtml,
       closeEditor,
+      startBodyEdit,
+      finishBodyEdit,
+      onBodyFocus,
+      onBodyBlur,
       isDeletingSkill,
       onDeleteSkill,
     };
@@ -578,7 +627,7 @@ export const SkillsPage = {
         @click.self="closeEditor"
         @keydown.esc.prevent="closeEditor"
       >
-        <div class="modal-box skills-editor-modal" role="dialog" aria-modal="true" data-testid="skills-editor-panel">
+        <div class="modal-box skills-editor-modal" :class="{ 'is-body-expanded': isBodyEditing || bodyEditorFocused }" role="dialog" aria-modal="true" data-testid="skills-editor-panel">
           <div class="skills-editor-modal-head">
             <div>
               <div class="modal-title">编辑技能</div>
@@ -610,14 +659,51 @@ export const SkillsPage = {
                 <input v-model="form.forceWordsText" class="modal-input" data-testid="skills-editor-force-input" placeholder="紧急, 必须, 强制" />
               </div>
             </div>
-            <div class="skills-field">
-              <label>SKILL 内容（默认自动解析 MD，可手动编辑）</label>
-              <textarea v-model="form.body" class="modal-input skills-body-input" data-testid="skills-editor-body-input" placeholder="输入技能正文 Markdown"></textarea>
+            <div class="skills-field skills-field-body">
+              <div class="skills-body-head">
+                <label>SKILL 内容（默认自动解析 MD，可手动编辑）</label>
+                <div class="skills-body-head-actions">
+                  <button
+                    v-if="!isBodyEditing"
+                    class="btn btn-secondary btn-xs skills-body-toggle"
+                    data-testid="skills-editor-body-edit-button"
+                    @click="startBodyEdit"
+                  >
+                    编辑正文
+                  </button>
+                  <button
+                    v-else
+                    class="btn btn-ghost btn-xs skills-body-toggle"
+                    data-testid="skills-editor-body-preview-button"
+                    @click="finishBodyEdit"
+                  >
+                    预览正文
+                  </button>
+                </div>
+              </div>
+              <div
+                v-if="!isBodyEditing"
+                class="skills-body-preview chat-item-markdown codex-markdown-root"
+                data-testid="skills-editor-body-preview"
+                v-html="skillBodyMarkdownHtml"
+              ></div>
+              <textarea
+                v-else
+                ref="bodyInputRef"
+                v-model="form.body"
+                class="modal-input skills-body-input"
+                :class="{ 'is-expanded': isBodyEditing || bodyEditorFocused }"
+                data-testid="skills-editor-body-input"
+                placeholder="输入技能正文 Markdown"
+                @focus="onBodyFocus"
+                @blur="onBodyBlur"
+              ></textarea>
+              <div class="skills-inline-tip">点击“编辑正文”进入放大编辑区；切回“预览正文”查看 Markdown 渲染效果。</div>
               <div v-if="sourcePath" class="skills-inline-tip">来源文件：{{ sourcePath }}</div>
             </div>
             <div class="skills-actions-row" data-testid="skills-editor-actions">
               <button class="btn btn-ghost" data-testid="skills-editor-cancel-button" @click="closeEditor">取消</button>
-              <button class="btn btn-primary" data-testid="skills-save-button" :disabled="saving" @click="onSaveSkill">
+              <button class="btn btn-primary skills-save-btn" data-testid="skills-save-button" :disabled="saving" @click="onSaveSkill">
                 {{ saving ? '保存中...' : '保存 Skill' }}
               </button>
             </div>

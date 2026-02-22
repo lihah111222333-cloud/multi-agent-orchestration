@@ -3,6 +3,7 @@
  * 每个 widget 定义了一个 Vue 组件，用于渲染特定 type 的 spec。
  */
 import { h, defineComponent, ref, onMounted, onBeforeUnmount, watch, nextTick } from '../../lib/vue.esm-browser.prod.js';
+import { renderAssistantMarkdown } from '../utils/assistant-markdown.js';
 
 // ──── 递归渲染子 spec 的辅助函数 ────
 function renderChildren(children, JsonRenderer) {
@@ -234,6 +235,21 @@ const JrText = defineComponent({
         return () => {
             const s = props.spec || {};
             return h('p', { class: 'jr-root', style: { margin: 0, fontSize: '12px', lineHeight: '1.5' } }, s.text || '');
+        };
+    },
+});
+
+const JrMarkdown = defineComponent({
+    name: 'JrMarkdown',
+    props: { spec: Object },
+    setup(props) {
+        return () => {
+            const s = props.spec || {};
+            const html = renderAssistantMarkdown((s.text || '').toString());
+            return h('div', {
+                class: 'jr-root jr-markdown chat-item-markdown codex-markdown-root',
+                innerHTML: html,
+            });
         };
     },
 });
@@ -534,6 +550,7 @@ export const WIDGET_REGISTRY = {
     Progress: { component: JrProgress },
     Separator: { component: JrSeparator },
     Text: { component: JrText },
+    Markdown: { component: JrMarkdown },
     Chart: { component: JrChart },
     Button: { component: JrButton },
     Image: { component: JrImage },

@@ -2467,6 +2467,142 @@ body.is-row-resizing * {
   }
 }
 
+.ran-plan-card-json {
+  position: relative;
+}
+
+.ran-plan-card-json .jr-card {
+  border: 1px solid rgba(20, 184, 127, 0.52);
+  border-radius: 0.78rem;
+  overflow: hidden;
+  color: var(--color-text-foreground, #fff);
+  background:
+    radial-gradient(120% 120% at 0% 0%, rgba(16, 185, 129, 0.1), transparent 54%),
+    linear-gradient(180deg, rgba(8, 15, 21, 0.98), rgba(4, 9, 14, 0.98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 8px 20px rgba(0, 0, 0, 0.24);
+}
+
+.ran-plan-card-json.is-done .jr-card {
+  border-color: rgba(34, 197, 94, 0.56);
+}
+
+.ran-plan-card-json .jr-card-header {
+  padding: 8px 48px 7px 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.24);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.012));
+}
+
+.ran-plan-card-json .jr-card-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.72);
+}
+
+.ran-plan-card-json .jr-card-desc {
+  color: rgba(203, 213, 225, 0.72);
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.ran-plan-card-json .jr-card-body {
+  padding: 12px 14px 13px;
+  max-height: min(56vh, 680px);
+  overflow: auto;
+  gap: 10px;
+  background: linear-gradient(180deg, rgba(2, 6, 12, 0.35), rgba(2, 6, 12, 0.08));
+}
+
+.ran-plan-card-json .jr-stack.jr-stack-row {
+  align-items: center;
+}
+
+.ran-plan-card-json .jr-stack.jr-stack-row > .jr-root {
+  margin: 0;
+}
+
+.ran-plan-card-json .jr-markdown {
+  margin: 0;
+}
+
+.ran-plan-card-json .jr-markdown.chat-item-markdown > p:first-child {
+  font-weight: 600;
+  color: #e2fced;
+}
+
+.ran-plan-card-json .jr-markdown.chat-item-markdown h1,
+.ran-plan-card-json .jr-markdown.chat-item-markdown h2,
+.ran-plan-card-json .jr-markdown.chat-item-markdown h3,
+.ran-plan-card-json .jr-markdown.chat-item-markdown h4 {
+  color: #f1f5f9;
+}
+
+.ran-plan-card-json .jr-markdown.chat-item-markdown ol,
+.ran-plan-card-json .jr-markdown.chat-item-markdown ul {
+  padding-left: 1.35em;
+}
+
+.ran-plan-card-json .jr-markdown.chat-item-markdown li {
+  line-height: 1.62;
+}
+
+.ran-plan-card-json .jr-markdown.chat-item-markdown li + li {
+  margin-top: 7px;
+}
+
+.ran-plan-card-json .jr-markdown.chat-item-markdown li::marker {
+  color: rgba(110, 231, 183, 0.95);
+}
+
+.ran-plan-card-json .jr-markdown.chat-item-markdown .chat-md-inline-code {
+  border-color: rgba(45, 212, 191, 0.28);
+  background: rgba(15, 118, 110, 0.16);
+  color: #d1fae5;
+}
+
+.ran-plan-card-json .jr-markdown.chat-item-markdown .chat-md-code {
+  border-color: rgba(45, 212, 191, 0.24);
+  background: rgba(2, 6, 23, 0.72);
+}
+
+.ran-plan-card-json__copy {
+  position: absolute;
+  top: 7px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.42);
+  color: rgba(226, 232, 240, 0.75);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+
+.ran-plan-card-json__copy:hover:not(:disabled) {
+  color: #f8fafc;
+  border-color: rgba(148, 163, 184, 0.5);
+  background: rgba(30, 41, 59, 0.62);
+  transform: translateY(-1px);
+}
+
+.ran-plan-card-json__copy:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ran-plan-card-json__copy-icon {
+  width: 13px;
+  height: 13px;
+}
+
 .chat-item.process.kind-tool .chat-process-line {
   border-left-color: var(--color-accent-purple, #ad7bf9);
   background: rgba(173, 123, 249, 0.06);
@@ -2480,8 +2616,16 @@ body.is-row-resizing * {
 }
 
 .chat-item.process.kind-plan .chat-process-line {
-  border-left-color: var(--assistant-accent);
-  background: var(--assistant-surface);
+  width: min(86%, 980px);
+  padding: 2px 0 4px;
+  border-left-color: transparent;
+  background: transparent;
+  border-radius: 0;
+}
+
+.chat-item.process.kind-plan .chat-process-line:hover {
+  background: transparent;
+  border-left-color: transparent;
 }
 
 .chat-item.process.kind-approval .chat-process-line {

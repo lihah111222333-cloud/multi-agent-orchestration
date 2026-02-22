@@ -466,6 +466,56 @@ export const ChatTimeline = {
       }
     }
 
+    async function copyPlanText(text) {
+      const target = (text || '').toString().trim();
+      if (!target) return;
+      const copied = await copyTextToClipboard(target);
+      if (copied) {
+        logInfo('ui', 'timeline.plan_text_copied', { length: target.length });
+      } else {
+        logWarn('ui', 'timeline.plan_text_copy_failed', { length: target.length });
+      }
+    }
+
+    function planCardSpec(item) {
+      const status = stateLabel(item) || (item?.done ? '完成' : '进行中');
+      const timeText = formatTime(item?.ts);
+      const children = [];
+      const metaChildren = [
+        { type: 'Badge', text: status, variant: item?.done ? 'success' : 'primary' },
+      ];
+      if (timeText) {
+        metaChildren.push({ type: 'Text', text: timeText });
+      }
+      children.push({ type: 'Stack', direction: 'row', gap: 8, children: metaChildren });
+      children.push({ type: 'Separator' });
+
+      const rawText = (item?.text || '').toString();
+      if (itemHasSpec(rawText)) {
+        const parts = splitBySpec(rawText);
+        parts.forEach((part) => {
+          if (part?.type === 'text' && (part.content || '').toString().trim()) {
+            children.push({ type: 'Markdown', text: part.content });
+            return;
+          }
+          if (part?.type === 'spec' && part.spec && typeof part.spec === 'object') {
+            children.push(part.spec);
+          }
+        });
+      } else if (rawText.trim()) {
+        children.push({ type: 'Markdown', text: rawText });
+      } else {
+        children.push({ type: 'Text', text: '(empty plan)' });
+      }
+
+      return {
+        type: 'Card',
+        title: 'PLAN',
+        description: item?.done ? '已完成' : '进行中',
+        children,
+      };
+    }
+
     function bubbleRole(item) {
       if (item?.kind === 'user') return 'role-user';
       if (item?.kind === 'assistant') return 'role-assistant';
@@ -621,6 +671,8 @@ export const ChatTimeline = {
       attachmentHoverStyle,
       attachmentHoverPreview,
       copyFilePath,
+      copyPlanText,
+      planCardSpec,
       itemHasSpec,
       splitBySpec,
       showAgentPresence,
@@ -722,7 +774,7 @@ export const ChatTimeline = {
         </template>
 
         <section v-else class="chat-process-line">
-          <header v-if="item.kind !== 'thinking' && item.kind !== 'command'" class="chat-process-head" :class="{ 'chat-process-head-file': item.kind === 'file' }">
+          <header v-if="item.kind !== 'thinking' && item.kind !== 'command' && item.kind !== 'plan'" class="chat-process-head" :class="{ 'chat-process-head-file': item.kind === 'file' }">
             <template v-if="item.kind === 'file'">
               <span class="chat-process-kind-icon" title="文件" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none">
@@ -772,8 +824,27 @@ export const ChatTimeline = {
             <time class="chat-process-time">{{ formatTime(item.ts) }}</time>
           </header>
 
-          <template v-if="item.kind === 'thinking' || item.kind === 'plan' || item.kind === 'error'">
+          <template v-if="item.kind === 'thinking' || item.kind === 'error'">
             <pre class="chat-process-text" :class="{ 'loading-shimmer': item.kind === 'thinking' && !item.done }">{{ item.text }}</pre>
+          </template>
+
+          <template v-else-if="item.kind === 'plan'">
+            <div class="ran-plan-card-json" :class="{ 'is-done': item.done }" @click="onAssistantBodyClick">
+              <JsonRenderer :spec="planCardSpec(item)" />
+              <button
+                class="ran-plan-card-json__copy"
+                type="button"
+                :title="'复制计划文本'"
+                aria-label="复制计划文本"
+                :disabled="!((item.text || '').toString().trim())"
+                @click.stop="copyPlanText(item.text)"
+              >
+                <svg class="ran-plan-card-json__copy-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <rect x="9" y="9" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.8"></rect>
+                  <rect x="5" y="5" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.8"></rect>
+                </svg>
+              </button>
+            </div>
           </template>
 
           <template v-else-if="item.kind === 'command'">

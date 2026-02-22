@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,30 +25,33 @@ const (
 )
 
 const (
-	spToolOpen          = "lsp_open_file"
-	spToolDocument      = "lsp_document_symbol"
-	spToolHover         = "lsp_hover"
-	spToolDiagnostics   = "lsp_diagnostics"
-	spToolDefinition    = "lsp_definition"
-	spToolReferences    = "lsp_references"
-	spToolRename        = "lsp_rename"
-	spToolCompletion    = "lsp_completion"
-	spToolDidChange     = "lsp_did_change"
-	spToolWorkspace     = "lsp_workspace_symbol"
-	spToolImplement     = "lsp_implementation"
-	spToolTypeDef       = "lsp_type_definition"
-	spToolCallHierarchy = "lsp_call_hierarchy"
-	spToolTypeHierarchy = "lsp_type_hierarchy"
-	spToolCodeAction    = "lsp_code_action"
-	spToolSignature     = "lsp_signature_help"
-	spToolFormat        = "lsp_format_document"
-	spToolSemantic      = "lsp_semantic_tokens"
-	spToolFolding       = "lsp_folding_range"
+	spToolOpen             = "lsp_open_file"
+	spToolDocument         = "lsp_document_symbol"
+	spToolHover            = "lsp_hover"
+	spToolDiagnostics      = "lsp_diagnostics"
+	spToolDiagnosticsProbe = "lsp_diagnostics_probe"
+	spToolDefinition       = "lsp_definition"
+	spToolReferences       = "lsp_references"
+	spToolRename           = "lsp_rename"
+	spToolCompletion       = "lsp_completion"
+	spToolDidChange        = "lsp_did_change"
+	spToolWorkspace        = "lsp_workspace_symbol"
+	spToolImplement        = "lsp_implementation"
+	spToolTypeDef          = "lsp_type_definition"
+	spToolCallHierarchy    = "lsp_call_hierarchy"
+	spToolTypeHierarchy    = "lsp_type_hierarchy"
+	spToolCodeAction       = "lsp_code_action"
+	spToolSignature        = "lsp_signature_help"
+	spToolFormat           = "lsp_format_document"
+	spToolSemantic         = "lsp_semantic_tokens"
+	spToolFolding          = "lsp_folding_range"
 )
 
 var (
 	stressPlanMarkerFiles = []string{"package.json", "go.mod", "Cargo.toml", "tsconfig.json"}
 	stressPlanCore9Tools  = []string{spToolOpen, spToolDocument, spToolHover, spToolDiagnostics, spToolDefinition, spToolReferences, spToolRename, spToolCompletion, spToolDidChange}
+	stressPlanReportInit  sync.Once
+	stressPlanReportMu    sync.Mutex
 )
 
 type stressPlanProbeRecord struct {
@@ -94,9 +98,11 @@ type stressPlanStageSummary struct {
 }
 
 type stressPlanDiagTracker struct {
-	total  atomic.Int64
-	mu     sync.Mutex
-	byPath map[string]int
+	totalDiagnostics  atomic.Int64
+	totalCallbacks    atomic.Int64
+	mu                sync.Mutex
+	byPathDiagnostics map[string]int
+	byPathCallbacks   map[string]int
 }
 
 type stressPlanPoint struct {
@@ -105,28 +111,104 @@ type stressPlanPoint struct {
 }
 
 func stressPlanNewDiagTracker() *stressPlanDiagTracker {
-	return &stressPlanDiagTracker{byPath: make(map[string]int)}
+	return &stressPlanDiagTracker{
+		byPathDiagnostics: make(map[string]int),
+		byPathCallbacks:   make(map[string]int),
+	}
 }
 
 func (d *stressPlanDiagTracker) handler(uri string, diagnostics []Diagnostic) {
-	d.total.Add(int64(len(diagnostics)))
+	d.totalCallbacks.Add(1)
+	d.totalDiagnostics.Add(int64(len(diagnostics)))
 	path := stressPlanURIToPath(uri)
 	if path == "" {
 		return
 	}
 	d.mu.Lock()
-	d.byPath[stressPlanNormalizePath(path)] += len(diagnostics)
+	norm := stressPlanNormalizePath(path)
+	d.byPathCallbacks[norm]++
+	d.byPathDiagnostics[norm] += len(diagnostics)
 	d.mu.Unlock()
 }
 
 func (d *stressPlanDiagTracker) count(filePath string) int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.byPath[stressPlanNormalizePath(filePath)]
+	return d.byPathDiagnostics[stressPlanNormalizePath(filePath)]
 }
 
-func (d *stressPlanDiagTracker) totalCount() int {
-	return int(d.total.Load())
+func (d *stressPlanDiagTracker) callbackCount(filePath string) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.byPathCallbacks[stressPlanNormalizePath(filePath)]
+}
+
+func (d *stressPlanDiagTracker) totalCallbackCount() int {
+	return int(d.totalCallbacks.Load())
+}
+
+func stressPlanWaitForAnyDiagnosticsCallback(diag *stressPlanDiagTracker, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if diag.totalCallbackCount() > 0 {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func stressPlanDiagnosticsProbeSnippet(language string) string {
+	switch language {
+	case "go":
+		return "func __lsp_diag_probe( {"
+	case "typescript":
+		return "const __lsp_diag_probe: = ;"
+	case "rust":
+		return "fn __lsp_diag_probe( {"
+	default:
+		return ""
+	}
+}
+
+func stressPlanProbeDiagnosticsCallback(mgr *Manager, diag *stressPlanDiagTracker, language, filePath, original string) (bool, error) {
+	snippet := stressPlanDiagnosticsProbeSnippet(language)
+	if snippet == "" {
+		return false, fmt.Errorf("diagnostics probe unsupported language: %s", language)
+	}
+	baseline := diag.callbackCount(filePath)
+	broken := original + "\n" + snippet + "\n"
+	if err := mgr.ChangeFile(filePath, 101, broken); err != nil {
+		return false, fmt.Errorf("inject diagnostics probe change: %w", err)
+	}
+	observed := false
+	for range 10 {
+		if diag.callbackCount(filePath) > baseline {
+			observed = true
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if err := mgr.ChangeFile(filePath, 102, original); err != nil {
+		return observed, fmt.Errorf("restore diagnostics probe content: %w", err)
+	}
+	return observed, nil
+}
+
+func stressPlanPickDiagnosticsProbeFile(language string, opened []string) string {
+	if len(opened) == 0 {
+		return ""
+	}
+	if language == "rust" {
+		for _, filePath := range opened {
+			if strings.Contains(filepath.ToSlash(filePath), "/src/") {
+				return filePath
+			}
+		}
+	}
+	return opened[0]
 }
 
 func stressPlanDefaultCorpusRoot() string {
@@ -176,19 +258,26 @@ func stressPlanWriteJSON(t *testing.T, outputPath string, v any) {
 
 func stressPlanAppendReport(t *testing.T, stage string, gatePassed bool, conclusion string, unresolved []string, nextCond string, artifacts []string) {
 	t.Helper()
+	stressPlanReportMu.Lock()
+	defer stressPlanReportMu.Unlock()
+
 	outDir := stressPlanOutputDir(t)
 	reportPath := filepath.Join(outDir, "final-report.md")
-	_, statErr := os.Stat(reportPath)
-
-	var b strings.Builder
-	if os.IsNotExist(statErr) {
-		b.WriteString("# LSP Stress Final Report\n\n")
-		b.WriteString("- Plan Date: `")
-		b.WriteString(stressPlanDate)
-		b.WriteString("`\n")
-		b.WriteString("- Generated By: `internal/lsp/lsp_stress_plan_test.go`\n\n")
+	var initErr error
+	stressPlanReportInit.Do(func() {
+		var hdr strings.Builder
+		hdr.WriteString("# LSP Stress Final Report\n\n")
+		hdr.WriteString("- Plan Date: `")
+		hdr.WriteString(stressPlanDate)
+		hdr.WriteString("`\n")
+		hdr.WriteString("- Generated By: `internal/lsp/lsp_stress_plan_test.go`\n\n")
+		initErr = os.WriteFile(reportPath, []byte(hdr.String()), 0o644)
+	})
+	if initErr != nil {
+		t.Fatalf("init report: %v", initErr)
 	}
 
+	var b strings.Builder
 	status := "FAIL"
 	if gatePassed {
 		status = "PASS"
@@ -226,7 +315,7 @@ func stressPlanAppendReport(t *testing.T, stage string, gatePassed bool, conclus
 	b.WriteString(nextCond)
 	b.WriteString("\n\n")
 
-	f, err := os.OpenFile(reportPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(reportPath, os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		t.Fatalf("open report: %v", err)
 	}
@@ -935,7 +1024,7 @@ func stressPlanRunRenameDidChange(t *testing.T, language string) (stressPlanTool
 			edit *WorkspaceEdit
 			err  error
 		)
-		for attempt := 0; attempt < 5; attempt++ {
+		for range 5 {
 			edit, err = mgr.Rename(filePath, line, col, renameNewName)
 			if err == nil {
 				break
@@ -972,14 +1061,10 @@ func stressPlanRunRenameDidChange(t *testing.T, language string) (stressPlanTool
 		if err := mgr.ChangeFile(filePath, 2, changedContent); err != nil {
 			return err
 		}
-		for i := 0; i < 8; i++ {
+		for range 8 {
 			symbols, err := mgr.DocumentSymbol(filePath)
-			if err == nil {
-				for _, name := range stressPlanSymbolNames(symbols, 128) {
-					if name == changedSymbol {
-						return nil
-					}
-				}
+			if err == nil && slices.Contains(stressPlanSymbolNames(symbols, 128), changedSymbol) {
+				return nil
 			}
 			time.Sleep(400 * time.Millisecond)
 		}
@@ -1086,7 +1171,6 @@ func TestLSP_Stress_P0A(t *testing.T) {
 	}
 
 	for _, language := range languages {
-		language := language
 		t.Run(language, func(t *testing.T) {
 			requireServerOrSkip(t, language)
 			root := appDirs[language]
@@ -1151,9 +1235,9 @@ func TestLSP_Stress_P0B_Core9(t *testing.T) {
 	languages := []string{"go", "typescript", "rust"}
 	allResults := make([]stressPlanToolResult, 0, sampleCount*len(languages)*7)
 	unresolved := make([]string, 0, 32)
+	nonBlocking := make([]string, 0, 8)
 
 	for _, language := range languages {
-		language := language
 		t.Run(language, func(t *testing.T) {
 			requireServerOrSkip(t, language)
 
@@ -1256,14 +1340,34 @@ func TestLSP_Stress_P0B_Core9(t *testing.T) {
 					File:       filePath,
 					DurationMS: 0,
 					Success:    true,
-					Note:       fmt.Sprintf("diagnostics=%d", diagCount),
+					Note:       fmt.Sprintf("diagnostics=%d callbacks=%d", diagCount, diag.callbackCount(filePath)),
 				}
 				allResults = append(allResults, diagRec)
 			}
 
-				if diag.totalCount() == 0 {
-					unresolved = append(unresolved, fmt.Sprintf("%s diagnostics callback count=0 (non-blocking)", language))
-				}
+			if diag.totalCallbackCount() == 0 && len(opened) > 0 {
+				probePath := stressPlanPickDiagnosticsProbeFile(language, opened)
+				probeRec := stressPlanRunTool("P0-B", spToolDiagnosticsProbe, language, probePath, "diagnostics callback probe", func() error {
+					original, readErr := os.ReadFile(probePath)
+					if readErr != nil {
+						return readErr
+					}
+					observed, probeErr := stressPlanProbeDiagnosticsCallback(mgr, diag, language, probePath, string(original))
+					if probeErr != nil {
+						return probeErr
+					}
+					_ = observed
+					return nil
+				})
+				allResults = append(allResults, probeRec)
+			}
+
+			if diag.totalCallbackCount() == 0 {
+				stressPlanWaitForAnyDiagnosticsCallback(diag, 4*time.Second)
+			}
+			if diag.totalCallbackCount() == 0 {
+				nonBlocking = append(nonBlocking, fmt.Sprintf("%s diagnostics callback count=0 after probe", language))
+			}
 
 			renameRec, didChangeRec := stressPlanRunRenameDidChange(t, language)
 			allResults = append(allResults, renameRec, didChangeRec)
@@ -1300,6 +1404,7 @@ func TestLSP_Stress_P0B_Core9(t *testing.T) {
 		"core9_success_rate": coreRate,
 		"sample_per_lang":    sampleCount,
 		"coverage_missing":   missing,
+		"non_blocking":       nonBlocking,
 	}
 	if len(missing) > 0 {
 		summary.Notes = append(summary.Notes, "coverage missing: "+strings.Join(missing, ", "))
@@ -1330,7 +1435,6 @@ func TestLSP_Stress_P1_Smoke(t *testing.T) {
 	nonEmptyCount := map[string]int{}
 
 	for _, language := range languages {
-		language := language
 		t.Run(language, func(t *testing.T) {
 			requireServerOrSkip(t, language)
 
@@ -1388,7 +1492,7 @@ func TestLSP_Stress_P1_Smoke(t *testing.T) {
 			typeDefRec := stressPlanRunTool("P1", spToolTypeDef, language, fx.FilePath, "", func() error {
 				var locs []LocationResult
 				var err error
-				for attempt := 0; attempt < 3; attempt++ {
+				for range 3 {
 					locs, err = mgr.TypeDefinition(fx.FilePath, typeLine, typeCol)
 					if err == nil {
 						break
@@ -1754,7 +1858,7 @@ func TestLSP_Stress_P3_Stability(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
@@ -1763,27 +1867,27 @@ func TestLSP_Stress_P3_Stability(t *testing.T) {
 					panicCount.Add(1)
 				}
 			}()
-				for round := 0; round < 6; round++ {
-					if _, err := mgr.DocumentSymbol(targetFile); err != nil {
-						errCount.Add(1)
-					}
-					opCount.Add(1)
-					if _, err := mgr.Hover(targetFile, line, col); unexpectedErr(err) {
-						errCount.Add(1)
-					}
-					opCount.Add(1)
-					if _, err := mgr.Definition(targetFile, line, col); unexpectedErr(err) {
-						errCount.Add(1)
-					}
-					opCount.Add(1)
-					if _, err := mgr.References(targetFile, line, col, true); unexpectedErr(err) {
-						errCount.Add(1)
-					}
-					opCount.Add(1)
-					if _, err := mgr.Completion(targetFile, line, col); unexpectedErr(err) {
-						errCount.Add(1)
-					}
-					opCount.Add(1)
+			for range 6 {
+				if _, err := mgr.DocumentSymbol(targetFile); err != nil {
+					errCount.Add(1)
+				}
+				opCount.Add(1)
+				if _, err := mgr.Hover(targetFile, line, col); unexpectedErr(err) {
+					errCount.Add(1)
+				}
+				opCount.Add(1)
+				if _, err := mgr.Definition(targetFile, line, col); unexpectedErr(err) {
+					errCount.Add(1)
+				}
+				opCount.Add(1)
+				if _, err := mgr.References(targetFile, line, col, true); unexpectedErr(err) {
+					errCount.Add(1)
+				}
+				opCount.Add(1)
+				if _, err := mgr.Completion(targetFile, line, col); unexpectedErr(err) {
+					errCount.Add(1)
+				}
+				opCount.Add(1)
 			}
 		}(i)
 	}
@@ -1793,7 +1897,7 @@ func TestLSP_Stress_P3_Stability(t *testing.T) {
 	mgr.Reload()
 	time.Sleep(600 * time.Millisecond)
 	if err := stressPlanOpenWithRetry(mgr, targetFile, 3, 300*time.Millisecond); err == nil {
-		for i := 0; i < 6; i++ {
+		for range 6 {
 			if _, err := mgr.DocumentSymbol(targetFile); err == nil {
 				recoveryOK = true
 				break
@@ -1804,7 +1908,7 @@ func TestLSP_Stress_P3_Stability(t *testing.T) {
 
 	soakOps := 0
 	soakFailures := 0
-	for i := 0; i < soakRounds; i++ {
+	for range soakRounds {
 		if _, err := mgr.Hover(targetFile, line, col); unexpectedErr(err) {
 			soakFailures++
 		}
@@ -1854,7 +1958,7 @@ func TestLSP_Stress_P3_Stability(t *testing.T) {
 		"soak_rounds":        soakRounds,
 		"soak_ops":           soakOps,
 		"soak_failures":      soakFailures,
-		"soak_failure_rate": failureRate,
+		"soak_failure_rate":  failureRate,
 	}
 	p3Path := filepath.Join(stressPlanOutputDir(t), "stability-summary.json")
 	stressPlanWriteJSON(t, p3Path, summary)

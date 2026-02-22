@@ -575,7 +575,7 @@ func (s *Server) lspRename(args json.RawMessage) string {
 	if err != nil {
 		return "error: " + err.Error()
 	}
-	if edit == nil || len(edit.Changes) == 0 {
+	if edit == nil || (len(edit.Changes) == 0 && len(edit.DocumentChanges) == 0) {
 		return "no edits produced"
 	}
 	data, _ := json.Marshal(edit)

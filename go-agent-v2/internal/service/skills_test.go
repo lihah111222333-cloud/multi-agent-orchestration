@@ -10,12 +10,40 @@ import (
 	"unicode/utf8"
 )
 
+func writeSkillFixture(t *testing.T, svc *SkillService, name, content string) {
+	t.Helper()
+	if _, err := svc.WriteSkillContent(name, content); err != nil {
+		t.Fatalf("WriteSkillContent(%q): %v", name, err)
+	}
+}
+
+func TestWriteSkillContentUsesByIDStorageForTraversalLikeName(t *testing.T) {
+	tmp := t.TempDir()
+	svc := NewSkillService(tmp)
+
+	path, err := svc.WriteSkillContent("../qa/tdd", "# traversal-safe skill")
+	if err != nil {
+		t.Fatalf("WriteSkillContent error: %v", err)
+	}
+	if !strings.HasPrefix(path, filepath.Join(tmp, "by-id")+string(filepath.Separator)) {
+		t.Fatalf("path=%q, want under by-id root", path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected SKILL.md to exist at hashed path: %v", err)
+	}
+
+	got, err := svc.ReadSkillContent("../qa/tdd")
+	if err != nil {
+		t.Fatalf("ReadSkillContent traversal name error: %v", err)
+	}
+	if !strings.Contains(got, "traversal-safe") {
+		t.Fatalf("content=%q, want include traversal-safe", got)
+	}
+}
+
 func TestListSkillsParsesMetadata(t *testing.T) {
 	tmp := t.TempDir()
-	dir := filepath.Join(tmp, "backend")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	svc := NewSkillService(tmp)
 	content := `---
 description: "backend skill"
 summary: "用于后端实现与代码审查的摘要"
@@ -25,11 +53,7 @@ force_words:
   - tdd
 ---
 # Backend`
-	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
-		t.Fatalf("write SKILL.md: %v", err)
-	}
-
-	svc := NewSkillService(tmp)
+	writeSkillFixture(t, svc, "backend", content)
 	skills, err := svc.ListSkills()
 	if err != nil {
 		t.Fatalf("ListSkills error: %v", err)
@@ -54,10 +78,7 @@ force_words:
 
 func TestListSkillsParsesTagsAndAliasesAsTriggerWords(t *testing.T) {
 	tmp := t.TempDir()
-	dir := filepath.Join(tmp, "grpc")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	svc := NewSkillService(tmp)
 	content := `---
 description: "grpc skill"
 tags: [gRPC, protobuf, 微服务]
@@ -66,11 +87,7 @@ aliases:
   - "@grpc-service"
 ---
 # gRPC`
-	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
-		t.Fatalf("write SKILL.md: %v", err)
-	}
-
-	svc := NewSkillService(tmp)
+	writeSkillFixture(t, svc, "grpc", content)
 	skills, err := svc.ListSkills()
 	if err != nil {
 		t.Fatalf("ListSkills error: %v", err)
@@ -90,21 +107,14 @@ aliases:
 
 func TestListSkillsAddsExplicitTriggerFromFrontmatterName(t *testing.T) {
 	tmp := t.TempDir()
-	dir := filepath.Join(tmp, "go-backend-tdd")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	svc := NewSkillService(tmp)
 	content := `---
 name: "测试驱动开发"
 description: "tdd skill"
 aliases: ["@TDD", "@测试驱动"]
 ---
 # TDD`
-	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
-		t.Fatalf("write SKILL.md: %v", err)
-	}
-
-	svc := NewSkillService(tmp)
+	writeSkillFixture(t, svc, "go-backend-tdd", content)
 	skills, err := svc.ListSkills()
 	if err != nil {
 		t.Fatalf("ListSkills error: %v", err)
@@ -121,20 +131,13 @@ aliases: ["@TDD", "@测试驱动"]
 
 func TestListSkillsUsesFrontmatterNameAsDisplayName(t *testing.T) {
 	tmp := t.TempDir()
-	dir := filepath.Join(tmp, "go-backend-development")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	svc := NewSkillService(tmp)
 	content := `---
 name: "测试驱动开发"
 description: "tdd skill"
 ---
 # TDD`
-	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
-		t.Fatalf("write SKILL.md: %v", err)
-	}
-
-	svc := NewSkillService(tmp)
+	writeSkillFixture(t, svc, "go-backend-development", content)
 	skills, err := svc.ListSkills()
 	if err != nil {
 		t.Fatalf("ListSkills error: %v", err)
@@ -149,21 +152,14 @@ description: "tdd skill"
 
 func TestReadSkillContentResolvesFrontmatterName(t *testing.T) {
 	tmp := t.TempDir()
-	dir := filepath.Join(tmp, "go-backend-development")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	svc := NewSkillService(tmp)
 	content := `---
 name: "测试驱动开发"
 description: "tdd skill"
 ---
 # TDD
 Body`
-	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
-		t.Fatalf("write SKILL.md: %v", err)
-	}
-
-	svc := NewSkillService(tmp)
+	writeSkillFixture(t, svc, "go-backend-development", content)
 
 	got, err := svc.ReadSkillContent("测试驱动开发")
 	if err != nil {
@@ -184,10 +180,7 @@ Body`
 
 func TestReadSkillDigestIncludesSectionRefs(t *testing.T) {
 	tmp := t.TempDir()
-	dir := filepath.Join(tmp, "brand")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	svc := NewSkillService(tmp)
 	content := `---
 summary: "品牌摘要"
 ---
@@ -195,11 +188,7 @@ summary: "品牌摘要"
 ## 第一部分：色彩系统
 ## 第二部分：字体系统
 `
-	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
-		t.Fatalf("write SKILL.md: %v", err)
-	}
-
-	svc := NewSkillService(tmp)
+	writeSkillFixture(t, svc, "brand", content)
 	digest, err := svc.ReadSkillDigest("brand")
 	if err != nil {
 		t.Fatalf("ReadSkillDigest error: %v", err)

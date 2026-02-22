@@ -11,6 +11,32 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/service"
 )
 
+func seededSkillService(t *testing.T, root string) *service.SkillService {
+	t.Helper()
+	svc := service.NewSkillService(root)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("seededSkillService readdir %s: %v", root, err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if name == "" || name == "by-id" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		sourceDir := filepath.Join(root, name)
+		if _, statErr := os.Stat(filepath.Join(sourceDir, "SKILL.md")); statErr != nil {
+			continue
+		}
+		if _, importErr := svc.ImportSkillDirectory(sourceDir, name); importErr != nil {
+			t.Fatalf("seededSkillService import %s: %v", sourceDir, importErr)
+		}
+	}
+	return svc
+}
+
 func TestSkillsListUsesConfiguredDirectory(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmp, "backend"), 0o755); err != nil {
@@ -36,7 +62,7 @@ summary: "tdd summary"
 
 	srv := &Server{
 		skillsDir: tmp,
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 	}
 	raw, err := srv.skillsList(context.Background(), nil)
 	if err != nil {
@@ -51,6 +77,21 @@ summary: "tdd summary"
 	}
 	if skills[0]["summary"] != "backend summary" || skills[1]["summary"] != "tdd summary" {
 		t.Fatalf("skillsList summaries=%v", []any{skills[0]["summary"], skills[1]["summary"]})
+	}
+}
+
+func TestSkillsDirectoryDefaultsToAppCache(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	srv := &Server{}
+	got := srv.skillsDirectory()
+	want := filepath.Join(tmpHome, ".multi-agent", "skills-cache")
+	if got != want {
+		t.Fatalf("skillsDirectory=%q, want=%q", got, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("default app cache skills dir should exist: %v", err)
 	}
 }
 
@@ -70,7 +111,7 @@ summary: "tdd summary"
 
 	srv := &Server{
 		skillsDir: tmp,
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 	}
 	raw, err := srv.skillsList(context.Background(), nil)
 	if err != nil {
@@ -86,39 +127,19 @@ summary: "tdd summary"
 	}
 }
 
-func TestSkillsConfigWriteAgentSkillsLifecycle(t *testing.T) {
-	srv := &Server{}
+func TestSkillsConfigWriteRejectsDeprecatedAgentMode(t *testing.T) {
+	tmp := t.TempDir()
+	srv := &Server{
+		skillsDir: tmp,
+		skillSvc:  service.NewSkillService(tmp),
+	}
 	ctx := context.Background()
 
-	raw, err := srv.skillsConfigWriteTyped(ctx, skillsConfigWriteParams{
-		AgentID: "thread-1",
-		Skills:  []string{" backend ", "TDD", "backend"},
+	_, err := srv.skillsConfigWriteTyped(ctx, skillsConfigWriteParams{
+		Content: "name: backend",
 	})
-	if err != nil {
-		t.Fatalf("skillsConfigWriteTyped set error: %v", err)
-	}
-	resp := raw.(map[string]any)
-	gotSkills := resp["skills"].([]string)
-	wantSkills := []string{"backend", "TDD"}
-	if !reflect.DeepEqual(gotSkills, wantSkills) {
-		t.Fatalf("configured skills=%v, want=%v", gotSkills, wantSkills)
-	}
-	if bound, _ := resp["session_bound"].(bool); bound {
-		t.Fatalf("session_bound=%v, want=false", resp["session_bound"])
-	}
-	if got := srv.GetAgentSkills("thread-1"); len(got) != 0 {
-		t.Fatalf("agent binding should be disabled, got=%v", got)
-	}
-
-	_, err = srv.skillsConfigWriteTyped(ctx, skillsConfigWriteParams{
-		AgentID: "thread-1",
-		Skills:  []string{},
-	})
-	if err != nil {
-		t.Fatalf("skillsConfigWriteTyped clear error: %v", err)
-	}
-	if got := srv.GetAgentSkills("thread-1"); len(got) != 0 {
-		t.Fatalf("agent binding should stay empty, got=%v", got)
+	if err == nil || !strings.Contains(err.Error(), "name is required") {
+		t.Fatalf("expected name validation error, got=%v", err)
 	}
 }
 
@@ -126,37 +147,66 @@ func TestSkillsConfigWriteAndRemoteWriteUseConfiguredDirectory(t *testing.T) {
 	tmp := t.TempDir()
 	srv := &Server{
 		skillsDir:   tmp,
+		skillSvc:    service.NewSkillService(tmp),
 		agentSkills: make(map[string][]string),
 	}
 	ctx := context.Background()
 
-	_, err := srv.skillsConfigWriteTyped(ctx, skillsConfigWriteParams{
+	raw, err := srv.skillsConfigWriteTyped(ctx, skillsConfigWriteParams{
 		Name:    "backend",
 		Content: "name: backend",
 	})
 	if err != nil {
 		t.Fatalf("skillsConfigWriteTyped file mode error: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tmp, "backend", "SKILL.md")); err != nil {
+	path := raw.(map[string]any)["path"].(string)
+	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected skill file in configured dir: %v", err)
 	}
-
-	if _, err := srv.skillsRemoteWriteTyped(ctx, skillsRemoteWriteParams{
-		Name:    "../bad",
-		Content: "x",
-	}); err == nil {
-		t.Fatalf("skillsRemoteWriteTyped should reject invalid skill name")
+	if !strings.Contains(path, filepath.Join(tmp, "by-id")) {
+		t.Fatalf("skillsConfigWriteTyped path=%q, want under by-id", path)
 	}
 
-	_, err = srv.skillsRemoteWriteTyped(ctx, skillsRemoteWriteParams{
+	raw, err = srv.skillsRemoteWriteTyped(ctx, skillsRemoteWriteParams{
+		Name:    "qa/tdd",
+		Content: "x",
+	})
+	if err != nil {
+		t.Fatalf("skillsRemoteWriteTyped nested path error: %v", err)
+	}
+	path = raw.(map[string]any)["path"].(string)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected nested skill file for slash name: %v", err)
+	}
+	if !strings.Contains(path, filepath.Join(tmp, "by-id")) {
+		t.Fatalf("skillsRemoteWriteTyped slash path=%q, want under by-id", path)
+	}
+
+	raw, err = srv.skillsRemoteWriteTyped(ctx, skillsRemoteWriteParams{
 		Name:    "tdd",
 		Content: "name: tdd",
 	})
 	if err != nil {
 		t.Fatalf("skillsRemoteWriteTyped valid name error: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tmp, "tdd", "SKILL.md")); err != nil {
+	path = raw.(map[string]any)["path"].(string)
+	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected remote skill file in configured dir: %v", err)
+	}
+
+	raw, err = srv.skillsRemoteWriteTyped(ctx, skillsRemoteWriteParams{
+		Name:    "../escape",
+		Content: "name: traversal-safe",
+	})
+	if err != nil {
+		t.Fatalf("skillsRemoteWriteTyped traversal-like name error: %v", err)
+	}
+	path = raw.(map[string]any)["path"].(string)
+	if !strings.Contains(path, filepath.Join(tmp, "by-id")) {
+		t.Fatalf("skillsRemoteWriteTyped traversal path=%q, want under by-id", path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected traversal skill file in configured dir: %v", err)
 	}
 }
 
@@ -177,7 +227,10 @@ Body`
 		t.Fatalf("write SKILL.md: %v", err)
 	}
 
-	srv := &Server{skillsDir: tmp}
+	srv := &Server{
+		skillsDir: tmp,
+		skillSvc:  seededSkillService(t, tmp),
+	}
 	raw, err := srv.skillsSummaryWriteTyped(context.Background(), skillsSummaryWriteParams{
 		Name:    "backend",
 		Summary: "inline edited summary",
@@ -189,7 +242,11 @@ Body`
 	if resp["summary"] != "inline edited summary" {
 		t.Fatalf("response summary=%v, want=%q", resp["summary"], "inline edited summary")
 	}
-	updated, err := os.ReadFile(path)
+	updatedPath, _ := resp["path"].(string)
+	if updatedPath == "" {
+		t.Fatalf("response path should not be empty: %v", resp)
+	}
+	updated, err := os.ReadFile(updatedPath)
 	if err != nil {
 		t.Fatalf("read updated SKILL.md: %v", err)
 	}
@@ -232,7 +289,7 @@ summary: "ops-summary"
 FULL OPS DETAIL SHOULD NOT INJECT`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 		agentSkills: map[string][]string{
 			"thread-1": {"backend", "tdd", "missing"},
@@ -281,7 +338,7 @@ summary: "ops-summary"
 FULL OPS DETAIL SHOULD NOT INJECT`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 	}
 	prompt, count := srv.buildSelectedSkillPrompt([]string{"backend", "tdd", "missing"})
@@ -325,7 +382,7 @@ aliases: ["@TDD", "@测试驱动"]
 tdd skill`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 	}
 
@@ -368,7 +425,7 @@ aliases: ["@TDD", "@测试驱动"]
 tdd skill`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 	}
 
@@ -409,7 +466,7 @@ description: TDD
 tdd skill`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 	}
 
@@ -457,7 +514,7 @@ force_words:
 tdd skill`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 		agentSkills: map[string][]string{
 			"thread-1": {"backend"},
@@ -507,7 +564,7 @@ aliases:
 brand guide`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 	}
 
@@ -539,7 +596,7 @@ description: Go后端规范
 backend guide`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 	}
 
@@ -584,7 +641,7 @@ force_words: ["@后端"]
 FULL BACKEND DETAIL SHOULD NOT INJECT`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 		agentSkills: map[string][]string{
 			"thread-1": {"后端"},
@@ -634,7 +691,7 @@ trigger_words: [api]
 api helper`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 		agentSkills: map[string][]string{
 			"thread-1": {"后端"},
@@ -682,7 +739,7 @@ force_words: ["@品牌", "@brand"]
 brand guide`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 		agentSkills: map[string][]string{
 			"thread-1": {"backend"},
@@ -738,7 +795,7 @@ description: Go后端规范
 backend guide`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 		agentSkills: map[string][]string{
 			"thread-1": {"后端"},
@@ -791,7 +848,7 @@ force_words: ["@后端"]
 backend guide`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 		agentSkills: map[string][]string{
 			"thread-1": {"后端"},
@@ -845,7 +902,7 @@ summary: "这段摘要是否存在不应影响 @ 触发"
 skill helper`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 	}
 
@@ -895,7 +952,7 @@ force_words: ["@brand"]
 brand guide`)
 
 	srv := &Server{
-		skillSvc:  service.NewSkillService(tmp),
+		skillSvc:  seededSkillService(t, tmp),
 		skillsDir: tmp,
 	}
 
@@ -970,21 +1027,17 @@ func TestSkillsConfigReadAndLocalRead(t *testing.T) {
 
 func TestSkillsLocalDeleteTypedRemovesDirectoryAndThreadBindings(t *testing.T) {
 	destRoot := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(destRoot, "backend"), 0o755); err != nil {
-		t.Fatalf("mkdir backend dir: %v", err)
+	svc := service.NewSkillService(destRoot)
+	if _, err := svc.WriteSkillContent("backend", "# backend"); err != nil {
+		t.Fatalf("seed backend skill: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(destRoot, "backend", "SKILL.md"), []byte("# backend"), 0o644); err != nil {
-		t.Fatalf("write backend SKILL.md: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(destRoot, "ops"), 0o755); err != nil {
-		t.Fatalf("mkdir ops dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(destRoot, "ops", "SKILL.md"), []byte("# ops"), 0o644); err != nil {
-		t.Fatalf("write ops SKILL.md: %v", err)
+	if _, err := svc.WriteSkillContent("ops", "# ops"); err != nil {
+		t.Fatalf("seed ops skill: %v", err)
 	}
 
 	srv := &Server{
 		skillsDir: destRoot,
+		skillSvc:  svc,
 	}
 
 	raw, err := srv.skillsLocalDeleteTyped(context.Background(), skillsLocalDeleteParams{Name: "backend"})
@@ -999,13 +1052,22 @@ func TestSkillsLocalDeleteTypedRemovesDirectoryAndThreadBindings(t *testing.T) {
 		t.Fatalf("removed_agent_bindings=%v, want=0", resp["removed_agent_bindings"])
 	}
 
-	if _, err := os.Stat(filepath.Join(destRoot, "backend")); !os.IsNotExist(err) {
+	deletedDir, _ := resp["dir"].(string)
+	if deletedDir == "" {
+		t.Fatalf("delete response dir should not be empty: %v", resp)
+	}
+	if _, err := os.Stat(deletedDir); !os.IsNotExist(err) {
 		t.Fatalf("backend directory should be removed, stat err=%v", err)
 	}
 }
 
 func TestSkillsLocalDeleteTypedReturnsNotFound(t *testing.T) {
-	srv := &Server{skillsDir: t.TempDir(), agentSkills: make(map[string][]string)}
+	destRoot := t.TempDir()
+	srv := &Server{
+		skillsDir:   destRoot,
+		skillSvc:    service.NewSkillService(destRoot),
+		agentSkills: make(map[string][]string),
+	}
 	_, err := srv.skillsLocalDeleteTyped(context.Background(), skillsLocalDeleteParams{Name: "missing"})
 	if err == nil {
 		t.Fatal("skillsLocalDeleteTyped should fail for missing skill")
@@ -1027,6 +1089,7 @@ func TestSkillsLocalImportDirCopiesWholeDirectory(t *testing.T) {
 	destRoot := t.TempDir()
 	srv := &Server{
 		skillsDir:   destRoot,
+		skillSvc:    service.NewSkillService(destRoot),
 		agentSkills: make(map[string][]string),
 	}
 	raw, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
@@ -1041,7 +1104,10 @@ func TestSkillsLocalImportDirCopiesWholeDirectory(t *testing.T) {
 	if name == "" {
 		t.Fatalf("imported skill name should not be empty")
 	}
-	targetRoot := filepath.Join(destRoot, name)
+	targetRoot, _ := skill["dir"].(string)
+	if targetRoot == "" {
+		t.Fatalf("imported skill dir should not be empty: %v", skill)
+	}
 	if _, err := os.Stat(filepath.Join(targetRoot, "SKILL.md")); err != nil {
 		t.Fatalf("missing copied SKILL.md: %v", err)
 	}
@@ -1056,7 +1122,10 @@ func TestSkillsLocalImportDirRequiresSkillFile(t *testing.T) {
 		t.Fatalf("write README.md: %v", err)
 	}
 	destRoot := t.TempDir()
-	srv := &Server{skillsDir: destRoot}
+	srv := &Server{
+		skillsDir: destRoot,
+		skillSvc:  service.NewSkillService(destRoot),
+	}
 	_, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
 		Path: sourceRoot,
 	})
@@ -1072,7 +1141,10 @@ func TestSkillsLocalImportDirSinglePathsRespectsName(t *testing.T) {
 	}
 
 	destRoot := t.TempDir()
-	srv := &Server{skillsDir: destRoot}
+	srv := &Server{
+		skillsDir: destRoot,
+		skillSvc:  service.NewSkillService(destRoot),
+	}
 	raw, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
 		Paths: []string{sourceRoot},
 		Name:  "backend-custom",
@@ -1085,19 +1157,20 @@ func TestSkillsLocalImportDirSinglePathsRespectsName(t *testing.T) {
 	if got, _ := skill["name"].(string); got != "backend-custom" {
 		t.Fatalf("imported skill name=%q, want=backend-custom", got)
 	}
-	if _, err := os.Stat(filepath.Join(destRoot, "backend-custom", "SKILL.md")); err != nil {
+	skillFile, _ := skill["skill_file"].(string)
+	if skillFile == "" {
+		t.Fatalf("imported skill_file should not be empty: %v", skill)
+	}
+	if _, err := os.Stat(skillFile); err != nil {
 		t.Fatalf("missing imported SKILL.md: %v", err)
 	}
 }
 
 func TestSkillsLocalImportDirKeepsExistingSkillWhenImportFails(t *testing.T) {
 	destRoot := t.TempDir()
-	existingDir := filepath.Join(destRoot, "backend")
-	if err := os.MkdirAll(existingDir, 0o755); err != nil {
-		t.Fatalf("mkdir existing skill dir: %v", err)
-	}
-	existingSkillPath := filepath.Join(existingDir, "SKILL.md")
-	if err := os.WriteFile(existingSkillPath, []byte("old-version"), 0o644); err != nil {
+	svc := service.NewSkillService(destRoot)
+	existingSkillPath, err := svc.WriteSkillContent("backend", "old-version")
+	if err != nil {
 		t.Fatalf("write existing SKILL.md: %v", err)
 	}
 
@@ -1105,13 +1178,16 @@ func TestSkillsLocalImportDirKeepsExistingSkillWhenImportFails(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sourceRoot, "SKILL.md"), []byte("# Skill"), 0o644); err != nil {
 		t.Fatalf("write source SKILL.md: %v", err)
 	}
-	tooLarge := make([]byte, maxSkillImportSingleFileSize+1)
+	tooLarge := make([]byte, (4<<20)+1)
 	if err := os.WriteFile(filepath.Join(sourceRoot, "huge.bin"), tooLarge, 0o644); err != nil {
 		t.Fatalf("write huge file: %v", err)
 	}
 
-	srv := &Server{skillsDir: destRoot}
-	_, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
+	srv := &Server{
+		skillsDir: destRoot,
+		skillSvc:  svc,
+	}
+	_, err = srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
 		Path: sourceRoot,
 		Name: "backend",
 	})
@@ -1149,7 +1225,10 @@ func TestSkillsLocalImportDirBatchImportsMultipleDirectories(t *testing.T) {
 	}
 
 	destRoot := t.TempDir()
-	srv := &Server{skillsDir: destRoot}
+	srv := &Server{
+		skillsDir: destRoot,
+		skillSvc:  service.NewSkillService(destRoot),
+	}
 	raw, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
 		Paths: []string{sourceA, sourceB},
 	})
@@ -1199,7 +1278,10 @@ func TestSkillsLocalImportDirBatchCollectsFailures(t *testing.T) {
 	}
 
 	destRoot := t.TempDir()
-	srv := &Server{skillsDir: destRoot}
+	srv := &Server{
+		skillsDir: destRoot,
+		skillSvc:  service.NewSkillService(destRoot),
+	}
 	raw, err := srv.skillsLocalImportDirTyped(context.Background(), skillsLocalImportDirParams{
 		Paths: []string{validSource, invalidSource},
 	})

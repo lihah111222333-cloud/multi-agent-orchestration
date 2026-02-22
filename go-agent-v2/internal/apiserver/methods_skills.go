@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,34 +22,23 @@ import (
 // ========================================
 
 func (s *Server) skillsList(_ context.Context, _ json.RawMessage) (any, error) {
-	if s.skillSvc != nil {
-		list, err := s.skillSvc.ListSkills()
-		if err == nil {
-			skills := make([]map[string]any, 0, len(list))
-			for _, item := range list {
-				skills = append(skills, map[string]any{
-					"name":          item.Name,
-					"dir":           item.Dir,
-					"description":   item.Description,
-					"summary":       item.Summary,
-					"trigger_words": item.TriggerWords,
-					"force_words":   item.ForceWords,
-				})
-			}
-			return map[string]any{"skills": skills}, nil
-		}
-		logger.Warn("skills/list: load metadata failed, fallback to dir scan", logger.FieldError, err)
+	if s.skillSvc == nil {
+		return map[string]any{"skills": []map[string]any{}}, nil
 	}
-
-	var skills []map[string]any
-	entries, err := os.ReadDir(s.skillsDirectory())
+	list, err := s.skillSvc.ListSkills()
 	if err != nil {
-		return map[string]any{"skills": skills}, nil
+		return nil, apperrors.Wrap(err, "Server.skillsList", "list skills")
 	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			skills = append(skills, map[string]any{"name": entry.Name()})
-		}
+	skills := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		skills = append(skills, map[string]any{
+			"name":          item.Name,
+			"dir":           item.Dir,
+			"description":   item.Description,
+			"summary":       item.Summary,
+			"trigger_words": item.TriggerWords,
+			"force_words":   item.ForceWords,
+		})
 	}
 	return map[string]any{"skills": skills}, nil
 }
@@ -67,12 +55,6 @@ type skillsLocalReadParams struct {
 	Path string `json:"path"`
 }
 
-const (
-	maxSkillImportFiles          = 1000
-	maxSkillImportSingleFileSize = 4 << 20  // 4MB
-	maxSkillImportTotalFileSize  = 20 << 20 // 20MB
-)
-
 type skillsLocalImportDirParams struct {
 	Path  string   `json:"path"`
 	Paths []string `json:"paths,omitempty"`
@@ -81,11 +63,6 @@ type skillsLocalImportDirParams struct {
 
 type skillsLocalDeleteParams struct {
 	Name string `json:"name"`
-}
-
-type skillImportStats struct {
-	Files int
-	Bytes int64
 }
 
 type skillImportFailure struct {
@@ -113,103 +90,6 @@ func skillImportDirName(rawName, sourceDir string) (string, error) {
 	}
 	base := filepath.Base(candidate)
 	return normalizeSkillName(base)
-}
-
-func ensureSourceSkillFile(sourceDir string) (string, error) {
-	path := filepath.Join(sourceDir, "SKILL.md")
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", err
-	}
-	if info.IsDir() {
-		return "", apperrors.Newf("ensureSourceSkillFile", "SKILL.md is a directory: %s", path)
-	}
-	return path, nil
-}
-
-func copyRegularFile(srcPath, dstPath string, mode fs.FileMode) error {
-	srcFile, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = srcFile.Close() }()
-	if mode == 0 {
-		mode = 0o644
-	}
-	dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(dstFile, srcFile)
-	closeErr := dstFile.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
-}
-
-func copySkillDirectory(sourceDir, targetDir string) (skillImportStats, error) {
-	stats := skillImportStats{}
-	err := filepath.WalkDir(sourceDir, func(currentPath string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		relative, err := filepath.Rel(sourceDir, currentPath)
-		if err != nil {
-			return err
-		}
-		relative = filepath.Clean(relative)
-		if relative == "." {
-			return os.MkdirAll(targetDir, 0o755)
-		}
-		if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return apperrors.Newf("copySkillDirectory", "path escapes source dir: %s", currentPath)
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return apperrors.Newf("copySkillDirectory", "symlink is not allowed: %s", relative)
-		}
-		if entry.IsDir() && strings.EqualFold(entry.Name(), ".git") {
-			return filepath.SkipDir
-		}
-		destinationPath := filepath.Join(targetDir, relative)
-		if entry.IsDir() {
-			return os.MkdirAll(destinationPath, 0o755)
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		if info.Size() > maxSkillImportSingleFileSize {
-			return apperrors.Newf(
-				"copySkillDirectory",
-				"file too large: %s (%d bytes, limit %d bytes)",
-				relative,
-				info.Size(),
-				maxSkillImportSingleFileSize,
-			)
-		}
-		stats.Files++
-		if stats.Files > maxSkillImportFiles {
-			return apperrors.Newf("copySkillDirectory", "too many files: limit %d", maxSkillImportFiles)
-		}
-		stats.Bytes += info.Size()
-		if stats.Bytes > maxSkillImportTotalFileSize {
-			return apperrors.Newf(
-				"copySkillDirectory",
-				"skill package too large: %d bytes (limit %d bytes)",
-				stats.Bytes,
-				maxSkillImportTotalFileSize,
-			)
-		}
-		if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
-			return err
-		}
-		return copyRegularFile(currentPath, destinationPath, info.Mode().Perm())
-	})
-	return stats, err
 }
 
 func collectSkillImportSources(path string, paths []string) []string {
@@ -241,78 +121,31 @@ func collectSkillImportSources(path string, paths []string) []string {
 }
 
 func (s *Server) importSingleSkillDirectory(sourceDir, name string) (skillImportResult, error) {
-	info, err := os.Stat(sourceDir)
-	if err != nil {
-		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "stat source dir")
+	if s.skillSvc == nil {
+		return skillImportResult{}, apperrors.New("Server.importSingleSkillDirectory", "skill service unavailable")
 	}
-	if !info.IsDir() {
-		return skillImportResult{}, apperrors.Newf("Server.importSingleSkillDirectory", "path is not a directory: %s", sourceDir)
-	}
-	if _, err := ensureSourceSkillFile(sourceDir); err != nil {
-		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "missing SKILL.md in source directory")
-	}
-
 	skillName, err := skillImportDirName(name, sourceDir)
 	if err != nil {
 		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "resolve skill name")
 	}
-	skillsRoot := s.skillsDirectory()
-	targetRoot := filepath.Join(skillsRoot, skillName)
-	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
-		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "mkdir skills root")
-	}
-
-	tmpRoot := filepath.Join(skillsRoot, fmt.Sprintf(".%s.import-%d", skillName, time.Now().UnixNano()))
-	if err := os.RemoveAll(tmpRoot); err != nil {
-		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "clean temp skill dir")
-	}
-	defer func() {
-		_ = os.RemoveAll(tmpRoot)
-	}()
-
-	stats, err := copySkillDirectory(sourceDir, tmpRoot)
+	result, err := s.skillSvc.ImportSkillDirectory(sourceDir, skillName)
 	if err != nil {
-		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "copy skill directory")
+		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "import directory")
 	}
-	skillFilePath := filepath.Join(tmpRoot, "SKILL.md")
-	if _, err := os.Stat(skillFilePath); err != nil {
-		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "copied package missing SKILL.md")
-	}
-
-	backupRoot := filepath.Join(skillsRoot, fmt.Sprintf(".%s.backup-%d", skillName, time.Now().UnixNano()))
-	backupCreated := false
-	if _, err := os.Stat(targetRoot); err == nil {
-		if err := os.Rename(targetRoot, backupRoot); err != nil {
-			return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "backup existing skill dir")
-		}
-		backupCreated = true
-	} else if !os.IsNotExist(err) {
-		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "stat existing skill dir")
-	}
-	if err := os.Rename(tmpRoot, targetRoot); err != nil {
-		if backupCreated {
-			_ = os.Rename(backupRoot, targetRoot)
-		}
-		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "activate imported skill dir")
-	}
-	if backupCreated {
-		_ = os.RemoveAll(backupRoot)
-	}
-	skillFilePath = filepath.Join(targetRoot, "SKILL.md")
 
 	logger.Info("skills/local/importDir: imported",
 		logger.FieldSkill, skillName,
 		logger.FieldPath, sourceDir,
-		"files", stats.Files,
-		"bytes", stats.Bytes,
+		"files", result.Files,
+		"bytes", result.Bytes,
 	)
 	return skillImportResult{
 		Name:      skillName,
-		Dir:       targetRoot,
-		SkillFile: skillFilePath,
+		Dir:       result.Dir,
+		SkillFile: result.SkillFile,
 		Source:    sourceDir,
-		Files:     stats.Files,
-		Bytes:     stats.Bytes,
+		Files:     result.Files,
+		Bytes:     result.Bytes,
 	}, nil
 }
 
@@ -449,35 +282,31 @@ func (s *Server) skillsLocalImportDirTyped(_ context.Context, p skillsLocalImpor
 }
 
 func (s *Server) skillsLocalDeleteTyped(_ context.Context, p skillsLocalDeleteParams) (any, error) {
+	if s.skillSvc == nil {
+		return nil, apperrors.New("Server.skillsLocalDelete", "skill service unavailable")
+	}
 	skillName, err := normalizeSkillName(p.Name)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsLocalDelete", "normalize skill name")
 	}
-	targetDir := filepath.Join(s.skillsDirectory(), skillName)
-	info, err := os.Stat(targetDir)
+	resolvedName, targetDir, err := s.skillSvc.DeleteSkill(skillName)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, apperrors.Newf("Server.skillsLocalDelete", "skill not found: %s", skillName)
 		}
-		return nil, apperrors.Wrap(err, "Server.skillsLocalDelete", "stat skill dir")
-	}
-	if !info.IsDir() {
-		return nil, apperrors.Newf("Server.skillsLocalDelete", "skill path is not directory: %s", targetDir)
-	}
-	if err := os.RemoveAll(targetDir); err != nil {
-		return nil, apperrors.Wrap(err, "Server.skillsLocalDelete", "remove skill dir")
+		return nil, apperrors.Wrap(err, "Server.skillsLocalDelete", "delete skill")
 	}
 
 	removedBindings := 0
 
 	logger.Info("skills/local/delete: removed",
-		logger.FieldSkill, skillName,
+		logger.FieldSkill, resolvedName,
 		logger.FieldPath, targetDir,
 		"removed_agent_bindings", removedBindings,
 	)
 	return map[string]any{
 		"ok":                     true,
-		"name":                   skillName,
+		"name":                   resolvedName,
 		"dir":                    targetDir,
 		"removed_agent_bindings": removedBindings,
 	}, nil
@@ -488,17 +317,9 @@ func (s *Server) skillsLocalDeleteTyped(_ context.Context, p skillsLocalDeletePa
 // ========================================
 
 // skillsConfigWriteParams skills/config/write 请求参数。
-//
-// 两种模式:
-//  1. 写入 SKILL.md 文件: {"name": "skill_name", "content": "..."}
-//  2. 兼容旧参数（已不绑定会话）: {"agent_id": "thread-xxx", "skills": ["s1", "s2"]}
 type skillsConfigWriteParams struct {
-	// 模式 1: 写文件
 	Name    string `json:"name"`
 	Content string `json:"content"`
-	// 模式 2: 兼容旧参数（不再绑定会话）
-	AgentID string   `json:"agent_id"`
-	Skills  []string `json:"skills"`
 }
 
 // skillsSummaryWriteParams skills/summary/write 请求参数。
@@ -572,43 +393,29 @@ func (s *Server) skillsConfigReadTyped(_ context.Context, p skillsConfigReadPara
 }
 
 func (s *Server) skillsConfigWriteTyped(_ context.Context, p skillsConfigWriteParams) (any, error) {
-	// 模式 2: 兼容旧入参, 不再做会话绑定。
-	if p.AgentID != "" {
-		normalizedSkills, err := normalizeSkillNames(p.Skills)
-		if err != nil {
-			return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "normalize skills")
-		}
-		logger.Info("skills/config/write: ignore deprecated agent binding",
-			logger.FieldAgentID, p.AgentID, "skills", normalizedSkills)
-		return map[string]any{
-			"ok":            true,
-			"agent_id":      p.AgentID,
-			"skills":        normalizedSkills,
-			"session_bound": false,
-		}, nil
+	if s.skillSvc == nil {
+		return nil, apperrors.New("Server.skillsConfigWrite", "skill service unavailable")
 	}
 
-	// 模式 1: 写 SKILL.md 文件
 	if strings.TrimSpace(p.Name) == "" {
-		return nil, apperrors.New("Server.skillsConfigWrite", "name or agent_id is required")
+		return nil, apperrors.New("Server.skillsConfigWrite", "name is required")
 	}
 	skillName, err := normalizeSkillName(p.Name)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "normalize skill name")
 	}
-	dir := filepath.Join(s.skillsDirectory(), skillName)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "mkdir")
-	}
-	path := filepath.Join(dir, "SKILL.md")
-	if err := os.WriteFile(path, []byte(p.Content), 0o644); err != nil {
-		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "write SKILL.md")
+	path, err := s.skillSvc.WriteSkillContent(skillName, p.Content)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "write skill content")
 	}
 	logger.Info("skills/config/write: saved", logger.FieldSkill, skillName, logger.FieldBytes, len(p.Content))
 	return map[string]any{"ok": true, "path": path}, nil
 }
 
 func (s *Server) skillsSummaryWriteTyped(_ context.Context, p skillsSummaryWriteParams) (any, error) {
+	if s.skillSvc == nil {
+		return nil, apperrors.New("Server.skillsSummaryWrite", "skill service unavailable")
+	}
 	if strings.TrimSpace(p.Name) == "" {
 		return nil, apperrors.New("Server.skillsSummaryWrite", "name is required")
 	}
@@ -616,21 +423,16 @@ func (s *Server) skillsSummaryWriteTyped(_ context.Context, p skillsSummaryWrite
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsSummaryWrite", "normalize skill name")
 	}
-	path := filepath.Join(s.skillsDirectory(), skillName, "SKILL.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.skillsSummaryWrite", "read SKILL.md")
-	}
 	summary := strings.TrimSpace(p.Summary)
-	updated := service.UpsertSkillSummaryFrontmatter(string(data), summary)
-	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
-		return nil, apperrors.Wrap(err, "Server.skillsSummaryWrite", "write SKILL.md")
+	path, resolvedName, err := s.skillSvc.UpdateSkillSummary(skillName, summary)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsSummaryWrite", "update skill summary")
 	}
-	logger.Info("skills/summary/write: saved", logger.FieldSkill, skillName, "summary_len", len(summary))
+	logger.Info("skills/summary/write: saved", logger.FieldSkill, resolvedName, "summary_len", len(summary))
 	return map[string]any{
 		"ok":      true,
 		"path":    path,
-		"name":    skillName,
+		"name":    resolvedName,
 		"summary": summary,
 	}, nil
 }
@@ -693,16 +495,16 @@ type skillsRemoteWriteParams struct {
 
 // skillsRemoteWriteTyped 写入远程 Skill 到本地。
 func (s *Server) skillsRemoteWriteTyped(_ context.Context, p skillsRemoteWriteParams) (any, error) {
+	if s.skillSvc == nil {
+		return nil, apperrors.New("Server.skillsRemoteWrite", "skill service unavailable")
+	}
 	skillName, err := normalizeSkillName(p.Name)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "normalize skill name")
 	}
-	skillsDir := filepath.Join(s.skillsDirectory(), skillName)
-	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-		return nil, err
+	path, err := s.skillSvc.WriteSkillContent(skillName, p.Content)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "write skill content")
 	}
-	if err := os.WriteFile(filepath.Join(skillsDir, "SKILL.md"), []byte(p.Content), 0o644); err != nil {
-		return nil, err
-	}
-	return map[string]any{}, nil
+	return map[string]any{"ok": true, "path": path}, nil
 }

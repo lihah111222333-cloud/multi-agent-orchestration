@@ -1,9 +1,17 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
@@ -13,6 +21,14 @@ const (
 	maxSkillSummaryRunes      = 220
 	maxSkillSectionTitleRunes = 80
 	maxSkillDigestSections    = 8
+
+	skillStoreByIDDir = "by-id"
+	skillIndexFile    = "skill.json"
+	skillMainFile     = "SKILL.md"
+
+	maxSkillImportFiles          = 1000
+	maxSkillImportSingleFileSize = 4 << 20  // 4MB
+	maxSkillImportTotalFileSize  = 20 << 20 // 20MB
 )
 
 // SkillInfo Skill 目录元数据。
@@ -39,15 +55,35 @@ type SkillDigestEntry struct {
 	Line  int    `json:"line"`
 }
 
-// SkillService 扫描 .agent/skills/ 文件系统。
+// SkillImportResult 目录导入结果。
+type SkillImportResult struct {
+	Name      string
+	Dir       string
+	SkillFile string
+	Files     int
+	Bytes     int64
+}
+
+// SkillService 统一管理技能存储。
 type SkillService struct {
 	dir string
 }
 
-type skillDirEntry struct {
-	DirName string
-	DirPath string
-	Meta    skillMetadata
+type skillRecord struct {
+	ID         string
+	DirPath    string
+	SkillPath  string
+	StoredName string
+	Meta       skillMetadata
+}
+
+type skillImportStats struct {
+	Files int
+	Bytes int64
+}
+
+type skillIndex struct {
+	Name string `json:"name"`
 }
 
 // NewSkillService 创建 SkillService。
@@ -55,8 +91,59 @@ func NewSkillService(dir string) *SkillService {
 	return &SkillService{dir: dir}
 }
 
-func (s *SkillService) scanSkillDirEntries() ([]skillDirEntry, error) {
-	entries, err := os.ReadDir(s.dir)
+func (s *SkillService) byIDRoot() string {
+	return filepath.Join(s.dir, skillStoreByIDDir)
+}
+
+func (s *SkillService) ensureByIDRoot() error {
+	return os.MkdirAll(s.byIDRoot(), 0o755)
+}
+
+func skillStorageID(name string) string {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	hash := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(hash[:])
+}
+
+func skillDisplayName(storedName string, meta skillMetadata, storageID string) string {
+	if name := strings.TrimSpace(meta.Name); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(storedName); name != "" {
+		return name
+	}
+	return storageID
+}
+
+func matchSkillName(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+func (s *SkillService) readSkillIndex(dirPath string) skillIndex {
+	path := filepath.Join(dirPath, skillIndexFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return skillIndex{}
+	}
+	var index skillIndex
+	if err := json.Unmarshal(data, &index); err != nil {
+		return skillIndex{}
+	}
+	index.Name = strings.TrimSpace(index.Name)
+	return index
+}
+
+func (s *SkillService) writeSkillIndex(dirPath, name string) error {
+	index := skillIndex{Name: strings.TrimSpace(name)}
+	data, err := json.Marshal(index)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dirPath, skillIndexFile), data, 0o644)
+}
+
+func (s *SkillService) scanSkillRecords() ([]skillRecord, error) {
+	entries, err := os.ReadDir(s.byIDRoot())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -64,94 +151,107 @@ func (s *SkillService) scanSkillDirEntries() ([]skillDirEntry, error) {
 		return nil, err
 	}
 
-	out := make([]skillDirEntry, 0, len(entries))
+	records := make([]skillRecord, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		dirName := entry.Name()
-		dirPath := filepath.Join(s.dir, dirName)
-		meta := extractSkillMetadata(filepath.Join(dirPath, "SKILL.md"))
-		out = append(out, skillDirEntry{
-			DirName: dirName,
-			DirPath: dirPath,
-			Meta:    meta,
+		id := strings.TrimSpace(entry.Name())
+		if id == "" || strings.HasPrefix(id, ".") {
+			continue
+		}
+		dirPath := filepath.Join(s.byIDRoot(), id)
+		skillPath := filepath.Join(dirPath, skillMainFile)
+		info, statErr := os.Stat(skillPath)
+		if statErr != nil || info.IsDir() {
+			continue
+		}
+		records = append(records, skillRecord{
+			ID:         id,
+			DirPath:    dirPath,
+			SkillPath:  skillPath,
+			StoredName: s.readSkillIndex(dirPath).Name,
+			Meta:       extractSkillMetadata(skillPath),
 		})
 	}
-	return out, nil
+
+	sort.Slice(records, func(i, j int) bool {
+		left := strings.ToLower(skillDisplayName(records[i].StoredName, records[i].Meta, records[i].ID))
+		right := strings.ToLower(skillDisplayName(records[j].StoredName, records[j].Meta, records[j].ID))
+		if left == right {
+			return records[i].ID < records[j].ID
+		}
+		return left < right
+	})
+	return records, nil
 }
 
-func skillDisplayName(dirName string, meta skillMetadata) string {
-	if name := strings.TrimSpace(meta.Name); name != "" {
-		return name
-	}
-	return dirName
-}
-
-func matchSkillName(a, b string) bool {
-	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
-}
-
-func (s *SkillService) resolveSkillDirName(name string) (string, error) {
+func (s *SkillService) resolveSkillRecord(name string) (skillRecord, error) {
 	requested := strings.TrimSpace(name)
-	if err := validateSkillName(requested); err != nil {
-		return "", apperrors.Wrap(err, "SkillService.resolveSkillDirName", "validate skill name")
+	if requested == "" {
+		return skillRecord{}, apperrors.New("SkillService.resolveSkillRecord", "skill name is required")
 	}
-	list, err := s.scanSkillDirEntries()
+	records, err := s.scanSkillRecords()
 	if err != nil {
-		return "", err
+		return skillRecord{}, err
 	}
-	if len(list) == 0 {
-		return "", os.ErrNotExist
+	if len(records) == 0 {
+		return skillRecord{}, os.ErrNotExist
 	}
 
-	for _, item := range list {
-		if matchSkillName(item.DirName, requested) {
-			return item.DirName, nil
+	for _, record := range records {
+		displayName := skillDisplayName(record.StoredName, record.Meta, record.ID)
+		if matchSkillName(displayName, requested) {
+			return record, nil
 		}
 	}
-	for _, item := range list {
-		if matchSkillName(item.Meta.Name, requested) {
-			return item.DirName, nil
+	for _, record := range records {
+		if matchSkillName(record.StoredName, requested) {
+			return record, nil
 		}
 	}
-	return "", os.ErrNotExist
+	for _, record := range records {
+		if matchSkillName(record.Meta.Name, requested) {
+			return record, nil
+		}
+	}
+	for _, record := range records {
+		if matchSkillName(record.ID, requested) {
+			return record, nil
+		}
+	}
+	return skillRecord{}, os.ErrNotExist
 }
 
 // ListSkills 扫描目录并返回所有 Skill 信息。
 func (s *SkillService) ListSkills() ([]SkillInfo, error) {
-	entries, err := s.scanSkillDirEntries()
+	records, err := s.scanSkillRecords()
 	if err != nil {
 		return nil, err
 	}
 
-	skills := make([]SkillInfo, 0, len(entries))
-	for _, entry := range entries {
-		meta := entry.Meta
-		info := SkillInfo{
-			Name: skillDisplayName(entry.DirName, meta),
-			Dir:  entry.DirPath,
-			// 尝试读取 SKILL.md frontmatter 元数据
+	skills := make([]SkillInfo, 0, len(records))
+	for _, record := range records {
+		meta := record.Meta
+		skills = append(skills, SkillInfo{
+			Name:         skillDisplayName(record.StoredName, meta, record.ID),
+			Dir:          record.DirPath,
 			Description:  meta.Description,
 			Summary:      meta.Summary,
 			TriggerWords: meta.TriggerWords,
 			ForceWords:   meta.ForceWords,
-		}
-		skills = append(skills, info)
+		})
 	}
 	return skills, nil
 }
 
 // ReadSkillContent 读取 SKILL.md 完整内容。
-//
-// 含路径遍历防护: 拒绝包含 "/", "\", ".." 的名称。
 func (s *SkillService) ReadSkillContent(name string) (string, error) {
-	dirName, err := s.resolveSkillDirName(name)
+	record, err := s.resolveSkillRecord(name)
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(s.dir, dirName, "SKILL.md")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(record.SkillPath)
 	if err != nil {
 		return "", err
 	}
@@ -183,6 +283,256 @@ func (s *SkillService) ReadSkillDigest(name string) (SkillDigest, error) {
 		digest.Summary = "未提供摘要"
 	}
 	return digest, nil
+}
+
+// WriteSkillContent 覆盖写入技能内容并更新索引。
+func (s *SkillService) WriteSkillContent(name, content string) (string, error) {
+	storedName := strings.TrimSpace(name)
+	if storedName == "" {
+		return "", apperrors.New("SkillService.WriteSkillContent", "skill name is required")
+	}
+	if err := s.ensureByIDRoot(); err != nil {
+		return "", err
+	}
+	id := skillStorageID(storedName)
+	targetDir := filepath.Join(s.byIDRoot(), id)
+	stagingDir := filepath.Join(s.byIDRoot(), fmt.Sprintf(".%s.write-%d", id, time.Now().UnixNano()))
+	if err := os.RemoveAll(stagingDir); err != nil {
+		return "", err
+	}
+	defer func() { _ = os.RemoveAll(stagingDir) }()
+	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(stagingDir, skillMainFile), []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	if err := s.writeSkillIndex(stagingDir, storedName); err != nil {
+		return "", err
+	}
+	if err := activateStagedSkillDir(targetDir, stagingDir); err != nil {
+		return "", err
+	}
+	return filepath.Join(targetDir, skillMainFile), nil
+}
+
+// UpdateSkillSummary 更新技能 frontmatter summary 字段。
+func (s *SkillService) UpdateSkillSummary(name, summary string) (skillPath string, resolvedName string, err error) {
+	record, err := s.resolveSkillRecord(name)
+	if err != nil {
+		return "", "", err
+	}
+	data, err := os.ReadFile(record.SkillPath)
+	if err != nil {
+		return "", "", err
+	}
+	summary = strings.TrimSpace(summary)
+	updated := UpsertSkillSummaryFrontmatter(string(data), summary)
+	if err := os.WriteFile(record.SkillPath, []byte(updated), 0o644); err != nil {
+		return "", "", err
+	}
+	resolvedName = skillDisplayName(record.StoredName, record.Meta, record.ID)
+	if resolvedName == "" {
+		resolvedName = strings.TrimSpace(name)
+	}
+	return record.SkillPath, resolvedName, nil
+}
+
+// DeleteSkill 删除技能目录。
+func (s *SkillService) DeleteSkill(name string) (resolvedName string, dir string, err error) {
+	record, err := s.resolveSkillRecord(name)
+	if err != nil {
+		return "", "", err
+	}
+	if err := os.RemoveAll(record.DirPath); err != nil {
+		return "", "", err
+	}
+	resolvedName = skillDisplayName(record.StoredName, record.Meta, record.ID)
+	if resolvedName == "" {
+		resolvedName = strings.TrimSpace(name)
+	}
+	return resolvedName, record.DirPath, nil
+}
+
+// ImportSkillDirectory 导入技能目录到 by-id 存储。
+func (s *SkillService) ImportSkillDirectory(sourceDir, name string) (SkillImportResult, error) {
+	info, err := os.Stat(sourceDir)
+	if err != nil {
+		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "stat source dir")
+	}
+	if !info.IsDir() {
+		return SkillImportResult{}, apperrors.Newf("SkillService.ImportSkillDirectory", "path is not a directory: %s", sourceDir)
+	}
+	if _, err := ensureSourceSkillFile(sourceDir); err != nil {
+		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "missing SKILL.md in source directory")
+	}
+
+	storedName := strings.TrimSpace(name)
+	if storedName == "" {
+		candidate := strings.TrimSpace(strings.TrimRight(sourceDir, `/\\`))
+		if candidate == "" {
+			return SkillImportResult{}, apperrors.New("SkillService.ImportSkillDirectory", "source directory is required")
+		}
+		storedName = strings.TrimSpace(filepath.Base(candidate))
+	}
+	if storedName == "" {
+		return SkillImportResult{}, apperrors.New("SkillService.ImportSkillDirectory", "skill name is required")
+	}
+
+	if err := s.ensureByIDRoot(); err != nil {
+		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "mkdir by-id root")
+	}
+	id := skillStorageID(storedName)
+	targetDir := filepath.Join(s.byIDRoot(), id)
+	stagingDir := filepath.Join(s.byIDRoot(), fmt.Sprintf(".%s.import-%d", id, time.Now().UnixNano()))
+	if err := os.RemoveAll(stagingDir); err != nil {
+		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "clean staging dir")
+	}
+	defer func() { _ = os.RemoveAll(stagingDir) }()
+
+	stats, err := copySkillDirectory(sourceDir, stagingDir)
+	if err != nil {
+		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "copy skill directory")
+	}
+	if _, err := ensureSourceSkillFile(stagingDir); err != nil {
+		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "copied package missing SKILL.md")
+	}
+	if err := s.writeSkillIndex(stagingDir, storedName); err != nil {
+		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "write skill index")
+	}
+	if err := activateStagedSkillDir(targetDir, stagingDir); err != nil {
+		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "activate imported skill dir")
+	}
+
+	return SkillImportResult{
+		Name:      storedName,
+		Dir:       targetDir,
+		SkillFile: filepath.Join(targetDir, skillMainFile),
+		Files:     stats.Files,
+		Bytes:     stats.Bytes,
+	}, nil
+}
+
+func ensureSourceSkillFile(sourceDir string) (string, error) {
+	path := filepath.Join(sourceDir, skillMainFile)
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", apperrors.Newf("ensureSourceSkillFile", "SKILL.md is a directory: %s", path)
+	}
+	return path, nil
+}
+
+func copyRegularFile(srcPath, dstPath string, mode fs.FileMode) error {
+	srcFile, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = srcFile.Close() }()
+	if mode == 0 {
+		mode = 0o644
+	}
+	dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(dstFile, srcFile)
+	closeErr := dstFile.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+func copySkillDirectory(sourceDir, targetDir string) (skillImportStats, error) {
+	stats := skillImportStats{}
+	err := filepath.WalkDir(sourceDir, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(sourceDir, currentPath)
+		if err != nil {
+			return err
+		}
+		relative = filepath.Clean(relative)
+		if relative == "." {
+			return os.MkdirAll(targetDir, 0o755)
+		}
+		if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return apperrors.Newf("copySkillDirectory", "path escapes source dir: %s", currentPath)
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return apperrors.Newf("copySkillDirectory", "symlink is not allowed: %s", relative)
+		}
+		if entry.IsDir() && strings.EqualFold(entry.Name(), ".git") {
+			return filepath.SkipDir
+		}
+		destinationPath := filepath.Join(targetDir, relative)
+		if entry.IsDir() {
+			return os.MkdirAll(destinationPath, 0o755)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		if info.Size() > maxSkillImportSingleFileSize {
+			return apperrors.Newf(
+				"copySkillDirectory",
+				"file too large: %s (%d bytes, limit %d bytes)",
+				relative,
+				info.Size(),
+				maxSkillImportSingleFileSize,
+			)
+		}
+		stats.Files++
+		if stats.Files > maxSkillImportFiles {
+			return apperrors.Newf("copySkillDirectory", "too many files: limit %d", maxSkillImportFiles)
+		}
+		stats.Bytes += info.Size()
+		if stats.Bytes > maxSkillImportTotalFileSize {
+			return apperrors.Newf(
+				"copySkillDirectory",
+				"skill package too large: %d bytes (limit %d bytes)",
+				stats.Bytes,
+				maxSkillImportTotalFileSize,
+			)
+		}
+		if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
+			return err
+		}
+		return copyRegularFile(currentPath, destinationPath, info.Mode().Perm())
+	})
+	return stats, err
+}
+
+func activateStagedSkillDir(targetDir, stagedDir string) error {
+	parentDir := filepath.Dir(targetDir)
+	base := filepath.Base(targetDir)
+	backupDir := filepath.Join(parentDir, fmt.Sprintf(".%s.backup-%d", base, time.Now().UnixNano()))
+	backupCreated := false
+	if _, err := os.Stat(targetDir); err == nil {
+		if err := os.Rename(targetDir, backupDir); err != nil {
+			return err
+		}
+		backupCreated = true
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(stagedDir, targetDir); err != nil {
+		if backupCreated {
+			_ = os.Rename(backupDir, targetDir)
+		}
+		return err
+	}
+	if backupCreated {
+		_ = os.RemoveAll(backupDir)
+	}
+	return nil
 }
 
 type skillMetadata struct {
@@ -467,7 +817,7 @@ func extractSkillSections(content string, limit int) []SkillDigestEntry {
 		seen[key] = struct{}{}
 		sections = append(sections, SkillDigestEntry{
 			Title: truncateRunes(title, maxSkillSectionTitleRunes),
-			File:  "SKILL.md",
+			File:  skillMainFile,
 			Line:  idx + 1,
 		})
 		if len(sections) >= limit {
@@ -478,13 +828,6 @@ func extractSkillSections(content string, limit int) []SkillDigestEntry {
 		return nil
 	}
 	return sections
-}
-
-func validateSkillName(name string) error {
-	if name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
-		return apperrors.Newf("validateSkillName", "invalid skill name: %q", name)
-	}
-	return nil
 }
 
 func parseFrontmatterWords(value string, tail []string) ([]string, int) {

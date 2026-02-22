@@ -777,6 +777,13 @@ func (s *Server) executeStallAutoInterrupt(threadID, turnID string, silent, thre
 	// Auto-interrupt: send /interrupt to codex process (same as turnInterrupt).
 	util.SafeGo(func() {
 		s.markTrackedTurnInterruptRequested(threadID)
+		if cancelled := s.cancelCodeRuns(threadID); cancelled > 0 {
+			logger.Info("turn tracker: cancelled running code_run executions",
+				logger.FieldThreadID, threadID,
+				"turn_id", turnID,
+				"cancelled_runs", cancelled,
+			)
+		}
 		interrupted := false
 		if proc := s.mgr.Get(threadID); proc != nil {
 			if err := proc.Client.SendCommand("/interrupt", ""); err != nil {

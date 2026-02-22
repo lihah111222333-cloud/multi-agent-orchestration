@@ -160,6 +160,7 @@ func (s *Server) orchestrationLaunchAgent(args json.RawMessage) string {
 	if err := s.mgr.Launch(ctx, id, p.Name, p.Prompt, p.Cwd, "", tools); err != nil {
 		return toolError(apperrors.Wrap(err, "orchestrationLaunchAgent", "launch agent"))
 	}
+	s.setAgentWorkDir(id, p.Cwd)
 
 	logger.Info("orchestration: agent launched", logger.FieldID, id, logger.FieldName, p.Name, logger.FieldCwd, p.Cwd, logger.FieldRunKey, p.WorkspaceRunKey)
 	return toolJSON(map[string]any{
@@ -182,10 +183,17 @@ func (s *Server) orchestrationStopAgent(args json.RawMessage) string {
 	if p.AgentID == "" {
 		return `{"error":"agent_id is required"}`
 	}
+	if cancelled := s.cancelCodeRuns(p.AgentID); cancelled > 0 {
+		logger.Info("orchestration: cancelled running code_run executions before stop",
+			logger.FieldAgentID, p.AgentID,
+			"cancelled_runs", cancelled,
+		)
+	}
 
 	if err := s.mgr.Stop(p.AgentID); err != nil {
 		return toolError(apperrors.Wrap(err, "orchestrationStopAgent", "stop agent"))
 	}
+	s.clearAgentWorkDir(p.AgentID)
 
 	// 共生共灭: agent 停止 → 解除 codexThreadId 绑定。
 	if s.bindingStore != nil {

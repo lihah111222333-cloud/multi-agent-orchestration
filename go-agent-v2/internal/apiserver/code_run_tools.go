@@ -12,6 +12,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -75,10 +77,13 @@ func (s *Server) buildCodeRunTools() []codex.DynamicTool {
 // ========================================
 
 // codeRunWithAgent 处理 code_run 工具调用。
-func (s *Server) codeRunWithAgent(agentID, callID string, args json.RawMessage) string {
-	if s.codeRunner == nil {
-		return `{"error":"code runner not available","exit_code":-1}`
+func (s *Server) codeRunWithAgent(ctx context.Context, agentID, callID string, args json.RawMessage) string {
+	runner, cleanupRunner, runnerErr := s.resolveCodeRunner(agentID)
+	if runnerErr != nil {
+		return fmt.Sprintf(`{"error":%q,"exit_code":-1}`, runnerErr.Error())
 	}
+	defer cleanupRunner()
+
 	var p struct {
 		Language string  `json:"language"`
 		Code     string  `json:"code"`
@@ -111,18 +116,19 @@ func (s *Server) codeRunWithAgent(agentID, callID string, args json.RawMessage) 
 		autoWrap = *p.AutoWrap
 	}
 
-	timeout := time.Duration(p.Timeout) * time.Second
-	if timeout <= 0 {
-		timeout = 0 // 由 CodeRunner 使用默认值
+	workDir := strings.TrimSpace(p.WorkDir)
+	if workDir == "" {
+		workDir = s.getAgentWorkDir(agentID)
 	}
+	timeout := parseCodeRunTimeout(p.Timeout)
 
-	result, err := s.codeRunner.Run(context.Background(), executor.RunRequest{
+	result, err := runner.Run(ctx, executor.RunRequest{
 		Language: p.Language,
 		Code:     p.Code,
 		Command:  p.Command,
 		Mode:     p.Mode,
 		AutoWrap: autoWrap,
-		WorkDir:  p.WorkDir,
+		WorkDir:  workDir,
 		Timeout:  timeout,
 	})
 	if err != nil {
@@ -137,10 +143,13 @@ func (s *Server) codeRunWithAgent(agentID, callID string, args json.RawMessage) 
 }
 
 // codeRunTestWithAgent 处理 code_run_test 工具调用。
-func (s *Server) codeRunTestWithAgent(agentID, _ string, args json.RawMessage) string {
-	if s.codeRunner == nil {
-		return `{"error":"code runner not available","exit_code":-1}`
+func (s *Server) codeRunTestWithAgent(ctx context.Context, agentID, _ string, args json.RawMessage) string {
+	runner, cleanupRunner, runnerErr := s.resolveCodeRunner(agentID)
+	if runnerErr != nil {
+		return fmt.Sprintf(`{"error":%q,"exit_code":-1}`, runnerErr.Error())
 	}
+	defer cleanupRunner()
+
 	var p struct {
 		TestFunc string  `json:"test_func"`
 		TestPkg  string  `json:"test_pkg"`
@@ -150,12 +159,9 @@ func (s *Server) codeRunTestWithAgent(agentID, _ string, args json.RawMessage) s
 		return toolError(err)
 	}
 
-	timeout := time.Duration(p.Timeout) * time.Second
-	if timeout <= 0 {
-		timeout = 0
-	}
+	timeout := parseCodeRunTimeout(p.Timeout)
 
-	result, err := s.codeRunner.Run(context.Background(), executor.RunRequest{
+	result, err := runner.Run(ctx, executor.RunRequest{
 		Mode:     executor.ModeTest,
 		TestFunc: p.TestFunc,
 		TestPkg:  p.TestPkg,
@@ -170,6 +176,198 @@ func (s *Server) codeRunTestWithAgent(agentID, _ string, args json.RawMessage) s
 		result.ExitCode, result.Duration.Milliseconds(), "", p.TestFunc, result.Output)
 
 	return codeRunResultJSON(result)
+}
+
+// ========================================
+// 执行上下文 / 工作目录 / runner 解析
+// ========================================
+
+// parseCodeRunTimeout 将 timeout(秒)转换为 time.Duration。
+// 返回 0 表示使用 CodeRunner 默认值。
+func parseCodeRunTimeout(seconds float64) time.Duration {
+	if seconds <= 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
+		return 0
+	}
+	ns := seconds * float64(time.Second)
+	if ns >= float64(math.MaxInt64) {
+		return time.Duration(math.MaxInt64)
+	}
+	timeout := time.Duration(ns)
+	if timeout <= 0 {
+		return time.Nanosecond
+	}
+	return timeout
+}
+
+func samePath(a, b string) bool {
+	if strings.TrimSpace(a) == "" || strings.TrimSpace(b) == "" {
+		return false
+	}
+	aa, errA := filepath.Abs(a)
+	bb, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return filepath.Clean(aa) == filepath.Clean(bb)
+}
+
+func normalizeAgentWorkDir(cwd string) string {
+	trimmed := strings.TrimSpace(cwd)
+	if trimmed == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(trimmed)
+	if err != nil {
+		return filepath.Clean(trimmed)
+	}
+	return filepath.Clean(abs)
+}
+
+func (s *Server) setAgentWorkDir(agentID, cwd string) {
+	id := strings.TrimSpace(agentID)
+	if id == "" {
+		return
+	}
+	normalized := normalizeAgentWorkDir(cwd)
+	if normalized == "" {
+		return
+	}
+	s.agentWorkDirMu.Lock()
+	if s.agentWorkDirs == nil {
+		s.agentWorkDirs = make(map[string]string)
+	}
+	s.agentWorkDirs[id] = normalized
+	s.agentWorkDirMu.Unlock()
+}
+
+func (s *Server) getAgentWorkDir(agentID string) string {
+	id := strings.TrimSpace(agentID)
+	if id == "" {
+		return ""
+	}
+	s.agentWorkDirMu.RLock()
+	cwd := s.agentWorkDirs[id]
+	s.agentWorkDirMu.RUnlock()
+	return cwd
+}
+
+func (s *Server) clearAgentWorkDir(agentID string) {
+	id := strings.TrimSpace(agentID)
+	if id == "" {
+		return
+	}
+	s.agentWorkDirMu.Lock()
+	delete(s.agentWorkDirs, id)
+	s.agentWorkDirMu.Unlock()
+}
+
+// resolveCodeRunner 按 agent 默认 cwd 选择 runner。
+// 当 agent cwd 与 server 全局 runner 根目录不一致时, 创建一次性 runner 并返回 cleanup。
+func (s *Server) resolveCodeRunner(agentID string) (*executor.CodeRunner, func(), error) {
+	defaultRunner := s.codeRunner
+	agentCwd := s.getAgentWorkDir(agentID)
+	if agentCwd == "" {
+		if defaultRunner == nil {
+			return nil, nil, fmt.Errorf("code runner not available")
+		}
+		return defaultRunner, func() {}, nil
+	}
+
+	if defaultRunner != nil && samePath(defaultRunner.WorkDir(), agentCwd) {
+		return defaultRunner, func() {}, nil
+	}
+
+	runner, err := executor.NewCodeRunner(agentCwd)
+	if err != nil {
+		if defaultRunner != nil {
+			logger.Warn("code-run: agent runner init failed, fallback to default runner",
+				logger.FieldAgentID, agentID,
+				logger.FieldCwd, agentCwd,
+				logger.FieldError, err,
+			)
+			return defaultRunner, func() {}, nil
+		}
+		return nil, nil, err
+	}
+	return runner, runner.Cleanup, nil
+}
+
+// registerCodeRunCancel 注册运行中的 code_run 取消函数, 返回本次 runKey。
+func (s *Server) registerCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string {
+	if cancel == nil {
+		return ""
+	}
+	id := strings.TrimSpace(agentID)
+	if id == "" {
+		return ""
+	}
+	seq := s.codeRunSeq.Add(1)
+	key := fmt.Sprintf("%s#%d", strings.TrimSpace(callID), seq)
+
+	s.codeRunMu.Lock()
+	if s.activeCodeRuns == nil {
+		s.activeCodeRuns = make(map[string]map[string]context.CancelFunc)
+	}
+	runs := s.activeCodeRuns[id]
+	if runs == nil {
+		runs = make(map[string]context.CancelFunc)
+		s.activeCodeRuns[id] = runs
+	}
+	runs[key] = cancel
+	s.codeRunMu.Unlock()
+	return key
+}
+
+func (s *Server) unregisterCodeRunCancel(agentID, runKey string) {
+	id := strings.TrimSpace(agentID)
+	key := strings.TrimSpace(runKey)
+	if id == "" || key == "" {
+		return
+	}
+	s.codeRunMu.Lock()
+	if runs := s.activeCodeRuns[id]; runs != nil {
+		delete(runs, key)
+		if len(runs) == 0 {
+			delete(s.activeCodeRuns, id)
+		}
+	}
+	s.codeRunMu.Unlock()
+}
+
+// cancelCodeRuns 取消指定 agent 当前所有 code_run/code_run_test 执行。
+func (s *Server) cancelCodeRuns(agentID string) int {
+	id := strings.TrimSpace(agentID)
+	if id == "" {
+		return 0
+	}
+	s.codeRunMu.Lock()
+	runs := s.activeCodeRuns[id]
+	delete(s.activeCodeRuns, id)
+	s.codeRunMu.Unlock()
+	if len(runs) == 0 {
+		return 0
+	}
+	for _, cancel := range runs {
+		cancel()
+	}
+	return len(runs)
+}
+
+// cancelAllCodeRuns 取消所有 agent 的 code_run/code_run_test 执行。
+func (s *Server) cancelAllCodeRuns() int {
+	s.codeRunMu.Lock()
+	all := s.activeCodeRuns
+	s.activeCodeRuns = make(map[string]map[string]context.CancelFunc)
+	s.codeRunMu.Unlock()
+
+	total := 0
+	for _, runs := range all {
+		for _, cancel := range runs {
+			cancel()
+			total++
+		}
+	}
+	return total
 }
 
 // ========================================

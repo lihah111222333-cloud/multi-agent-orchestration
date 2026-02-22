@@ -2,6 +2,7 @@
 package apiserver
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,9 +19,57 @@ import (
 func (s *Server) skillsDirectory() string {
 	dir := strings.TrimSpace(s.skillsDir)
 	if dir == "" {
-		return ".agent/skills"
+		return defaultSkillsCacheDir()
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		logger.Warn("skills directory: ensure custom dir failed, fallback to app cache",
+			logger.FieldError, err,
+			logger.FieldPath, dir,
+		)
+		return defaultSkillsCacheDir()
 	}
 	return dir
+}
+
+func defaultSkillsCacheDir() string {
+	ensureLocalFallback := func(path string) string {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			logger.Warn("skills directory: ensure local fallback failed", logger.FieldError, err, logger.FieldPath, path)
+		}
+		return path
+	}
+	localFallback := filepath.Join(".multi-agent", "skills-cache")
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		logger.Warn("skills directory: resolve user home failed, fallback to local path",
+			logger.FieldError, err,
+		)
+		return ensureLocalFallback(localFallback)
+	}
+	homeDir = strings.TrimSpace(homeDir)
+	if homeDir == "" {
+		logger.Warn("skills directory: user home empty, fallback to local path")
+		return ensureLocalFallback(localFallback)
+	}
+
+	appRootDir := filepath.Join(homeDir, ".multi-agent")
+	if err := os.MkdirAll(appRootDir, 0o755); err != nil {
+		logger.Warn("skills directory: ensure app root failed, fallback to local path",
+			logger.FieldError, err,
+			logger.FieldPath, appRootDir,
+		)
+		return ensureLocalFallback(localFallback)
+	}
+	cacheDir := filepath.Join(appRootDir, "skills-cache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		logger.Warn("skills directory: ensure cache dir failed, fallback to local path",
+			logger.FieldError, err,
+			logger.FieldPath, cacheDir,
+		)
+		return ensureLocalFallback(localFallback)
+	}
+	return cacheDir
 }
 
 // registerDynamicTools 注册所有动态工具处理函数。
@@ -314,9 +363,27 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 		result = s.orchestrationSendMessageFrom(agentID, call.Arguments)
 	} else if call.Tool == "code_run" {
 		// code_run / code_run_test: 需要 agentID + callID, 在此硬编码分支。
-		result = s.codeRunWithAgent(agentID, resolveCodeRunCallID(call.CallID, event.RequestID), call.Arguments)
+		resolvedCallID := resolveCodeRunCallID(call.CallID, event.RequestID)
+		result = func() string {
+			execCtx, execCancel := context.WithCancel(context.Background())
+			runKey := s.registerCodeRunCancel(agentID, resolvedCallID, execCancel)
+			defer func() {
+				s.unregisterCodeRunCancel(agentID, runKey)
+				execCancel()
+			}()
+			return s.codeRunWithAgent(execCtx, agentID, resolvedCallID, call.Arguments)
+		}()
 	} else if call.Tool == "code_run_test" {
-		result = s.codeRunTestWithAgent(agentID, resolveCodeRunCallID(call.CallID, event.RequestID), call.Arguments)
+		resolvedCallID := resolveCodeRunCallID(call.CallID, event.RequestID)
+		result = func() string {
+			execCtx, execCancel := context.WithCancel(context.Background())
+			runKey := s.registerCodeRunCancel(agentID, resolvedCallID, execCancel)
+			defer func() {
+				s.unregisterCodeRunCancel(agentID, runKey)
+				execCancel()
+			}()
+			return s.codeRunTestWithAgent(execCtx, agentID, resolvedCallID, call.Arguments)
+		}()
 	} else if handler, ok := s.dynTools[call.Tool]; ok {
 		result = handler(call.Arguments)
 	} else {

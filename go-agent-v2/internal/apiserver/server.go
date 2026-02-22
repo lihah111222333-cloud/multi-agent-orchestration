@@ -59,6 +59,8 @@ type Server struct {
 	// pendingMu:    pending map (Server→Client 请求跟踪)
 	// diagMu:       diagCache (LSP 诊断缓存)
 	// toolCallMu:   toolCallCount (工具调用计数)
+	// codeRunMu:    activeCodeRuns (code_run 执行上下文取消函数)
+	// agentWorkDirMu: agentWorkDirs (agent 默认工作目录)
 	// fileChangeMu: fileChangeByThread (文件变更跟踪)
 	// skillsMu:     agentSkills (技能配置)
 	// sseMu:        sseClients (SSE 推送)
@@ -119,6 +121,15 @@ type Server struct {
 	toolCallMu    sync.Mutex
 	toolCallCount map[string]int64 // toolName → count
 
+	// code_run 执行上下文管理 (agentID -> runKey -> cancel)。
+	codeRunMu      sync.Mutex
+	activeCodeRuns map[string]map[string]context.CancelFunc
+	codeRunSeq     atomic.Int64
+
+	// agent 默认工作目录缓存 (agentID -> abs cwd)。
+	agentWorkDirMu sync.RWMutex
+	agentWorkDirs  map[string]string
+
 	// 文件变更跟踪 (threadId → 当前变更文件列表)
 	fileChangeMu       sync.Mutex
 	fileChangeByThread map[string][]string
@@ -166,7 +177,7 @@ type Deps struct {
 	LSP       *lsp.Manager
 	Config    *config.Config
 	DB        *pgxpool.Pool // 必需: 资源工具
-	SkillsDir string        // .agent/skills 目录路径 (可选, 默认 ".agent/skills")
+	SkillsDir string        // skills 目录路径 (可选, 默认 app 缓存目录)
 }
 
 // New 创建服务器。
@@ -181,6 +192,8 @@ func New(deps Deps) *Server {
 		pending:                     make(map[int64]chan *Response),
 		diagCache:                   make(map[string][]lsp.Diagnostic),
 		toolCallCount:               make(map[string]int64),
+		activeCodeRuns:              make(map[string]map[string]context.CancelFunc),
+		agentWorkDirs:               make(map[string]string),
 		fileChangeByThread:          make(map[string][]string),
 		activeTurns:                 make(map[string]*trackedTurn),
 		turnWatchdogTimeout:         defaultTurnWatchdogTimeout,
@@ -239,9 +252,15 @@ func New(deps Deps) *Server {
 		logger.Info("app-server: resource tools + dashboard enabled")
 	}
 	// Skills service (filesystem, no DB required)
-	skillsDir := deps.SkillsDir
+	skillsDir := strings.TrimSpace(deps.SkillsDir)
 	if skillsDir == "" {
-		skillsDir = ".agent/skills"
+		skillsDir = defaultSkillsCacheDir()
+	} else if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		logger.Warn("app-server: ensure custom skills dir failed, fallback to app cache",
+			logger.FieldError, err,
+			logger.FieldPath, skillsDir,
+		)
+		skillsDir = defaultSkillsCacheDir()
 	}
 	s.skillsDir = skillsDir
 	s.skillSvc = service.NewSkillService(skillsDir)
@@ -314,8 +333,12 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 
 func (s *Server) cleanupRuntimeResources() {
 	s.cleanupOnce.Do(func() {
+		s.cancelAllCodeRuns()
 		if s.codeRunner != nil {
 			s.codeRunner.Cleanup()
 		}
+		s.agentWorkDirMu.Lock()
+		clear(s.agentWorkDirs)
+		s.agentWorkDirMu.Unlock()
 	})
 }

@@ -109,7 +109,23 @@ func NewCodeRunner(workDir string) (*CodeRunner, error) {
 		return nil, pkgerr.Wrap(err, "NewCodeRunner", "resolve workDir")
 	}
 
-	tempRoot, err := os.MkdirTemp("", "code_exec_")
+	// 优先将临时目录放在工作区内:
+	//   - go run 生成的主文件位于模块树内时, 可导入 internal/... 包
+	//   - 失败时回退到系统临时目录, 保证功能可用
+	tempParent := filepath.Join(abs, ".codex", "code_exec")
+	if mkErr := os.MkdirAll(tempParent, 0o755); mkErr != nil {
+		logger.Warn("code-runner: create in-workspace temp parent failed, fallback to os temp",
+			logger.FieldPath, tempParent,
+			logger.FieldError, mkErr,
+		)
+		tempParent = ""
+	}
+
+	tempPattern := "code_exec_"
+	if tempParent != "" {
+		tempPattern = "session_"
+	}
+	tempRoot, err := os.MkdirTemp(tempParent, tempPattern)
 	if err != nil {
 		return nil, pkgerr.Wrap(err, "NewCodeRunner", "create tempRoot")
 	}
@@ -136,6 +152,9 @@ func (r *CodeRunner) HasNode() bool { return r.hasNode }
 
 // HasTsx 返回 tsx 是否可用 (PATH 或 node_modules/.bin/tsx)。
 func (r *CodeRunner) HasTsx() bool { return r.hasTsx }
+
+// WorkDir 返回当前 runner 的工作目录根。
+func (r *CodeRunner) WorkDir() string { return r.workDir }
 
 // Cleanup 清理实例级临时目录。应在 Server 关闭时调用。
 func (r *CodeRunner) Cleanup() {
@@ -245,7 +264,11 @@ func (r *CodeRunner) runGo(ctx context.Context, req RunRequest) (*RunResult, err
 		return nil, pkgerr.Wrap(err, "CodeRunner.runGo", "write main.go")
 	}
 
-	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, r.workDir, "go", "run", mainFile)
+	workDir := r.workDir
+	if req.WorkDir != "" {
+		workDir = req.WorkDir
+	}
+	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, workDir, "go", "run", mainFile)
 	return &RunResult{
 		Success:   exitCode == 0,
 		Output:    output,
@@ -267,7 +290,11 @@ func (r *CodeRunner) runGoTest(ctx context.Context, req RunRequest) (*RunResult,
 	}
 
 	pattern := buildGoTestPattern(req.TestFunc)
-	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, r.workDir, "go", "test", "-v", "-run", pattern, pkg)
+	workDir := r.workDir
+	if req.WorkDir != "" {
+		workDir = req.WorkDir
+	}
+	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, workDir, "go", "test", "-v", "-run", pattern, pkg)
 	return &RunResult{
 		Success:   exitCode == 0,
 		Output:    output,

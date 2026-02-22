@@ -315,6 +315,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 			logger.FieldPort, proc.Client.GetPort(),
 			"codex_thread_id", strings.TrimSpace(proc.Client.GetThreadID()),
 		)
+		s.setAgentWorkDir(id, launchCwd)
 		s.registerBinding(ctx, id, proc)
 		return proc, nil
 	}
@@ -354,9 +355,10 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 
 	dynamicTools := s.buildAllDynamicTools()
 
-	if err := s.mgr.Launch(ctx, id, id, "", launchCwd, s.resolveJsonRenderPrompt(ctx), dynamicTools); err != nil {
+	if err := s.mgr.Launch(ctx, id, id, "", launchCwd, "", dynamicTools); err != nil {
 		// 并发补加载时可能已被其他请求拉起，二次确认后再报错。
 		if proc := s.mgr.Get(id); proc != nil {
+			s.setAgentWorkDir(id, launchCwd)
 			return proc, nil
 		}
 		return nil, apperrors.Wrapf(err, "Server.ensureThreadReady", "auto-load thread %s", id)
@@ -366,6 +368,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	if proc == nil {
 		return nil, apperrors.Newf("Server.ensureThreadReady", "thread %s loaded but not found", id)
 	}
+	s.setAgentWorkDir(id, launchCwd)
 	logger.Info("turn/start: process launched for restore",
 		logger.FieldAgentID, id, logger.FieldThreadID, id,
 		logger.FieldPort, proc.Client.GetPort(),
@@ -404,6 +407,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 				"resume_thread_id", resumeThreadID,
 				logger.FieldError, err,
 			)
+			_ = s.cancelCodeRuns(id)
 			_ = s.mgr.Stop(id)
 			s.broadcastNotification(buildSessionLostNotification(id, err))
 			return nil, apperrors.Wrapf(err, "Server.ensureThreadReady",
@@ -440,8 +444,9 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 		)
 		// proc 在 non-crash 路径中仍然存活，但可能被 mgr 移除
 		if s.mgr.Get(id) == nil {
+			_ = s.cancelCodeRuns(id)
 			_ = s.mgr.Stop(id)
-			if launchErr := s.mgr.Launch(ctx, id, id, "", launchCwd, s.resolveJsonRenderPrompt(ctx), dynamicTools); launchErr != nil {
+			if launchErr := s.mgr.Launch(ctx, id, id, "", launchCwd, "", dynamicTools); launchErr != nil {
 				return nil, apperrors.Wrapf(launchErr, "Server.ensureThreadReady", "final re-spawn thread %s", id)
 			}
 			proc = s.mgr.Get(id)

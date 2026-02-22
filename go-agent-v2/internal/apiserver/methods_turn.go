@@ -151,42 +151,12 @@ func (s *Server) resolveLSPUsagePromptHint(ctx context.Context) string {
 	return hint
 }
 
-func (s *Server) appendLSPUsageHint(ctx context.Context, prompt string) string {
-	return mergePromptText(prompt, s.resolveLSPUsagePromptHint(ctx))
-}
-
 func (s *Server) resolveUnifiedToolingPrompt(ctx context.Context) string {
-	merged := s.resolveLSPUsagePromptHint(ctx)
-	merged = mergePromptText(merged, s.resolveJsonRenderPrompt(ctx))
-	merged = mergePromptText(merged, s.resolveBrowserPrompt(ctx))
-	if s.codeRunner != nil {
-		merged = mergePromptText(merged, s.resolveCodeRunPrompt(ctx))
-	}
-	return merged
+	return s.resolveLSPUsagePromptHint(ctx)
 }
 
 func (s *Server) appendUnifiedToolingHint(ctx context.Context, prompt string) string {
 	return mergePromptText(prompt, s.resolveUnifiedToolingPrompt(ctx))
-}
-
-func (s *Server) resolveBrowserPrompt(ctx context.Context) string {
-	if s.prefManager == nil {
-		return defaultBrowserPrompt
-	}
-	value, err := s.prefManager.Get(ctx, prefKeyBrowserPrompt)
-	if err != nil {
-		logger.Warn("browser prompt: load preference failed", logger.FieldError, err)
-		return defaultBrowserPrompt
-	}
-	prompt := strings.TrimSpace(asString(value))
-	if prompt == "" {
-		return defaultBrowserPrompt
-	}
-	if len(prompt) > maxBrowserPromptLen {
-		logger.Warn("browser prompt: invalid preference fallback to default", "length", len(prompt))
-		return defaultBrowserPrompt
-	}
-	return prompt
 }
 
 func (s *Server) buildConfiguredSkillPrompt(agentID string, input []UserInput) (string, int) {
@@ -578,6 +548,12 @@ func (s *Server) turnInterrupt(_ context.Context, params json.RawMessage) (any, 
 		"active_before", activeBefore,
 		"active_tracked_before", activeTrackedBefore,
 	)
+	if cancelled := s.cancelCodeRuns(p.ThreadID); cancelled > 0 {
+		logger.Info("turn/interrupt: cancelled running code_run executions",
+			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+			"cancelled_runs", cancelled,
+		)
+	}
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
 		if err := proc.Client.SendCommand("/interrupt", ""); err != nil {
 			if isInterruptNoActiveTurnError(err) {
@@ -658,6 +634,12 @@ func (s *Server) turnForceComplete(_ context.Context, params json.RawMessage) (a
 	logger.Info("turn/forceComplete: request",
 		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 	)
+	if cancelled := s.cancelCodeRuns(p.ThreadID); cancelled > 0 {
+		logger.Info("turn/forceComplete: cancelled running code_run executions",
+			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+			"cancelled_runs", cancelled,
+		)
+	}
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
 		// 尝试发送中断; 忽略 "no active turn" 错误, 但记录其他错误。
 		if err := proc.Client.SendCommand("/interrupt", ""); err != nil {
@@ -869,9 +851,6 @@ func normalizeSkillName(raw string) (string, error) {
 	name := strings.TrimSpace(raw)
 	if name == "" {
 		return "", apperrors.New("normalizeSkillName", "skill name is required")
-	}
-	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
-		return "", apperrors.Newf("normalizeSkillName", "invalid skill name %q", raw)
 	}
 	return name, nil
 }

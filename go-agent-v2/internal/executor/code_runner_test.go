@@ -68,6 +68,54 @@ fmt.Println(n)
 	}
 }
 
+// TestCodeRunner_GoRunWithInternalImport 验证 Go 代码可导入模块 internal 包。
+func TestCodeRunner_GoRunWithInternalImport(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/coderun\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkgDir := filepath.Join(root, "internal", "hello")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "hello.go"), []byte("package hello\n\nfunc Message() string { return \"hello-internal\" }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := NewCodeRunner(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Cleanup()
+
+	code := `package main
+
+import (
+	"fmt"
+	"example.com/coderun/internal/hello"
+)
+
+func main() {
+	fmt.Println(hello.Message())
+}
+`
+	result, err := r.Run(context.Background(), RunRequest{
+		Language: "go",
+		Code:     code,
+		Mode:     ModeRun,
+		AutoWrap: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got exit_code=%d, output=%s", result.ExitCode, result.Output)
+	}
+	if !strings.Contains(result.Output, "hello-internal") {
+		t.Fatalf("expected internal package output, got: %s", result.Output)
+	}
+}
+
 // TestCodeRunner_GoRunTimeout 验证超时 + 进程组清理。
 func TestCodeRunner_GoRunTimeout(t *testing.T) {
 	r := mustNewRunner(t)

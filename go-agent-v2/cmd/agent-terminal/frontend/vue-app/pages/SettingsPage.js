@@ -24,20 +24,6 @@ export const SettingsPage = {
     const lspPromptSaving = ref(false);
     const lspPromptNotice = reactive({ level: 'info', message: '' });
 
-    // json-render Prompt
-    const jrPrompt = ref('');
-    const jrDefaultPrompt = ref('');
-    const jrPromptLoading = ref(false);
-    const jrPromptSaving = ref(false);
-    const jrPromptNotice = reactive({ level: 'info', message: '' });
-
-    // Browser Prompt
-    const browserPrompt = ref('');
-    const browserDefaultPrompt = ref('');
-    const browserPromptLoading = ref(false);
-    const browserPromptSaving = ref(false);
-    const browserPromptNotice = reactive({ level: 'info', message: '' });
-
     let logRefreshTimer = 0;
 
     // Turn Tracker 设置
@@ -111,96 +97,6 @@ export const SettingsPage = {
       await saveLSPPromptHint();
     }
 
-    function setJRPromptNotice(level, message) {
-      jrPromptNotice.level = level || 'info';
-      jrPromptNotice.message = (message || '').toString().trim();
-    }
-
-    async function loadJRPrompt() {
-      jrPromptLoading.value = true;
-      try {
-        const res = await callAPI('config/jsonRenderPrompt/read', {});
-        jrPrompt.value = (res?.prompt || '').toString();
-        jrDefaultPrompt.value = (res?.defaultPrompt || '').toString();
-        setJRPromptNotice('info', '');
-      } catch (error) {
-        setJRPromptNotice('error', `加载失败：${error?.message || error}`);
-      } finally {
-        jrPromptLoading.value = false;
-      }
-    }
-
-    async function saveJRPrompt() {
-      if (jrPromptSaving.value) return;
-      jrPromptSaving.value = true;
-      try {
-        const res = await callAPI('config/jsonRenderPrompt/write', {
-          prompt: jrPrompt.value,
-        });
-        jrPrompt.value = (res?.prompt || '').toString();
-        if (res?.usingDefault) {
-          setJRPromptNotice('info', '已恢复默认提示词');
-        } else {
-          setJRPromptNotice('info', '提示词已保存 (新建对话生效)');
-        }
-      } catch (error) {
-        setJRPromptNotice('error', `保存失败：${error?.message || error}`);
-      } finally {
-        jrPromptSaving.value = false;
-      }
-    }
-
-    async function resetJRPrompt() {
-      if (jrPromptSaving.value) return;
-      jrPrompt.value = '';
-      await saveJRPrompt();
-    }
-
-    function setBrowserPromptNotice(level, message) {
-      browserPromptNotice.level = level || 'info';
-      browserPromptNotice.message = (message || '').toString().trim();
-    }
-
-    async function loadBrowserPrompt() {
-      browserPromptLoading.value = true;
-      try {
-        const res = await callAPI('config/browserPrompt/read', {});
-        browserPrompt.value = (res?.prompt || '').toString();
-        browserDefaultPrompt.value = (res?.defaultPrompt || '').toString();
-        setBrowserPromptNotice('info', '');
-      } catch (error) {
-        setBrowserPromptNotice('error', `加载失败：${error?.message || error}`);
-      } finally {
-        browserPromptLoading.value = false;
-      }
-    }
-
-    async function saveBrowserPrompt() {
-      if (browserPromptSaving.value) return;
-      browserPromptSaving.value = true;
-      try {
-        const res = await callAPI('config/browserPrompt/write', {
-          prompt: browserPrompt.value,
-        });
-        browserPrompt.value = (res?.prompt || '').toString();
-        if (res?.usingDefault) {
-          setBrowserPromptNotice('info', '已恢复默认提示词');
-        } else {
-          setBrowserPromptNotice('info', '提示词已保存');
-        }
-      } catch (error) {
-        setBrowserPromptNotice('error', `保存失败：${error?.message || error}`);
-      } finally {
-        browserPromptSaving.value = false;
-      }
-    }
-
-    async function resetBrowserPrompt() {
-      if (browserPromptSaving.value) return;
-      browserPrompt.value = '';
-      await saveBrowserPrompt();
-    }
-
     // Turn Tracker: 加载
     async function loadStallSettings() {
       stallLoading.value = true;
@@ -250,8 +146,6 @@ export const SettingsPage = {
       logInfo('page', 'settings.mounted', {});
       refreshLogPanel();
       loadLSPPromptHint();
-      loadJRPrompt();
-      loadBrowserPrompt();
       loadStallSettings();
       logRefreshTimer = window.setInterval(refreshLogPanel, 1000);
     });
@@ -279,14 +173,6 @@ export const SettingsPage = {
       loadLSPPromptHint,
       saveLSPPromptHint,
       resetLSPPromptHint,
-      jrPrompt,
-      jrDefaultPrompt,
-      jrPromptLoading,
-      jrPromptSaving,
-      jrPromptNotice,
-      loadJRPrompt,
-      saveJRPrompt,
-      resetJRPrompt,
       formatLogTime,
       stallThreshold,
       stallHeartbeat,
@@ -295,14 +181,6 @@ export const SettingsPage = {
       loadStallSettings,
       saveStallThreshold,
       saveStallHeartbeat,
-      browserPrompt,
-      browserDefaultPrompt,
-      browserPromptLoading,
-      browserPromptSaving,
-      browserPromptNotice,
-      loadBrowserPrompt,
-      saveBrowserPrompt,
-      resetBrowserPrompt,
     };
   },
   template: `
@@ -370,10 +248,10 @@ export const SettingsPage = {
         <div class="section-header">PROMPT</div>
         <div class="data-card-vue settings-prompt-card" data-testid="settings-lsp-prompt-card">
           <div class="data-row-vue">
-            <strong>LSP 提示词注入</strong>
+            <strong>Playwright/json-render /LSP 系统提示词注入</strong>
             <span>{{ lspPromptLoading ? '加载中...' : '已启用' }}</span>
           </div>
-          <div class="settings-prompt-desc">留空并保存可恢复默认值</div>
+          <div class="settings-prompt-desc">单一注入点。留空并保存可恢复默认值。</div>
           <textarea
             class="settings-prompt-textarea"
             data-testid="settings-lsp-prompt-input"
@@ -390,60 +268,6 @@ export const SettingsPage = {
             <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-lsp-reset-button" @click="resetLSPPromptHint" :disabled="lspPromptLoading || lspPromptSaving">恢复默认</button>
             <button class="btn btn-primary btn-toolbar-sm" data-testid="settings-lsp-save-button" @click="saveLSPPromptHint" :disabled="lspPromptLoading || lspPromptSaving">
               {{ lspPromptSaving ? '保存中...' : '保存提示词' }}
-            </button>
-          </div>
-        </div>
-
-        <div class="section-header">GENERATIVE UI</div>
-        <div class="data-card-vue settings-prompt-card" data-testid="settings-json-render-prompt-card">
-          <div class="data-row-vue">
-            <strong>json-render 提示词</strong>
-            <span>{{ jrPromptLoading ? '加载中...' : '已启用' }}</span>
-          </div>
-          <div class="settings-prompt-desc">控制 AI 输出结构化 UI 组件的系统提示词，留空并保存可恢复默认</div>
-          <textarea
-            class="settings-prompt-textarea"
-            data-testid="settings-json-render-prompt-input"
-            rows="8"
-            v-model="jrPrompt"
-            :placeholder="jrDefaultPrompt || '请输入提示词'"
-            :disabled="jrPromptLoading || jrPromptSaving"
-          ></textarea>
-          <div v-if="jrPromptNotice.message" class="settings-prompt-notice" data-testid="settings-json-render-prompt-notice" :class="'is-' + jrPromptNotice.level">
-            {{ jrPromptNotice.message }}
-          </div>
-          <div class="settings-action-row settings-action-inline">
-            <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-json-render-refresh-button" @click="loadJRPrompt" :disabled="jrPromptSaving">刷新</button>
-            <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-json-render-reset-button" @click="resetJRPrompt" :disabled="jrPromptLoading || jrPromptSaving">恢复默认</button>
-            <button class="btn btn-primary btn-toolbar-sm" data-testid="settings-json-render-save-button" @click="saveJRPrompt" :disabled="jrPromptLoading || jrPromptSaving">
-              {{ jrPromptSaving ? '保存中...' : '保存提示词' }}
-            </button>
-          </div>
-        </div>
-
-        <div class="section-header">BROWSER</div>
-        <div class="data-card-vue settings-prompt-card" data-testid="settings-browser-prompt-card">
-          <div class="data-row-vue">
-            <strong>Playwright 浏览器提示词</strong>
-            <span>{{ browserPromptLoading ? '加载中...' : '已启用' }}</span>
-          </div>
-          <div class="settings-prompt-desc">控制 AI 使用 Playwright 浏览器自动化的系统提示词，留空并保存可恢复默认</div>
-          <textarea
-            class="settings-prompt-textarea"
-            data-testid="settings-browser-prompt-input"
-            rows="6"
-            v-model="browserPrompt"
-            :placeholder="browserDefaultPrompt || '请输入提示词'"
-            :disabled="browserPromptLoading || browserPromptSaving"
-          ></textarea>
-          <div v-if="browserPromptNotice.message" class="settings-prompt-notice" data-testid="settings-browser-prompt-notice" :class="'is-' + browserPromptNotice.level">
-            {{ browserPromptNotice.message }}
-          </div>
-          <div class="settings-action-row settings-action-inline">
-            <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-browser-refresh-button" @click="loadBrowserPrompt" :disabled="browserPromptSaving">刷新</button>
-            <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-browser-reset-button" @click="resetBrowserPrompt" :disabled="browserPromptLoading || browserPromptSaving">恢复默认</button>
-            <button class="btn btn-primary btn-toolbar-sm" data-testid="settings-browser-save-button" @click="saveBrowserPrompt" :disabled="browserPromptLoading || browserPromptSaving">
-              {{ browserPromptSaving ? '保存中...' : '保存提示词' }}
             </button>
           </div>
         </div>

@@ -31,5 +31,3 @@
 真实调用按钮钩子（当前覆盖设置页）：
 
 - `settings-lsp-save-button`
-- `settings-json-render-save-button`
-- `settings-browser-save-button`

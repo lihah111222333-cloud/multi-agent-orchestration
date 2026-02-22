@@ -32,15 +32,7 @@ test("settings save actions trigger real API calls and surface notices", async (
     await expect(page.getByTestId("settings-lsp-prompt-notice")).toBeVisible();
     await expect(page.getByTestId("settings-lsp-prompt-notice")).not.toHaveText("");
 
-    const jsonSave = page.getByTestId("settings-json-render-save-button");
-    await expect(jsonSave).toBeEnabled();
-    await jsonSave.click();
-    await expect(page.getByTestId("settings-json-render-prompt-notice")).toBeVisible();
-    await expect(page.getByTestId("settings-json-render-prompt-notice")).not.toHaveText("");
-
-    const browserSave = page.getByTestId("settings-browser-save-button");
-    await expect(browserSave).toBeEnabled();
-    await browserSave.click();
-    await expect(page.getByTestId("settings-browser-prompt-notice")).toBeVisible();
-    await expect(page.getByTestId("settings-browser-prompt-notice")).not.toHaveText("");
+    const promptCards = page.locator(".settings-prompt-card");
+    await expect(promptCards).toHaveCount(1);
+    await expect(page.getByText("Playwright/json-render /LSP 系统提示词注入")).toBeVisible();
 });

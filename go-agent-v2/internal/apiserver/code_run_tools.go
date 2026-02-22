@@ -4,7 +4,7 @@
 //   - code_run:      执行代码片段 (Go/JS/TS) 或项目命令
 //   - code_run_test: 执行 go test -run
 //
-// 审批策略: 仅 project_cmd 强制审批; run/test 默认免审批。
+// 审批策略: 仅高风险 project_cmd 需要审批; run/test 默认免审批。
 // 审计: 所有执行结果写入 audit_events 表。
 package apiserver
 
@@ -39,7 +39,7 @@ func (s *Server) buildCodeRunTools() []codex.DynamicTool {
 	tools := []codex.DynamicTool{
 		{
 			Name:        "code_run",
-			Description: "Execute a code snippet (Go, JavaScript, TypeScript) or a project shell command. Go snippets can be auto-wrapped with main function and imports. Use mode='project_cmd' for shell commands (requires approval).",
+			Description: "Execute a code snippet (Go, JavaScript, TypeScript) or a project shell command. Go snippets can be auto-wrapped with main function and imports. Use mode='project_cmd' for shell commands (only high-risk commands require approval).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -101,10 +101,10 @@ func (s *Server) codeRunWithAgent(ctx context.Context, agentID, callID string, a
 		p.Mode = executor.ModeRun
 	}
 
-	// project_cmd 强制审批
+	// project_cmd: 仅高风险命令需要审批
 	if p.Mode == executor.ModeProjectCmd {
 		isDangerous := executor.DetectDangerous(p.Command) != ""
-		if !s.awaitCodeRunApproval(agentID, callID, p.Mode, p.Command, isDangerous) {
+		if isDangerous && !s.awaitCodeRunApproval(agentID, callID, p.Mode, p.Command, isDangerous) {
 			s.writeCodeRunAudit(agentID, p.Language, p.Mode, "denied", 0, 0, p.Code, p.Command, "")
 			return `{"error":"execution denied by user","exit_code":-1}`
 		}

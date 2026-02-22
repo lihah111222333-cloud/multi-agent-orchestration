@@ -14,7 +14,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/executor"
 )
 
-func TestCodeRunWithAgent_ProjectCmdDeniedWithoutFrontend(t *testing.T) {
+func TestCodeRunWithAgent_ProjectCmdSafeCommandNoApproval(t *testing.T) {
 	r, err := executor.NewCodeRunner(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -29,6 +29,29 @@ func TestCodeRunWithAgent_ProjectCmdDeniedWithoutFrontend(t *testing.T) {
 
 	args := json.RawMessage(`{"mode":"project_cmd","command":"echo hello"}`)
 	resp := s.codeRunWithAgent(context.Background(), "agent-1", "call-1", args)
+	if !strings.Contains(resp, `"success":true`) {
+		t.Fatalf("expected success response, got: %s", resp)
+	}
+	if !strings.Contains(resp, "hello") {
+		t.Fatalf("expected output content, got: %s", resp)
+	}
+}
+
+func TestCodeRunWithAgent_ProjectCmdDangerousDeniedWithoutFrontend(t *testing.T) {
+	r, err := executor.NewCodeRunner(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.Cleanup)
+
+	s := &Server{
+		codeRunner: r,
+		conns:      map[string]*connEntry{},
+		pending:    make(map[int64]chan *Response),
+	}
+
+	args := json.RawMessage(`{"mode":"project_cmd","command":"rm -rf /tmp/unsafe"}`)
+	resp := s.codeRunWithAgent(context.Background(), "agent-1", "call-1-danger", args)
 	if !strings.Contains(resp, "execution denied by user") {
 		t.Fatalf("expected denied response, got: %s", resp)
 	}

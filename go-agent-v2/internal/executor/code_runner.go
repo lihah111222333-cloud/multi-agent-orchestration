@@ -2,7 +2,7 @@
 //
 // 支持语言: Go (run/test) · JavaScript (node) · TypeScript (npx tsx)
 // 安全约束: 临时目录隔离 · 进程组管理 · 信号量限流 · 输出聚合裁剪
-// 审批范围: 仅 project_cmd 强制审批; run/test 受隔离+超时+输出上限约束
+// 审批范围: 仅高风险 project_cmd 需要审批; run/test 受隔离+超时+输出上限约束
 package executor
 
 import (
@@ -47,7 +47,7 @@ const (
 const (
 	ModeRun        = "run"         // 直接执行代码片段
 	ModeTest       = "test"        // go test -run
-	ModeProjectCmd = "project_cmd" // sh -c (强制审批)
+	ModeProjectCmd = "project_cmd" // sh -c (高风险命令审批)
 )
 
 // ========================================
@@ -382,7 +382,7 @@ func (r *CodeRunner) runTS(ctx context.Context, req RunRequest) (*RunResult, err
 // Project Command 执行
 // ========================================
 
-// runProjectCmd 执行 shell 命令 (唯一强制审批的模式)。
+// runProjectCmd 执行 shell 命令 (高风险命令由上层审批)。
 //
 // 审批由上层 apiserver 处理, 此处仅负责执行。
 func (r *CodeRunner) runProjectCmd(ctx context.Context, req RunRequest) (*RunResult, error) {

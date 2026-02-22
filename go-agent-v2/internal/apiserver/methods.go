@@ -76,7 +76,7 @@ const (
 		"  - Go 代码默认 auto_wrap=true, 自动补全 package main 和 imports\n" +
 		"  - JS/TS 代码直接执行, 无需额外配置\n" +
 		"2. 执行测试: code_run_test — go test -v -run ^TestFunc$ [package]\n" +
-		"3. 项目命令: code_run (mode=project_cmd) — 执行 shell 命令 (需要用户审批)\n" +
+		"3. 项目命令: code_run (mode=project_cmd) — 执行 shell 命令 (仅高风险命令需要用户审批)\n" +
 		"安全约束: 输出上限 512KB, 默认超时 30s, 代码在临时目录隔离执行。\n" +
 		"优先使用 code_run 验证代码逻辑, 使用 code_run_test 验证测试结果。"
 	prefKeyLSPUsagePromptHint = "settings.lspUsagePromptHint"

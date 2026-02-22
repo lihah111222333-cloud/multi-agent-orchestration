@@ -63,7 +63,7 @@ func loadEnvFile() {
 	if err != nil {
 		return
 	}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		envPath := filepath.Join(dir, ".env")
 		f, err := os.Open(envPath)
 		if err == nil {

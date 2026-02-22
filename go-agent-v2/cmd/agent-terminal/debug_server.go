@@ -229,7 +229,7 @@ func readDebugBridgeEvents(after int64, limit int) ([]debugBridgeEvent, int64, i
 
 	cap := len(debugBridgeHub.ring)
 	out := make([]debugBridgeEvent, 0, limit)
-	for i := 0; i < queueDepth; i++ {
+	for i := range queueDepth {
 		idx := (debugBridgeHub.head + i) % cap
 		evt := debugBridgeHub.ring[idx]
 		if evt.ID <= after {
@@ -294,7 +294,7 @@ func startDebugServer(ctx context.Context, uiPort int, apiBaseURL string) {
 
 	// 注入 shim 的 index.html handler
 	// serveIndexWithShim 读取 dist/index.html 并注入 shim 脚本
-	serveIndexWithShim := func(w http.ResponseWriter, r *http.Request) {
+	serveIndexWithShim := func(w http.ResponseWriter, _ *http.Request) {
 		data, err := os.ReadFile(filepath.Join(distDir, "index.html"))
 		if err != nil {
 			http.Error(w, "dist/index.html not found — run 'npm run build:react'", 404)

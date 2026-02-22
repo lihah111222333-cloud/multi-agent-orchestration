@@ -60,10 +60,8 @@ func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any
 	// 构建全部动态工具注入 agent (LSP + 编排 + 资源)
 	dynamicTools := s.buildAllDynamicTools()
 
-	// 解析 json-render 提示词 (支持用户自定义)
-	jsonRenderPrompt := s.resolveJsonRenderPrompt(ctx)
-
-	if err := s.mgr.Launch(ctx, id, id, "", p.Cwd, jsonRenderPrompt, dynamicTools); err != nil {
+	// 提示词注入统一走 turn/start 与 turn/steer，thread 启动不再附加独立注入。
+	if err := s.mgr.Launch(ctx, id, id, "", p.Cwd, "", dynamicTools); err != nil {
 		return nil, apperrors.Wrap(err, "Server.threadStart", "launch thread")
 	}
 	if proc := s.mgr.Get(id); proc != nil {

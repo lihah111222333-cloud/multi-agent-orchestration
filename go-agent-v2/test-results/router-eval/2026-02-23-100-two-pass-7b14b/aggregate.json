@@ -1,0 +1,144 @@
+{
+  "generated_at": "2026-02-23T04:25:01.588182",
+  "tools": [
+    "lsp_open_file",
+    "lsp_document_symbol",
+    "lsp_hover",
+    "lsp_diagnostics",
+    "lsp_definition",
+    "lsp_references",
+    "lsp_rename",
+    "lsp_completion",
+    "lsp_did_change",
+    "lsp_workspace_symbol",
+    "lsp_implementation",
+    "lsp_type_definition",
+    "lsp_call_hierarchy",
+    "lsp_type_hierarchy",
+    "lsp_code_action",
+    "lsp_signature_help",
+    "lsp_format",
+    "lsp_semantic_tokens",
+    "lsp_folding_range"
+  ],
+  "total_cases": 100,
+  "rerank_model": "qwen2.5:14b",
+  "rerank_mode": "parse_or_ambiguous",
+  "models": {
+    "qwen2.5_7b__rerank_qwen2.5_14b__parse_or_ambiguous": {
+      "model": "qwen2.5:7b",
+      "rerank_model": "qwen2.5:14b",
+      "rerank_mode": "parse_or_ambiguous",
+      "total_cases": 100,
+      "stage1_top1_accuracy": 0.85,
+      "stage1_hit_primary_accuracy": 0.93,
+      "top1_accuracy": 0.95,
+      "hit_primary_accuracy": 0.97,
+      "exact_set_accuracy": 0.76,
+      "parse_fail_rate": 0.0,
+      "call_fail_rate": 0.0,
+      "stage2_trigger_rate": 0.39,
+      "latency_avg_s": 0.9374,
+      "latency_p50_s": 0.5505,
+      "latency_p95_s": 1.7911,
+      "elapsed_wall_s": 93.754,
+      "per_tool": {
+        "lsp_open_file": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_document_symbol": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_hover": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_diagnostics": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_definition": {
+          "n": 6,
+          "top1_acc": 0.8333,
+          "hit_primary_acc": 0.8333
+        },
+        "lsp_references": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_rename": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_completion": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_did_change": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_workspace_symbol": {
+          "n": 6,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_implementation": {
+          "n": 6,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_type_definition": {
+          "n": 6,
+          "top1_acc": 0.8333,
+          "hit_primary_acc": 0.8333
+        },
+        "lsp_call_hierarchy": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_type_hierarchy": {
+          "n": 5,
+          "top1_acc": 0.6,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_code_action": {
+          "n": 6,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_signature_help": {
+          "n": 5,
+          "top1_acc": 0.8,
+          "hit_primary_acc": 0.8
+        },
+        "lsp_format": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_semantic_tokens": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_folding_range": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        }
+      }
+    }
+  }
+}

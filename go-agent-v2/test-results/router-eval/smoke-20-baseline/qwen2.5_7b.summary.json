@@ -1,0 +1,40 @@
+{
+  "model": "qwen2.5:7b",
+  "rerank_model": "",
+  "rerank_mode": "off",
+  "total_cases": 20,
+  "stage1_top1_accuracy": 1.0,
+  "stage1_hit_primary_accuracy": 1.0,
+  "top1_accuracy": 1.0,
+  "hit_primary_accuracy": 1.0,
+  "exact_set_accuracy": 0.85,
+  "parse_fail_rate": 0.0,
+  "call_fail_rate": 0.0,
+  "stage2_trigger_rate": 0.0,
+  "latency_avg_s": 0.7545,
+  "latency_p50_s": 0.5289,
+  "latency_p95_s": 4.2429,
+  "elapsed_wall_s": 15.09,
+  "per_tool": {
+    "lsp_open_file": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_document_symbol": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_hover": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_diagnostics": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    }
+  }
+}

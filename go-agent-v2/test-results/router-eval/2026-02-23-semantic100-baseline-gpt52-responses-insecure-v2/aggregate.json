@@ -1,0 +1,150 @@
+{
+  "generated_at": "2026-02-23T04:53:40.178362",
+  "tools": [
+    "lsp_open_file",
+    "lsp_document_symbol",
+    "lsp_hover",
+    "lsp_diagnostics",
+    "lsp_definition",
+    "lsp_references",
+    "lsp_rename",
+    "lsp_completion",
+    "lsp_did_change",
+    "lsp_workspace_symbol",
+    "lsp_implementation",
+    "lsp_type_definition",
+    "lsp_call_hierarchy",
+    "lsp_type_hierarchy",
+    "lsp_code_action",
+    "lsp_signature_help",
+    "lsp_format",
+    "lsp_semantic_tokens",
+    "lsp_folding_range"
+  ],
+  "total_cases": 100,
+  "provider": "openai",
+  "api_base": "https://api.gpteamservices.com/v1",
+  "openai_endpoint": "responses",
+  "reasoning_effort": "high",
+  "tls_insecure": true,
+  "ca_bundle": "",
+  "rerank_model": "",
+  "rerank_mode": "off",
+  "models": {
+    "gpt-5.2-codex": {
+      "model": "gpt-5.2-codex",
+      "rerank_model": "",
+      "rerank_mode": "off",
+      "total_cases": 100,
+      "stage1_top1_accuracy": 0.0,
+      "stage1_hit_primary_accuracy": 0.0,
+      "top1_accuracy": 0.0,
+      "hit_primary_accuracy": 0.0,
+      "exact_set_accuracy": 0.0,
+      "parse_fail_rate": 1.0,
+      "call_fail_rate": 1.0,
+      "stage2_trigger_rate": 0.0,
+      "latency_avg_s": 0.3084,
+      "latency_p50_s": 0.3069,
+      "latency_p95_s": 0.3413,
+      "elapsed_wall_s": 30.842,
+      "per_tool": {
+        "lsp_open_file": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_document_symbol": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_hover": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_diagnostics": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_definition": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_references": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_rename": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_completion": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_did_change": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_workspace_symbol": {
+          "n": 6,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_implementation": {
+          "n": 6,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_type_definition": {
+          "n": 6,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_call_hierarchy": {
+          "n": 6,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_type_hierarchy": {
+          "n": 6,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_code_action": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_signature_help": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_format": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_semantic_tokens": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        },
+        "lsp_folding_range": {
+          "n": 5,
+          "top1_acc": 0.0,
+          "hit_primary_acc": 0.0
+        }
+      }
+    }
+  }
+}

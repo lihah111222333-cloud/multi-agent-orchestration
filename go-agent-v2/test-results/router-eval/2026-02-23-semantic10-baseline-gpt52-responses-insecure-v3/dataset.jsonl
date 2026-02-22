@@ -1,0 +1,10 @@
+{"id": 1, "query": "先把目标源码加载进语言服务上下文，后面我才开始定位问题。", "expected_primary": "lsp_open_file", "expected_tools": ["lsp_open_file"]}
+{"id": 2, "query": "我还没让编辑器感知这个文件，先让它进入会话。", "expected_primary": "lsp_open_file", "expected_tools": ["lsp_open_file"]}
+{"id": 3, "query": "在分析前先把这份代码纳入当前工作文档状态。", "expected_primary": "lsp_open_file", "expected_tools": ["lsp_open_file"]}
+{"id": 4, "query": "先建立该文件与语言服务器的关联，再继续下一步。", "expected_primary": "lsp_open_file", "expected_tools": ["lsp_open_file"]}
+{"id": 5, "query": "我刚切到这个文件，请先让工具链感知它。", "expected_primary": "lsp_open_file", "expected_tools": ["lsp_open_file"]}
+{"id": 6, "query": "我想先看这份代码的结构轮廓：有哪些类型、函数和方法。", "expected_primary": "lsp_document_symbol", "expected_tools": ["lsp_document_symbol"]}
+{"id": 7, "query": "先给我一张源码目录图，按声明级别列出主要成员。", "expected_primary": "lsp_document_symbol", "expected_tools": ["lsp_document_symbol"]}
+{"id": 8, "query": "不看实现细节，先把文件内的定义骨架梳理出来。", "expected_primary": "lsp_document_symbol", "expected_tools": ["lsp_document_symbol"]}
+{"id": 9, "query": "请输出该文件的结构化声明列表，便于快速导航。", "expected_primary": "lsp_document_symbol", "expected_tools": ["lsp_document_symbol"]}
+{"id": 10, "query": "先做代码地图，把关键声明节点列出来。", "expected_primary": "lsp_document_symbol", "expected_tools": ["lsp_document_symbol"]}

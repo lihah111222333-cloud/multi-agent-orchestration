@@ -1,0 +1,30 @@
+{
+  "model": "gpt-5.2-codex",
+  "rerank_model": "",
+  "rerank_mode": "off",
+  "total_cases": 10,
+  "stage1_top1_accuracy": 0.8,
+  "stage1_hit_primary_accuracy": 0.9,
+  "top1_accuracy": 0.8,
+  "hit_primary_accuracy": 0.9,
+  "exact_set_accuracy": 0.8,
+  "parse_fail_rate": 0.0,
+  "call_fail_rate": 0.0,
+  "stage2_trigger_rate": 0.0,
+  "latency_avg_s": 2.6353,
+  "latency_p50_s": 2.3188,
+  "latency_p95_s": 4.3014,
+  "elapsed_wall_s": 26.353,
+  "per_tool": {
+    "lsp_open_file": {
+      "n": 5,
+      "top1_acc": 0.8,
+      "hit_primary_acc": 0.8
+    },
+    "lsp_document_symbol": {
+      "n": 5,
+      "top1_acc": 0.8,
+      "hit_primary_acc": 1.0
+    }
+  }
+}

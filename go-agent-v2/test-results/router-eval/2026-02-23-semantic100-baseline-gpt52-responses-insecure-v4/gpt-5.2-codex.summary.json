@@ -1,0 +1,115 @@
+{
+  "model": "gpt-5.2-codex",
+  "rerank_model": "",
+  "rerank_mode": "off",
+  "total_cases": 100,
+  "stage1_top1_accuracy": 0.94,
+  "stage1_hit_primary_accuracy": 0.97,
+  "top1_accuracy": 0.94,
+  "hit_primary_accuracy": 0.97,
+  "exact_set_accuracy": 0.87,
+  "parse_fail_rate": 0.0,
+  "call_fail_rate": 0.0,
+  "stage2_trigger_rate": 0.0,
+  "latency_avg_s": 2.5983,
+  "latency_p50_s": 2.4188,
+  "latency_p95_s": 3.8155,
+  "elapsed_wall_s": 259.841,
+  "per_tool": {
+    "lsp_open_file": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_document_symbol": {
+      "n": 5,
+      "top1_acc": 0.8,
+      "hit_primary_acc": 0.8
+    },
+    "lsp_hover": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_diagnostics": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_definition": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_references": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_rename": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_completion": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_did_change": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_workspace_symbol": {
+      "n": 6,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_implementation": {
+      "n": 6,
+      "top1_acc": 0.8333,
+      "hit_primary_acc": 0.8333
+    },
+    "lsp_type_definition": {
+      "n": 6,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_call_hierarchy": {
+      "n": 6,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_type_hierarchy": {
+      "n": 6,
+      "top1_acc": 0.8333,
+      "hit_primary_acc": 0.8333
+    },
+    "lsp_code_action": {
+      "n": 5,
+      "top1_acc": 0.4,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_signature_help": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_format": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_semantic_tokens": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_folding_range": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    }
+  }
+}

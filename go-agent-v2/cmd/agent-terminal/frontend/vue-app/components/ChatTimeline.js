@@ -19,6 +19,9 @@ export const ChatTimeline = {
   emits: ['file-ref-click'],
   setup(props, { emit }) {
     let updateSeq = 0;
+    let attachmentHoverHideTimer = 0;
+    const ATTACHMENT_HOVER_ZOOM_STEP = 0.25;
+    const ATTACHMENT_HOVER_ZOOM_MAX = 3;
     const visibleCount = ref(VISIBLE_WINDOW);
     const assistantMarkdownCache = new Map();
     const attachmentHoverPreview = ref(null);
@@ -206,13 +209,32 @@ export const ChatTimeline = {
       return { x: 32, y: 32 };
     }
 
+    function clearAttachmentHoverHideTimer() {
+      if (!attachmentHoverHideTimer) return;
+      window.clearTimeout(attachmentHoverHideTimer);
+      attachmentHoverHideTimer = 0;
+    }
+
+    function scheduleAttachmentHoverHide(delayMS = 110) {
+      clearAttachmentHoverHideTimer();
+      const delay = Number(delayMS);
+      attachmentHoverHideTimer = window.setTimeout(() => {
+        attachmentHoverPreview.value = null;
+        attachmentHoverHideTimer = 0;
+      }, Number.isFinite(delay) ? Math.max(0, delay) : 110);
+    }
+
     function attachmentHoverPosition(pointX, pointY) {
       const margin = 14;
       const offset = 18;
-      const previewWidth = 360;
-      const previewHeight = 280;
-      const viewportWidth = window.innerWidth || previewWidth + margin * 2;
-      const viewportHeight = window.innerHeight || previewHeight + margin * 2;
+      const viewportWidth = window.innerWidth || 1280;
+      const viewportHeight = window.innerHeight || 800;
+      const maxWidthByViewport = Math.max(240, viewportWidth - margin * 2);
+      const maxHeightByViewport = Math.max(220, viewportHeight - margin * 2);
+      const preferredWidth = Math.round(viewportWidth * 0.68);
+      const preferredHeight = Math.round(viewportHeight * 0.76);
+      const previewWidth = Math.min(760, maxWidthByViewport, Math.max(320, preferredWidth));
+      const previewHeight = Math.min(720, maxHeightByViewport, Math.max(260, preferredHeight));
       let left = pointX + offset;
       let top = pointY + offset;
       if (left + previewWidth > viewportWidth - margin) {
@@ -221,7 +243,12 @@ export const ChatTimeline = {
       if (top + previewHeight > viewportHeight - margin) {
         top = Math.max(margin, pointY - previewHeight - offset);
       }
-      return { left, top };
+      return {
+        left,
+        top,
+        width: previewWidth,
+        maxHeight: previewHeight,
+      };
     }
 
     function onAttachmentHoverMove(event, att) {
@@ -230,18 +257,59 @@ export const ChatTimeline = {
         attachmentHoverPreview.value = null;
         return;
       }
+      clearAttachmentHoverHideTimer();
       const point = attachmentHoverPoint(event);
       const pos = attachmentHoverPosition(point.x, point.y);
+      const prev = attachmentHoverPreview.value;
+      const prevZoomRaw = Number(prev?.zoom);
+      const zoom = prev && prev.src === src && Number.isFinite(prevZoomRaw) && prevZoomRaw > 0 ? prevZoomRaw : 1;
       attachmentHoverPreview.value = {
         src,
         alt: (att?.name || att?.path || 'image attachment').toString(),
         left: pos.left,
         top: pos.top,
+        width: pos.width,
+        maxHeight: pos.maxHeight,
+        zoom,
       };
     }
 
     function onAttachmentHoverLeave() {
-      attachmentHoverPreview.value = null;
+      scheduleAttachmentHoverHide();
+    }
+
+    function onAttachmentPreviewEnter() {
+      clearAttachmentHoverHideTimer();
+    }
+
+    function onAttachmentPreviewLeave() {
+      scheduleAttachmentHoverHide(80);
+    }
+
+    function onAttachmentPreviewZoomIn(event) {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      clearAttachmentHoverHideTimer();
+      const current = attachmentHoverPreview.value;
+      if (!current) return;
+      const zoomRaw = Number(current.zoom);
+      const zoom = Number.isFinite(zoomRaw) && zoomRaw > 0 ? zoomRaw : 1;
+      const nextZoom = Math.min(
+        ATTACHMENT_HOVER_ZOOM_MAX,
+        Math.round((zoom + ATTACHMENT_HOVER_ZOOM_STEP) * 100) / 100,
+      );
+      attachmentHoverPreview.value = { ...current, zoom: nextZoom };
+    }
+
+    function attachmentHoverImageStyle() {
+      const current = attachmentHoverPreview.value;
+      const zoomRaw = Number(current?.zoom);
+      const zoom = Number.isFinite(zoomRaw) && zoomRaw > 0 ? zoomRaw : 1;
+      if (zoom <= 1) return null;
+      return {
+        width: `${Math.round(zoom * 100)}%`,
+        maxHeight: 'none',
+      };
     }
 
     function formatTime(ts) {
@@ -440,6 +508,10 @@ export const ChatTimeline = {
       onAssistantBodyClick,
       onAttachmentHoverMove,
       onAttachmentHoverLeave,
+      onAttachmentPreviewEnter,
+      onAttachmentPreviewLeave,
+      onAttachmentPreviewZoomIn,
+      attachmentHoverImageStyle,
       attachmentHoverPreview,
       copyFilePath,
       itemHasSpec,
@@ -639,10 +711,28 @@ export const ChatTimeline = {
       <div
         v-if="attachmentHoverPreview"
         class="chat-attachment-hover-preview"
-        :style="{ left: attachmentHoverPreview.left + 'px', top: attachmentHoverPreview.top + 'px' }"
+        :style="{
+          left: attachmentHoverPreview.left + 'px',
+          top: attachmentHoverPreview.top + 'px',
+          width: attachmentHoverPreview.width + 'px',
+          maxHeight: attachmentHoverPreview.maxHeight + 'px',
+        }"
+        @mouseenter="onAttachmentPreviewEnter"
+        @mouseleave="onAttachmentPreviewLeave"
         aria-hidden="true"
       >
-        <img :src="attachmentHoverPreview.src" :alt="attachmentHoverPreview.alt" />
+        <button
+          class="chat-attachment-preview-zoom-btn"
+          type="button"
+          title="继续放大"
+          aria-label="继续放大"
+          @click="onAttachmentPreviewZoomIn"
+        >+</button>
+        <img
+          :src="attachmentHoverPreview.src"
+          :alt="attachmentHoverPreview.alt"
+          :style="attachmentHoverImageStyle()"
+        />
       </div>
       <div v-if="showAgentPresence" class="chat-presence-row">
         <div class="chat-item-avatar chat-item-avatar-presence">

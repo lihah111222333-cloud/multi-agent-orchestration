@@ -3123,8 +3123,8 @@ body.is-row-resizing * {
 }
 
 .chat-attachment-image {
-  max-width: 220px;
-  max-height: 180px;
+  max-width: 320px;
+  max-height: 240px;
   object-fit: contain;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.26);
@@ -3139,8 +3139,8 @@ body.is-row-resizing * {
 .chat-attachment-hover-preview {
   position: fixed;
   z-index: 1200;
-  width: min(46vw, 420px);
-  max-height: min(58vh, 420px);
+  width: min(70vw, 760px);
+  max-height: min(82vh, 720px);
   padding: 8px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.28);
@@ -3148,16 +3148,48 @@ body.is-row-resizing * {
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  pointer-events: none;
+  pointer-events: auto;
+  overflow: auto;
   animation: chat-attachment-preview-enter 0.12s ease-out;
+}
+
+.chat-attachment-preview-zoom-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  background: rgba(8, 8, 10, 0.8);
+  color: #f8fafc;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: zoom-in;
+}
+
+.chat-attachment-preview-zoom-btn:hover {
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(20, 20, 24, 0.92);
+}
+
+.chat-attachment-preview-zoom-btn:focus-visible {
+  outline: 2px solid rgba(148, 197, 255, 0.8);
+  outline-offset: 1px;
 }
 
 .chat-attachment-hover-preview img {
   width: 100%;
-  max-height: min(56vh, 400px);
+  max-height: min(78vh, 680px);
   object-fit: contain;
   border-radius: 8px;
   display: block;
+  transition: width 0.12s ease;
 }
 
 @keyframes chat-attachment-preview-enter {

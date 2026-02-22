@@ -399,7 +399,13 @@ function renderParagraph(lines) {
 
 function renderList(type, items) {
   if (!items.length) return '';
-  const body = items.map((item) => `<li>${renderInlineLine(item)}</li>`).join('');
+  const body = items.map((item) => {
+    const lines = (Array.isArray(item) ? item : [item])
+      .map((line) => (line || '').toString())
+      .filter((line) => line.trim().length > 0);
+    const content = lines.map((line) => renderInlineLine(line)).join('<br>');
+    return `<li>${content}</li>`;
+  }).join('');
   return `<${type}>${body}</${type}>`;
 }
 
@@ -816,6 +822,11 @@ function parseMarkdownBlocks(rawText) {
     listItems = [];
   }
 
+  function appendToCurrentListItem(line) {
+    if (!listItems.length) return;
+    listItems[listItems.length - 1].push(line);
+  }
+
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     const trimmed = line.trim();
@@ -840,7 +851,7 @@ function parseMarkdownBlocks(rawText) {
       flushQuote();
       if (listType) {
         const nextType = nextNonEmptyLineType(index + 1);
-        if (nextType !== listType) flushList();
+        if (nextType && nextType !== listType) flushList();
       }
       continue;
     }
@@ -899,7 +910,7 @@ function parseMarkdownBlocks(rawText) {
       flushParagraph();
       if (listType && listType !== 'ul') flushList();
       listType = 'ul';
-      listItems.push(unordered[1]);
+      listItems.push([unordered[1]]);
       continue;
     }
 
@@ -908,11 +919,18 @@ function parseMarkdownBlocks(rawText) {
       flushParagraph();
       if (listType && listType !== 'ol') flushList();
       listType = 'ol';
-      listItems.push(ordered[1]);
+      listItems.push([ordered[1]]);
       continue;
     }
 
-    flushList();
+    if (listType) {
+      const nextType = nextNonEmptyLineType(index + 1);
+      if (nextType === listType) {
+        appendToCurrentListItem(line);
+        continue;
+      }
+      flushList();
+    }
     paragraphLines.push(line);
   }
 

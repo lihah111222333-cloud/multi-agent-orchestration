@@ -31,6 +31,26 @@ test('ordered list keeps one ol across blank lines', () => {
   assert.equal(html, '<ol><li>first</li><li>second</li><li>third</li></ol>');
 });
 
+test('ordered list keeps sequential numbering when items have detail lines', () => {
+  const md = [
+    '1. first',
+    'detail A',
+    '',
+    '1. second',
+    'detail B',
+    '',
+    '1. third',
+    'detail C',
+    '',
+    '1. fourth',
+  ].join('\n');
+  const html = renderAssistantMarkdown(md);
+  assert.equal(
+    html,
+    '<ol><li>first<br>detail A</li><li>second<br>detail B</li><li>third<br>detail C</li><li>fourth</li></ol>',
+  );
+});
+
 test('unordered list keeps one ul across blank lines', () => {
   const html = renderAssistantMarkdown('- first\n\n- second\n\n- third');
   assert.equal(html, '<ul><li>first</li><li>second</li><li>third</li></ul>');

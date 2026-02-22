@@ -1979,89 +1979,98 @@ body.is-row-resizing * {
 }
 
 .chat-messages-vue.has-plan-pin {
-  padding-top: 176px;
+  padding-top: 304px;
 }
 
 .chat-plan-pin {
   position: absolute;
   top: 10px;
   right: 12px;
-  width: min(46%, 420px);
-  max-height: 152px;
-  z-index: 6;
-  border: 1px solid rgba(255, 255, 255, 0.34);
-  border-radius: 10px;
-  background: linear-gradient(180deg, rgba(28, 28, 28, 0.94) 0%, rgba(14, 14, 14, 0.98) 100%);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
-  padding: 9px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
+  width: clamp(312px, 48%, 440px);
+  max-width: calc(100% - 24px);
+  z-index: 32;
+  pointer-events: auto;
 }
 
-.chat-plan-pin.done {
-  border-color: rgba(34, 197, 94, 0.5);
+.chat-plan-pin-body {
+  margin: 0;
+  position: relative;
 }
 
-.chat-plan-pin-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.chat-plan-pin-body.ran-plan-card-json .jr-card {
+  border-color: var(--border-hover);
+  background: linear-gradient(180deg, rgba(35, 35, 35, 0.96) 0%, rgba(20, 20, 20, 0.98) 100%);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.44);
 }
 
-.chat-plan-pin-role {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #f8fafc;
+.chat-plan-pin-body.ran-plan-card-json .jr-card-header {
+  background: linear-gradient(180deg, rgba(46, 46, 46, 0.94) 0%, rgba(30, 30, 30, 0.96) 100%);
+  padding-right: 46px;
 }
 
-.chat-plan-pin-status {
-  font-size: 10px;
-  color: #f8fafc;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  background: rgba(255, 255, 255, 0.14);
-  padding: 1px 8px;
+.chat-plan-pin-body.ran-plan-card-json .jr-card-body {
+  max-height: min(28vh, 220px);
 }
 
-.chat-plan-pin.done .chat-plan-pin-status {
-  border-color: rgba(34, 197, 94, 0.46);
-  background: rgba(34, 197, 94, 0.18);
+.chat-plan-pin.done .chat-plan-pin-body.ran-plan-card-json .jr-card {
+  border-color: var(--border-hover);
 }
 
 .chat-plan-pin-close {
-  margin-left: auto;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  background: rgba(33, 33, 33, 0.92);
-  color: var(--text-sec);
-  width: 22px;
-  height: 22px;
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 7;
+  border: 1px solid var(--border-hover);
+  background: color-mix(in srgb, var(--surface) 92%, #111 8%);
+  color: var(--text);
+  width: 28px;
+  height: 28px;
   border-radius: 999px;
-  font-size: 14px;
+  font-size: 16px;
+  font-weight: 600;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: border-color var(--transition), color var(--transition), background var(--transition);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.46);
+  transition: border-color var(--transition), color var(--transition), background var(--transition), transform var(--transition);
 }
 
 .chat-plan-pin-close:hover {
-  border-color: rgba(255, 255, 255, 0.5);
-  color: #f8fafc;
+  border-color: var(--border-hover);
+  color: var(--text);
+  background: color-mix(in srgb, var(--hover) 84%, #1a1a1a 16%);
+  transform: translateY(-1px);
 }
 
-.chat-plan-pin-body {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: inherit;
-  color: #f8fafc;
-  font-size: 12px;
-  line-height: 1.5;
-  overflow: auto;
+@media (max-width: 960px) {
+  .chat-messages-vue.has-plan-pin {
+    padding-top: 320px;
+  }
+
+  .chat-plan-pin {
+    width: calc(100% - 24px);
+  }
+}
+
+@media (max-width: 640px) {
+  .chat-messages-vue.has-plan-pin {
+    padding-top: 292px;
+  }
+
+  .chat-plan-pin {
+    top: 8px;
+    right: 8px;
+    width: calc(100% - 16px);
+    max-width: calc(100% - 16px);
+  }
+
+  .chat-plan-pin-close {
+    top: 8px;
+    right: 8px;
+  }
 }
 
 .chat-empty {
@@ -2472,26 +2481,22 @@ body.is-row-resizing * {
 }
 
 .ran-plan-card-json .jr-card {
-  border: 1px solid rgba(20, 184, 127, 0.52);
-  border-radius: 0.78rem;
+  border: 1px solid var(--border-hover);
+  border-radius: 12px;
   overflow: hidden;
-  color: var(--color-text-foreground, #fff);
-  background:
-    radial-gradient(120% 120% at 0% 0%, rgba(16, 185, 129, 0.1), transparent 54%),
-    linear-gradient(180deg, rgba(8, 15, 21, 0.98), rgba(4, 9, 14, 0.98));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    0 8px 20px rgba(0, 0, 0, 0.24);
+  color: var(--text);
+  background: var(--chat-system-bg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .ran-plan-card-json.is-done .jr-card {
-  border-color: rgba(34, 197, 94, 0.56);
+  border-color: var(--border-hover);
 }
 
 .ran-plan-card-json .jr-card-header {
   padding: 8px 48px 7px 10px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.24);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.012));
+  border-bottom: 1px solid var(--border);
+  background: var(--assistant-surface);
 }
 
 .ran-plan-card-json .jr-card-title {
@@ -2499,11 +2504,11 @@ body.is-row-resizing * {
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: rgba(226, 232, 240, 0.72);
+  color: var(--text-muted);
 }
 
 .ran-plan-card-json .jr-card-desc {
-  color: rgba(203, 213, 225, 0.72);
+  color: var(--text-subtle);
   font-size: 11px;
   margin-top: 3px;
 }
@@ -2513,7 +2518,7 @@ body.is-row-resizing * {
   max-height: min(56vh, 680px);
   overflow: auto;
   gap: 10px;
-  background: linear-gradient(180deg, rgba(2, 6, 12, 0.35), rgba(2, 6, 12, 0.08));
+  background: transparent;
 }
 
 .ran-plan-card-json .jr-stack.jr-stack-row {
@@ -2530,14 +2535,14 @@ body.is-row-resizing * {
 
 .ran-plan-card-json .jr-markdown.chat-item-markdown > p:first-child {
   font-weight: 600;
-  color: #e2fced;
+  color: var(--text);
 }
 
 .ran-plan-card-json .jr-markdown.chat-item-markdown h1,
 .ran-plan-card-json .jr-markdown.chat-item-markdown h2,
 .ran-plan-card-json .jr-markdown.chat-item-markdown h3,
 .ran-plan-card-json .jr-markdown.chat-item-markdown h4 {
-  color: #f1f5f9;
+  color: var(--text);
 }
 
 .ran-plan-card-json .jr-markdown.chat-item-markdown ol,
@@ -2554,18 +2559,30 @@ body.is-row-resizing * {
 }
 
 .ran-plan-card-json .jr-markdown.chat-item-markdown li::marker {
-  color: rgba(110, 231, 183, 0.95);
+  color: var(--text-muted);
 }
 
 .ran-plan-card-json .jr-markdown.chat-item-markdown .chat-md-inline-code {
-  border-color: rgba(45, 212, 191, 0.28);
-  background: rgba(15, 118, 110, 0.16);
-  color: #d1fae5;
+  border-color: var(--border-hover);
+  background: var(--elevated);
+  color: var(--text-sec);
 }
 
 .ran-plan-card-json .jr-markdown.chat-item-markdown .chat-md-code {
-  border-color: rgba(45, 212, 191, 0.24);
-  background: rgba(2, 6, 23, 0.72);
+  border-color: var(--border-hover);
+  background: #1e1e1e;
+}
+
+.ran-plan-card-json .jr-badge-primary {
+  background: var(--selected);
+  color: var(--text-sec);
+  border: 1px solid var(--border-hover);
+}
+
+.ran-plan-card-json .jr-badge-success {
+  background: var(--selected);
+  color: var(--text);
+  border: 1px solid var(--border-hover);
 }
 
 .ran-plan-card-json__copy {
@@ -2574,10 +2591,10 @@ body.is-row-resizing * {
   right: 10px;
   width: 28px;
   height: 28px;
-  border: 1px solid rgba(148, 163, 184, 0.34);
+  border: 1px solid var(--border-hover);
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.42);
-  color: rgba(226, 232, 240, 0.75);
+  background: var(--hover);
+  color: var(--text-sec);
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -2587,9 +2604,9 @@ body.is-row-resizing * {
 }
 
 .ran-plan-card-json__copy:hover:not(:disabled) {
-  color: #f8fafc;
-  border-color: rgba(148, 163, 184, 0.5);
-  background: rgba(30, 41, 59, 0.62);
+  color: var(--text);
+  border-color: var(--border-hover);
+  background: var(--selected);
   transform: translateY(-1px);
 }
 

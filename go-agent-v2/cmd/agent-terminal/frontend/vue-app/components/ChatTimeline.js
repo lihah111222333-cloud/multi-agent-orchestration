@@ -15,6 +15,7 @@ export const ChatTimeline = {
     activeStatusText: { type: String, default: '' },
     activeStatusMeta: { type: String, default: '' },
     pinnedPlanVisible: { type: Boolean, default: false },
+    pinnedPlanItemId: { type: [String, Number], default: null },
   },
   emits: ['file-ref-click'],
   setup(props, { emit }) {
@@ -61,7 +62,16 @@ export const ChatTimeline = {
 
     const timelineItems = computed(() => {
       const all = Array.isArray(props.items) ? props.items : [];
-      return all.filter((item) => !isBottomOnlyStatusItem(item));
+      const filtered = all.filter((item) => !isBottomOnlyStatusItem(item));
+      const pinnedId = props.pinnedPlanItemId;
+      if (!props.pinnedPlanVisible || pinnedId === null || pinnedId === undefined || pinnedId === '') {
+        return filtered;
+      }
+      const targetId = pinnedId.toString();
+      return filtered.filter((item) => {
+        if (item?.kind !== 'plan') return true;
+        return (item?.id ?? '').toString() !== targetId;
+      });
     });
 
     const visibleItems = computed(() => {

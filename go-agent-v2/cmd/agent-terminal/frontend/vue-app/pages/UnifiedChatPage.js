@@ -11,8 +11,10 @@ import { ChatTimeline } from '../components/ChatTimeline.js';
 import { DiffPanel } from '../components/DiffPanel.js';
 import { ComposerBar } from '../components/ComposerBar.js';
 import { ActivityPanel } from '../components/ActivityPanel.js';
+import { JsonRenderer } from '../components/JsonRenderer.js';
 import { normalizeStatus } from '../services/status.js';
 import { parseUnifiedDiff } from '../services/diff.js';
+import { hasJsonRenderSpec, extractSpecBlocks } from '../services/json-render-engine.js';
 import { callAPI, copyTextToClipboard, onFilesDropped, resolveThreadIdentity } from '../services/api.js';
 import { logDebug, logInfo, logWarn } from '../services/log.js';
 import { useComposerStore } from '../stores/composer.js';
@@ -477,6 +479,7 @@ export const UnifiedChatPage = {
     DiffPanel,
     ComposerBar,
     ActivityPanel,
+    JsonRenderer,
   },
   props: {
     projectStore: { type: Object, required: true },
@@ -907,6 +910,50 @@ export const UnifiedChatPage = {
       dismissedPlanKeyByThread.value = {
         ...dismissedPlanKeyByThread.value,
         [plan.threadId]: plan.key,
+      };
+    }
+    function pinnedPlanHasSpec(text) {
+      return hasJsonRenderSpec(text);
+    }
+    function splitPinnedPlanSpec(text) {
+      return extractSpecBlocks(text);
+    }
+    function pinnedPlanCardSpec(plan) {
+      const statusText = (plan?.statusText || (plan?.done ? '完成' : '进行中')).toString();
+      const metaChildren = [
+        { type: 'Badge', text: statusText, variant: 'default' },
+      ];
+      const rawText = (plan?.text || '').toString();
+      const bodyChildren = pinnedPlanHasSpec(rawText)
+        ? splitPinnedPlanSpec(rawText).flatMap((part) => {
+            if (part?.type === 'text' && (part.content || '').toString().trim()) {
+              return [{ type: 'Markdown', text: part.content }];
+            }
+            if (part?.type === 'spec' && part.spec && typeof part.spec === 'object') {
+              return [part.spec];
+            }
+            return [];
+          })
+        : rawText.trim()
+          ? [{ type: 'Markdown', text: rawText }]
+          : [{ type: 'Text', text: '(empty plan)' }];
+      const children = [
+        {
+          type: 'Stack',
+          direction: 'row',
+          gap: 8,
+          children: metaChildren,
+        },
+        {
+          type: 'Separator',
+        },
+        ...bodyChildren,
+      ];
+      return {
+        type: 'Card',
+        title: 'PLAN',
+        description: statusText,
+        children,
       };
     }
 
@@ -2253,6 +2300,7 @@ export const UnifiedChatPage = {
       handleInlineRenameBlur,
       getDisplayName,
       dismissPinnedPlan,
+      pinnedPlanCardSpec,
       onTimelineFileRefClick,
     };
   },
@@ -2584,17 +2632,15 @@ export const UnifiedChatPage = {
                   :class="{ done: activePinnedPlan.done }"
                   :title="activePinnedPlan.statusText"
                 >
-                  <header class="chat-plan-pin-head">
-                    <span class="chat-plan-pin-role">计划</span>
-                    <span class="chat-plan-pin-status">{{ activePinnedPlan.statusText }}</span>
+                  <div class="chat-plan-pin-body ran-plan-card-json" :class="{ 'is-done': activePinnedPlan.done }">
+                    <JsonRenderer :spec="pinnedPlanCardSpec(activePinnedPlan)" />
                     <button
                       type="button"
                       class="chat-plan-pin-close"
                       aria-label="关闭计划标签"
-                      @click="dismissPinnedPlan"
+                      @click.stop="dismissPinnedPlan"
                     >×</button>
-                  </header>
-                  <pre class="chat-plan-pin-body">{{ activePinnedPlan.text }}</pre>
+                  </div>
                 </aside>
                 <div v-if="noActiveThread" class="chat-messages-vue">
                   <div class="diff-empty" data-testid="chat-empty-state">选择或启动一个 Agent 开始对话</div>
@@ -2606,6 +2652,7 @@ export const UnifiedChatPage = {
                   :active-status-text="displayStatusText"
                   :active-status-meta="activeStatusMeta"
                   :pinned-plan-visible="Boolean(activePinnedPlan)"
+                  :pinned-plan-item-id="activePinnedPlan ? activePinnedPlan.id : null"
                   @file-ref-click="onTimelineFileRefClick"
                 />
               </div>

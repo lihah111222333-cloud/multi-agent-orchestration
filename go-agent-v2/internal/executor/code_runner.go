@@ -63,7 +63,7 @@ const (
 type CodeRunner struct {
 	workDir  string        // 项目工作目录 (go test/project_cmd 的 cmd.Dir)
 	hasNode  bool          // node 可用
-	hasTsx   bool          // npx tsx 可用
+	hasTsx   bool          // tsx 可用 (PATH 或 node_modules/.bin/tsx)
 	sem      chan struct{} // 并发信号量
 	tempRoot string        // 实例级临时目录根
 }
@@ -117,7 +117,7 @@ func NewCodeRunner(workDir string) (*CodeRunner, error) {
 	r := &CodeRunner{
 		workDir:  abs,
 		hasNode:  commandExists("node"),
-		hasTsx:   commandExists("npx"),
+		hasTsx:   commandExists("tsx") || resolveLocalTsxPath(abs) != "",
 		sem:      make(chan struct{}, maxConcurrentRuns),
 		tempRoot: tempRoot,
 	}
@@ -134,7 +134,7 @@ func NewCodeRunner(workDir string) (*CodeRunner, error) {
 // HasNode 返回 node 是否可用。
 func (r *CodeRunner) HasNode() bool { return r.hasNode }
 
-// HasTsx 返回 npx tsx 是否可用。
+// HasTsx 返回 tsx 是否可用 (PATH 或 node_modules/.bin/tsx)。
 func (r *CodeRunner) HasTsx() bool { return r.hasTsx }
 
 // Cleanup 清理实例级临时目录。应在 Server 关闭时调用。
@@ -266,7 +266,7 @@ func (r *CodeRunner) runGoTest(ctx context.Context, req RunRequest) (*RunResult,
 		pkg = "./..."
 	}
 
-	pattern := fmt.Sprintf("^%s$", req.TestFunc)
+	pattern := buildGoTestPattern(req.TestFunc)
 	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, r.workDir, "go", "test", "-v", "-run", pattern, pkg)
 	return &RunResult{
 		Success:   exitCode == 0,
@@ -276,6 +276,10 @@ func (r *CodeRunner) runGoTest(ctx context.Context, req RunRequest) (*RunResult,
 		Mode:      ModeTest,
 		Truncated: truncated,
 	}, nil
+}
+
+func buildGoTestPattern(testFunc string) string {
+	return "^" + regexp.QuoteMeta(strings.TrimSpace(testFunc)) + "$"
 }
 
 // ========================================
@@ -313,7 +317,7 @@ func (r *CodeRunner) runJS(ctx context.Context, req RunRequest) (*RunResult, err
 // runTS 执行 TypeScript 代码片段: MkdirTemp → script.ts → npx tsx。
 func (r *CodeRunner) runTS(ctx context.Context, req RunRequest) (*RunResult, error) {
 	if !r.hasTsx {
-		return nil, pkgerr.New("CodeRunner.runTS", "npx (tsx) not available on PATH")
+		return nil, pkgerr.New("CodeRunner.runTS", "tsx not available on PATH or node_modules/.bin/tsx")
 	}
 
 	dir, err := os.MkdirTemp(r.tempRoot, "ts_")
@@ -327,7 +331,16 @@ func (r *CodeRunner) runTS(ctx context.Context, req RunRequest) (*RunResult, err
 		return nil, pkgerr.Wrap(err, "CodeRunner.runTS", "write script.ts")
 	}
 
-	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, dir, "npx", "tsx", scriptFile)
+	name := "tsx"
+	if !commandExists(name) {
+		localTsx := resolveLocalTsxPath(r.workDir)
+		if localTsx == "" {
+			return nil, pkgerr.New("CodeRunner.runTS", "tsx not available on PATH or node_modules/.bin/tsx")
+		}
+		name = localTsx
+	}
+
+	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, dir, name, scriptFile)
 	return &RunResult{
 		Success:   exitCode == 0,
 		Output:    output,
@@ -424,7 +437,7 @@ func wrapGoMain(code string) string {
 
 	// 扫描引用的包 (过滤注释行, 减少假阳性)
 	var codeLines []string
-	for _, line := range strings.Split(trimmed, "\n") {
+	for line := range strings.SplitSeq(trimmed, "\n") {
 		stripped := strings.TrimSpace(line)
 		if strings.HasPrefix(stripped, "//") {
 			continue
@@ -539,16 +552,46 @@ func (r *CodeRunner) killProcessGroup(cmd *exec.Cmd) {
 // 使用 filepath.Rel 判断, 拒绝 "../" 开头的路径 (防止路径穿越)。
 // NEVER 用 strings.HasPrefix — 无法区分 /root/work 和 /root/work2。
 func (r *CodeRunner) validateWorkDir(dir string) error {
+	rootAbs, err := filepath.Abs(r.workDir)
+	if err != nil {
+		return pkgerr.Wrap(err, "CodeRunner.validateWorkDir", "resolve project root")
+	}
+
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return pkgerr.Wrap(err, "CodeRunner.validateWorkDir", "resolve path")
 	}
-	rel, err := filepath.Rel(r.workDir, abs)
+	rel, err := filepath.Rel(rootAbs, abs)
 	if err != nil {
 		return pkgerr.Wrap(err, "CodeRunner.validateWorkDir", "compute relative path")
 	}
-	if strings.HasPrefix(rel, "..") {
-		return pkgerr.Newf("CodeRunner.validateWorkDir", "path %q is outside project root %q", dir, r.workDir)
+	rel = filepath.Clean(rel)
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return pkgerr.Newf("CodeRunner.validateWorkDir", "path %q is outside project root %q", dir, rootAbs)
+	}
+
+	// 软链接校验: 防止路径字面在根内, 但解析后跳到根外。
+	rootReal, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return pkgerr.Wrap(err, "CodeRunner.validateWorkDir", "resolve project root symlink")
+	}
+
+	pathReal, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		// 不存在路径交由后续执行阶段报错; 这里仅做越界拦截。
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return pkgerr.Wrap(err, "CodeRunner.validateWorkDir", "resolve path symlink")
+	}
+
+	realRel, err := filepath.Rel(rootReal, pathReal)
+	if err != nil {
+		return pkgerr.Wrap(err, "CodeRunner.validateWorkDir", "compute real relative path")
+	}
+	realRel = filepath.Clean(realRel)
+	if realRel == ".." || strings.HasPrefix(realRel, ".."+string(filepath.Separator)) {
+		return pkgerr.Newf("CodeRunner.validateWorkDir", "path %q is outside project root %q", dir, rootAbs)
 	}
 	return nil
 }
@@ -568,6 +611,18 @@ func DetectDangerous(command string) string {
 func commandExists(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
+}
+
+func resolveLocalTsxPath(workDir string) string {
+	candidate := filepath.Join(workDir, "node_modules", ".bin", "tsx")
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		return ""
+	}
+	return candidate
 }
 
 // cleanup 清理临时目录 (仅清理当前实例创建的目录)。

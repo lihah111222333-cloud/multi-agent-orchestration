@@ -211,39 +211,37 @@ func TestCodeRunner_ConcurrencyLimit(t *testing.T) {
 	r := mustNewRunner(t)
 	defer r.Cleanup()
 
-	var running atomic.Int32
-	var maxRunning atomic.Int32
-
 	const total = 6
+	const sleepPerRun = 250 * time.Millisecond
 	var wg sync.WaitGroup
 	wg.Add(total)
+	start := time.Now()
+	var runErrs atomic.Int32
 
 	for i := 0; i < total; i++ {
 		go func() {
 			defer wg.Done()
-			_, _ = r.Run(context.Background(), RunRequest{
+			_, err := r.Run(context.Background(), RunRequest{
 				Mode:    ModeProjectCmd,
-				Command: "sleep 0.1",
+				Command: "sleep 0.25",
 				Timeout: 5 * time.Second,
 			})
-			cur := running.Add(1)
-			// 尝试捕获最大并发数
-			for {
-				old := maxRunning.Load()
-				if cur <= old || maxRunning.CompareAndSwap(old, cur) {
-					break
-				}
+			if err != nil {
+				runErrs.Add(1)
 			}
-			time.Sleep(50 * time.Millisecond) // 保持一小段时间让并发显现
-			running.Add(-1)
 		}()
 	}
 	wg.Wait()
+	if runErrs.Load() > 0 {
+		t.Fatalf("expected all runs success, got %d errors", runErrs.Load())
+	}
 
-	// 信号量容量为 3, 所以最大并发不应超过 3 (允许少量调度误差)
-	// 这里主要验证不会 panic 且能全部完成
-	if maxRunning.Load() > maxConcurrentRuns+1 {
-		t.Logf("warning: maxRunning=%d, expected <= %d", maxRunning.Load(), maxConcurrentRuns)
+	// maxConcurrentRuns=3, total=6, 每个 run 至少 sleep 250ms:
+	// 有限流时应至少分两批, 耗时应明显大于单批。
+	elapsed := time.Since(start)
+	minExpected := sleepPerRun + 150*time.Millisecond
+	if elapsed < minExpected {
+		t.Fatalf("expected concurrency limit to serialize runs into batches, elapsed=%v < %v", elapsed, minExpected)
 	}
 }
 
@@ -326,6 +324,61 @@ func TestCodeRunner_WorkDir_PathTraversalBlocked(t *testing.T) {
 				t.Fatalf("expected 'outside project root' error, got: %v", err)
 			}
 		})
+	}
+}
+
+// TestCodeRunner_WorkDir_SymlinkTraversalBlocked 验证软链接指向项目根外目录时应被阻断。
+func TestCodeRunner_WorkDir_SymlinkTraversalBlocked(t *testing.T) {
+	r := mustNewRunner(t)
+	defer r.Cleanup()
+
+	outsideDir, err := os.MkdirTemp("", "code_exec_outside_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(outsideDir)
+
+	linkPath := filepath.Join(r.workDir, "outside_link")
+	_ = os.Remove(linkPath)
+	t.Cleanup(func() { _ = os.Remove(linkPath) })
+	if err := os.Symlink(outsideDir, linkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = r.Run(context.Background(), RunRequest{
+		Mode:    ModeProjectCmd,
+		WorkDir: linkPath,
+		Command: "pwd -P",
+	})
+	if err == nil {
+		t.Fatalf("expected symlink traversal to be blocked for %q", linkPath)
+	}
+	if !strings.Contains(err.Error(), "outside project root") {
+		t.Fatalf("expected 'outside project root' error, got: %v", err)
+	}
+}
+
+// TestCodeRunner_WorkDir_AllowsDotDotPrefixInsideRoot 验证项目根内 "..x" 目录不应被误判为越界。
+func TestCodeRunner_WorkDir_AllowsDotDotPrefixInsideRoot(t *testing.T) {
+	r := mustNewRunner(t)
+	defer r.Cleanup()
+
+	insideDir := filepath.Join(r.workDir, "..cache_"+t.Name())
+	if err := os.MkdirAll(insideDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(insideDir)
+
+	result, err := r.Run(context.Background(), RunRequest{
+		Mode:    ModeProjectCmd,
+		WorkDir: insideDir,
+		Command: "pwd",
+	})
+	if err != nil {
+		t.Fatalf("expected inside path to pass validation, got error: %v", err)
+	}
+	if !strings.Contains(result.Output, "..cache_") {
+		t.Fatalf("expected custom inside workdir in output, got: %s", result.Output)
 	}
 }
 
@@ -448,6 +501,44 @@ fmt.Println(x)
 	// os 仅在注释中 → 不应导入
 	if strings.Contains(result, `"os"`) {
 		t.Fatalf("wrapGoMain should NOT import os when only in comment\nresult:\n%s", result)
+	}
+}
+
+func TestBuildGoTestPattern_QuotesRegexMeta(t *testing.T) {
+	pattern := buildGoTestPattern("TestA|TestB")
+	if pattern != "^TestA\\|TestB$" {
+		t.Fatalf("pattern = %q, want %q", pattern, "^TestA\\|TestB$")
+	}
+}
+
+func TestResolveLocalTsxPath_ExecutableFile(t *testing.T) {
+	root := t.TempDir()
+	tsxPath := filepath.Join(root, "node_modules", ".bin", "tsx")
+	if err := os.MkdirAll(filepath.Dir(tsxPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tsxPath, []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := resolveLocalTsxPath(root)
+	if got != tsxPath {
+		t.Fatalf("resolveLocalTsxPath() = %q, want %q", got, tsxPath)
+	}
+}
+
+func TestResolveLocalTsxPath_NonExecutableIgnored(t *testing.T) {
+	root := t.TempDir()
+	tsxPath := filepath.Join(root, "node_modules", ".bin", "tsx")
+	if err := os.MkdirAll(filepath.Dir(tsxPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tsxPath, []byte("not executable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := resolveLocalTsxPath(root); got != "" {
+		t.Fatalf("resolveLocalTsxPath() = %q, want empty for non-executable file", got)
 	}
 }
 

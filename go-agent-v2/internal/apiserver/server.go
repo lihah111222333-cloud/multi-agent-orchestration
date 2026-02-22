@@ -155,6 +155,7 @@ type Server struct {
 
 	// 审批去重: 防止同一 agentID+method 并发双重处理
 	approvalInFlight sync.Map // key: "agentID:method"
+	cleanupOnce      sync.Once
 
 	upgrader websocket.Upgrader
 }
@@ -272,6 +273,8 @@ func New(deps Deps) *Server {
 //
 // addr 格式: "ws://127.0.0.1:4500" 或 "127.0.0.1:4500"。
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
+	defer s.cleanupRuntimeResources()
+
 	// 解析地址: 去掉 ws:// 前缀
 	host := strings.TrimPrefix(addr, "ws://")
 	host = strings.TrimPrefix(host, "wss://")
@@ -307,4 +310,12 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 		return pkgerr.Wrap(err, "Server.ListenAndServe", "listen")
 	}
 	return nil
+}
+
+func (s *Server) cleanupRuntimeResources() {
+	s.cleanupOnce.Do(func() {
+		if s.codeRunner != nil {
+			s.codeRunner.Cleanup()
+		}
+	})
 }

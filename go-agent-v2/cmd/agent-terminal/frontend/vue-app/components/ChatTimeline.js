@@ -470,10 +470,30 @@ export const ChatTimeline = {
         :class="['kind-' + item.kind, isDialog(item) ? 'dialog' : 'process', bubbleRole(item)]"
       >
         <template v-if="isDialog(item)">
-          <div v-if="hasAvatar(item)" class="chat-item-avatar">{{ avatarText(item) }}</div>
+          <div v-if="hasAvatar(item)" class="chat-item-avatar">
+            <svg
+              v-if="item.kind === 'assistant'"
+              class="chat-item-avatar-bot-icon"
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M10 3V5"></path>
+              <path d="M6.2 5H13.8C15 5 16 6 16 7.2V12.8C16 14 15 15 13.8 15H6.2C5 15 4 14 4 12.8V7.2C4 6 5 5 6.2 5Z"></path>
+              <path d="M2.8 8V12"></path>
+              <path d="M17.2 8V12"></path>
+              <circle cx="8" cy="10" r="0.9" fill="currentColor" stroke="none"></circle>
+              <circle cx="12" cy="10" r="0.9" fill="currentColor" stroke="none"></circle>
+            </svg>
+            <template v-else>{{ avatarText(item) }}</template>
+          </div>
 
           <section class="chat-item-bubble">
-            <header class="chat-item-head">
+            <header v-if="item.kind !== 'assistant'" class="chat-item-head">
               <span class="chat-item-role">{{ roleLabel(item) }}</span>
               <span v-if="stateLabel(item)" class="chat-item-status">{{ stateLabel(item) }}</span>
               <span class="chat-item-spacer"></span>
@@ -492,7 +512,12 @@ export const ChatTimeline = {
                 </template>
               </div>
             </template>
-            <pre v-else class="chat-item-body chat-item-plain">{{ item.text }}</pre>
+            <div
+              v-else
+              class="chat-item-body chat-item-markdown codex-markdown-root"
+              v-html="renderAssistantBody(item.text)"
+              @click="onAssistantBodyClick"
+            ></div>
             <div v-if="(item.attachments || []).length > 0" class="chat-attachment-list">
               <span
                 v-for="(att, idx) in item.attachments"
@@ -620,7 +645,25 @@ export const ChatTimeline = {
         <img :src="attachmentHoverPreview.src" :alt="attachmentHoverPreview.alt" />
       </div>
       <div v-if="showAgentPresence" class="chat-presence-row">
-        <div class="chat-item-avatar chat-item-avatar-presence">AI</div>
+        <div class="chat-item-avatar chat-item-avatar-presence">
+          <svg
+            class="chat-item-avatar-bot-icon"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M10 3V5"></path>
+            <path d="M6.2 5H13.8C15 5 16 6 16 7.2V12.8C16 14 15 15 13.8 15H6.2C5 15 4 14 4 12.8V7.2C4 6 5 5 6.2 5Z"></path>
+            <path d="M2.8 8V12"></path>
+            <path d="M17.2 8V12"></path>
+            <circle cx="8" cy="10" r="0.9" fill="currentColor" stroke="none"></circle>
+            <circle cx="12" cy="10" r="0.9" fill="currentColor" stroke="none"></circle>
+          </svg>
+        </div>
         <div class="chat-status chat-status-presence">
           <svg
             v-if="activeStatus === 'thinking' || activeStatus === 'starting' || activeStatus === 'running' || activeStatus === 'responding'"

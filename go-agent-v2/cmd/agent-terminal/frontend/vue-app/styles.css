@@ -2137,6 +2137,12 @@ body.is-row-resizing * {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
+.chat-item-avatar-bot-icon {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+
 .chat-item-avatar:hover {
   transform: scale(1.08);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);

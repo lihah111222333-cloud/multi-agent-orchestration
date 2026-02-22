@@ -269,7 +269,7 @@ func (c *AppServerClient) Submit(prompt string, images, files []string, outputSc
 		logger.Debug("codex: active turn set from turn/start response",
 			logger.FieldAgentID, c.AgentID,
 			logger.FieldThreadID, c.ThreadID,
-			"turn_id", turnID,
+			logger.FieldTurnID, turnID,
 		)
 	} else {
 		logger.Warn("codex: turn/start response missing turn id",
@@ -307,7 +307,7 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 				logger.Info("codex: turn/interrupt OK",
 					logger.FieldAgentID, c.AgentID,
 					logger.FieldThreadID, threadID,
-					"turn_id", turnID,
+					logger.FieldTurnID, turnID,
 				)
 				return nil
 			}
@@ -315,14 +315,14 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 				logger.Warn("codex: turn/interrupt turn_id mismatch, retry thread-scoped interrupt",
 					logger.FieldAgentID, c.AgentID,
 					logger.FieldThreadID, threadID,
-					"turn_id", turnID,
+					logger.FieldTurnID, turnID,
 					logger.FieldError, err,
 				)
 				if retryErr := tryTurnInterrupt("thread_scoped"); retryErr == nil {
 					logger.Info("codex: turn/interrupt thread-scoped retry OK",
 						logger.FieldAgentID, c.AgentID,
 						logger.FieldThreadID, threadID,
-						"turn_id", turnID,
+						logger.FieldTurnID, turnID,
 					)
 					return nil
 				} else {
@@ -333,14 +333,14 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 				logger.Warn("codex: turn/interrupt FAILED, fallback to interruptConversation",
 					logger.FieldAgentID, c.AgentID,
 					logger.FieldThreadID, threadID,
-					"turn_id", turnID,
+					logger.FieldTurnID, turnID,
 					logger.FieldError, err,
 				)
 			} else {
 				logger.Warn("codex: turn/interrupt unsupported, fallback to interruptConversation",
 					logger.FieldAgentID, c.AgentID,
 					logger.FieldThreadID, threadID,
-					"turn_id", turnID,
+					logger.FieldTurnID, turnID,
 					logger.FieldError, err,
 				)
 			}
@@ -537,7 +537,7 @@ func (c *AppServerClient) ResumeThread(req ResumeThreadRequest) error {
 	}
 	path := strings.TrimSpace(req.Path)
 	cwd := strings.TrimSpace(req.Cwd)
-	logger.Info("[DIAG] ResumeThread: calling thread/resume",
+	logger.Info("codex: ResumeThread calling thread/resume",
 		logger.FieldAgentID, c.AgentID,
 		"request_thread_id", id,
 		"request_path", path,
@@ -550,14 +550,14 @@ func (c *AppServerClient) ResumeThread(req ResumeThreadRequest) error {
 		Cwd:      cwd,
 	}, 30*time.Second)
 	if err != nil {
-		logger.Warn("[DIAG] ResumeThread: thread/resume RPC failed",
+		logger.Warn("codex: ResumeThread RPC failed",
 			logger.FieldAgentID, c.AgentID,
 			"request_thread_id", id,
 			logger.FieldError, err,
 		)
 		return apperrors.Wrap(err, "AppServerClient.ResumeThread", "thread/resume")
 	}
-	logger.Info("[DIAG] ResumeThread: raw response",
+	logger.Info("codex: ResumeThread raw response",
 		logger.FieldAgentID, c.AgentID,
 		"request_thread_id", id,
 		"raw_response_len", len(result),
@@ -565,7 +565,7 @@ func (c *AppServerClient) ResumeThread(req ResumeThreadRequest) error {
 	)
 	resolvedID, err := parseThreadResumeResult(result, id)
 	if err != nil {
-		logger.Warn("[DIAG] ResumeThread: parseThreadResumeResult failed",
+		logger.Warn("codex: ResumeThread parse failed",
 			logger.FieldAgentID, c.AgentID,
 			"request_thread_id", id,
 			logger.FieldError, err,
@@ -576,7 +576,7 @@ func (c *AppServerClient) ResumeThread(req ResumeThreadRequest) error {
 	if resolvedID != id {
 		idMatch = "FORKED_NEW_ID"
 	}
-	logger.Info("[DIAG] ResumeThread: success",
+	logger.Info("codex: ResumeThread success",
 		logger.FieldAgentID, c.AgentID,
 		"request_thread_id", id,
 		"resolved_thread_id", resolvedID,

@@ -47,7 +47,7 @@ func (m *Master) AddGateway(gw *Gateway) { m.gateways = append(m.gateways, gw) }
 
 // Run 执行编排循环 (for-select 状态机)。
 func (m *Master) Run(ctx context.Context) error {
-	logger.Infow("orchestrator started", "gateways", len(m.gateways))
+	logger.Info("orchestrator started", "gateways", len(m.gateways))
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -56,10 +56,11 @@ func (m *Master) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			logger.Info("orchestrator shutting down")
+			logger.Info("orchestrator shutdown completed", "gateways", len(m.gateways))
 			return nil
 		case <-ticker.C:
 			if err := m.tick(ctx); err != nil {
-				logger.Errorw("orchestrator tick error", logger.FieldStatus, m.state, logger.FieldError, err)
+				logger.Error("orchestrator tick error", logger.FieldStatus, m.state, logger.FieldError, err, logger.FieldDecision, "transition_to_error")
 				m.state = StateError
 			}
 		}
@@ -103,7 +104,7 @@ type Gateway struct {
 
 // Execute 执行任务分发。
 func (g *Gateway) Execute(ctx context.Context, task string) (string, error) {
-	logger.Infow("gateway executing", logger.FieldGatewayID, g.ID, "task", task)
+	logger.Info("gateway executing", logger.FieldGatewayID, g.ID, "task", task)
 	// TODO: 实现 Gateway 任务分发逻辑
 	return "dispatched", nil
 }

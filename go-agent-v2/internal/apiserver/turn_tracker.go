@@ -121,7 +121,7 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 	turn.timer = time.AfterFunc(s.turnWatchdogTimeout, func() {
 		logger.Warn("turn tracker: watchdog timeout reached",
 			logger.FieldThreadID, watchdogThreadID,
-			"turn_id", watchdogTurnID,
+			logger.FieldTurnID, watchdogTurnID,
 			"watchdog_timeout_ms", s.turnWatchdogTimeout.Milliseconds(),
 			"turn_age_ms", time.Since(watchdogStartedAt).Milliseconds(),
 		)
@@ -146,7 +146,7 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 
 	logger.Info("turn tracker: begin turn tracking",
 		logger.FieldThreadID, id,
-		"turn_id", tid,
+		logger.FieldTurnID, tid,
 		"source_turn_id", strings.TrimSpace(turnID),
 		"watchdog_timeout_ms", s.turnWatchdogTimeout.Milliseconds(),
 	)
@@ -280,7 +280,7 @@ func (s *Server) completeTrackedTurnByID(threadID, turnID, status, reason string
 	}
 	logger.Info("turn tracker: turn completed",
 		logger.FieldThreadID, id,
-		"turn_id", turn.ID,
+		logger.FieldTurnID, turn.ID,
 		logger.FieldStatus, finalStatus,
 		"reason", strings.TrimSpace(reason),
 		"duration_ms", time.Since(turn.StartedAt).Milliseconds(),
@@ -736,7 +736,7 @@ func (s *Server) handleStallGracePeriod(threadID, turnID string, silent, thresho
 
 	logger.Warn("turn tracker: thinking stall detected — grace period started",
 		logger.FieldThreadID, threadID,
-		"turn_id", turnID,
+		logger.FieldTurnID, turnID,
 		"silent_ms", silent.Milliseconds(),
 		"threshold_ms", threshold.Milliseconds(),
 		"grace_period_ms", stallGracePeriod.Milliseconds(),
@@ -764,7 +764,7 @@ func (s *Server) handleStallGracePeriod(threadID, turnID string, silent, thresho
 func (s *Server) executeStallAutoInterrupt(threadID, turnID string, silent, threshold time.Duration) {
 	logger.Warn("turn tracker: thinking stall detected — auto interrupting",
 		logger.FieldThreadID, threadID,
-		"turn_id", turnID,
+		logger.FieldTurnID, turnID,
 		"silent_ms", silent.Milliseconds(),
 		"threshold_ms", threshold.Milliseconds(),
 	)
@@ -780,7 +780,7 @@ func (s *Server) executeStallAutoInterrupt(threadID, turnID string, silent, thre
 		if cancelled := s.cancelCodeRuns(threadID); cancelled > 0 {
 			logger.Info("turn tracker: cancelled running code_run executions",
 				logger.FieldThreadID, threadID,
-				"turn_id", turnID,
+				logger.FieldTurnID, turnID,
 				"cancelled_runs", cancelled,
 			)
 		}
@@ -789,7 +789,7 @@ func (s *Server) executeStallAutoInterrupt(threadID, turnID string, silent, thre
 			if err := proc.Client.SendCommand("/interrupt", ""); err != nil {
 				logger.Warn("turn tracker: stall auto-interrupt failed",
 					logger.FieldThreadID, threadID,
-					"turn_id", turnID,
+					logger.FieldTurnID, turnID,
 					logger.FieldError, err,
 				)
 			} else {

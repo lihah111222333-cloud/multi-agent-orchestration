@@ -243,7 +243,7 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 			"trigger", trigger,
 			"attempt", attempt,
 			"max_retries", maxRetries,
-			"active_turn_id", activeTurnID,
+			logger.FieldTurnID, activeTurnID,
 			logger.FieldError, retryErr,
 		)
 		return false
@@ -271,7 +271,7 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 		"trigger", trigger,
 		"attempt", attempt,
 		"max_retries", maxRetries,
-		"active_turn_id", activeTurnID,
+		logger.FieldTurnID, activeTurnID,
 	)
 	return true
 }
@@ -295,7 +295,7 @@ func (c *AppServerClient) handleReconnectExhausted(trigger, activeTurnID string,
 		logger.FieldAgentID, c.AgentID,
 		"trigger", trigger,
 		"max_retries", maxRetries,
-		"active_turn_id", activeTurnID,
+		logger.FieldTurnID, activeTurnID,
 		logger.FieldError, lastErr,
 	)
 }

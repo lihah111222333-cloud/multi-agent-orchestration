@@ -75,7 +75,7 @@ func (c *AppServerClient) readLoop() {
 			} else {
 				logger.Warn("codex: readLoop read failed",
 					logger.FieldAgentID, c.AgentID,
-					"active_turn_id", c.getActiveTurnID(),
+					logger.FieldTurnID, c.getActiveTurnID(),
 					"idle_timeout", isIdleTimeoutError(err),
 					logger.FieldError, readErr,
 				)
@@ -228,7 +228,7 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 			logger.FieldEventType, event.Type,
 			logger.FieldThreadID, boundThreadID,
 			"conversation_id", conversationID,
-			"active_turn_id", c.getActiveTurnID(),
+			logger.FieldTurnID, c.getActiveTurnID(),
 		)
 	}
 	// 跟踪活跃 turn 生命周期
@@ -260,7 +260,7 @@ func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 			c.setActiveTurnID(turnID)
 			logger.Debug("codex: active turn set",
 				logger.FieldAgentID, c.AgentID,
-				"turn_id", turnID,
+				logger.FieldTurnID, turnID,
 			)
 			return
 		}
@@ -296,9 +296,9 @@ func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 		}
 	default:
 		if activeTurnID != "" && isTurnTailProgressEvent(event.Type, method) {
-			logger.Info("codex: active turn observed progress event without terminal yet",
+			logger.Debug("codex: active turn observed progress event without terminal yet",
 				logger.FieldAgentID, c.AgentID,
-				"active_turn_id", activeTurnID,
+				logger.FieldTurnID, activeTurnID,
 				logger.FieldEventType, event.Type,
 				logger.FieldMethod, method,
 				logger.FieldDataLen, len(event.Data),

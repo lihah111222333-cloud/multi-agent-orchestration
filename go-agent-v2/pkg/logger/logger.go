@@ -257,6 +257,7 @@ const (
 	FieldCallID  = "call_id"
 	FieldRaw     = "raw"
 	// v5: 高风险点日志所需常量
+	FieldTurnID     = "turn_id"
 	FieldCommand    = "command"
 	FieldRunID      = "run_id"
 	FieldExitCode   = "exit_code"

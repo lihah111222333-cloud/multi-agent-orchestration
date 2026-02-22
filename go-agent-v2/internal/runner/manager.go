@@ -192,7 +192,7 @@ func (m *AgentManager) findFreePort() (int, error) {
 // ctx 控制 spawn 超时和子进程生命周期。
 // dynamicTools 为 nil 时不注入自定义工具。
 func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string, instructions string, dynamicTools []codex.DynamicTool) error {
-	logger.Infow("runner: launching agent",
+	logger.Info("runner: launching agent",
 		logger.FieldAgentID, id,
 		logger.FieldName, name,
 		logger.FieldCwd, cwd,
@@ -291,11 +291,11 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 			delete(m.agents, id)
 		}
 		m.mu.Unlock()
-		logger.Error("runner: launch failed", logger.FieldAgentID, id, logger.FieldPort, port, logger.FieldError, err)
+		logger.Error("runner: launch failed", logger.FieldAgentID, id, logger.FieldPort, port, logger.FieldError, err, logger.FieldDecision, "removed_from_agents_map")
 		return apperrors.Wrapf(err, "AgentManager.Launch", "launch %s", id)
 	}
 
-	logger.Infow("runner: agent launched", logger.FieldAgentID, id, logger.FieldPort, port)
+	logger.Info("runner: agent launched", logger.FieldAgentID, id, logger.FieldPort, port)
 	return nil
 }
 
@@ -351,9 +351,10 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event codex.Event) {
 	if newState != "" {
 		proc.mu.Lock()
 		if proc.State != newState {
-			logger.Debug("runner: state transition",
+			logger.Info("runner: state transition",
 				logger.FieldAgentID, proc.ID,
 				logger.FieldEventType, event.Type,
+				"prev_state", string(proc.State),
 				logger.FieldState, string(newState),
 			)
 			proc.State = newState
@@ -413,7 +414,7 @@ func (m *AgentManager) SendInput(id string, data []byte) error {
 
 // Stop 停止指定 Agent。
 func (m *AgentManager) Stop(id string) error {
-	logger.Infow("runner: stopping agent", logger.FieldAgentID, id)
+	logger.Info("runner: stopping agent", logger.FieldAgentID, id)
 
 	m.mu.Lock()
 	proc, ok := m.agents[id]
@@ -432,7 +433,7 @@ func (m *AgentManager) Stop(id string) error {
 	proc.mu.Lock()
 	proc.State = StateStopped
 	proc.mu.Unlock()
-	logger.Infow("runner: agent stopped", logger.FieldAgentID, id)
+	logger.Info("runner: agent stopped", logger.FieldAgentID, id)
 	return nil
 }
 
@@ -448,7 +449,7 @@ func (m *AgentManager) StopAll() {
 	if len(ids) == 0 {
 		return
 	}
-	logger.Infow("runner: stopping all agents (parallel)", logger.FieldCount, len(ids))
+	logger.Info("runner: stopping all agents (parallel)", logger.FieldCount, len(ids))
 	var wg sync.WaitGroup
 	for _, id := range ids {
 		wg.Add(1)
@@ -478,7 +479,7 @@ func (m *AgentManager) KillAll() {
 	if len(procs) == 0 {
 		return
 	}
-	logger.Infow("runner: force killing all agents", logger.FieldCount, len(procs))
+	logger.Info("runner: force killing all agents", logger.FieldCount, len(procs))
 	for _, proc := range procs {
 		if err := proc.Client.Kill(); err != nil {
 			logger.Warn("runner: KillAll: kill failed", logger.FieldAgentID, proc.ID, logger.FieldError, err)

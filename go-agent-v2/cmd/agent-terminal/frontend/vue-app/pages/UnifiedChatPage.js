@@ -2257,8 +2257,8 @@ export const UnifiedChatPage = {
     };
   },
   template: `
-    <section class="page active unified-chat-page" :class="isCmd ? 'mode-cmd' : 'mode-chat'">
-      <div class="chat-toolbar unified-toolbar" style="position:relative">
+    <section class="page active unified-chat-page" :class="isCmd ? 'mode-cmd' : 'mode-chat'" data-testid="chat-page">
+      <div class="chat-toolbar unified-toolbar" style="position:relative" data-testid="chat-toolbar">
         <div
           v-if="activeStatus === 'thinking' || activeStatus === 'responding' || activeStatus === 'running'"
           class="chat-running-card"
@@ -2292,17 +2292,6 @@ export const UnifiedChatPage = {
           <button class="btn btn-ghost btn-xs" :class="{active: cmdCardCols===3}" @click="setCmdCardCols(3)">3列</button>
         </div>
 
-        <button
-          class="btn btn-secondary btn-toolbar-sm launch-agent-icon-btn"
-          aria-label="启动 Agent"
-          title="启动 Agent"
-          @click="launchOne"
-        >
-          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-            <path d="M2 10l2.3-.5L10 3.8a1.3 1.3 0 10-1.8-1.8L2.5 7.7 2 10z"></path>
-            <path d="M7.6 2.6l1.8 1.8"></path>
-          </svg>
-        </button>
         <button
           v-if="!isCmd && selectedThreadId"
           class="btn btn-ghost btn-xs chat-toolbar-icon-btn"
@@ -2360,6 +2349,18 @@ export const UnifiedChatPage = {
             <path d="M18.5 18.5h-3"></path>
           </svg>
         </button>
+        <button
+          class="btn btn-secondary btn-toolbar-sm launch-agent-icon-btn"
+          data-testid="launch-agent-button"
+          aria-label="启动 Agent"
+          title="启动 Agent"
+          @click="launchOne"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 20h4l10-10a2.2 2.2 0 0 0-3.1-3.1L4.9 16.8 4 20z"></path>
+            <path d="M13.8 7.2l3 3"></path>
+          </svg>
+        </button>
         <div v-if="!isCmd" class="chat-status" :title="selectedThreadId || '未选择会话'">
           <span class="status-dot" :class="activeStatus"></span>
           <span>{{ displayStatusText }}</span>
@@ -2372,7 +2373,12 @@ export const UnifiedChatPage = {
       </div>
 
       <div class="unified-main">
-        <aside v-if="!isCmd" class="thread-rail" :aria-label="showArchivedThreadList ? '归档会话列表' : '会话列表'">
+        <aside
+          v-if="!isCmd"
+          class="thread-rail"
+          data-testid="thread-rail"
+          :aria-label="showArchivedThreadList ? '归档会话列表' : '会话列表'"
+        >
           <header class="thread-rail-header">
             <div class="thread-rail-header-main">
               <span
@@ -2410,6 +2416,7 @@ export const UnifiedChatPage = {
             <button
               type="button"
               class="btn btn-ghost btn-xs thread-rail-switch-btn"
+              data-testid="thread-archive-toggle"
               :class="{ active: showArchivedThreadList }"
               :aria-label="showArchivedThreadList ? '返回会话列表' : '打开归档列表'"
               :title="showArchivedThreadList ? '返回会话列表' : '打开归档列表'"
@@ -2425,10 +2432,10 @@ export const UnifiedChatPage = {
               </svg>
             </button>
           </header>
-          <div v-if="visibleChatThreadCards.length === 0" class="thread-rail-empty">
+          <div v-if="visibleChatThreadCards.length === 0" class="thread-rail-empty" data-testid="thread-empty-state">
             {{ showArchivedThreadList ? '暂无归档会话' : '暂无会话，点击顶部「启动 Agent」开始对话' }}
           </div>
-          <div v-else class="thread-rail-list hide-scrollbar">
+          <div v-else class="thread-rail-list hide-scrollbar" data-testid="thread-list">
             <button
               v-for="thread in visibleChatThreadCards"
               :key="thread.id"
@@ -2590,7 +2597,7 @@ export const UnifiedChatPage = {
                   <pre class="chat-plan-pin-body">{{ activePinnedPlan.text }}</pre>
                 </aside>
                 <div v-if="noActiveThread" class="chat-messages-vue">
-                  <div class="diff-empty">选择或启动一个 Agent 开始对话</div>
+                  <div class="diff-empty" data-testid="chat-empty-state">选择或启动一个 Agent 开始对话</div>
                 </div>
                 <ChatTimeline
                   v-else

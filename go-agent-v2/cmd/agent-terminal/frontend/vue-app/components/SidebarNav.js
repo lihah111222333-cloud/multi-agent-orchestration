@@ -21,12 +21,13 @@ export const SidebarNav = {
     };
   },
   template: `
-    <nav id="sidebar">
+    <nav id="sidebar" data-testid="sidebar-nav">
       <button
         v-for="item in items"
         :key="item.key"
         class="sidebar-btn"
         :class="{ active: item.key === page }"
+        :data-testid="'nav-' + item.key"
         @click="onChange(item.key)"
       >
         <span class="sb-icon">{{ item.icon }}</span>

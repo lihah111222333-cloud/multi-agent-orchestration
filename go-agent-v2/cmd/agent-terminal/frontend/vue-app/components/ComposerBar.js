@@ -404,6 +404,7 @@ export const ComposerBar = {
     <div
       id="chat-input-bar"
       class="chat-input-vue"
+      data-testid="composer-bar"
       :class="{ 'drop-active': dropActive }"
       data-file-drop-target=""
       style="position:relative"
@@ -414,7 +415,7 @@ export const ComposerBar = {
     >
       <div v-if="compacting" class="codex-loading-bar"></div>
       <div v-if="dropActive" class="composer-drop-hint" aria-live="polite">松开即可添加附件</div>
-      <div class="composer-skill-selector" role="status" aria-live="polite">
+      <div class="composer-skill-selector" role="status" aria-live="polite" data-testid="composer-skill-selector">
         <div class="composer-skill-selector-head">
           <span class="composer-skill-selector-title" :class="{ 'loading-shimmer': skillMatchesLoading }">
             {{ skillMatchesLoading ? '技能匹配中…' : ('技能选择 ' + selectedSkillNames.length + '/' + skillMatches.length) }}
@@ -457,12 +458,13 @@ export const ComposerBar = {
         </span>
       </div>
 
-      <div id="input-row" class="chat-input-row-vue">
-        <button id="btnAttach" class="btn btn-secondary" @click="onAttach" :disabled="composer.state.attaching || disabled">
+      <div id="input-row" class="chat-input-row-vue" data-testid="composer-input-row">
+        <button id="btnAttach" class="btn btn-secondary" data-testid="composer-attach-button" @click="onAttach" :disabled="composer.state.attaching || disabled">
           {{ composer.state.attaching ? '选择中...' : '附件' }}
         </button>
         <textarea
           id="chatInput"
+          data-testid="composer-input"
           rows="2"
           v-model="composer.state.text"
           placeholder="输入给 Agent 的内容，Enter 发送，Shift+Enter 换行"
@@ -477,6 +479,7 @@ export const ComposerBar = {
           <div class="composer-top-actions">
             <button
               class="composer-compact-btn"
+              data-testid="composer-compact-button"
               :class="{ loading: compacting }"
               type="button"
               :title="compacting ? '压缩中…' : (interruptible ? '将先暂停再压缩上下文' : '压缩上下文')"
@@ -505,6 +508,7 @@ export const ComposerBar = {
           <button
             id="btnSend"
             class="btn btn-primary"
+            data-testid="composer-send-button"
             :class="{ 'btn-stop': isPauseMode() }"
             :disabled="disabled || (isPauseMode() && interruptPending) || (!isPauseMode() && !hasReadyInput())"
             :aria-label="isPauseMode() ? '中断' : '发送'"

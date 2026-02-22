@@ -37,20 +37,25 @@ export const DataPage = {
     return {};
   },
   template: `
-    <section :id="'page-' + pageId" class="page active">
-      <div class="panel-header">
+    <section :id="'page-' + pageId" class="page active" :data-testid="'data-page-' + pageId">
+      <div class="panel-header" :data-testid="'data-page-header-' + pageId">
         <div class="ph-bar"></div>
         <div class="ph-text">
           <h2>{{ title }}</h2>
         </div>
       </div>
-      <div class="panel-body">
-        <div v-if="items.length === 0" class="empty-state">
+      <div class="panel-body" :data-testid="'data-page-body-' + pageId">
+        <div v-if="items.length === 0" class="empty-state" :data-testid="'data-page-empty-' + pageId">
           <div class="es-icon">{{ icon }}</div>
           <h3>{{ emptyText }}</h3>
         </div>
-        <div v-else class="data-list-vue">
-          <article v-for="(item, idx) in items" :key="item.id || item[fields[0]?.key] || idx" class="data-card-vue">
+        <div v-else class="data-list-vue" :data-testid="'data-page-list-' + pageId">
+          <article
+            v-for="(item, idx) in items"
+            :key="item.id || item[fields[0]?.key] || idx"
+            class="data-card-vue"
+            :data-testid="'data-page-card-' + pageId + '-' + idx"
+          >
             <div v-for="field in fields" :key="field.key" class="data-row-vue">
               <strong>{{ field.label }}</strong>
               <span>{{ item[field.key] ?? '-' }}</span>

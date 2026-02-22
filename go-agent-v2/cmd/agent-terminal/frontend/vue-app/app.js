@@ -244,10 +244,10 @@ export const AppRoot = {
     };
   },
   template: `
-    <div class="app-shell">
+    <div class="app-shell" data-testid="app-shell">
       <SidebarNav :items="NAV_ITEMS" :page="page" @change="page = $event" />
 
-      <main id="content">
+      <main id="content" :data-testid="'page-' + page">
         <UnifiedChatPage
           v-if="page === 'chat'"
           mode="chat"

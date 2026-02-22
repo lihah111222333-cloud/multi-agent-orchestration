@@ -306,7 +306,7 @@ export const SettingsPage = {
     };
   },
   template: `
-    <section id="page-settings" class="page active">
+    <section id="page-settings" class="page active" data-testid="settings-page">
       <div class="panel-header">
         <div class="ph-bar"></div>
         <div class="ph-text">
@@ -314,20 +314,20 @@ export const SettingsPage = {
         </div>
       </div>
 
-      <div class="panel-body">
+      <div class="panel-body" data-testid="settings-panel-body">
         <div class="section-header">ABOUT</div>
-        <div class="data-card-vue">
+        <div class="data-card-vue" data-testid="settings-about-card">
           <div class="data-row-vue"><strong>版本</strong><span>{{ versionText }}</span></div>
           <div class="data-row-vue"><strong>运行时</strong><span>{{ runtimeText }}</span></div>
           <div class="data-row-vue"><strong>构建时间</strong><span>{{ buildTimeText }}</span></div>
           <div class="data-row-vue"><strong>Commit</strong><span>{{ commitText }}</span></div>
         </div>
         <div class="settings-action-row">
-          <button class="btn btn-secondary" @click="refresh">刷新构建信息</button>
+          <button class="btn btn-secondary" data-testid="settings-refresh-build-button" @click="refresh">刷新构建信息</button>
         </div>
 
         <div class="section-header">TURN TRACKER</div>
-        <div class="data-card-vue settings-stall-card">
+        <div class="data-card-vue settings-stall-card" data-testid="settings-stall-card">
           <div class="data-row-vue">
             <strong>Stall 检测阈值</strong>
             <span>无事件超过此时间自动中断 turn</span>
@@ -336,13 +336,14 @@ export const SettingsPage = {
             <input
               type="number"
               class="settings-stall-input"
+              data-testid="settings-stall-threshold-input"
               v-model.number="stallThreshold"
               min="30"
               step="30"
               :disabled="stallLoading"
             />
             <span class="settings-stall-unit">秒 ({{ Math.round(stallThreshold / 60) }} 分钟)</span>
-            <button class="btn btn-primary btn-toolbar-sm" @click="saveStallThreshold" :disabled="stallLoading">保存</button>
+            <button class="btn btn-primary btn-toolbar-sm" data-testid="settings-stall-threshold-save-button" @click="saveStallThreshold" :disabled="stallLoading">保存</button>
           </div>
           <div class="data-row-vue" style="margin-top:12px">
             <strong>心跳保活间隔</strong>
@@ -352,21 +353,22 @@ export const SettingsPage = {
             <input
               type="number"
               class="settings-stall-input"
+              data-testid="settings-stall-heartbeat-input"
               v-model.number="stallHeartbeat"
               min="10"
               step="30"
               :disabled="stallLoading"
             />
             <span class="settings-stall-unit">秒 ({{ Math.round(stallHeartbeat / 60) }} 分钟)</span>
-            <button class="btn btn-primary btn-toolbar-sm" @click="saveStallHeartbeat" :disabled="stallLoading">保存</button>
+            <button class="btn btn-primary btn-toolbar-sm" data-testid="settings-stall-heartbeat-save-button" @click="saveStallHeartbeat" :disabled="stallLoading">保存</button>
           </div>
-          <div v-if="stallNotice.message" class="settings-prompt-notice" :class="'is-' + stallNotice.level">
+          <div v-if="stallNotice.message" class="settings-prompt-notice" data-testid="settings-stall-notice" :class="'is-' + stallNotice.level">
             {{ stallNotice.message }}
           </div>
         </div>
 
         <div class="section-header">PROMPT</div>
-        <div class="data-card-vue settings-prompt-card">
+        <div class="data-card-vue settings-prompt-card" data-testid="settings-lsp-prompt-card">
           <div class="data-row-vue">
             <strong>LSP 提示词注入</strong>
             <span>{{ lspPromptLoading ? '加载中...' : '已启用' }}</span>
@@ -374,25 +376,26 @@ export const SettingsPage = {
           <div class="settings-prompt-desc">留空并保存可恢复默认值</div>
           <textarea
             class="settings-prompt-textarea"
+            data-testid="settings-lsp-prompt-input"
             rows="6"
             v-model="lspPromptHint"
             :placeholder="lspPromptDefaultHint || '请输入提示词'"
             :disabled="lspPromptLoading || lspPromptSaving"
           ></textarea>
-          <div v-if="lspPromptNotice.message" class="settings-prompt-notice" :class="'is-' + lspPromptNotice.level">
+          <div v-if="lspPromptNotice.message" class="settings-prompt-notice" data-testid="settings-lsp-prompt-notice" :class="'is-' + lspPromptNotice.level">
             {{ lspPromptNotice.message }}
           </div>
           <div class="settings-action-row settings-action-inline">
-            <button class="btn btn-secondary btn-toolbar-sm" @click="loadLSPPromptHint" :disabled="lspPromptSaving">刷新</button>
-            <button class="btn btn-secondary btn-toolbar-sm" @click="resetLSPPromptHint" :disabled="lspPromptLoading || lspPromptSaving">恢复默认</button>
-            <button class="btn btn-primary btn-toolbar-sm" @click="saveLSPPromptHint" :disabled="lspPromptLoading || lspPromptSaving">
+            <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-lsp-refresh-button" @click="loadLSPPromptHint" :disabled="lspPromptSaving">刷新</button>
+            <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-lsp-reset-button" @click="resetLSPPromptHint" :disabled="lspPromptLoading || lspPromptSaving">恢复默认</button>
+            <button class="btn btn-primary btn-toolbar-sm" data-testid="settings-lsp-save-button" @click="saveLSPPromptHint" :disabled="lspPromptLoading || lspPromptSaving">
               {{ lspPromptSaving ? '保存中...' : '保存提示词' }}
             </button>
           </div>
         </div>
 
         <div class="section-header">GENERATIVE UI</div>
-        <div class="data-card-vue settings-prompt-card">
+        <div class="data-card-vue settings-prompt-card" data-testid="settings-json-render-prompt-card">
           <div class="data-row-vue">
             <strong>json-render 提示词</strong>
             <span>{{ jrPromptLoading ? '加载中...' : '已启用' }}</span>
@@ -400,25 +403,26 @@ export const SettingsPage = {
           <div class="settings-prompt-desc">控制 AI 输出结构化 UI 组件的系统提示词，留空并保存可恢复默认</div>
           <textarea
             class="settings-prompt-textarea"
+            data-testid="settings-json-render-prompt-input"
             rows="8"
             v-model="jrPrompt"
             :placeholder="jrDefaultPrompt || '请输入提示词'"
             :disabled="jrPromptLoading || jrPromptSaving"
           ></textarea>
-          <div v-if="jrPromptNotice.message" class="settings-prompt-notice" :class="'is-' + jrPromptNotice.level">
+          <div v-if="jrPromptNotice.message" class="settings-prompt-notice" data-testid="settings-json-render-prompt-notice" :class="'is-' + jrPromptNotice.level">
             {{ jrPromptNotice.message }}
           </div>
           <div class="settings-action-row settings-action-inline">
-            <button class="btn btn-secondary btn-toolbar-sm" @click="loadJRPrompt" :disabled="jrPromptSaving">刷新</button>
-            <button class="btn btn-secondary btn-toolbar-sm" @click="resetJRPrompt" :disabled="jrPromptLoading || jrPromptSaving">恢复默认</button>
-            <button class="btn btn-primary btn-toolbar-sm" @click="saveJRPrompt" :disabled="jrPromptLoading || jrPromptSaving">
+            <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-json-render-refresh-button" @click="loadJRPrompt" :disabled="jrPromptSaving">刷新</button>
+            <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-json-render-reset-button" @click="resetJRPrompt" :disabled="jrPromptLoading || jrPromptSaving">恢复默认</button>
+            <button class="btn btn-primary btn-toolbar-sm" data-testid="settings-json-render-save-button" @click="saveJRPrompt" :disabled="jrPromptLoading || jrPromptSaving">
               {{ jrPromptSaving ? '保存中...' : '保存提示词' }}
             </button>
           </div>
         </div>
 
         <div class="section-header">BROWSER</div>
-        <div class="data-card-vue settings-prompt-card">
+        <div class="data-card-vue settings-prompt-card" data-testid="settings-browser-prompt-card">
           <div class="data-row-vue">
             <strong>Playwright 浏览器提示词</strong>
             <span>{{ browserPromptLoading ? '加载中...' : '已启用' }}</span>
@@ -426,34 +430,35 @@ export const SettingsPage = {
           <div class="settings-prompt-desc">控制 AI 使用 Playwright 浏览器自动化的系统提示词，留空并保存可恢复默认</div>
           <textarea
             class="settings-prompt-textarea"
+            data-testid="settings-browser-prompt-input"
             rows="6"
             v-model="browserPrompt"
             :placeholder="browserDefaultPrompt || '请输入提示词'"
             :disabled="browserPromptLoading || browserPromptSaving"
           ></textarea>
-          <div v-if="browserPromptNotice.message" class="settings-prompt-notice" :class="'is-' + browserPromptNotice.level">
+          <div v-if="browserPromptNotice.message" class="settings-prompt-notice" data-testid="settings-browser-prompt-notice" :class="'is-' + browserPromptNotice.level">
             {{ browserPromptNotice.message }}
           </div>
           <div class="settings-action-row settings-action-inline">
-            <button class="btn btn-secondary btn-toolbar-sm" @click="loadBrowserPrompt" :disabled="browserPromptSaving">刷新</button>
-            <button class="btn btn-secondary btn-toolbar-sm" @click="resetBrowserPrompt" :disabled="browserPromptLoading || browserPromptSaving">恢复默认</button>
-            <button class="btn btn-primary btn-toolbar-sm" @click="saveBrowserPrompt" :disabled="browserPromptLoading || browserPromptSaving">
+            <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-browser-refresh-button" @click="loadBrowserPrompt" :disabled="browserPromptSaving">刷新</button>
+            <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-browser-reset-button" @click="resetBrowserPrompt" :disabled="browserPromptLoading || browserPromptSaving">恢复默认</button>
+            <button class="btn btn-primary btn-toolbar-sm" data-testid="settings-browser-save-button" @click="saveBrowserPrompt" :disabled="browserPromptLoading || browserPromptSaving">
               {{ browserPromptSaving ? '保存中...' : '保存提示词' }}
             </button>
           </div>
         </div>
 
         <div class="section-header">UI LOG</div>
-        <div class="data-card-vue settings-log-card">
+        <div class="data-card-vue settings-log-card" data-testid="settings-log-card">
           <div class="data-row-vue">
             <strong>日志级别</strong>
             <span>{{ logLevel }}</span>
           </div>
           <div class="settings-action-row">
-            <button class="btn btn-secondary btn-toolbar-sm" @click="refreshLogPanel">刷新日志</button>
+            <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-log-refresh-button" @click="refreshLogPanel">刷新日志</button>
           </div>
-          <div v-if="logEntries.length === 0" class="settings-log-empty">暂无日志</div>
-          <div v-else class="settings-log-list">
+          <div v-if="logEntries.length === 0" class="settings-log-empty" data-testid="settings-log-empty">暂无日志</div>
+          <div v-else class="settings-log-list" data-testid="settings-log-list">
             <div
               v-for="entry in logEntries"
               :key="entry.seq"

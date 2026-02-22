@@ -607,32 +607,33 @@ export const SkillsPage = {
     };
   },
   template: `
-    <section id="page-skills" class="page active skills-page">
+    <section id="page-skills" class="page active skills-page" data-testid="skills-page">
       <div class="panel-header">
         <div class="ph-bar"></div>
         <div class="ph-text"><h2>技能管理</h2></div>
       </div>
-      <div class="split-duo">
-        <div class="split-left">
+      <div class="split-duo" data-testid="skills-split">
+        <div class="split-left" data-testid="skills-left">
           <div class="section-header">SKILL 列表</div>
-          <div class="panel-body skills-list-panel">
-            <div class="skills-toolbar">
-              <button class="btn btn-secondary" :disabled="uploading" @click="onUploadSkill">
+          <div class="panel-body skills-list-panel" data-testid="skills-list-panel">
+            <div class="skills-toolbar" data-testid="skills-toolbar">
+              <button class="btn btn-secondary" data-testid="skills-import-button" :disabled="uploading" @click="onUploadSkill">
                 {{ uploading ? '导入中...' : '批量导入技能目录' }}
               </button>
-              <button class="btn btn-ghost" @click="loadThreadSkills">刷新会话绑定</button>
+              <button class="btn btn-ghost" data-testid="skills-refresh-binding-button" @click="loadThreadSkills">刷新会话绑定</button>
             </div>
-            <div v-if="skillCards.length === 0" class="empty-state">
+            <div v-if="skillCards.length === 0" class="empty-state" data-testid="skills-empty-state">
               <div class="es-icon">S</div>
               <h3>暂无 Skill</h3>
               <p>支持一次导入多个目录（每个目录需包含 SKILL.md）</p>
             </div>
-            <div v-else class="data-list-vue">
+            <div v-else class="data-list-vue" data-testid="skills-list">
               <article
-                v-for="item in skillCards"
+                v-for="(item, idx) in skillCards"
                 :key="item.name"
                 class="data-card-vue skill-card"
                 :class="{ active: selectedSkillName.toLowerCase() === item.name.toLowerCase() }"
+                :data-testid="'skills-card-' + idx"
               >
                 <div class="data-row-vue">
                   <strong>技能</strong>
@@ -654,10 +655,10 @@ export const SkillsPage = {
                         @keydown="onInlineSummaryKeydown($event, item)"
                       ></textarea>
                       <div class="skill-summary-actions">
-                        <button class="btn btn-primary btn-xs" :disabled="isInlineSummarySaving(item.name)" @click="saveInlineSummary(item)">
+                        <button class="btn btn-primary btn-xs" :data-testid="'skills-summary-save-button-' + idx" :disabled="isInlineSummarySaving(item.name)" @click="saveInlineSummary(item)">
                           {{ isInlineSummarySaving(item.name) ? '保存中...' : '保存' }}
                         </button>
-                        <button class="btn btn-ghost btn-xs" :disabled="isInlineSummarySaving(item.name)" @click="cancelInlineSummaryEdit">
+                        <button class="btn btn-ghost btn-xs" :data-testid="'skills-summary-cancel-button-' + idx" :disabled="isInlineSummarySaving(item.name)" @click="cancelInlineSummaryEdit">
                           取消
                         </button>
                       </div>
@@ -683,11 +684,11 @@ export const SkillsPage = {
                   <span>{{ (item.forceWords || []).join(', ') || '-' }}</span>
                 </div>
                 <div class="data-actions-vue skill-actions">
-                  <button class="btn btn-ghost btn-xs" @click="onEditSkill(item)">编辑详情</button>
-                  <button class="btn btn-ghost btn-xs" :disabled="binding" @click="toggleThreadSkill(item.name)">
+                  <button class="btn btn-ghost btn-xs" :data-testid="'skills-edit-button-' + idx" @click="onEditSkill(item)">编辑详情</button>
+                  <button class="btn btn-ghost btn-xs" :data-testid="'skills-toggle-thread-button-' + idx" :disabled="binding" @click="toggleThreadSkill(item.name)">
                     {{ threadSkills.some((s) => s.toLowerCase() === item.name.toLowerCase()) ? '移出会话' : '加入会话' }}
                   </button>
-                  <button class="btn btn-ghost btn-xs btn-warning" :disabled="Boolean(deletingSkillName)" @click="onDeleteSkill(item)">
+                  <button class="btn btn-ghost btn-xs btn-warning" :data-testid="'skills-delete-button-' + idx" :disabled="Boolean(deletingSkillName)" @click="onDeleteSkill(item)">
                     {{ isDeletingSkill(item.name) ? '删除中...' : '删除' }}
                   </button>
                 </div>
@@ -696,36 +697,36 @@ export const SkillsPage = {
           </div>
         </div>
         <div class="split-divider"></div>
-        <div class="split-right">
+        <div class="split-right" data-testid="skills-editor-right">
           <div class="section-header">编辑器</div>
-          <div class="panel-body skills-editor-panel">
+          <div class="panel-body skills-editor-panel" data-testid="skills-editor-panel">
             <div class="skills-field">
               <label>技能名称</label>
-              <input v-model="form.name" class="modal-input" placeholder="例如：backend" />
+              <input v-model="form.name" class="modal-input" data-testid="skills-editor-name-input" placeholder="例如：backend" />
             </div>
             <div class="skills-field">
               <label>描述（可选）</label>
-              <input v-model="form.description" class="modal-input" placeholder="一句话描述" />
+              <input v-model="form.description" class="modal-input" data-testid="skills-editor-description-input" placeholder="一句话描述" />
             </div>
             <div class="skills-field">
               <label>摘要（注入内容）</label>
-              <textarea v-model="form.summary" class="modal-input" rows="3" placeholder="用于运行时注入的摘要，建议 1-3 句"></textarea>
+              <textarea v-model="form.summary" class="modal-input" data-testid="skills-editor-summary-input" rows="3" placeholder="用于运行时注入的摘要，建议 1-3 句"></textarea>
               <div class="skills-inline-tip">摘要来源：{{ summarySourceLabel }}</div>
               <div class="skills-inline-tip">系统会先生成一版摘要；你可以直接修改并保存到 SKILL.md 的 frontmatter。</div>
             </div>
             <div class="skills-field two-col">
               <div>
                 <label>触发词（逗号分隔）</label>
-                <input v-model="form.triggerWordsText" class="modal-input" placeholder="api, golang, backend" />
+                <input v-model="form.triggerWordsText" class="modal-input" data-testid="skills-editor-trigger-input" placeholder="api, golang, backend" />
               </div>
               <div>
                 <label>强制词（逗号分隔）</label>
-                <input v-model="form.forceWordsText" class="modal-input" placeholder="紧急, 必须, 强制" />
+                <input v-model="form.forceWordsText" class="modal-input" data-testid="skills-editor-force-input" placeholder="紧急, 必须, 强制" />
               </div>
             </div>
             <div class="skills-field">
               <label>绑定会话</label>
-              <select v-model="selectedThreadId" class="project-selector">
+              <select v-model="selectedThreadId" class="project-selector" data-testid="skills-editor-thread-select">
                 <option value="">未选择会话</option>
                 <option v-for="item in threadOptions" :key="item.id" :value="item.id">
                   {{ item.name }} ({{ item.id }})
@@ -737,21 +738,21 @@ export const SkillsPage = {
             </div>
             <div class="skills-field">
               <label>SKILL 内容（默认自动解析 MD，可手动编辑）</label>
-              <textarea v-model="form.body" class="modal-input skills-body-input" placeholder="输入技能正文 Markdown"></textarea>
+              <textarea v-model="form.body" class="modal-input skills-body-input" data-testid="skills-editor-body-input" placeholder="输入技能正文 Markdown"></textarea>
               <div v-if="sourcePath" class="skills-inline-tip">来源文件：{{ sourcePath }}</div>
             </div>
-            <div class="skills-actions-row">
-              <button class="btn btn-primary" :disabled="saving" @click="onSaveSkill">
+            <div class="skills-actions-row" data-testid="skills-editor-actions">
+              <button class="btn btn-primary" data-testid="skills-save-button" :disabled="saving" @click="onSaveSkill">
                 {{ saving ? '保存中...' : '保存 Skill' }}
               </button>
-              <button class="btn btn-secondary" :disabled="binding || !form.name" @click="toggleThreadSkill(form.name)">
+              <button class="btn btn-secondary" data-testid="skills-toggle-current-thread-button" :disabled="binding || !form.name" @click="toggleThreadSkill(form.name)">
                 {{ currentSkillInThread ? '从当前会话移除' : '加入当前会话' }}
               </button>
             </div>
-            <div v-if="notice.message" class="skills-notice" :class="'is-' + notice.level">
+            <div v-if="notice.message" class="skills-notice" data-testid="skills-notice" :class="'is-' + notice.level">
               {{ notice.message }}
             </div>
-            <ul v-if="importFailures.length > 0" class="skills-failure-list">
+            <ul v-if="importFailures.length > 0" class="skills-failure-list" data-testid="skills-failure-list">
               <li v-for="item in importFailures.slice(0, 5)" :key="item">{{ item }}</li>
             </ul>
             <div v-if="importFailures.length > 5" class="skills-inline-tip">

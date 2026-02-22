@@ -2305,29 +2305,61 @@ export const UnifiedChatPage = {
         </button>
         <button
           v-if="!isCmd && selectedThreadId"
-          class="btn btn-ghost btn-xs"
+          class="btn btn-ghost btn-xs chat-toolbar-icon-btn"
+          :aria-label="copyButtonLabel"
+          :title="copyButtonLabel"
           @click="copySelectedThreadId"
-        >{{ copyButtonLabel }}</button>
-        <button
-          v-if="!isCmd && selectedThreadId"
-          class="btn btn-ghost btn-xs"
-          @click="setMainSelected"
         >
-          {{ selectedThreadId === mainAgentId ? '主Agent' : '设为主Agent' }}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="7" width="10" height="13" rx="2.2"></rect>
+            <path d="M15 7V5.8A1.8 1.8 0 0 0 13.2 4H6.8A1.8 1.8 0 0 0 5 5.8V16.2A1.8 1.8 0 0 0 6.8 18H9"></path>
+            <path d="M12 11.5h4"></path>
+            <path d="M12 15h4"></path>
+          </svg>
         </button>
         <button
           v-if="!isCmd && selectedThreadId"
-          class="btn btn-ghost btn-xs"
+          class="btn btn-ghost btn-xs chat-toolbar-icon-btn"
+          :aria-label="selectedThreadId === mainAgentId ? '主Agent' : '设为主Agent'"
+          :title="selectedThreadId === mainAgentId ? '主Agent' : '设为主Agent'"
+          @click="setMainSelected"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="8"></circle>
+            <path d="M12 8.2l1.3 2.6 2.9.4-2.1 2 .5 2.8-2.6-1.4-2.6 1.4.5-2.8-2.1-2 2.9-.4L12 8.2z"></path>
+            <path v-if="selectedThreadId !== mainAgentId" d="M18.2 5.4v3.2"></path>
+            <path v-if="selectedThreadId !== mainAgentId" d="M16.6 7h3.2"></path>
+          </svg>
+        </button>
+        <button
+          v-if="!isCmd && selectedThreadId"
+          class="btn btn-ghost btn-xs chat-toolbar-icon-btn"
           :disabled="!canInterrupt"
+          :aria-label="canInterrupt ? '停止' : '当前没有可中断任务'"
           :title="canInterrupt ? '中断当前执行' : '当前没有可中断任务'"
           @click="stopSelected"
-        >停止</button>
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="8"></circle>
+            <rect x="9" y="9" width="6" height="6" rx="1.2"></rect>
+          </svg>
+        </button>
         <button
           v-if="!isCmd && selectedThreadId && activeStatus === 'running'"
-          class="btn btn-ghost btn-xs btn-warning"
+          class="btn btn-ghost btn-xs btn-warning chat-toolbar-icon-btn"
           @click="forceCompleteCurrent"
+          aria-label="重链"
           title="强制完成当前 turn，重置状态机"
-        >重链</button>
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9.4 14.6 7 17a3.2 3.2 0 1 1-4.5-4.5l2.4-2.4"></path>
+            <path d="M14.6 9.4 17 7a3.2 3.2 0 1 1 4.5 4.5l-2.4 2.4"></path>
+            <path d="M9 15h6"></path>
+            <path d="M18.5 15.5a6.5 6.5 0 0 1-9.2 2.1"></path>
+            <path d="M18.5 18.5v-3"></path>
+            <path d="M18.5 18.5h-3"></path>
+          </svg>
+        </button>
         <div v-if="!isCmd" class="chat-status" :title="selectedThreadId || '未选择会话'">
           <span class="status-dot" :class="activeStatus"></span>
           <span>{{ displayStatusText }}</span>

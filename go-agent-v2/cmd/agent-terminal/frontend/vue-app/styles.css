@@ -3767,6 +3767,22 @@ body.is-row-resizing * {
   display: block;
 }
 
+.chat-toolbar-icon-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0 !important;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-toolbar-icon-btn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
 .modal-input-row {
   display: flex;
   gap: 8px;

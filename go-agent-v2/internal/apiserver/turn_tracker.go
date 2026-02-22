@@ -657,7 +657,7 @@ func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time
 		return true
 	}
 	switch eventKey {
-	case "turn_diff", "plan_delta", "item/completed":
+	case "turn_diff", "plan_delta", "item/completed", "exec_command_end":
 		return true
 	default:
 		return false

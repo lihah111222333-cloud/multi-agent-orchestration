@@ -155,8 +155,18 @@ func (s *Server) appendLSPUsageHint(ctx context.Context, prompt string) string {
 	return mergePromptText(prompt, s.resolveLSPUsagePromptHint(ctx))
 }
 
-func (s *Server) appendJsonRenderHint(ctx context.Context, prompt string) string {
-	return mergePromptText(prompt, s.resolveJsonRenderPrompt(ctx))
+func (s *Server) resolveUnifiedToolingPrompt(ctx context.Context) string {
+	merged := s.resolveLSPUsagePromptHint(ctx)
+	merged = mergePromptText(merged, s.resolveJsonRenderPrompt(ctx))
+	merged = mergePromptText(merged, s.resolveBrowserPrompt(ctx))
+	if s.codeRunner != nil {
+		merged = mergePromptText(merged, s.resolveCodeRunPrompt(ctx))
+	}
+	return merged
+}
+
+func (s *Server) appendUnifiedToolingHint(ctx context.Context, prompt string) string {
+	return mergePromptText(prompt, s.resolveUnifiedToolingPrompt(ctx))
 }
 
 func (s *Server) resolveBrowserPrompt(ctx context.Context) string {
@@ -177,17 +187,6 @@ func (s *Server) resolveBrowserPrompt(ctx context.Context) string {
 		return defaultBrowserPrompt
 	}
 	return prompt
-}
-
-func (s *Server) appendBrowserHint(ctx context.Context, prompt string) string {
-	return mergePromptText(prompt, s.resolveBrowserPrompt(ctx))
-}
-
-func (s *Server) appendCodeRunHint(ctx context.Context, prompt string) string {
-	if s.codeRunner == nil {
-		return prompt
-	}
-	return mergePromptText(prompt, s.resolveCodeRunPrompt(ctx))
 }
 
 func (s *Server) buildConfiguredSkillPrompt(agentID string, input []UserInput) (string, int) {
@@ -237,6 +236,15 @@ func (s *Server) buildSelectedSkillPrompt(selectedSkills []string) (string, int)
 		return "", 0
 	}
 	return strings.Join(texts, "\n"), len(texts)
+}
+
+func (s *Server) buildTurnSkillPrompt(threadID, prompt string, input []UserInput, selectedSkills []string, manualSkillSelection bool) (string, int, int) {
+	selectedSkillPrompt, selectedSkillCount := s.buildSelectedSkillPrompt(selectedSkills)
+	if manualSkillSelection || selectedSkillCount > 0 {
+		return selectedSkillPrompt, selectedSkillCount, 0
+	}
+	autoSkillPrompt, autoSkillCount := s.buildForcedOrExplicitMatchedSkillPrompt(threadID, prompt, input)
+	return mergePromptText(selectedSkillPrompt, autoSkillPrompt), selectedSkillCount, autoSkillCount
 }
 
 func lowerMatchedTerms(text string, candidates []string) []string {
@@ -494,12 +502,9 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 	}
 
 	prompt, images, files := extractInputs(p.Input)
-	selectedSkillPrompt, selectedSkillCount := s.buildSelectedSkillPrompt(selectedSkills)
-	submitPrompt := mergePromptText(prompt, selectedSkillPrompt)
-	submitPrompt = s.appendLSPUsageHint(ctx, submitPrompt)
-	submitPrompt = s.appendJsonRenderHint(ctx, submitPrompt)
-	submitPrompt = s.appendBrowserHint(ctx, submitPrompt)
-	submitPrompt = s.appendCodeRunHint(ctx, submitPrompt)
+	skillPrompt, selectedSkillCount, autoMatchedSkillCount := s.buildTurnSkillPrompt(p.ThreadID, prompt, p.Input, selectedSkills, p.ManualSkillSelection)
+	submitPrompt := mergePromptText(prompt, skillPrompt)
+	submitPrompt = s.appendUnifiedToolingHint(ctx, submitPrompt)
 	logger.Info("turn/start: input prepared",
 		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 		"text_len", len(prompt),
@@ -508,7 +513,7 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 		"selected_skills_requested", len(selectedSkills),
 		"selected_skills_injected", selectedSkillCount,
 		"manual_skill_selection", p.ManualSkillSelection,
-		"auto_matched_skills", 0,
+		"auto_matched_skills", autoMatchedSkillCount,
 	)
 	if err := proc.Client.Submit(submitPrompt, images, files, p.OutputSchema); err != nil {
 		return nil, apperrors.Wrap(err, "Server.turnStart", "submit prompt")
@@ -547,12 +552,9 @@ func (s *Server) turnSteerTyped(ctx context.Context, p turnSteerParams) (any, er
 			return nil, apperrors.Wrap(err, "Server.turnSteer", "normalize selected skills")
 		}
 		prompt, images, files := extractInputs(p.Input)
-		selectedSkillPrompt, _ := s.buildSelectedSkillPrompt(selectedSkills)
-		submitPrompt := mergePromptText(prompt, selectedSkillPrompt)
-		submitPrompt = s.appendLSPUsageHint(ctx, submitPrompt)
-		submitPrompt = s.appendJsonRenderHint(ctx, submitPrompt)
-		submitPrompt = s.appendBrowserHint(ctx, submitPrompt)
-		submitPrompt = s.appendCodeRunHint(ctx, submitPrompt)
+		skillPrompt, _, _ := s.buildTurnSkillPrompt(p.ThreadID, prompt, p.Input, selectedSkills, p.ManualSkillSelection)
+		submitPrompt := mergePromptText(prompt, skillPrompt)
+		submitPrompt = s.appendUnifiedToolingHint(ctx, submitPrompt)
 		if err := proc.Client.Submit(submitPrompt, images, files, nil); err != nil {
 			return nil, err
 		}

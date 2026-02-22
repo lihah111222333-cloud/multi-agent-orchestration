@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/multi-agent/go-agent-v2/internal/executor"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 
@@ -143,5 +144,33 @@ func TestAppendLSPUsageHint(t *testing.T) {
 	}
 	if !strings.Contains(got, defaultLSPUsagePromptHint) {
 		t.Fatalf("prompt missing lsp hint: %q", got)
+	}
+}
+
+func TestAppendUnifiedToolingHint_InjectsAllToolPrompts(t *testing.T) {
+	srv := &Server{
+		prefManager: uistate.NewPreferenceManager(nil),
+		codeRunner:  &executor.CodeRunner{},
+	}
+	original := "请帮我分析这个 Go 文件"
+	got := srv.appendUnifiedToolingHint(context.Background(), original)
+
+	if !strings.Contains(got, original) {
+		t.Fatalf("prompt missing original text: %q", got)
+	}
+	if !strings.Contains(got, defaultLSPUsagePromptHint) {
+		t.Fatalf("prompt missing lsp hint: %q", got)
+	}
+	if !strings.Contains(got, srv.resolveJsonRenderPrompt(context.Background())) {
+		t.Fatalf("prompt missing json-render hint: %q", got)
+	}
+	if !strings.Contains(got, defaultBrowserPrompt) {
+		t.Fatalf("prompt missing browser hint: %q", got)
+	}
+	if !strings.Contains(got, defaultCodeRunPrompt) {
+		t.Fatalf("prompt missing code-run hint: %q", got)
+	}
+	if strings.Count(got, "已注入代码执行工具。使用规则：") != 1 {
+		t.Fatalf("code-run hint injected multiple times: %q", got)
 	}
 }

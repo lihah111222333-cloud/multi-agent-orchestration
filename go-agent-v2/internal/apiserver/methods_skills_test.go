@@ -54,6 +54,38 @@ summary: "tdd summary"
 	}
 }
 
+func TestSkillsListUsesFrontmatterNameWhenProvided(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "go-backend-development"), 0o755); err != nil {
+		t.Fatalf("mkdir skill: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "go-backend-development", "SKILL.md"), []byte(`---
+name: "测试驱动开发"
+description: "tdd helper"
+summary: "tdd summary"
+---
+# tdd`), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	srv := &Server{
+		skillsDir: tmp,
+		skillSvc:  service.NewSkillService(tmp),
+	}
+	raw, err := srv.skillsList(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("skillsList error: %v", err)
+	}
+	resp := raw.(map[string]any)
+	skills := resp["skills"].([]map[string]any)
+	if len(skills) != 1 {
+		t.Fatalf("len(skills)=%d, want=1", len(skills))
+	}
+	if got := skills[0]["name"].(string); got != "测试驱动开发" {
+		t.Fatalf("skillsList name=%q, want=%q", got, "测试驱动开发")
+	}
+}
+
 func TestSkillsConfigWriteAgentSkillsLifecycle(t *testing.T) {
 	srv := &Server{}
 	ctx := context.Background()
@@ -270,6 +302,132 @@ FULL OPS DETAIL SHOULD NOT INJECT`)
 	}
 	if strings.Contains(prompt, "[skill:ops]") {
 		t.Fatalf("non-selected skill should not be injected, got=%q", prompt)
+	}
+}
+
+func TestBuildTurnSkillPromptAutoInjectsExplicitSkillWhenNoManualSelection(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("测试驱动开发", `---
+description: TDD
+aliases: ["@TDD", "@测试驱动"]
+---
+tdd skill`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+	}
+
+	skillPrompt, selectedCount, autoCount := srv.buildTurnSkillPrompt(
+		"thread-1",
+		"请按@测试驱动开发执行",
+		nil,
+		nil,
+		false,
+	)
+	if selectedCount != 0 {
+		t.Fatalf("selectedCount=%d, want=0", selectedCount)
+	}
+	if autoCount != 1 {
+		t.Fatalf("autoCount=%d, want=1", autoCount)
+	}
+	if !strings.Contains(skillPrompt, "[skill:测试驱动开发]") {
+		t.Fatalf("expected auto injected skill prompt, got=%q", skillPrompt)
+	}
+}
+
+func TestBuildTurnSkillPromptAutoInjectsExplicitFrontmatterNameWhenDirDiffers(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("go-backend-development", `---
+name: 测试驱动开发
+description: TDD
+aliases: ["@TDD", "@测试驱动"]
+---
+tdd skill`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+	}
+
+	skillPrompt, selectedCount, autoCount := srv.buildTurnSkillPrompt(
+		"thread-1",
+		"请按@测试驱动开发执行",
+		nil,
+		nil,
+		false,
+	)
+	if selectedCount != 0 {
+		t.Fatalf("selectedCount=%d, want=0", selectedCount)
+	}
+	if autoCount != 1 {
+		t.Fatalf("autoCount=%d, want=1", autoCount)
+	}
+	if !strings.Contains(skillPrompt, "[skill:测试驱动开发]") {
+		t.Fatalf("expected auto injected skill prompt by logical skill name, got=%q", skillPrompt)
+	}
+}
+
+func TestBuildTurnSkillPromptManualSelectionDisablesAutoMatch(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill := func(name, content string) {
+		t.Helper()
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	writeSkill("测试驱动开发", `---
+description: TDD
+---
+tdd skill`)
+
+	srv := &Server{
+		skillSvc:  service.NewSkillService(tmp),
+		skillsDir: tmp,
+	}
+
+	skillPrompt, selectedCount, autoCount := srv.buildTurnSkillPrompt(
+		"thread-1",
+		"请按@测试驱动开发执行",
+		nil,
+		nil,
+		true,
+	)
+	if selectedCount != 0 {
+		t.Fatalf("selectedCount=%d, want=0", selectedCount)
+	}
+	if autoCount != 0 {
+		t.Fatalf("autoCount=%d, want=0", autoCount)
+	}
+	if strings.TrimSpace(skillPrompt) != "" {
+		t.Fatalf("expected no skill prompt when manual selection is enabled, got=%q", skillPrompt)
 	}
 }
 

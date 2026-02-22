@@ -45,6 +45,19 @@ func TestExtractToolFilePath(t *testing.T) {
 	}
 }
 
+func TestResolveCodeRunCallID(t *testing.T) {
+	reqID := int64(42)
+	if got := resolveCodeRunCallID("call-1", &reqID); got != "call-1" {
+		t.Fatalf("call id should win, got %q", got)
+	}
+	if got := resolveCodeRunCallID("", &reqID); got != "req-42" {
+		t.Fatalf("request id fallback mismatch, got %q", got)
+	}
+	if got := resolveCodeRunCallID("", nil); got != "" {
+		t.Fatalf("empty fallback mismatch, got %q", got)
+	}
+}
+
 func TestBuildToolNotifyPayload(t *testing.T) {
 	call := codex.DynamicToolCallData{Tool: "lsp_hover", CallID: "c1"}
 	result := strings.Repeat("x", 600)

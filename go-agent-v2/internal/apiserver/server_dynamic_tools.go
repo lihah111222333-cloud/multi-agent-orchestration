@@ -314,9 +314,9 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 		result = s.orchestrationSendMessageFrom(agentID, call.Arguments)
 	} else if call.Tool == "code_run" {
 		// code_run / code_run_test: 需要 agentID + callID, 在此硬编码分支。
-		result = s.codeRunWithAgent(agentID, call.CallID, call.Arguments)
+		result = s.codeRunWithAgent(agentID, resolveCodeRunCallID(call.CallID, event.RequestID), call.Arguments)
 	} else if call.Tool == "code_run_test" {
-		result = s.codeRunTestWithAgent(agentID, call.CallID, call.Arguments)
+		result = s.codeRunTestWithAgent(agentID, resolveCodeRunCallID(call.CallID, event.RequestID), call.Arguments)
 	} else if handler, ok := s.dynTools[call.Tool]; ok {
 		result = handler(call.Arguments)
 	} else {
@@ -358,6 +358,17 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 	if err := proc.Client.SendDynamicToolResult(call.CallID, result, event.RequestID); err != nil {
 		logger.Warn("app-server: send tool result failed", logger.FieldAgentID, agentID, logger.FieldToolName, call.Tool, logger.FieldError, err)
 	}
+}
+
+func resolveCodeRunCallID(callID string, requestID *int64) string {
+	trimmed := strings.TrimSpace(callID)
+	if trimmed != "" {
+		return trimmed
+	}
+	if requestID != nil {
+		return fmt.Sprintf("req-%d", *requestID)
+	}
+	return ""
 }
 
 func extractToolFilePath(args map[string]any) string {

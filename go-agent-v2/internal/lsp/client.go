@@ -159,6 +159,19 @@ func (c *Client) DidClose(uri string) error {
 	})
 }
 
+// DidChange 通知服务器文档内容发生变化 (全量替换)。
+func (c *Client) DidChange(uri string, version int, newText string) error {
+	return c.notify("textDocument/didChange", DidChangeTextDocumentParams{
+		TextDocument: VersionedTextDocumentIdentifier{
+			URI:     uri,
+			Version: version,
+		},
+		ContentChanges: []TextDocumentContentChangeEvent{
+			{Text: newText},
+		},
+	})
+}
+
 // Hover 请求 hover 信息。
 func (c *Client) Hover(ctx context.Context, uri string, line, character int) (*HoverResult, error) {
 	if !c.Running() {
@@ -240,6 +253,37 @@ func (c *Client) DocumentSymbol(ctx context.Context, uri string) ([]DocumentSymb
 		return nil, err
 	}
 	return result, nil
+}
+
+// Completion 代码补全 — 返回补全列表。
+//
+// LSP 规范: 返回值可能是 CompletionItem[] | CompletionList | null。
+func (c *Client) Completion(ctx context.Context, uri string, line, character int) ([]CompletionItem, error) {
+	if !c.Running() {
+		return nil, fmt.Errorf("lsp client not running")
+	}
+	var raw json.RawMessage
+	err := c.call("textDocument/completion", CompletionParams{
+		TextDocument: TextDocumentIdentifier{URI: uri},
+		Position:     Position{Line: line, Character: character},
+	}, &raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+
+	var list CompletionList
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return list.Items, nil
+	}
+
+	var items []CompletionItem
+	if err := json.Unmarshal(raw, &items); err == nil {
+		return items, nil
+	}
+	return nil, nil
 }
 
 // Rename 重命名 — 返回重命名所需的全部编辑。

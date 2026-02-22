@@ -8,6 +8,7 @@
 //   - definition: textDocument/definition (跳转定义)
 //   - references: textDocument/references (查找引用)
 //   - documentSymbol: textDocument/documentSymbol (文件大纲)
+//   - completion: textDocument/completion (代码补全)
 //   - rename: textDocument/rename (重命名)
 package lsp
 
@@ -147,6 +148,23 @@ type DidOpenTextDocumentParams struct {
 // DidCloseTextDocumentParams textDocument/didClose 通知参数。
 type DidCloseTextDocumentParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
+}
+
+// DidChangeTextDocumentParams textDocument/didChange 通知参数。
+type DidChangeTextDocumentParams struct {
+	TextDocument   VersionedTextDocumentIdentifier  `json:"textDocument"`
+	ContentChanges []TextDocumentContentChangeEvent `json:"contentChanges"`
+}
+
+// VersionedTextDocumentIdentifier 带版本的文档标识。
+type VersionedTextDocumentIdentifier struct {
+	URI     string `json:"uri"`
+	Version int    `json:"version"`
+}
+
+// TextDocumentContentChangeEvent 内容变更事件 (全量替换模式)。
+type TextDocumentContentChangeEvent struct {
+	Text string `json:"text"` // 全量替换
 }
 
 // ========================================
@@ -306,6 +324,31 @@ func (k SymbolKind) String() string {
 		return n
 	}
 	return "unknown"
+}
+
+// ========================================
+// Completion (textDocument/completion)
+// ========================================
+
+// CompletionParams 补全请求参数。
+type CompletionParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+}
+
+// CompletionItem 补全项。
+type CompletionItem struct {
+	Label         string `json:"label"`
+	Kind          int    `json:"kind,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	Documentation any    `json:"documentation,omitempty"`
+	InsertText    string `json:"insertText,omitempty"`
+}
+
+// CompletionList 补全列表。
+type CompletionList struct {
+	IsIncomplete bool             `json:"isIncomplete"`
+	Items        []CompletionItem `json:"items"`
 }
 
 // ========================================

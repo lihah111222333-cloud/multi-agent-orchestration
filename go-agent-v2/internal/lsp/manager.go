@@ -174,6 +174,15 @@ func (m *Manager) CloseFile(filePath string) error {
 	return client.DidClose(pathToURI(filePath))
 }
 
+// ChangeFile 更新已打开文件内容 (didChange)。
+func (m *Manager) ChangeFile(filePath string, version int, newContent string) error {
+	client, err := m.clientForFile(filePath)
+	if client == nil || err != nil {
+		return err
+	}
+	return client.DidChange(pathToURI(filePath), version, newContent)
+}
+
 // Hover 获取 hover 信息。
 func (m *Manager) Hover(filePath string, line, character int) (*HoverResult, error) {
 	ext := strings.TrimPrefix(filepath.Ext(filePath), ".")
@@ -216,6 +225,15 @@ func (m *Manager) DocumentSymbol(filePath string) ([]DocumentSymbol, error) {
 		return nil, err
 	}
 	return client.DocumentSymbol(m.ctx, pathToURI(filePath))
+}
+
+// Completion 获取补全候选。
+func (m *Manager) Completion(filePath string, line, character int) ([]CompletionItem, error) {
+	client, err := m.clientForFile(filePath)
+	if client == nil || err != nil {
+		return nil, err
+	}
+	return client.Completion(m.ctx, pathToURI(filePath), line, character)
 }
 
 // Rename 重命名符号。

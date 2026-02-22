@@ -22,7 +22,7 @@ const (
 		"5. 查找引用: lsp_references — 查找符号的所有使用点\n" +
 		"6. 文件大纲: lsp_document_symbol — 获取函数/类型/方法列表\n" +
 		"7. 安全重命名: lsp_rename — 跨文件重命名符号\n" +
-		"未使用上述工具前，不得基于猜测给出结论。禁止跳过 lsp_open_file 直接调用其他 LSP 工具。"
+		"凡是源代码的分析、定位、修改与解释，须优先调用上述 7 个 LSP 工具（lsp_open_file → lsp_document_symbol → lsp_hover / lsp_definition / lsp_references / lsp_diagnostics → lsp_rename）增强代码理解能力。未使用上述工具前，不得基于猜测给出结论。禁止跳过 lsp_open_file 直接调用其他 LSP 工具。"
 	prefKeyLSPUsagePromptHint = "settings.lspUsagePromptHint"
 	maxLSPUsagePromptHintLen  = 4000
 

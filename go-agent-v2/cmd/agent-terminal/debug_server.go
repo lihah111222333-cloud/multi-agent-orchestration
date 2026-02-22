@@ -43,14 +43,14 @@ type debugBridgeEvent struct {
 }
 
 var debugBridgeHub = struct {
-	mu     sync.RWMutex
-	nextID int64
-	events []debugBridgeEvent
-}{
-	events: make([]debugBridgeEvent, 0, 256),
-}
+	mu   sync.RWMutex
+	ring []debugBridgeEvent // 预分配环形缓冲区
+	head int                // 最旧事件在 ring 中的索引
+	size int                // 当前有效事件数 (0..cap)
+	seq  int64              // 单调递增的全局事件 ID
+}{}
 
-const debugBridgeMaxEvents = 20000
+const debugBridgeMaxEvents = 200_000
 const debugBridgePublishSampleEvery int64 = 120
 const debugBridgePollSampleEvery int64 = 120
 
@@ -58,7 +58,15 @@ const debugBridgePollSampleEvery int64 = 120
 const debugBridgeDroppableSampleRate int64 = 5
 
 // debugBridgeOverflowLogEvery 溢出日志采样间隔 — 第 1 次和每第 N 次溢出打 WARN。
-const debugBridgeOverflowLogEvery int64 = 1000
+const debugBridgeOverflowLogEvery int64 = 5000
+
+// ensureDebugBridgeRing 延迟初始化 ring buffer (首次 publish 时分配)。
+// 调用方必须持有 debugBridgeHub.mu 写锁。
+func ensureDebugBridgeRing() {
+	if debugBridgeHub.ring == nil {
+		debugBridgeHub.ring = make([]debugBridgeEvent, debugBridgeMaxEvents)
+	}
+}
 
 var debugBridgeMetrics = struct {
 	publishedTotal     atomic.Int64
@@ -92,13 +100,19 @@ func isHighFreqMethod(method string) bool {
 }
 
 // isDroppableHighFreqMethod 判断是否为可安全丢弃的高频方法。
-// 仅含 streaming 类事件 (delta/output/stream)。
-// 注意: ui/state/changed 和 tokenUsage/updated 不可丢弃 — 前端依赖它们触发状态同步。
+// 含 streaming 类事件 (delta/output/stream) 以及生命周期信号事件
+// (item/started, item/completed, tokenUsage, summaryPart, rateLimits)。
+// 不可丢弃: ui/state/changed, turn/completed, thread/started, error — 前端依赖它们触发状态同步或终止判断。
 func isDroppableHighFreqMethod(method string) bool {
 	lower := strings.ToLower(method)
 	return strings.Contains(lower, "delta") ||
 		strings.Contains(lower, "output") ||
-		strings.Contains(lower, "stream")
+		strings.Contains(lower, "stream") ||
+		strings.Contains(lower, "item/started") ||
+		strings.Contains(lower, "item/completed") ||
+		strings.Contains(lower, "tokenusage") ||
+		strings.Contains(lower, "summarypart") ||
+		strings.Contains(lower, "ratelimits")
 }
 
 var debugBridgeEnabled atomic.Bool
@@ -110,7 +124,7 @@ func shouldLogBridgePublish(method string, seq int64) bool {
 	return true
 }
 
-// publishDebugBridgeEvent 将 Go 桥接事件写入调试队列。
+// publishDebugBridgeEvent 将 Go 桥接事件写入调试队列 (环形缓冲区)。
 // 约束：前端不直接连 SSE，仅通过此 Go 队列拉取事件。
 func publishDebugBridgeEvent(method string, params any) {
 	if !debugBridgeEnabled.Load() {
@@ -137,28 +151,47 @@ func publishDebugBridgeEvent(method string, params any) {
 	debugBridgeHub.mu.Lock()
 	defer debugBridgeHub.mu.Unlock()
 
-	debugBridgeHub.nextID++
-	eventID := debugBridgeHub.nextID
-	debugBridgeHub.events = append(debugBridgeHub.events, debugBridgeEvent{
-		ID:      eventID,
-		Type:    method,
-		AgentID: threadID,
-		Data:    string(rawPayload),
-		Payload: payloadMap,
-	})
+	ensureDebugBridgeRing()
+
+	debugBridgeHub.seq++
+	eventID := debugBridgeHub.seq
+	cap := len(debugBridgeHub.ring)
 
 	dropped := 0
-	if len(debugBridgeHub.events) > debugBridgeMaxEvents {
-		dropped = len(debugBridgeHub.events) - debugBridgeMaxEvents
-		debugBridgeHub.events = append([]debugBridgeEvent(nil), debugBridgeHub.events[dropped:]...)
+	if debugBridgeHub.size >= cap {
+		// 环形缓冲区满: 覆盖最旧事件 (head 位置)
+		dropped = 1
+		debugBridgeHub.ring[debugBridgeHub.head] = debugBridgeEvent{
+			ID:      eventID,
+			Type:    method,
+			AgentID: threadID,
+			Data:    string(rawPayload),
+			Payload: payloadMap,
+		}
+		debugBridgeHub.head = (debugBridgeHub.head + 1) % cap
+		// size 不变 (始终 == cap)
+	} else {
+		// 未满: 写入 tail 位置
+		tail := (debugBridgeHub.head + debugBridgeHub.size) % cap
+		debugBridgeHub.ring[tail] = debugBridgeEvent{
+			ID:      eventID,
+			Type:    method,
+			AgentID: threadID,
+			Data:    string(rawPayload),
+			Payload: payloadMap,
+		}
+		debugBridgeHub.size++
+	}
+
+	if dropped > 0 {
 		totalDropped := debugBridgeMetrics.droppedTotal.Add(int64(dropped))
 		overflowSeq := debugBridgeMetrics.overflowCount.Add(1)
 		if shouldLogOverflow(method, overflowSeq) {
 			logger.Warn("debug bridge: queue overflow, dropped oldest events",
 				logger.FieldMethod, method,
 				"dropped", dropped,
-				"queue_depth", len(debugBridgeHub.events),
-				"max_events", debugBridgeMaxEvents,
+				"queue_depth", debugBridgeHub.size,
+				"max_events", cap,
 				"dropped_total", totalDropped,
 				"overflow_seq", overflowSeq)
 		}
@@ -170,7 +203,7 @@ func publishDebugBridgeEvent(method string, params any) {
 			logger.FieldMethod, method,
 			"event_id", eventID,
 			logger.FieldAgentID, threadID,
-			"queue_depth", len(debugBridgeHub.events),
+			"queue_depth", debugBridgeHub.size,
 			"published_total", publishedTotal,
 			"dropped_total", debugBridgeMetrics.droppedTotal.Load())
 	}
@@ -184,18 +217,21 @@ func readDebugBridgeEvents(after int64, limit int) ([]debugBridgeEvent, int64, i
 	debugBridgeHub.mu.RLock()
 	defer debugBridgeHub.mu.RUnlock()
 
-	lastID := debugBridgeHub.nextID
-	queueDepth := len(debugBridgeHub.events)
+	lastID := debugBridgeHub.seq
+	queueDepth := debugBridgeHub.size
 	oldestID := int64(0)
 	if queueDepth > 0 {
-		oldestID = debugBridgeHub.events[0].ID
+		oldestID = debugBridgeHub.ring[debugBridgeHub.head].ID
 	}
-	if len(debugBridgeHub.events) == 0 {
+	if queueDepth == 0 {
 		return nil, lastID, queueDepth, oldestID
 	}
 
+	cap := len(debugBridgeHub.ring)
 	out := make([]debugBridgeEvent, 0, limit)
-	for _, evt := range debugBridgeHub.events {
+	for i := 0; i < queueDepth; i++ {
+		idx := (debugBridgeHub.head + i) % cap
+		evt := debugBridgeHub.ring[idx]
 		if evt.ID <= after {
 			continue
 		}

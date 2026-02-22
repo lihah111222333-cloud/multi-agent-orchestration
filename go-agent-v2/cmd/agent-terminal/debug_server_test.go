@@ -8,8 +8,10 @@ import (
 
 func resetDebugBridgeStateForTest() {
 	debugBridgeHub.mu.Lock()
-	debugBridgeHub.nextID = 0
-	debugBridgeHub.events = debugBridgeHub.events[:0]
+	debugBridgeHub.seq = 0
+	debugBridgeHub.head = 0
+	debugBridgeHub.size = 0
+	debugBridgeHub.ring = nil // 下次 publish 时延迟分配
 	debugBridgeHub.mu.Unlock()
 
 	debugBridgeMetrics.publishedTotal.Store(0)
@@ -24,6 +26,8 @@ func resetDebugBridgeStateForTest() {
 }
 
 func TestHandleFirstPoll(t *testing.T) {
+	resetDebugBridgeStateForTest()
+	debugBridgeEnabled.Store(true)
 	rec := httptest.NewRecorder()
 	params := debugPollParams{after: 0, effectiveLimit: 200}
 
@@ -50,7 +54,7 @@ func TestPublishDebugBridgeEvent_DisabledByDefault(t *testing.T) {
 	publishDebugBridgeEvent("ui/state/changed", map[string]any{"threadId": "t-1"})
 
 	debugBridgeHub.mu.RLock()
-	got := len(debugBridgeHub.events)
+	got := debugBridgeHub.size
 	debugBridgeHub.mu.RUnlock()
 	if got != 0 {
 		t.Fatalf("expected no queued event when debug bridge disabled, got %d", got)
@@ -67,7 +71,7 @@ func TestPublishDebugBridgeEvent_EnabledQueuesEvent(t *testing.T) {
 	publishDebugBridgeEvent("ui/state/changed", map[string]any{"threadId": "t-1"})
 
 	debugBridgeHub.mu.RLock()
-	got := len(debugBridgeHub.events)
+	got := debugBridgeHub.size
 	debugBridgeHub.mu.RUnlock()
 	if got != 1 {
 		t.Fatalf("expected queued event when debug bridge enabled, got %d", got)
@@ -149,6 +153,11 @@ func TestIsDroppableHighFreqMethod_DeltaMethods(t *testing.T) {
 		"item/plan/delta",
 		"item/commandExecution/outputDelta",
 		"item/fileChange/outputDelta",
+		"item/started",
+		"item/completed",
+		"thread/tokenUsage/updated",
+		"item/reasoning/summaryPartAdded",
+		"account/rateLimits/updated",
 	}
 	for _, m := range droppable {
 		if !isDroppableHighFreqMethod(m) {
@@ -160,13 +169,9 @@ func TestIsDroppableHighFreqMethod_DeltaMethods(t *testing.T) {
 func TestIsDroppableHighFreqMethod_NonDroppable(t *testing.T) {
 	nonDroppable := []string{
 		"ui/state/changed",
-		"thread/tokenUsage/updated",
 		"thread/started",
 		"turn/completed",
-		"item/started",
-		"item/completed",
 		"error",
-		"account/rateLimits/updated",
 	}
 	for _, m := range nonDroppable {
 		if isDroppableHighFreqMethod(m) {
@@ -189,7 +194,7 @@ func TestPublishDebugBridgeEvent_DroppableHighFreqSampled(t *testing.T) {
 	}
 
 	debugBridgeHub.mu.RLock()
-	got := len(debugBridgeHub.events)
+	got := debugBridgeHub.size
 	debugBridgeHub.mu.RUnlock()
 
 	// 采样率 1/5: 10 条应该只入队 2 条
@@ -208,7 +213,7 @@ func TestPublishDebugBridgeEvent_NonDroppableAlwaysQueued(t *testing.T) {
 	}
 
 	debugBridgeHub.mu.RLock()
-	got := len(debugBridgeHub.events)
+	got := debugBridgeHub.size
 	debugBridgeHub.mu.RUnlock()
 
 	// 不可丢弃: 10 条全部入队

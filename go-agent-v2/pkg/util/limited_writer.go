@@ -7,9 +7,10 @@ import "io"
 // 语义: 超限时返回 len(p) 而非 (0, ErrShortWrite), 避免 exec.Cmd 等
 // 调用方误认为管道断裂。未超限时返回实际写入字节数以满足 io.Writer 契约。
 type LimitedWriter struct {
-	w       io.Writer
-	limit   int
-	written int
+	w        io.Writer
+	limit    int
+	written  int
+	overflow bool
 }
 
 // NewLimitedWriter 创建 LimitedWriter。
@@ -21,9 +22,11 @@ func NewLimitedWriter(w io.Writer, limit int) *LimitedWriter {
 func (lw *LimitedWriter) Write(p []byte) (int, error) {
 	remain := lw.limit - lw.written
 	if remain <= 0 {
+		lw.overflow = true
 		return len(p), nil // 静默丢弃, 对调用方透明
 	}
 	if len(p) > remain {
+		lw.overflow = true
 		p = p[:remain]
 	}
 	n, err := lw.w.Write(p)
@@ -32,7 +35,7 @@ func (lw *LimitedWriter) Write(p []byte) (int, error) {
 }
 
 // Overflow 返回写入是否已超出限制 (后续写入被静默丢弃)。
-func (lw *LimitedWriter) Overflow() bool { return lw.written >= lw.limit }
+func (lw *LimitedWriter) Overflow() bool { return lw.overflow }
 
 // Written 返回实际已写入的字节数。
 func (lw *LimitedWriter) Written() int { return lw.written }

@@ -111,3 +111,30 @@ func TestLimitedWriter_ZeroLimitDiscardsAll(t *testing.T) {
 		t.Fatalf("expected empty buffer, got %q", buf.String())
 	}
 }
+
+func TestLimitedWriter_Overflow_ExactLimitWithoutDiscard(t *testing.T) {
+	var buf bytes.Buffer
+	lw := NewLimitedWriter(&buf, 5)
+
+	if _, err := lw.Write([]byte("hello")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if lw.Overflow() {
+		t.Fatal("expected overflow=false when output exactly hits limit without discard")
+	}
+}
+
+func TestLimitedWriter_Overflow_TrueAfterDiscard(t *testing.T) {
+	var buf bytes.Buffer
+	lw := NewLimitedWriter(&buf, 5)
+
+	if _, err := lw.Write([]byte("hello")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := lw.Write([]byte("!")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !lw.Overflow() {
+		t.Fatal("expected overflow=true after data is discarded")
+	}
+}

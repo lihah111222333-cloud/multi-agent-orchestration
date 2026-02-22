@@ -40,7 +40,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// TODO: 集成 github.com/mark3labs/mcp-go
 	// 以下为工具注册占位
 	tools := s.toolRegistry()
-	logger.Infow("MCP tools registered", logger.FieldCount, len(tools))
+	logger.Info("MCP tools registered", logger.FieldCount, len(tools))
 	<-ctx.Done()
 	return nil
 }

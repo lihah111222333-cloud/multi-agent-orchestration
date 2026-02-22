@@ -73,7 +73,7 @@ func (s *Server) commandExecTyped(ctx context.Context, p commandExecParams) (any
 		}
 	}
 
-	logger.Infow("command/exec: starting",
+	logger.Info("command/exec: starting",
 		logger.FieldCommand, baseName,
 		logger.FieldCwd, p.Cwd,
 		"argc", len(p.Argv),
@@ -120,7 +120,7 @@ func (s *Server) commandExecTyped(ctx context.Context, p commandExecParams) (any
 		}
 	}
 
-	logger.Infow("command/exec: completed",
+	logger.Info("command/exec: completed",
 		logger.FieldCommand, baseName,
 		logger.FieldExitCode, exitCode,
 		logger.FieldDurationMS, elapsed.Milliseconds(),

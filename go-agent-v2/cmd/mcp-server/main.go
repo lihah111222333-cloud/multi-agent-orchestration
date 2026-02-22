@@ -22,7 +22,7 @@ func main() {
 
 	pool, err := database.NewPool(ctx, cfg)
 	if err != nil {
-		logger.Fatal("database init failed", logger.Any(logger.FieldError, err))
+		logger.Fatal("database init failed", logger.FieldError, err)
 	}
 	defer pool.Close()
 
@@ -40,6 +40,6 @@ func main() {
 
 	s := mcp.NewServer(stores)
 	if err := s.Start(ctx); err != nil {
-		logger.Fatal("MCP server failed", logger.Any(logger.FieldError, err))
+		logger.Fatal("MCP server failed", logger.FieldError, err)
 	}
 }

@@ -69,10 +69,10 @@ func (s *Server) sseHandler(c *gin.Context) {
 	ch := s.bus.Subscribe(clientID)
 	defer func() {
 		s.bus.Unsubscribe(clientID)
-		logger.Infow("SSE client disconnected", "client_id", clientID)
+		logger.Info("dashboard: SSE client disconnected", "client_id", clientID)
 	}()
 
-	logger.Infow("SSE client connected", "client_id", clientID)
+	logger.Info("dashboard: SSE client connected", "client_id", clientID)
 
 	c.Stream(func(w io.Writer) bool {
 		// 复用 timer 避免每次循环创建新定时器 (GC 压力)

@@ -121,7 +121,7 @@ func (c *Client) Spawn(ctx context.Context) error {
 		return apperrors.Wrap(err, "Client.Spawn", "spawn codex http-api")
 	}
 
-	logger.Infow("codex: process spawned",
+	logger.Info("codex: process spawned",
 		logger.FieldAgentID, c.AgentID,
 		logger.FieldPort, c.Port,
 		logger.FieldPID, c.Cmd.Process.Pid,
@@ -142,7 +142,7 @@ func (c *Client) waitForKnownPort(ctx context.Context, deadline time.Time) error
 	backoff := 100 * time.Millisecond
 	for time.Now().Before(deadline) {
 		if err := c.Health(); err == nil {
-			logger.Infow("codex: health check passed", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port)
+			logger.Info("codex: health check passed", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port)
 			return nil
 		}
 		select {
@@ -460,7 +460,7 @@ func (c *Client) SpawnAndConnect(ctx context.Context, prompt, cwd, model, instru
 		return err
 	}
 
-	logger.Infow("codex: spawn and connect complete",
+	logger.Info("codex: spawn and connect complete",
 		logger.FieldAgentID, c.AgentID,
 		logger.FieldPort, c.Port,
 		logger.FieldThreadID, c.ThreadID,
@@ -477,7 +477,7 @@ func (c *Client) Shutdown() error {
 	if c.stopped.Swap(true) {
 		return nil
 	}
-	logger.Infow("codex: shutting down", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port)
+	logger.Info("codex: shutting down", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port)
 	if c.stderrCollector != nil {
 		_ = c.stderrCollector.Close()
 	}

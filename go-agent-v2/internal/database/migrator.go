@@ -60,7 +60,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 	// 执行未应用的迁移
 	pending := countPendingMigrations(sqlFiles, applied)
 	if pending > 0 {
-		logger.Infow("migrate: applying pending migrations", logger.FieldCount, pending)
+		logger.Info("migrate: applying pending migrations", logger.FieldCount, pending)
 	}
 	for _, name := range sqlFiles {
 		if applied[name] {
@@ -69,7 +69,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 		if err := applyOneMigration(ctx, pool, migrationsDir, name); err != nil {
 			return err
 		}
-		logger.Infow("migration applied", logger.FieldVersion, name)
+		logger.Info("migrate: migration applied", logger.FieldVersion, name)
 	}
 
 	return nil

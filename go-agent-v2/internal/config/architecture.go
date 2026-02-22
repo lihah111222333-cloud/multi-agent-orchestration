@@ -59,7 +59,7 @@ func LoadArchitectureRaw(configPath string) (*ArchitectureRaw, error) {
 
 	var raw ArchitectureRaw
 	if err := json.Unmarshal(data, &raw); err != nil {
-		logger.Warnw("config.json parse failed", logger.FieldError, err)
+		logger.Warn("config.json parse failed", logger.FieldError, err)
 		return &ArchitectureRaw{}, nil
 	}
 	return &raw, nil

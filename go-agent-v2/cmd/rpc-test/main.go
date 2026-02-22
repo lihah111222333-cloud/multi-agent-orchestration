@@ -25,7 +25,7 @@ func main() {
 	logger.Info("connecting", logger.FieldAddr, addr)
 	conn, _, err := websocket.DefaultDialer.Dial(addr, nil)
 	if err != nil {
-		logger.Fatal("dial failed", logger.Any(logger.FieldError, err))
+		logger.Fatal("dial failed", logger.FieldError, err)
 	}
 	defer conn.Close()
 	logger.Info("connected")
@@ -35,7 +35,7 @@ func main() {
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
-				logger.Error("read error", logger.Any(logger.FieldError, err))
+				logger.Error("read error", logger.FieldError, err)
 				return
 			}
 			// 美化 JSON
@@ -58,11 +58,11 @@ func main() {
 	}
 	data1, err := json.Marshal(req1)
 	if err != nil {
-		logger.Fatal("marshal thread/start", logger.Any(logger.FieldError, err))
+		logger.Fatal("marshal thread/start", logger.FieldError, err)
 	}
 	logger.Info(">>> SEND", "data", string(data1))
 	if err := conn.WriteMessage(websocket.TextMessage, data1); err != nil {
-		logger.Fatal("write thread/start failed", logger.Any(logger.FieldError, err))
+		logger.Fatal("write thread/start failed", logger.FieldError, err)
 	}
 
 	// 等待 thread/start 响应 + 可能的通知
@@ -79,11 +79,11 @@ func main() {
 	}
 	data2, err := json.Marshal(req2)
 	if err != nil {
-		logger.Fatal("marshal thread/list", logger.Any(logger.FieldError, err))
+		logger.Fatal("marshal thread/list", logger.FieldError, err)
 	}
 	logger.Info(">>> SEND", "data", string(data2))
 	if err := conn.WriteMessage(websocket.TextMessage, data2); err != nil {
-		logger.Error("write thread/list failed", logger.Any(logger.FieldError, err))
+		logger.Error("write thread/list failed", logger.FieldError, err)
 	}
 	time.Sleep(2 * time.Second)
 

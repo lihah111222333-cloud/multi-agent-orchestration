@@ -23,14 +23,14 @@ func main() {
 
 	pool, err := database.NewPool(ctx, cfg)
 	if err != nil {
-		logger.Fatal("database init failed", logger.Any(logger.FieldError, err))
+		logger.Fatal("database init failed", logger.FieldError, err)
 	}
 	defer pool.Close()
 	logger.AttachDBHandler(pool)
 	defer logger.ShutdownDBHandler()
 
 	if err := database.Migrate(ctx, pool, "./migrations"); err != nil {
-		logger.Fatal("migration failed", logger.Any(logger.FieldError, err))
+		logger.Fatal("migration failed", logger.FieldError, err)
 	}
 
 	stores := &dashboard.Stores{
@@ -56,6 +56,6 @@ func main() {
 
 	port := ":8080"
 	if err := srv.ListenAndServe(ctx, port); err != nil {
-		logger.Fatal("server failed", logger.Any(logger.FieldError, err))
+		logger.Fatal("server failed", logger.FieldError, err)
 	}
 }

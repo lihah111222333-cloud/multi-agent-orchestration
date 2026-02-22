@@ -64,7 +64,7 @@ func (c *StderrCollector) scan() {
 			level = slog.LevelError
 		}
 
-		slog.Log(context.Background(), level, line,
+		getLogger().Log(context.Background(), level, line,
 			FieldSource, "codex",
 			FieldComponent, "stderr",
 			FieldAgentID, c.agentID,
@@ -73,7 +73,7 @@ func (c *StderrCollector) scan() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		slog.Log(context.Background(), slog.LevelError, "stderr collector scan failed",
+		getLogger().Log(context.Background(), slog.LevelError, "stderr collector scan failed",
 			FieldSource, "codex",
 			FieldComponent, "stderr",
 			FieldAgentID, c.agentID,

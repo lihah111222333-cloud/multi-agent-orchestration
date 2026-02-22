@@ -123,7 +123,7 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 	now := time.Now()
 	agents, err := p.agentStore.List(ctx, "")
 	if err != nil {
-		logger.Errorw("patrol: list agents failed", logger.FieldError, err)
+		logger.Error("patrol: list agents failed", logger.FieldError, err)
 		return &PatrolResult{OK: false, Ts: now, Error: err.Error(), Summary: emptySummary()}
 	}
 
@@ -154,7 +154,7 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 		a.Status = status
 		a.StagnantSec = stagnant
 		if _, err := p.agentStore.Upsert(ctx, &a); err != nil {
-			logger.Warnw("patrol: upsert failed", logger.FieldAgentID, a.AgentID, logger.FieldError, err)
+			logger.Warn("patrol: upsert failed", logger.FieldAgentID, a.AgentID, logger.FieldError, err)
 		}
 	}
 
@@ -203,7 +203,7 @@ func (p *Patrol) Start(ctx context.Context) {
 			}
 		}
 	})
-	logger.Infow("patrol started", "interval_sec", defaultIntervalSec)
+	logger.Info("patrol started", "interval_sec", defaultIntervalSec)
 }
 
 // ========================================

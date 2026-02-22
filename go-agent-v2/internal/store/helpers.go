@@ -30,8 +30,8 @@ func mustMarshalJSON(v any) []byte {
 	data, err := json.Marshal(v)
 	if err != nil {
 		logger.Warn("mustMarshalJSON: marshal failed, using fallback",
-			logger.Any("value_type", fmt.Sprintf("%T", v)),
-			logger.Any(logger.FieldError, err))
+			"value_type", fmt.Sprintf("%T", v),
+			logger.FieldError, err)
 		return emptyJSON
 	}
 	return data

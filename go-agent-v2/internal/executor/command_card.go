@@ -89,7 +89,7 @@ type PrepareResult struct {
 
 // Prepare 创建命令卡运行实例，渲染模板并写入 DB (对应 Python prepare_command_card_run)。
 func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, params map[string]string, requestedBy string) (*PrepareResult, error) {
-	logger.Infow("executor: prepare",
+	logger.Info("executor: prepare",
 		logger.FieldCardKey, cardKey,
 		"requested_by", requestedBy,
 	)
@@ -180,7 +180,7 @@ type ReviewResult struct {
 
 // Review 对 pending_review 状态的运行实例进行审批 (对应 Python review_command_card_run)。
 func (e *CommandCardExecutor) Review(ctx context.Context, runID int, decision, reviewer, note string) (*ReviewResult, error) {
-	logger.Infow("executor: review",
+	logger.Info("executor: review",
 		logger.FieldRunID, runID,
 		logger.FieldDecision, decision,
 		"reviewer", reviewer,
@@ -277,7 +277,7 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 		logger.Warn("executor: mark running failed", logger.FieldRunID, runID, logger.FieldError, err)
 	}
 
-	logger.Infow("executor: executing command",
+	logger.Info("executor: executing command",
 		logger.FieldRunID, runID,
 		logger.FieldCommand, func() string {
 			if len(command) > 200 {
@@ -326,7 +326,7 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 		logger.Warn("executor: audit append failed", logger.FieldError, err)
 	}
 
-	logger.Infow("command executed",
+	logger.Info("executor: command executed",
 		"run_id", runID,
 		"exit_code", exitCode,
 		"output_len", len(output),
@@ -387,7 +387,7 @@ type RunOneOpts struct {
 
 // RunOne 一站式: Prepare → (Review) → Execute (对应 Python execute_command_card)。
 func (e *CommandCardExecutor) RunOne(ctx context.Context, cardKey string, params map[string]string, requestedBy string, opts RunOneOpts) (*ExecResult, error) {
-	logger.Infow("executor: run_one",
+	logger.Info("executor: run_one",
 		logger.FieldCardKey, cardKey,
 		"requested_by", requestedBy,
 		"auto_approve", opts.AutoApprove,
@@ -539,7 +539,7 @@ func detectDangerous(command string) string {
 func marshalJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
-		logger.Debug("marshalJSON failed", logger.FieldError, err)
+		logger.Warn("executor: marshalJSON failed", logger.FieldError, err)
 		return "{}"
 	}
 	return string(b)

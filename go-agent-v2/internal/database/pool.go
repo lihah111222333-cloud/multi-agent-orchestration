@@ -52,7 +52,7 @@ func NewPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 		return nil, apperrors.Wrap(err, "NewPool", "ping postgres")
 	}
 
-	logger.Infow("postgres pool created",
+	logger.Info("database: postgres pool created",
 		"min_conns", cfg.PostgresPoolMinSize,
 		"max_conns", cfg.PostgresPoolMaxSize,
 		"schema", schema,

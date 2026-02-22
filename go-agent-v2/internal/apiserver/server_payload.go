@@ -637,7 +637,7 @@ func (s *Server) handleHTTPRPC(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		logger.Debug("http-rpc: encode response", logger.FieldError, err)
+		logger.Warn("http-rpc: encode response failed", logger.FieldError, err)
 	}
 }
 
@@ -654,7 +654,7 @@ func writeJSONRPCError(w http.ResponseWriter, id any, code int, message string) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK) // JSON-RPC 错误仍返回 200
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		logger.Debug("http-rpc: encode error response", logger.FieldError, err)
+		logger.Warn("http-rpc: encode error response failed", logger.FieldError, err)
 	}
 }
 

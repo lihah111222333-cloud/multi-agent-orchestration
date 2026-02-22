@@ -143,7 +143,7 @@ func publishDebugBridgeEvent(method string, params any) {
 
 	rawPayload, err := json.Marshal(payloadMap)
 	if err != nil {
-		logger.Debug("debug: marshal bridge payload", logger.FieldError, err)
+		logger.Warn("debug: marshal bridge payload failed", logger.FieldError, err)
 		rawPayload = []byte("{}")
 	}
 	threadID, _ := payloadMap["threadId"].(string)
@@ -538,7 +538,7 @@ func handleDebugSelectProjectDir(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(w).Encode(map[string]string{
 			"error": err.Error(),
 		}); err != nil {
-			logger.Debug("debug: encode response", logger.FieldError, err)
+			logger.Warn("debug: encode response failed", logger.FieldError, err)
 		}
 		return
 	}
@@ -547,7 +547,7 @@ func handleDebugSelectProjectDir(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(map[string]string{
 		"path": path,
 	}); err != nil {
-		logger.Debug("debug: encode response", logger.FieldError, err)
+		logger.Warn("debug: encode response failed", logger.FieldError, err)
 	}
 }
 
@@ -573,7 +573,7 @@ func handleDebugSelectFiles(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(w).Encode(map[string]string{
 			"error": err.Error(),
 		}); err != nil {
-			logger.Debug("debug: encode response", logger.FieldError, err)
+			logger.Warn("debug: encode response failed", logger.FieldError, err)
 		}
 		return
 	}
@@ -582,7 +582,7 @@ func handleDebugSelectFiles(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(map[string]any{
 		"paths": paths,
 	}); err != nil {
-		logger.Debug("debug: encode response", logger.FieldError, err)
+		logger.Warn("debug: encode response failed", logger.FieldError, err)
 	}
 }
 
@@ -594,7 +594,7 @@ func handleDebugBuildInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(currentBuildInfo()); err != nil {
-		logger.Debug("debug: encode response", logger.FieldError, err)
+		logger.Warn("debug: encode response failed", logger.FieldError, err)
 	}
 }
 

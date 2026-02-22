@@ -44,7 +44,7 @@ func main() {
 	}
 	dbPool, err := database.NewPool(ctx, cfg)
 	if err != nil {
-		logger.Fatal("postgres connect failed", logger.Any(logger.FieldError, err))
+		logger.Fatal("postgres connect failed", logger.FieldError, err)
 	}
 	defer dbPool.Close()
 
@@ -82,6 +82,6 @@ func main() {
 	logger.Info("app-server starting", logger.FieldListen, *listen)
 
 	if err := srv.ListenAndServe(ctx, *listen); err != nil {
-		logger.Fatal("app-server failed", logger.Any(logger.FieldError, err))
+		logger.Fatal("app-server failed", logger.FieldError, err)
 	}
 }

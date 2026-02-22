@@ -22,10 +22,10 @@ func TestPatrolUpsertFail_UsesWarnLevel(t *testing.T) {
 	content := string(src)
 
 	// 核心断言: upsert failed 应该用 Warnw, 不是 Debugw
-	if strings.Contains(content, `Debugw("patrol: upsert failed"`) {
-		t.Fatal("patrol.go: upsert failed should use logger.Warnw, not logger.Debugw")
+	if strings.Contains(content, `Debugw("patrol: upsert failed"`) || strings.Contains(content, `Debug("patrol: upsert failed"`) {
+		t.Fatal("patrol.go: upsert failed should use logger.Warn, not logger.Debug")
 	}
-	if !strings.Contains(content, `Warnw("patrol: upsert failed"`) {
-		t.Fatal("patrol.go: expected logger.Warnw(\"patrol: upsert failed\", ...)")
+	if !strings.Contains(content, `Warn("patrol: upsert failed"`) {
+		t.Fatal("patrol.go: expected logger.Warn(\"patrol: upsert failed\", ...)")
 	}
 }

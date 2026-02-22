@@ -60,3 +60,31 @@ func TestAppendAgentStatusThreads(t *testing.T) {
 		t.Fatalf("got[2]=%+v, want ID=agent-3 Name=Agent 3 State=idle", got[2])
 	}
 }
+
+func TestAppendArchivedThreads(t *testing.T) {
+	seen := map[string]struct{}{
+		"agent-1": {},
+	}
+	base := []threadListItem{
+		{ID: "agent-1", Name: "Agent 1", State: "running"},
+	}
+
+	archived := map[string]int64{
+		"":        123,
+		"agent-1": 124, // already seen
+		"agent-2": 100,
+		"agent-3": 200,
+		"agent-4": 0, // invalid timestamp
+	}
+
+	got := appendArchivedThreads(base, seen, archived)
+	if len(got) != 3 {
+		t.Fatalf("len(got)=%d, want 3", len(got))
+	}
+	if got[1].ID != "agent-3" || got[1].Name != "agent-3" || got[1].State != "idle" {
+		t.Fatalf("got[1]=%+v, want ID=agent-3 Name=agent-3 State=idle", got[1])
+	}
+	if got[2].ID != "agent-2" || got[2].Name != "agent-2" || got[2].State != "idle" {
+		t.Fatalf("got[2]=%+v, want ID=agent-2 Name=agent-2 State=idle", got[2])
+	}
+}

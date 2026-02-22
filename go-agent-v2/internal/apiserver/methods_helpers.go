@@ -68,6 +68,20 @@ func (s *Server) threadExistsInHistory(ctx context.Context, threadID string) boo
 		}
 	}
 
+	if s.prefManager != nil {
+		dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		archivedMap, err := s.loadThreadArchiveMap(dbCtx)
+		cancel()
+		if err != nil {
+			logger.Warn("turn/start: check thread history from threadArchives.chat failed",
+				logger.FieldAgentID, id, logger.FieldThreadID, id,
+				logger.FieldError, err,
+			)
+		} else if _, ok := archivedMap[id]; ok {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -862,9 +876,24 @@ func (s *Server) threadMCPList(ctx context.Context, params json.RawMessage) (any
 	return s.sendSlashCommand(ctx, params, "/mcp")
 }
 
-// threadSkillsList 列出 Skills (/skills)。
-func (s *Server) threadSkillsList(ctx context.Context, params json.RawMessage) (any, error) {
-	return s.sendSlashCommand(ctx, params, "/skills")
+// threadSkillsList 列出 Skills（统一走本地 SkillService 缓存，不透传外部 /skills）。
+func (s *Server) threadSkillsList(_ context.Context, _ json.RawMessage) (any, error) {
+	if s.skillSvc == nil {
+		return map[string]any{"skills": []string{}}, nil
+	}
+	list, err := s.skillSvc.ListSkills()
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.threadSkillsList", "list skills")
+	}
+	skills := make([]string, 0, len(list))
+	for _, item := range list {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		skills = append(skills, name)
+	}
+	return map[string]any{"skills": skills}, nil
 }
 
 // threadDebugMemory 调试记忆 (/debug-m-drop 或 /debug-m-update)。

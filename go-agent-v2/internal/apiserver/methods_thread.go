@@ -409,6 +409,40 @@ func appendAgentStatusThreads(threads []threadListItem, seen map[string]struct{}
 	return threads
 }
 
+func appendArchivedThreads(threads []threadListItem, seen map[string]struct{}, archived map[string]int64) []threadListItem {
+	type archivedEntry struct {
+		ID string
+		At int64
+	}
+
+	entries := make([]archivedEntry, 0, len(archived))
+	for rawID, rawAt := range archived {
+		id := strings.TrimSpace(rawID)
+		if id == "" || rawAt <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		entries = append(entries, archivedEntry{ID: id, At: rawAt})
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].At != entries[j].At {
+			return entries[i].At > entries[j].At
+		}
+		return entries[i].ID < entries[j].ID
+	})
+	for _, item := range entries {
+		threads = append(threads, threadListItem{
+			ID:    item.ID,
+			Name:  item.ID,
+			State: "idle",
+		})
+		seen[item.ID] = struct{}{}
+	}
+	return threads
+}
+
 func (s *Server) appendThreadHistoryFromStores(ctx context.Context, threads []threadListItem, seen map[string]struct{}, methodName string) []threadListItem {
 	// DB 历史兜底 #1: agent_codex_binding (Codex 会话绑定)
 	if s.bindingStore != nil {
@@ -431,6 +465,19 @@ func (s *Server) appendThreadHistoryFromStores(ctx context.Context, threads []th
 			logger.Warn(methodName+": load history threads from agent_status failed", logger.FieldError, err)
 		} else {
 			threads = appendAgentStatusThreads(threads, seen, statusItems)
+		}
+	}
+
+	// DB/Preference 历史兜底 #3: threadArchives.chat
+	// 归档标记由用户手工管理，归档线程应保持可见，避免因运行时/状态表波动而“消失”。
+	if s.prefManager != nil {
+		dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		archivedMap, err := s.loadThreadArchiveMap(dbCtx)
+		cancel()
+		if err != nil {
+			logger.Warn(methodName+": load history threads from threadArchives.chat failed", logger.FieldError, err)
+		} else {
+			threads = appendArchivedThreads(threads, seen, archivedMap)
 		}
 	}
 	return threads

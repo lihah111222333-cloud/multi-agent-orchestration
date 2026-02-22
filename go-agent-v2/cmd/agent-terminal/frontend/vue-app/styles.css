@@ -1189,6 +1189,7 @@ a,
   margin-right: auto;
   position: relative;
   z-index: 12;
+  align-self: flex-end;
 }
 
 .unified-chat-page .chat-composer-shell .chat-input-vue {
@@ -1196,11 +1197,25 @@ a,
 }
 
 .unified-chat-page .workspace-bottom-row {
-  --activity-panel-fixed-height: 124px;
+  --activity-panel-base-height: 124px;
+  --activity-panel-overlay-height: var(--activity-panel-base-height);
+  --activity-panel-fixed-height: var(--activity-panel-base-height);
   display: flex;
-  align-items: stretch;
+  align-items: flex-end;
   min-width: 0;
   flex-shrink: 0;
+  overflow: visible;
+}
+
+.unified-chat-page .workspace-area,
+.unified-chat-page .chat-workspace,
+.unified-chat-page .workspace-bottom-row,
+.unified-chat-page .workspace-bottom-side,
+.unified-chat-page .workspace-bottom-side-layer,
+.unified-chat-page .cmd-card-panel,
+.unified-chat-page .panel-resizer,
+.unified-chat-page .activity-panel-resizer {
+  -webkit-app-region: no-drag;
 }
 
 .unified-chat-page .workspace-bottom-row.is-cmd {
@@ -1210,17 +1225,38 @@ a,
 .unified-chat-page .workspace-bottom-side {
   flex: 1;
   min-width: 0;
-  min-height: var(--activity-panel-fixed-height);
-  height: var(--activity-panel-fixed-height);
-  max-height: var(--activity-panel-fixed-height);
+  min-height: var(--activity-panel-base-height);
+  height: var(--activity-panel-base-height);
+  max-height: var(--activity-panel-base-height);
   display: flex;
   position: relative;
-  align-items: stretch;
-  border-left: 1px solid var(--border);
-  overflow: hidden;
+  align-items: flex-end;
+  overflow: visible;
+  pointer-events: none;
 }
 
-.unified-chat-page .workspace-bottom-side .activity-panel {
+.unified-chat-page .workspace-bottom-side-layer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--activity-panel-overlay-height);
+  min-height: var(--activity-panel-base-height);
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.28);
+  pointer-events: auto;
+  z-index: 4;
+}
+
+.unified-chat-page .workspace-bottom-side-layer.dragging {
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.unified-chat-page .workspace-bottom-side-layer .activity-panel {
   width: 100%;
   flex: none;
   min-height: 100%;
@@ -1233,11 +1269,11 @@ a,
   top: 0;
   left: 0;
   right: 0;
-  height: 10px;
+  height: 14px;
   cursor: ns-resize;
   user-select: none;
   touch-action: none;
-  z-index: 3;
+  z-index: 5;
 }
 
 .unified-chat-page .activity-panel-resizer::after {
@@ -1245,18 +1281,29 @@ a,
   position: absolute;
   left: 14px;
   right: 14px;
-  top: 3px;
-  height: 2px;
+  top: 5px;
+  height: 3px;
   border-radius: 999px;
-  background: var(--border-hover);
-  opacity: 0.6;
-  transition: opacity 0.2s, background 0.2s;
+  background: rgba(180, 185, 195, 0.45);
+  opacity: 0.82;
+  transition: opacity 0.2s, background 0.2s, box-shadow 0.2s;
 }
 
 .unified-chat-page .activity-panel-resizer:hover::after,
 .unified-chat-page .activity-panel-resizer.dragging::after {
   opacity: 1;
   background: var(--primary);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
+body.is-col-resizing,
+body.is-col-resizing * {
+  cursor: ew-resize !important;
+}
+
+body.is-row-resizing,
+body.is-row-resizing * {
+  cursor: ns-resize !important;
 }
 
 .cmd-card-panel {
@@ -1550,16 +1597,43 @@ a,
 }
 
 .panel-resizer {
-  width: 4px;
-  cursor: col-resize;
+  position: relative;
+  width: 10px;
+  margin: 0 -3px;
+  cursor: ew-resize;
   background: transparent;
-  transition: background 0.2s;
+  transition: background 0.2s, box-shadow 0.2s;
   flex-shrink: 0;
+  user-select: none;
+  touch-action: none;
+  z-index: 5;
+}
+
+.panel-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(180, 185, 195, 0.42);
+  opacity: 0.85;
+  transition: background 0.2s, opacity 0.2s, box-shadow 0.2s;
 }
 
 .panel-resizer:hover,
 .panel-resizer.dragging {
+  background: rgba(180, 185, 195, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.panel-resizer:hover::after,
+.panel-resizer.dragging::after {
   background: var(--primary);
+  opacity: 1;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 
 #diff-panel {

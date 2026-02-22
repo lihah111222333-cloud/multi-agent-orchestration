@@ -854,7 +854,9 @@ export const UnifiedChatPage = {
     const activityPanelRowStyle = computed(() => {
       if (isCmd.value) return {};
       return {
-        '--activity-panel-fixed-height': `${clampActivityPanelHeight(activityPanelHeight.value)}px`,
+        '--activity-panel-base-height': `${ACTIVITY_PANEL_MIN_HEIGHT}px`,
+        '--activity-panel-overlay-height': `${clampActivityPanelHeight(activityPanelHeight.value)}px`,
+        '--activity-panel-fixed-height': `${ACTIVITY_PANEL_MIN_HEIGHT}px`,
       };
     });
     const latestPlanItem = computed(() => {
@@ -2017,6 +2019,9 @@ export const UnifiedChatPage = {
     function onResizeStart(event) {
       if (!showWorkspace.value) return;
       if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      document.body.classList.add('is-col-resizing');
       dragging.value = true;
 
       const onMove = (e) => {
@@ -2030,18 +2035,23 @@ export const UnifiedChatPage = {
 
       const onUp = () => {
         dragging.value = false;
+        document.body.classList.remove('is-col-resizing');
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
+        window.removeEventListener('blur', onUp);
       };
 
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
+      window.addEventListener('blur', onUp);
     }
 
     function onActivityResizeStart(event) {
       if (isCmd.value) return;
       if (event.button !== 0) return;
       event.preventDefault();
+      event.stopPropagation();
+      document.body.classList.add('is-row-resizing');
       activityPanelDragging.value = true;
       clearActivityPanelResizeListeners();
 
@@ -2060,16 +2070,19 @@ export const UnifiedChatPage = {
 
       const onUp = () => {
         activityPanelDragging.value = false;
+        document.body.classList.remove('is-row-resizing');
         clearActivityPanelResizeListeners();
       };
 
       clearActivityPanelResizeListeners = () => {
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
+        window.removeEventListener('blur', onUp);
       };
 
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
+      window.addEventListener('blur', onUp);
     }
 
     function ensureStatusTickTimer() {
@@ -2131,6 +2144,8 @@ export const UnifiedChatPage = {
       offFilesDropped = () => { };
       dragging.value = false;
       activityPanelDragging.value = false;
+      document.body.classList.remove('is-col-resizing');
+      document.body.classList.remove('is-row-resizing');
       clearActivityPanelResizeListeners();
       clearActivityPanelResizeListeners = () => { };
       clearComposerSkillPreviewTimer();
@@ -2592,12 +2607,14 @@ export const UnifiedChatPage = {
                 />
               </div>
               <div v-if="!isCmd" class="workspace-bottom-side">
-                <div class="activity-panel-resizer" :class="{ dragging: activityPanelDragging }" @mousedown="onActivityResizeStart"></div>
-                <ActivityPanel
-                  :stats="activeActivityStats"
-                  :alerts="activeAlerts"
-                  :process-events="activeProcessActivity"
-                />
+                <div class="workspace-bottom-side-layer" :class="{ dragging: activityPanelDragging }">
+                  <div class="activity-panel-resizer" :class="{ dragging: activityPanelDragging }" @mousedown="onActivityResizeStart"></div>
+                  <ActivityPanel
+                    :stats="activeActivityStats"
+                    :alerts="activeAlerts"
+                    :process-events="activeProcessActivity"
+                  />
+                </div>
               </div>
             </div>
           </div>

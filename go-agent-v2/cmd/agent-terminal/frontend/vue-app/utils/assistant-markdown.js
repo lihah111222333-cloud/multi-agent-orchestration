@@ -174,13 +174,17 @@ function stripTrailingPunctuation(url) {
 function isLikelyFilePath(pathRaw, hasLocation) {
   const hasPathSeparator = /[\\/]/.test(pathRaw);
   const hasRelativePrefix = /^\.{1,2}[\\/]/.test(pathRaw);
-  if (hasPathSeparator || hasRelativePrefix) return true;
+  const hasAbsolutePrefix = /^(?:[\\/]|~[\\/]|[A-Za-z]:[\\/])/.test(pathRaw);
 
   const filename = pathRaw.split(/[\\/]/).filter(Boolean).pop() || pathRaw;
   const filenameLower = filename.toLowerCase();
   if (BARE_FILENAME_ALLOWLIST.has(filenameLower)) return true;
 
-  if (!filename.includes('.')) return false;
+  if (!filename.includes('.')) {
+    // 防止把工具链路如 lsp_open_file/lsp_hover/lsp_diagnostics 误判为文件路径。
+    if (hasLocation && (hasRelativePrefix || hasAbsolutePrefix)) return true;
+    return false;
+  }
   const extension = filename.split('.').pop() || '';
   if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,20}$/.test(extension)) return false;
 
@@ -191,7 +195,7 @@ function isLikelyFilePath(pathRaw, hasLocation) {
 
   const knownExtension = KNOWN_FILE_EXT_ALLOWLIST.has(extLower) || LONG_EXTENSION_ALLOWLIST.has(extLower);
   if (!knownExtension && !hasLocation) return false;
-  if (!knownExtension && !hasPathSeparator && !hasRelativePrefix) return false;
+  if (!knownExtension && !hasPathSeparator && !hasRelativePrefix && !hasAbsolutePrefix) return false;
 
   if (extLower.length > 10 && !LONG_EXTENSION_ALLOWLIST.has(extLower)) return false;
   return true;

@@ -31,6 +31,10 @@ func (s *Server) registerDynamicTools() {
 	s.dynTools["lsp_hover"] = s.lspHover
 	s.dynTools["lsp_open_file"] = s.lspOpenFile
 	s.dynTools["lsp_diagnostics"] = s.lspDiagnostics
+	s.dynTools["lsp_definition"] = s.lspDefinition
+	s.dynTools["lsp_references"] = s.lspReferences
+	s.dynTools["lsp_document_symbol"] = s.lspDocumentSymbol
+	s.dynTools["lsp_rename"] = s.lspRename
 
 	// 编排工具
 	s.dynTools["orchestration_list_agents"] = func(_ json.RawMessage) string { return s.orchestrationListAgents() }
@@ -139,6 +143,58 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 				"properties": map[string]any{
 					"file_path": map[string]any{"type": "string", "description": "Absolute or relative path to the file. Empty = all files."},
 				},
+			},
+		},
+		{
+			Name:        "lsp_definition",
+			Description: "Go to definition. Returns the location(s) where a symbol is defined. The file must be opened with lsp_open_file first.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_path": map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
+					"line":      map[string]any{"type": "number", "description": "0-indexed line number"},
+					"column":    map[string]any{"type": "number", "description": "0-indexed column number"},
+				},
+				"required": []string{"file_path", "line", "column"},
+			},
+		},
+		{
+			Name:        "lsp_references",
+			Description: "Find all references to a symbol. Returns locations where the symbol is used. The file must be opened with lsp_open_file first.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_path":           map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
+					"line":                map[string]any{"type": "number", "description": "0-indexed line number"},
+					"column":              map[string]any{"type": "number", "description": "0-indexed column number"},
+					"include_declaration": map[string]any{"type": "boolean", "description": "Include the declaration in results (default: true)"},
+				},
+				"required": []string{"file_path", "line", "column"},
+			},
+		},
+		{
+			Name:        "lsp_document_symbol",
+			Description: "Get file outline (all symbols: functions, types, methods, constants). Returns a hierarchical symbol tree. The file must be opened with lsp_open_file first.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_path": map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
+				},
+				"required": []string{"file_path"},
+			},
+		},
+		{
+			Name:        "lsp_rename",
+			Description: "Rename a symbol across all files. Returns all edits needed. The file must be opened with lsp_open_file first.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_path": map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
+					"line":      map[string]any{"type": "number", "description": "0-indexed line number"},
+					"column":    map[string]any{"type": "number", "description": "0-indexed column number"},
+					"new_name":  map[string]any{"type": "string", "description": "New name for the symbol"},
+				},
+				"required": []string{"file_path", "line", "column", "new_name"},
 			},
 		},
 	}
@@ -409,4 +465,119 @@ func (s *Server) lspDiagnostics(args json.RawMessage) string {
 		}
 	}
 	return sb.String()
+}
+
+// lspDefinition 跳转定义。
+func (s *Server) lspDefinition(args json.RawMessage) string {
+	if s.lsp == nil {
+		return "error: lsp manager unavailable"
+	}
+	var p struct {
+		FilePath string `json:"file_path"`
+		Line     int    `json:"line"`
+		Column   int    `json:"column"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "error: " + err.Error()
+	}
+	if strings.TrimSpace(p.FilePath) == "" {
+		return "error: file_path is required"
+	}
+	locs, err := s.lsp.Definition(p.FilePath, p.Line, p.Column)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	if len(locs) == 0 {
+		return "no definition found"
+	}
+	data, _ := json.Marshal(locs)
+	return string(data)
+}
+
+// lspReferences 查找引用。
+func (s *Server) lspReferences(args json.RawMessage) string {
+	if s.lsp == nil {
+		return "error: lsp manager unavailable"
+	}
+	var p struct {
+		FilePath    string `json:"file_path"`
+		Line        int    `json:"line"`
+		Column      int    `json:"column"`
+		IncludeDecl *bool  `json:"include_declaration"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "error: " + err.Error()
+	}
+	if strings.TrimSpace(p.FilePath) == "" {
+		return "error: file_path is required"
+	}
+	includeDecl := true
+	if p.IncludeDecl != nil {
+		includeDecl = *p.IncludeDecl
+	}
+	locs, err := s.lsp.References(p.FilePath, p.Line, p.Column, includeDecl)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	if len(locs) == 0 {
+		return "no references found"
+	}
+	data, _ := json.Marshal(locs)
+	return string(data)
+}
+
+// lspDocumentSymbol 文件大纲。
+func (s *Server) lspDocumentSymbol(args json.RawMessage) string {
+	if s.lsp == nil {
+		return "error: lsp manager unavailable"
+	}
+	var p struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "error: " + err.Error()
+	}
+	if strings.TrimSpace(p.FilePath) == "" {
+		return "error: file_path is required"
+	}
+	symbols, err := s.lsp.DocumentSymbol(p.FilePath)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	if len(symbols) == 0 {
+		return "no symbols found"
+	}
+	data, _ := json.Marshal(symbols)
+	return string(data)
+}
+
+// lspRename 重命名符号。
+func (s *Server) lspRename(args json.RawMessage) string {
+	if s.lsp == nil {
+		return "error: lsp manager unavailable"
+	}
+	var p struct {
+		FilePath string `json:"file_path"`
+		Line     int    `json:"line"`
+		Column   int    `json:"column"`
+		NewName  string `json:"new_name"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "error: " + err.Error()
+	}
+	if strings.TrimSpace(p.FilePath) == "" {
+		return "error: file_path is required"
+	}
+	if strings.TrimSpace(p.NewName) == "" {
+		return "error: new_name is required"
+	}
+	edit, err := s.lsp.Rename(p.FilePath, p.Line, p.Column, p.NewName)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	if edit == nil || len(edit.Changes) == 0 {
+		return "no edits produced"
+	}
+	data, _ := json.Marshal(edit)
+	return string(data)
 }

@@ -191,6 +191,62 @@ func (m *Manager) Hover(filePath string, line, character int) (*HoverResult, err
 	return client.Hover(m.ctx, pathToURI(filePath), line, character)
 }
 
+// Definition 跳转定义。
+func (m *Manager) Definition(filePath string, line, character int) ([]Location, error) {
+	client, err := m.clientForFile(filePath)
+	if client == nil || err != nil {
+		return nil, err
+	}
+	return client.Definition(m.ctx, pathToURI(filePath), line, character)
+}
+
+// References 查找引用。
+func (m *Manager) References(filePath string, line, character int, includeDecl bool) ([]Location, error) {
+	client, err := m.clientForFile(filePath)
+	if client == nil || err != nil {
+		return nil, err
+	}
+	return client.References(m.ctx, pathToURI(filePath), line, character, includeDecl)
+}
+
+// DocumentSymbol 获取文件大纲。
+func (m *Manager) DocumentSymbol(filePath string) ([]DocumentSymbol, error) {
+	client, err := m.clientForFile(filePath)
+	if client == nil || err != nil {
+		return nil, err
+	}
+	return client.DocumentSymbol(m.ctx, pathToURI(filePath))
+}
+
+// Rename 重命名符号。
+func (m *Manager) Rename(filePath string, line, character int, newName string) (*WorkspaceEdit, error) {
+	client, err := m.clientForFile(filePath)
+	if client == nil || err != nil {
+		return nil, err
+	}
+	return client.Rename(m.ctx, pathToURI(filePath), line, character, newName)
+}
+
+// clientForFile 根据文件扩展名查找已运行的 LSP client (不自动启动)。
+func (m *Manager) clientForFile(filePath string) (*Client, error) {
+	ext := strings.TrimPrefix(filepath.Ext(filePath), ".")
+	if ext == "" {
+		return nil, nil
+	}
+	m.mu.RLock()
+	cfg, ok := m.configs[ext]
+	if !ok {
+		m.mu.RUnlock()
+		return nil, nil
+	}
+	client, exists := m.clients[cfg.Language]
+	m.mu.RUnlock()
+	if !exists || !client.Running() {
+		return nil, nil
+	}
+	return client, nil
+}
+
 // Statuses 返回所有配置的语言服务器状态。
 func (m *Manager) Statuses() []ServerStatus {
 	m.mu.RLock()

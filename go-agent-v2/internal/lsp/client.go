@@ -161,16 +161,84 @@ func (c *Client) DidClose(uri string) error {
 
 // Hover 请求 hover 信息。
 func (c *Client) Hover(ctx context.Context, uri string, line, character int) (*HoverResult, error) {
-	params := HoverParams{
-		TextDocument: TextDocumentIdentifier{URI: uri},
-		Position:     Position{Line: line, Character: character},
+	if !c.Running() {
+		return nil, fmt.Errorf("lsp client not running")
 	}
 	var result HoverResult
-	if err := c.call("textDocument/hover", params, &result); err != nil {
+	err := c.call("textDocument/hover", TextDocumentPositionParams{
+		TextDocument: TextDocumentIdentifier{URI: uri},
+		Position:     Position{Line: line, Character: character},
+	}, &result)
+	if err != nil {
 		return nil, err
 	}
 	if result.Contents.Value == "" {
 		return nil, nil
+	}
+	return &result, nil
+}
+
+// Definition 跳转定义 — 返回符号的定义位置。
+func (c *Client) Definition(ctx context.Context, uri string, line, character int) ([]Location, error) {
+	if !c.Running() {
+		return nil, fmt.Errorf("lsp client not running")
+	}
+	var result []Location
+	err := c.call("textDocument/definition", DefinitionParams{
+		TextDocument: TextDocumentIdentifier{URI: uri},
+		Position:     Position{Line: line, Character: character},
+	}, &result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// References 查找引用 — 返回符号的所有引用位置。
+func (c *Client) References(ctx context.Context, uri string, line, character int, includeDecl bool) ([]Location, error) {
+	if !c.Running() {
+		return nil, fmt.Errorf("lsp client not running")
+	}
+	var result []Location
+	err := c.call("textDocument/references", ReferenceParams{
+		TextDocument: TextDocumentIdentifier{URI: uri},
+		Position:     Position{Line: line, Character: character},
+		Context:      ReferenceContext{IncludeDeclaration: includeDecl},
+	}, &result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// DocumentSymbol 文件大纲 — 返回文件中所有符号的层次结构。
+func (c *Client) DocumentSymbol(ctx context.Context, uri string) ([]DocumentSymbol, error) {
+	if !c.Running() {
+		return nil, fmt.Errorf("lsp client not running")
+	}
+	var result []DocumentSymbol
+	err := c.call("textDocument/documentSymbol", DocumentSymbolParams{
+		TextDocument: TextDocumentIdentifier{URI: uri},
+	}, &result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// Rename 重命名 — 返回重命名所需的全部编辑。
+func (c *Client) Rename(ctx context.Context, uri string, line, character int, newName string) (*WorkspaceEdit, error) {
+	if !c.Running() {
+		return nil, fmt.Errorf("lsp client not running")
+	}
+	var result WorkspaceEdit
+	err := c.call("textDocument/rename", RenameParams{
+		TextDocument: TextDocumentIdentifier{URI: uri},
+		Position:     Position{Line: line, Character: character},
+		NewName:      newName,
+	}, &result)
+	if err != nil {
+		return nil, err
 	}
 	return &result, nil
 }

@@ -81,6 +81,31 @@ const BARE_FILENAME_ALLOWLIST = new Set([
   'readme',
   'license',
 ]);
+const CODE_KEYWORD_LINE_RE = /^\s*(package|import|func|type|var|const|class|def|from|return|if|else|for|while|switch|case|try|catch|finally|interface|enum|struct|public|private|protected|async|await|select|insert|update|delete|create|alter|drop|begin|with)\b/i;
+const CODE_SYMBOL_LINE_RE = /[{}[\];]|=>|::|:=|==|!=|<=|>=|\|\||&&/;
+const CODE_INDENT_LINE_RE = /^(?:\t+| {2,})\S/;
+const CODE_COMMENT_LINE_RE = /^\s*(\/\/|#|\/\*|\*|--)\s*\S/;
+const CODE_HTML_TAG_LINE_RE = /^\s*<\/?[a-z][\w-]*(?:\s+[^>]*)?>\s*$/i;
+const CODE_START_HINT_RE = /^\s*(package|import|func|type|var|const|class|def|from|interface|enum|struct|<\?xml|<\/?[a-z]|#include|select|insert|update|delete|create|alter|drop|begin|with|\{|\[)/i;
+const NON_CODE_META_LINE_RE = /^\s*(?:\[skill:[^\]]+\]|可选段落[:：]|使用方式[:：]|已注入LSP工具|普通对话直接用 markdown|##+\s+)/i;
+const CODE_TOKEN_LABEL = 'CODETOK';
+const GO_KEYWORD_RE = /\b(?:break|case|chan|const|continue|default|defer|else|fallthrough|for|func|go|goto|if|import|interface|map|package|range|return|select|struct|switch|type|var)\b/g;
+const JS_KEYWORD_RE = /\b(?:async|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|export|extends|finally|for|from|function|if|import|in|instanceof|let|new|of|return|static|super|switch|this|throw|try|typeof|var|void|while|with|yield)\b/g;
+const TS_EXTRA_KEYWORD_RE = /\b(?:abstract|any|as|asserts|bigint|boolean|declare|enum|implements|infer|interface|keyof|module|namespace|never|readonly|satisfies|type|unknown)\b/g;
+const PY_KEYWORD_RE = /\b(?:and|as|assert|async|await|break|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield)\b/g;
+const SQL_KEYWORD_RE = /\b(?:select|insert|update|delete|from|where|group|by|order|having|limit|offset|join|left|right|inner|outer|on|as|and|or|not|into|values|set|create|alter|drop|table|view|index|distinct|union|all|case|when|then|else|end|with)\b/gi;
+const BASH_KEYWORD_RE = /\b(?:if|then|else|fi|for|in|do|done|case|esac|while|until|function|local|export|return|break|continue)\b/g;
+const NUMBER_TOKEN_RE = /\b(?:0x[0-9a-fA-F]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)\b/g;
+const CONST_TOKEN_RE = /\b(?:true|false|null|nil|undefined|None|True|False)\b/g;
+const FUNC_TOKEN_RE = /\b[A-Za-z_]\w*(?=\s*\()/g;
+const OPERATOR_TOKEN_RE = /:=|==|!=|<=|>=|&&|\|\||=>|<-|\+\+|--|\+|-|\*|\/|%|=|<|>/g;
+const BLOCK_COMMENT_TOKEN_RE = /\/\*[\s\S]*?\*\//g;
+const LINE_COMMENT_TOKEN_RE = /(^|\s)(\/\/.*$)/gm;
+const HASH_COMMENT_TOKEN_RE = /(^|\s)(#.*$)/gm;
+const SQL_COMMENT_TOKEN_RE = /(^|\s)(--.*$)/gm;
+const STRING_DQ_TOKEN_RE = /&quot;(?:\\.|(?!&quot;)[\s\S])*?&quot;/g;
+const STRING_SQ_TOKEN_RE = /&#39;(?:\\.|(?!&#39;)[\s\S])*?&#39;/g;
+const STRING_BT_TOKEN_RE = /`(?:\\.|[^`\\])*`/g;
 
 function escapeHtml(value) {
   return (value || '')
@@ -388,11 +413,71 @@ function renderBlockQuote(lines) {
   return `<blockquote class="chat-md-quote">${valid.map((line) => renderInlineLine(line)).join('<br>')}</blockquote>`;
 }
 
-function renderCodeBlock(codeLines, language = '') {
+function normalizeCodeLanguage(language) {
   const lang = (language || '').toString().trim().toLowerCase();
+  if (!lang) return '';
+  if (lang === 'ts') return 'typescript';
+  if (lang === 'js') return 'javascript';
+  if (lang === 'py') return 'python';
+  if (lang === 'sh' || lang === 'zsh' || lang === 'shell') return 'bash';
+  return lang;
+}
+
+function highlightEscapedCode(escapedCode, language) {
+  const lang = normalizeCodeLanguage(language);
+  if (!escapedCode) return '';
+  if (!lang || lang === 'text' || lang === 'markdown') return escapedCode;
+
+  let html = escapedCode;
+  const tokens = [];
+  const wrap = (className, value) => stashToken(tokens, CODE_TOKEN_LABEL, `<span class="${className}">${value}</span>`);
+
+  const replaceByRegex = (regex, className) => {
+    html = html.replace(regex, (match) => wrap(className, match));
+  };
+
+  const replaceWithPrefix = (regex, className) => {
+    html = html.replace(regex, (_, prefix, body) => `${prefix}${wrap(className, body)}`);
+  };
+
+  const isSQL = lang === 'sql';
+  const isPythonLike = lang === 'python';
+  const isBashLike = lang === 'bash';
+  const isCLike = lang === 'go' || lang === 'javascript' || lang === 'typescript' || lang === 'java' || lang === 'c' || lang === 'cpp' || lang === 'rust';
+
+  if (isCLike) replaceByRegex(BLOCK_COMMENT_TOKEN_RE, 'chat-md-token-comment');
+  if (isCLike) replaceWithPrefix(LINE_COMMENT_TOKEN_RE, 'chat-md-token-comment');
+  if (isPythonLike || isBashLike) replaceWithPrefix(HASH_COMMENT_TOKEN_RE, 'chat-md-token-comment');
+  if (isSQL) replaceWithPrefix(SQL_COMMENT_TOKEN_RE, 'chat-md-token-comment');
+
+  replaceByRegex(STRING_BT_TOKEN_RE, 'chat-md-token-string');
+  replaceByRegex(STRING_DQ_TOKEN_RE, 'chat-md-token-string');
+  replaceByRegex(STRING_SQ_TOKEN_RE, 'chat-md-token-string');
+  replaceByRegex(NUMBER_TOKEN_RE, 'chat-md-token-number');
+  replaceByRegex(CONST_TOKEN_RE, 'chat-md-token-constant');
+
+  if (lang === 'go') replaceByRegex(GO_KEYWORD_RE, 'chat-md-token-keyword');
+  if (lang === 'javascript') replaceByRegex(JS_KEYWORD_RE, 'chat-md-token-keyword');
+  if (lang === 'typescript') {
+    replaceByRegex(JS_KEYWORD_RE, 'chat-md-token-keyword');
+    replaceByRegex(TS_EXTRA_KEYWORD_RE, 'chat-md-token-keyword');
+  }
+  if (lang === 'python') replaceByRegex(PY_KEYWORD_RE, 'chat-md-token-keyword');
+  if (lang === 'sql') replaceByRegex(SQL_KEYWORD_RE, 'chat-md-token-keyword');
+  if (lang === 'bash') replaceByRegex(BASH_KEYWORD_RE, 'chat-md-token-keyword');
+
+  replaceByRegex(FUNC_TOKEN_RE, 'chat-md-token-function');
+  replaceByRegex(OPERATOR_TOKEN_RE, 'chat-md-token-operator');
+  return restoreToken(html, CODE_TOKEN_LABEL, tokens);
+}
+
+function renderCodeBlock(codeLines, language = '') {
+  const lang = normalizeCodeLanguage(language);
   const langLabel = lang ? `<span class="chat-md-code-lang">${escapeHtml(lang)}</span>` : '';
-  const content = escapeHtml(codeLines.join('\n'));
-  return `<pre class="chat-md-code">${langLabel}<code>${content}</code></pre>`;
+  const escaped = escapeHtml(codeLines.join('\n'));
+  const content = highlightEscapedCode(escaped, lang);
+  const languageClass = lang ? ` language-${escapeHtml(lang)}` : '';
+  return `<pre class="chat-md-code">${langLabel}<code class="${languageClass.trim()}">${content}</code></pre>`;
 }
 
 function parseTableRow(line) {
@@ -434,8 +519,244 @@ function renderTable(headers, aligns, rows) {
   return `<div class="chat-md-table-wrap"><table class="chat-md-table"><thead><tr>${th}</tr></thead><tbody>${tbody}</tbody></table></div>`;
 }
 
+function stripOuterBlankLines(text) {
+  const lines = (text || '').split('\n');
+  while (lines.length > 0 && !lines[0].trim()) lines.shift();
+  while (lines.length > 0 && !lines[lines.length - 1].trim()) lines.pop();
+  return lines.join('\n');
+}
+
+function analyzeCodeShape(lines) {
+  let keywordLines = 0;
+  let symbolLines = 0;
+  let indentLines = 0;
+  let commentLines = 0;
+  let htmlTagLines = 0;
+  let nonEmptyCount = 0;
+  for (const line of lines) {
+    const trimmed = (line || '').trim();
+    if (!trimmed) continue;
+    nonEmptyCount += 1;
+    if (CODE_KEYWORD_LINE_RE.test(trimmed)) keywordLines += 1;
+    if (CODE_SYMBOL_LINE_RE.test(trimmed)) symbolLines += 1;
+    if (CODE_INDENT_LINE_RE.test(line || '')) indentLines += 1;
+    if (CODE_COMMENT_LINE_RE.test(trimmed)) commentLines += 1;
+    if (CODE_HTML_TAG_LINE_RE.test(trimmed)) htmlTagLines += 1;
+  }
+  return {
+    keywordLines,
+    symbolLines,
+    indentLines,
+    commentLines,
+    htmlTagLines,
+    nonEmptyCount,
+  };
+}
+
+function isCodeSignalLine(line) {
+  const raw = (line || '').toString();
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (NON_CODE_META_LINE_RE.test(trimmed)) return false;
+  if (CODE_KEYWORD_LINE_RE.test(trimmed)) return true;
+  if (CODE_COMMENT_LINE_RE.test(trimmed)) return true;
+  if (CODE_HTML_TAG_LINE_RE.test(trimmed)) return true;
+  if (CODE_SYMBOL_LINE_RE.test(trimmed)) return true;
+  if (CODE_INDENT_LINE_RE.test(raw)) return true;
+  if (/^[)\]}],?$/.test(trimmed)) return true;
+  if (/^[A-Za-z_][\w.]*\s*\([^)]*\)\s*\{?$/.test(trimmed)) return true;
+  return false;
+}
+
+function looksLikeRawCodeMessage(text) {
+  const raw = (text || '').toString();
+  if (!raw || raw.includes('```')) return false;
+  const lines = raw.split('\n');
+  if (lines.some((line) => NON_CODE_META_LINE_RE.test(((line || '') + '').trim()))) return false;
+  const shape = analyzeCodeShape(lines);
+  if (shape.nonEmptyCount < 3) return false;
+
+  const firstLine = lines.find((line) => (line || '').trim().length > 0) || '';
+  const hasStartHint = CODE_START_HINT_RE.test(firstLine.trim());
+  const score = (shape.keywordLines * 2)
+    + shape.symbolLines
+    + shape.indentLines
+    + shape.commentLines
+    + (shape.htmlTagLines * 2);
+  const threshold = Math.max(5, Math.ceil(shape.nonEmptyCount * 1.05));
+
+  if (shape.htmlTagLines >= Math.max(3, Math.floor(shape.nonEmptyCount * 0.5))) return true;
+  if (shape.keywordLines >= 2 && shape.symbolLines >= 2) return true;
+  if (!hasStartHint && score < threshold + 2) return false;
+  if (score >= threshold && (shape.keywordLines >= 1 || shape.symbolLines >= Math.ceil(shape.nonEmptyCount * 0.45))) {
+    return true;
+  }
+  return false;
+}
+
+function collectRawCodeBlock(lines, startIndex) {
+  const startLine = (lines[startIndex] || '').toString();
+  if (!isCodeSignalLine(startLine)) return null;
+
+  const blockLines = [];
+  let codeSignalCount = 0;
+  let nonEmptyCount = 0;
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const line = (lines[index] || '').toString();
+    const trimmed = line.trim();
+    if (!trimmed) {
+      let lookAhead = index + 1;
+      while (lookAhead < lines.length && !(lines[lookAhead] || '').toString().trim()) {
+        lookAhead += 1;
+      }
+      if (lookAhead < lines.length && isCodeSignalLine(lines[lookAhead] || '')) {
+        blockLines.push(line);
+        index += 1;
+        continue;
+      }
+      break;
+    }
+
+    if (NON_CODE_META_LINE_RE.test(trimmed)) {
+      break;
+    }
+
+    const signal = isCodeSignalLine(line);
+    const likelyExpr = /[=:+\-*/<>]/.test(line) || /[`"'\\]/.test(line);
+    if (signal || (nonEmptyCount > 0 && likelyExpr)) {
+      blockLines.push(line);
+      nonEmptyCount += 1;
+      if (signal) codeSignalCount += 1;
+      index += 1;
+      continue;
+    }
+    break;
+  }
+
+  if (blockLines.length === 0 || codeSignalCount < 2) return null;
+  const text = blockLines.join('\n');
+  if (!looksLikeRawCodeMessage(text)) return null;
+  return {
+    text,
+    lines: blockLines,
+    endIndex: index,
+  };
+}
+
+function autoFencePlainLines(lines) {
+  const output = [];
+  let index = 0;
+  let changed = false;
+
+  while (index < lines.length) {
+    const block = collectRawCodeBlock(lines, index);
+    if (!block) {
+      output.push(lines[index]);
+      index += 1;
+      continue;
+    }
+    const lang = inferCodeLanguage(block.text);
+    output.push(`\`\`\`${lang}`);
+    output.push(...block.lines);
+    output.push('```');
+    changed = true;
+    index = block.endIndex;
+  }
+
+  return {
+    lines: output,
+    changed,
+  };
+}
+
+function autoFenceCodeSections(text) {
+  const raw = (text || '').toString();
+  if (!raw) return raw;
+  const lines = raw.split('\n');
+  const output = [];
+  let changed = false;
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = (lines[index] || '').toString();
+    if (line.trim().startsWith('```')) {
+      output.push(line);
+      index += 1;
+      while (index < lines.length) {
+        const fenceLine = (lines[index] || '').toString();
+        output.push(fenceLine);
+        index += 1;
+        if (fenceLine.trim().startsWith('```')) break;
+      }
+      continue;
+    }
+
+    const chunkStart = index;
+    while (index < lines.length) {
+      const chunkLine = (lines[index] || '').toString();
+      if (chunkLine.trim().startsWith('```')) break;
+      index += 1;
+    }
+    const chunk = lines.slice(chunkStart, index);
+    const chunkResult = autoFencePlainLines(chunk);
+    output.push(...chunkResult.lines);
+    if (chunkResult.changed) changed = true;
+  }
+
+  return changed ? output.join('\n') : raw;
+}
+
+function inferCodeLanguage(text) {
+  const sample = (text || '').toString();
+  const trimmed = sample.trim();
+  if (!trimmed) return 'text';
+  if (/^\s*package\s+\w+/m.test(sample) || /^\s*func\s*(?:\([^)]*\)\s*)?\w+\s*\(/m.test(sample) || /^\s*import\s*\(/m.test(sample)) {
+    return 'go';
+  }
+  if (/^\s*def\s+\w+\s*\(/m.test(sample) || /^\s*class\s+\w+/m.test(sample) || /^\s*from\s+\w+\s+import\s+/m.test(sample)) {
+    return 'python';
+  }
+  if (/^\s*(?:select|insert|update|delete|create|alter|drop|with)\b/im.test(sample)) {
+    return 'sql';
+  }
+  if (/^\s*<\?xml\b/i.test(sample)) return 'xml';
+  if (/^\s*<(?:!doctype|html|head|body|main|section|article|div|span|script|style|template)\b/i.test(sample) || /<\/[a-z][\w-]*>/i.test(sample)) {
+    return 'html';
+  }
+  if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && /"[\w-]+"\s*:/.test(trimmed)) {
+    return 'json';
+  }
+  if (/\binterface\s+\w+/.test(sample) || /\btype\s+\w+\s*=/.test(sample) || /:\s*(string|number|boolean|unknown|any)\b/.test(sample)) {
+    return 'typescript';
+  }
+  if (/\b(const|let|var|function)\b/.test(sample) || /=>/.test(sample)) {
+    return 'javascript';
+  }
+  if (/^\s*#!/.test(sample) || /^\s*(echo|cd|ls|pwd|grep|cat|chmod|chown|export)\b/m.test(sample)) {
+    return 'bash';
+  }
+  return 'text';
+}
+
+function maybeAutoFenceCode(text) {
+  const raw = (text || '').toString();
+  if (!raw) return raw;
+  const normalized = stripOuterBlankLines(raw);
+  if (!normalized) return raw;
+  // 当模型未输出 fenced code block 时，自动识别“纯代码回复”并补全围栏。
+  if (!raw.includes('```') && looksLikeRawCodeMessage(normalized)) {
+    const language = inferCodeLanguage(normalized);
+    return `\`\`\`${language}\n${normalized}\n\`\`\``;
+  }
+  // 对“解释文字 + 代码段”混合回复，自动识别代码区并仅包裹代码区。
+  return autoFenceCodeSections(raw);
+}
+
 function parseMarkdownBlocks(rawText) {
   let text = (rawText || '').toString().replace(/\r\n?/g, '\n');
+  text = maybeAutoFenceCode(text);
   if (!text.trim()) return '';
   text = text.replace(/^---\n[\s\S]*?\n---\s*\n?/, '');
 

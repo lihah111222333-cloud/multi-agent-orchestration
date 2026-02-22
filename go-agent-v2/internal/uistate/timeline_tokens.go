@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 func extractFirstInt(payload map[string]any, keys ...string) (int, bool) {
@@ -102,14 +104,17 @@ func extractFirstIntDeep(payload map[string]any, keys ...string) (int, bool) {
 }
 
 func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[string]any, eventType, method string, ts time.Time) {
-	next := m.snapshot.TokenUsageByThread[threadID]
+	prev := m.snapshot.TokenUsageByThread[threadID]
+	next := prev
 	allowInfoTotal := strings.EqualFold(strings.TrimSpace(eventType), "context_compacted") || strings.EqualFold(strings.TrimSpace(method), "thread/compacted")
 
-	if limit, ok := extractContextWindow(payload); ok {
+	limit, hasLimit := extractContextWindow(payload)
+	if hasLimit {
 		next.ContextWindowTokens = limit
 	}
 
-	if used, ok := extractTotalUsedTokens(payload, allowInfoTotal); ok {
+	used, hasUsed := extractTotalUsedTokens(payload, allowInfoTotal)
+	if hasUsed {
 		next.UsedTokens = used
 	}
 
@@ -120,6 +125,35 @@ func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[str
 	}
 	next.UpdatedAt = ts.UTC().Format(time.RFC3339)
 	m.snapshot.TokenUsageByThread[threadID] = next
+
+	// ── compact 链路可观测日志 ──
+	if allowInfoTotal {
+		logger.Info("uistate: token update [compact]",
+			logger.FieldThreadID, threadID,
+			"event_type", eventType,
+			"method", method,
+			"has_limit", hasLimit,
+			"has_used", hasUsed,
+			"prev_used", prev.UsedTokens,
+			"next_used", next.UsedTokens,
+			"prev_window", prev.ContextWindowTokens,
+			"next_window", next.ContextWindowTokens,
+			"prev_pct", prev.UsedPercent,
+			"next_pct", next.UsedPercent,
+		)
+	} else if next.UsedTokens != prev.UsedTokens || next.ContextWindowTokens != prev.ContextWindowTokens {
+		logger.Debug("uistate: token update [normal]",
+			logger.FieldThreadID, threadID,
+			"event_type", eventType,
+			"method", method,
+			"prev_used", prev.UsedTokens,
+			"next_used", next.UsedTokens,
+			"prev_window", prev.ContextWindowTokens,
+			"next_window", next.ContextWindowTokens,
+			"prev_pct", prev.UsedPercent,
+			"next_pct", next.UsedPercent,
+		)
+	}
 }
 
 // extractContextWindow looks up the context window size from structured or flat payload keys.

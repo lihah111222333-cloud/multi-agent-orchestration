@@ -110,7 +110,20 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 	applyOverlays(rt, eventType, method, payload)
 	applyCollabDepth(rt, eventType)
 
-	if eventType == "token_count" || eventType == "context_compacted" || method == "thread/tokenUsage/updated" || method == "thread/compacted" {
+	isTokenEvent := eventType == "token_count" || eventType == "context_compacted" || method == "thread/tokenUsage/updated" || method == "thread/compacted"
+	if isTokenEvent {
+		if eventType == "context_compacted" || method == "thread/compacted" {
+			keys := make([]string, 0, len(payload))
+			for k := range payload {
+				keys = append(keys, k)
+			}
+			logger.Info("uistate: compact event received → entering token update",
+				logger.FieldThreadID, threadID,
+				"event_type", eventType,
+				"method", method,
+				"payload_keys", keys,
+			)
+		}
 		m.updateTokenUsageLocked(threadID, payload, eventType, method, ts)
 	}
 	if isThreadStatusChangedEvent(eventType, method) {

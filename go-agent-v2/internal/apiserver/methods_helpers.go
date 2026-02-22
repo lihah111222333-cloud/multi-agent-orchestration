@@ -579,6 +579,8 @@ func (s *Server) sendSlashCommand(ctx context.Context, params json.RawMessage, c
 		logger.FieldAgentID, p.ThreadID,
 		logger.FieldThreadID, p.ThreadID,
 		logger.FieldCommand, command,
+		"codex_thread_id", strings.TrimSpace(proc.Client.GetThreadID()),
+		logger.FieldPort, proc.Client.GetPort(),
 		logger.FieldDurationMS, time.Since(start).Milliseconds(),
 	)
 	return map[string]any{}, nil
@@ -660,7 +662,8 @@ func extractInputs(inputs []UserInput) (prompt string, images, files []string) {
 				files = append(files, value)
 			}
 		case "skill":
-			texts = append(texts, skillInputText(inp.Name, inp.Content))
+			// 技能注入统一由 turn/start|steer 的 selectedSkills 处理，避免透传输入中的摘要内容。
+			continue
 		}
 	}
 	prompt = strings.Join(texts, "\n")

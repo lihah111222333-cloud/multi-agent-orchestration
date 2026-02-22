@@ -1,7 +1,7 @@
 {
   "stage": "P1",
-  "generated_at": "2026-02-23T03:21:51+08:00",
-  "gate_passed": false,
+  "generated_at": "2026-02-23T04:01:24+08:00",
+  "gate_passed": true,
   "thresholds": {
     "non_empty_languages_per_tool": "\u003e=2"
   },
@@ -23,13 +23,13 @@
     },
     "lsp_type_definition": {
       "attempts": 3,
-      "successes": 2,
-      "success_rate": 0.6666666666666666
+      "successes": 3,
+      "success_rate": 1
     },
     "lsp_type_hierarchy": {
       "attempts": 3,
-      "successes": 1,
-      "success_rate": 0.3333333333333333
+      "successes": 3,
+      "success_rate": 1
     },
     "lsp_workspace_symbol": {
       "attempts": 3,
@@ -45,13 +45,13 @@
     },
     "rust": {
       "attempts": 6,
-      "successes": 4,
-      "success_rate": 0.6666666666666666
+      "successes": 6,
+      "success_rate": 1
     },
     "typescript": {
       "attempts": 6,
-      "successes": 5,
-      "success_rate": 0.8333333333333334
+      "successes": 6,
+      "success_rate": 1
     }
   },
   "tool_language_success": {
@@ -72,10 +72,13 @@
     },
     "lsp_type_definition": {
       "go": 1,
+      "rust": 1,
       "typescript": 1
     },
     "lsp_type_hierarchy": {
-      "go": 1
+      "go": 1,
+      "rust": 1,
+      "typescript": 1
     },
     "lsp_workspace_symbol": {
       "go": 1,
@@ -88,8 +91,8 @@
       "stage": "P1",
       "tool": "lsp_open_file",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego4190316026/001/main.go",
-      "duration_ms": 45,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego3926901238/001/main.go",
+      "duration_ms": 42,
       "success": true,
       "note": "fixture bootstrap"
     },
@@ -97,99 +100,97 @@
       "stage": "P1",
       "tool": "lsp_workspace_symbol",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego4190316026/001/main.go",
-      "duration_ms": 3,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego3926901238/001/main.go",
+      "duration_ms": 1,
       "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_implementation",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego4190316026/001/main.go",
-      "duration_ms": 1,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego3926901238/001/main.go",
+      "duration_ms": 0,
       "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_type_definition",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego4190316026/001/main.go",
-      "duration_ms": 1,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego3926901238/001/main.go",
+      "duration_ms": 0,
       "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_call_hierarchy",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego4190316026/001/main.go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego3926901238/001/main.go",
+      "duration_ms": 2,
+      "success": true
+    },
+    {
+      "stage": "P1",
+      "tool": "lsp_type_hierarchy",
+      "language": "go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego3926901238/001/main.go",
+      "duration_ms": 1,
+      "success": true
+    },
+    {
+      "stage": "P1",
+      "tool": "lsp_open_file",
+      "language": "typescript",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript2384119764/001/main.ts",
+      "duration_ms": 101,
+      "success": true,
+      "note": "fixture bootstrap"
+    },
+    {
+      "stage": "P1",
+      "tool": "lsp_workspace_symbol",
+      "language": "typescript",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript2384119764/001/main.ts",
+      "duration_ms": 7,
+      "success": true
+    },
+    {
+      "stage": "P1",
+      "tool": "lsp_implementation",
+      "language": "typescript",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript2384119764/001/main.ts",
+      "duration_ms": 38,
+      "success": true
+    },
+    {
+      "stage": "P1",
+      "tool": "lsp_type_definition",
+      "language": "typescript",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript2384119764/001/main.ts",
+      "duration_ms": 1,
+      "success": true
+    },
+    {
+      "stage": "P1",
+      "tool": "lsp_call_hierarchy",
+      "language": "typescript",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript2384119764/001/main.ts",
       "duration_ms": 4,
       "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_type_hierarchy",
-      "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego4190316026/001/main.go",
-      "duration_ms": 2,
-      "success": true
-    },
-    {
-      "stage": "P1",
-      "tool": "lsp_open_file",
       "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1434485124/001/main.ts",
-      "duration_ms": 105,
-      "success": true,
-      "note": "fixture bootstrap"
-    },
-    {
-      "stage": "P1",
-      "tool": "lsp_workspace_symbol",
-      "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1434485124/001/main.ts",
-      "duration_ms": 8,
-      "success": true
-    },
-    {
-      "stage": "P1",
-      "tool": "lsp_implementation",
-      "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1434485124/001/main.ts",
-      "duration_ms": 28,
-      "success": true
-    },
-    {
-      "stage": "P1",
-      "tool": "lsp_type_definition",
-      "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1434485124/001/main.ts",
-      "duration_ms": 1,
-      "success": true
-    },
-    {
-      "stage": "P1",
-      "tool": "lsp_call_hierarchy",
-      "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1434485124/001/main.ts",
-      "duration_ms": 3,
-      "success": true
-    },
-    {
-      "stage": "P1",
-      "tool": "lsp_type_hierarchy",
-      "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1434485124/001/main.ts",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript2384119764/001/main.ts",
       "duration_ms": 0,
-      "success": false,
-      "error_code": "request_failed",
-      "error_text": "LSP.call: textDocument/prepareTypeHierarchy error -32601: Unhandled method textDocument/prepareTypeHierarchy"
+      "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_open_file",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust20273897/001/src/main.rs",
-      "duration_ms": 9,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust4113292218/001/src/main.rs",
+      "duration_ms": 12,
       "success": true,
       "note": "fixture bootstrap"
     },
@@ -197,15 +198,15 @@
       "stage": "P1",
       "tool": "lsp_workspace_symbol",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust20273897/001/src/main.rs",
-      "duration_ms": 335,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust4113292218/001/src/main.rs",
+      "duration_ms": 260,
       "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_implementation",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust20273897/001/src/main.rs",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust4113292218/001/src/main.rs",
       "duration_ms": 0,
       "success": true
     },
@@ -213,39 +214,35 @@
       "stage": "P1",
       "tool": "lsp_type_definition",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust20273897/001/src/main.rs",
-      "duration_ms": 89,
-      "success": false,
-      "error_code": "request_failed",
-      "error_text": "LSP.call: textDocument/typeDefinition error -32801: content modified"
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust4113292218/001/src/main.rs",
+      "duration_ms": 411,
+      "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_call_hierarchy",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust20273897/001/src/main.rs",
-      "duration_ms": 240,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust4113292218/001/src/main.rs",
+      "duration_ms": 262,
       "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_type_hierarchy",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust20273897/001/src/main.rs",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust4113292218/001/src/main.rs",
       "duration_ms": 0,
-      "success": false,
-      "error_code": "request_failed",
-      "error_text": "LSP.call: textDocument/prepareTypeHierarchy error -32601: unknown request"
+      "success": true
     }
-  ],
-  "notes": [
-    "lsp_type_hierarchy non-empty languages=1 (\u003c2)"
   ],
   "empty_reasons": {
     "lsp_call_hierarchy": {},
     "lsp_implementation": {},
     "lsp_type_definition": {},
-    "lsp_type_hierarchy": {},
+    "lsp_type_hierarchy": {
+      "rust": "unsupported by language server",
+      "typescript": "unsupported by language server"
+    },
     "lsp_workspace_symbol": {}
   }
 }

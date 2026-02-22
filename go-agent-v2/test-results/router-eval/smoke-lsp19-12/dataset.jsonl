@@ -1,0 +1,12 @@
+{"id": 1, "query": "请先打开 internal/apiserver/methods.go 文件，我要开始分析。", "expected_primary": "lsp_open_file", "expected_tools": ["lsp_open_file"]}
+{"id": 2, "query": "先把 internal/lsp/manager.go 打开到 LSP 上下文里。", "expected_primary": "lsp_open_file", "expected_tools": ["lsp_open_file"]}
+{"id": 3, "query": "分析前先 open 这个文件：cmd/agent-terminal/main.go。", "expected_primary": "lsp_open_file", "expected_tools": ["lsp_open_file"]}
+{"id": 4, "query": "把 pkg/logger/logger.go 先加载到编辑器上下文。", "expected_primary": "lsp_open_file", "expected_tools": ["lsp_open_file"]}
+{"id": 5, "query": "先打开 internal/config/config.go，后面再看代码。", "expected_primary": "lsp_open_file", "expected_tools": ["lsp_open_file"]}
+{"id": 6, "query": "列出 internal/lsp/manager.go 的函数和类型大纲。", "expected_primary": "lsp_document_symbol", "expected_tools": ["lsp_document_symbol"]}
+{"id": 7, "query": "给我这个文件的 symbol 列表（函数/方法/结构体）。", "expected_primary": "lsp_document_symbol", "expected_tools": ["lsp_document_symbol"]}
+{"id": 8, "query": "查看 cmd/agent-terminal/main.go 的文档符号树。", "expected_primary": "lsp_document_symbol", "expected_tools": ["lsp_document_symbol"]}
+{"id": 9, "query": "我想看 internal/apiserver/server.go 的 outline。", "expected_primary": "lsp_document_symbol", "expected_tools": ["lsp_document_symbol"]}
+{"id": 10, "query": "请返回这个 Go 文件的顶层符号清单。", "expected_primary": "lsp_document_symbol", "expected_tools": ["lsp_document_symbol"]}
+{"id": 11, "query": "在 internal/lsp/manager.go 第120行第15列做 hover 看类型说明。", "expected_primary": "lsp_hover", "expected_tools": ["lsp_hover"]}
+{"id": 12, "query": "帮我查看变量 ctx 的 hover 文档。", "expected_primary": "lsp_hover", "expected_tools": ["lsp_hover"]}

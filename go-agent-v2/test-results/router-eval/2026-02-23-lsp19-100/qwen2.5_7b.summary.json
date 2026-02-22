@@ -1,0 +1,110 @@
+{
+  "model": "qwen2.5:7b",
+  "total_cases": 100,
+  "top1_accuracy": 0.84,
+  "hit_primary_accuracy": 0.92,
+  "exact_set_accuracy": 0.78,
+  "parse_fail_rate": 0.01,
+  "call_fail_rate": 0.0,
+  "latency_avg_s": 0.5396,
+  "latency_p50_s": 0.5054,
+  "latency_p95_s": 0.7216,
+  "elapsed_wall_s": 53.964,
+  "per_tool": {
+    "lsp_open_file": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_document_symbol": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_hover": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_diagnostics": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_definition": {
+      "n": 6,
+      "top1_acc": 0.8333,
+      "hit_primary_acc": 0.8333
+    },
+    "lsp_references": {
+      "n": 5,
+      "top1_acc": 0.8,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_rename": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_completion": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_did_change": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_workspace_symbol": {
+      "n": 6,
+      "top1_acc": 0.6667,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_implementation": {
+      "n": 6,
+      "top1_acc": 0.3333,
+      "hit_primary_acc": 0.5
+    },
+    "lsp_type_definition": {
+      "n": 6,
+      "top1_acc": 0.5,
+      "hit_primary_acc": 0.6667
+    },
+    "lsp_call_hierarchy": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_type_hierarchy": {
+      "n": 5,
+      "top1_acc": 0.8,
+      "hit_primary_acc": 0.8
+    },
+    "lsp_code_action": {
+      "n": 6,
+      "top1_acc": 0.5,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_signature_help": {
+      "n": 5,
+      "top1_acc": 0.8,
+      "hit_primary_acc": 0.8
+    },
+    "lsp_format": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_semantic_tokens": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_folding_range": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    }
+  }
+}

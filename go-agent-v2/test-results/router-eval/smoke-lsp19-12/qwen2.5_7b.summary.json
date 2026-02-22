@@ -1,0 +1,30 @@
+{
+  "model": "qwen2.5:7b",
+  "total_cases": 12,
+  "top1_accuracy": 1.0,
+  "hit_primary_accuracy": 1.0,
+  "exact_set_accuracy": 0.8333,
+  "parse_fail_rate": 0.0,
+  "call_fail_rate": 0.0,
+  "latency_avg_s": 0.93,
+  "latency_p50_s": 0.5518,
+  "latency_p95_s": 4.753,
+  "elapsed_wall_s": 11.16,
+  "per_tool": {
+    "lsp_open_file": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_document_symbol": {
+      "n": 5,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    },
+    "lsp_hover": {
+      "n": 2,
+      "top1_acc": 1.0,
+      "hit_primary_acc": 1.0
+    }
+  }
+}

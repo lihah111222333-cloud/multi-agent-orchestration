@@ -1,0 +1,57 @@
+{
+  "generated_at": "2026-02-23T04:05:44.169098",
+  "tools": [
+    "lsp_open_file",
+    "lsp_document_symbol",
+    "lsp_hover",
+    "lsp_diagnostics",
+    "lsp_definition",
+    "lsp_references",
+    "lsp_rename",
+    "lsp_completion",
+    "lsp_did_change",
+    "lsp_workspace_symbol",
+    "lsp_implementation",
+    "lsp_type_definition",
+    "lsp_call_hierarchy",
+    "lsp_type_hierarchy",
+    "lsp_code_action",
+    "lsp_signature_help",
+    "lsp_format",
+    "lsp_semantic_tokens",
+    "lsp_folding_range"
+  ],
+  "total_cases": 12,
+  "models": {
+    "qwen2.5:7b": {
+      "model": "qwen2.5:7b",
+      "total_cases": 12,
+      "top1_accuracy": 1.0,
+      "hit_primary_accuracy": 1.0,
+      "exact_set_accuracy": 0.8333,
+      "parse_fail_rate": 0.0,
+      "call_fail_rate": 0.0,
+      "latency_avg_s": 0.93,
+      "latency_p50_s": 0.5518,
+      "latency_p95_s": 4.753,
+      "elapsed_wall_s": 11.16,
+      "per_tool": {
+        "lsp_open_file": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_document_symbol": {
+          "n": 5,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        },
+        "lsp_hover": {
+          "n": 2,
+          "top1_acc": 1.0,
+          "hit_primary_acc": 1.0
+        }
+      }
+    }
+  }
+}

@@ -132,3 +132,449 @@
 - 未解决问题: soak failure rate 25.00% >= 2%
 - 下一阶段入口条件: panic=0，恢复成功，soak 累计失败率<2%
 
+## P0-B (2026-02-23T03:36:40+08:00)
+
+- Stage Gate: `PASS`
+- 结论: Core9 success rate=100.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/core9-summary.json`
+- 未解决问题: rust diagnostics callback count=0 (non-blocking)
+- 下一阶段入口条件: 工具 1-9 每语言至少成功 1 次，且 success_rate>=98%
+
+## P1 (2026-02-23T03:36:47+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P1 跨文件/层级能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/xref-hierarchy-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 10-14 至少两种语言出现非空结果；空结果已记录原因
+
+## P2 (2026-02-23T03:36:50+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P2 编辑动作与语义展示能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/actions-semantic-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 15-19 每项至少 1 个正样例，formatting 幂等
+
+## P3 (2026-02-23T03:36:55+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P3 并发/恢复/soak 已执行，soak failure rate=0.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/stability-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: panic=0，恢复成功，soak 累计失败率<2%
+
+## P0-A (2026-02-23T03:37:31+08:00)
+
+- Stage Gate: `PASS`
+- 结论: 目录探测与 smoke 流程通过
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/p0a-summary.json`
+- 未解决问题: probe ok: go <- /Users/mima0000/Desktop/wj/e2e测试/go (corpus-infer)
+- 未解决问题: probe ok: rust <- /Users/mima0000/Desktop/wj/e2e测试/rust (corpus-infer)
+- 未解决问题: probe ok: typescript <- /Users/mima0000/Desktop/wj/e2e测试/js (corpus-infer)
+- 下一阶段入口条件: 每种语言至少 1 个文件完成 open->documentSymbol
+
+## P0-B (2026-02-23T03:37:47+08:00)
+
+- Stage Gate: `PASS`
+- 结论: Core9 success rate=100.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/core9-summary.json`
+- 未解决问题: rust diagnostics callback count=0 (non-blocking)
+- 下一阶段入口条件: 工具 1-9 每语言至少成功 1 次，且 success_rate>=98%
+
+## P1 (2026-02-23T03:37:54+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P1 跨文件/层级能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/xref-hierarchy-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 10-14 至少两种语言出现非空结果；空结果已记录原因
+
+## P2 (2026-02-23T03:37:57+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P2 编辑动作与语义展示能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/actions-semantic-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 15-19 每项至少 1 个正样例，formatting 幂等
+
+## P0-A (2026-02-23T03:38:09+08:00)
+
+- Stage Gate: `PASS`
+- 结论: 目录探测与 smoke 流程通过
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/p0a-summary.json`
+- 未解决问题: probe ok: go <- /Users/mima0000/Desktop/wj/e2e测试/go (corpus-infer)
+- 未解决问题: probe ok: rust <- /Users/mima0000/Desktop/wj/e2e测试/rust (corpus-infer)
+- 未解决问题: probe ok: typescript <- /Users/mima0000/Desktop/wj/e2e测试/js (corpus-infer)
+- 下一阶段入口条件: 每种语言至少 1 个文件完成 open->documentSymbol
+
+## P0-B (2026-02-23T03:38:24+08:00)
+
+- Stage Gate: `PASS`
+- 结论: Core9 success rate=100.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/core9-summary.json`
+- 未解决问题: rust diagnostics callback count=0 (non-blocking)
+- 下一阶段入口条件: 工具 1-9 每语言至少成功 1 次，且 success_rate>=98%
+
+## P1 (2026-02-23T03:38:31+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P1 跨文件/层级能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/xref-hierarchy-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 10-14 至少两种语言出现非空结果；空结果已记录原因
+
+## P2 (2026-02-23T03:38:34+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P2 编辑动作与语义展示能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/actions-semantic-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 15-19 每项至少 1 个正样例，formatting 幂等
+
+## P3 (2026-02-23T03:38:39+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P3 并发/恢复/soak 已执行，soak failure rate=0.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/stability-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: panic=0，恢复成功，soak 累计失败率<2%
+
+## P0-A (2026-02-23T03:44:19+08:00)
+
+- Stage Gate: `PASS`
+- 结论: 目录探测与 smoke 流程通过
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/p0a-summary.json`
+- 未解决问题: probe ok: go <- /Users/mima0000/Desktop/wj/e2e测试/go (corpus-infer)
+- 未解决问题: probe ok: rust <- /Users/mima0000/Desktop/wj/e2e测试/rust (corpus-infer)
+- 未解决问题: probe ok: typescript <- /Users/mima0000/Desktop/wj/e2e测试/js (corpus-infer)
+- 下一阶段入口条件: 每种语言至少 1 个文件完成 open->documentSymbol
+
+## P0-B (2026-02-23T03:44:41+08:00)
+
+- Stage Gate: `FAIL`
+- 结论: Core9 success rate=99.77%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/core9-summary.json`
+- 未解决问题: rust diagnostics callback count=0 (non-blocking)
+- 未解决问题: rust rename failed: LSP.call: textDocument/rename error -32801: content modified
+- 未解决问题: coverage missing: lsp_rename@rust
+- 下一阶段入口条件: 工具 1-9 每语言至少成功 1 次，且 success_rate>=98%
+
+## P1 (2026-02-23T03:44:48+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P1 跨文件/层级能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/xref-hierarchy-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 10-14 至少两种语言出现非空结果；空结果已记录原因
+
+## P2 (2026-02-23T03:44:51+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P2 编辑动作与语义展示能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/actions-semantic-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 15-19 每项至少 1 个正样例，formatting 幂等
+
+## P3 (2026-02-23T03:45:05+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P3 并发/恢复/soak 已执行，soak failure rate=0.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/stability-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: panic=0，恢复成功，soak 累计失败率<2%
+
+
+## Cache Gate (2026-02-23T03:45:23+0800)
+
+- Stage Gate: `PASS`
+- 结论: 第 6.4 节缓存门禁全部通过（启用/命中/无污染）
+- 命令: `go test ./internal/lsp -run 'TestCacheDir_DefaultAndCustom|TestCacheFallback_UnwritableDirectoryDowngradesToMemory|TestCacheRecover_BootstrapStillChecksDiskFreshness|TestCacheFailClosed_OpenSyncFailureDoesNotUpsert|TestCacheTTL_ExpiredEntryCleaned' -count=1 -timeout 20m`
+- 下一阶段入口条件: 保持 cache gate 与 Quick/Full Gate 可复现通过
+## P0-A (2026-02-23T03:46:41+08:00)
+
+- Stage Gate: `PASS`
+- 结论: 目录探测与 smoke 流程通过
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/p0a-summary.json`
+- 未解决问题: probe ok: go <- /Users/mima0000/Desktop/wj/e2e测试/go (corpus-infer)
+- 未解决问题: probe ok: rust <- /Users/mima0000/Desktop/wj/e2e测试/rust (corpus-infer)
+- 未解决问题: probe ok: typescript <- /Users/mima0000/Desktop/wj/e2e测试/js (corpus-infer)
+- 下一阶段入口条件: 每种语言至少 1 个文件完成 open->documentSymbol
+
+## P0-B (2026-02-23T03:46:53+08:00)
+
+- Stage Gate: `PASS`
+- 结论: Core9 success rate=100.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/core9-summary.json`
+- 未解决问题: rust diagnostics callback count=0 (non-blocking)
+- 未解决问题: typescript diagnostics callback count=0 (non-blocking)
+- 下一阶段入口条件: 工具 1-9 每语言至少成功 1 次，且 success_rate>=98%
+
+## P1 (2026-02-23T03:47:00+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P1 跨文件/层级能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/xref-hierarchy-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 10-14 至少两种语言出现非空结果；空结果已记录原因
+
+## P2 (2026-02-23T03:47:03+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P2 编辑动作与语义展示能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/actions-semantic-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 15-19 每项至少 1 个正样例，formatting 幂等
+
+## P0-A (2026-02-23T03:47:36+08:00)
+
+- Stage Gate: `PASS`
+- 结论: 目录探测与 smoke 流程通过
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/p0a-summary.json`
+- 未解决问题: probe ok: go <- /Users/mima0000/Desktop/wj/e2e测试/go (corpus-infer)
+- 未解决问题: probe ok: rust <- /Users/mima0000/Desktop/wj/e2e测试/rust (corpus-infer)
+- 未解决问题: probe ok: typescript <- /Users/mima0000/Desktop/wj/e2e测试/js (corpus-infer)
+- 下一阶段入口条件: 每种语言至少 1 个文件完成 open->documentSymbol
+
+## P0-B (2026-02-23T03:47:54+08:00)
+
+- Stage Gate: `PASS`
+- 结论: Core9 success rate=100.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/core9-summary.json`
+- 未解决问题: rust diagnostics callback count=0 (non-blocking)
+- 下一阶段入口条件: 工具 1-9 每语言至少成功 1 次，且 success_rate>=98%
+
+## P1 (2026-02-23T03:48:02+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P1 跨文件/层级能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/xref-hierarchy-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 10-14 至少两种语言出现非空结果；空结果已记录原因
+
+## P2 (2026-02-23T03:48:05+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P2 编辑动作与语义展示能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/actions-semantic-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 15-19 每项至少 1 个正样例，formatting 幂等
+
+## P3 (2026-02-23T03:48:11+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P3 并发/恢复/soak 已执行，soak failure rate=0.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/stability-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: panic=0，恢复成功，soak 累计失败率<2%
+
+## P0-A (2026-02-23T03:53:25+08:00)
+
+- Stage Gate: `PASS`
+- 结论: 目录探测与 smoke 流程通过
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/p0a-summary.json`
+- 未解决问题: probe ok: go <- /Users/mima0000/Desktop/wj/e2e测试/go (corpus-infer)
+- 未解决问题: probe ok: rust <- /Users/mima0000/Desktop/wj/e2e测试/rust (corpus-infer)
+- 未解决问题: probe ok: typescript <- /Users/mima0000/Desktop/wj/e2e测试/js (corpus-infer)
+- 下一阶段入口条件: 每种语言至少 1 个文件完成 open->documentSymbol
+
+## P0-B (2026-02-23T03:53:43+08:00)
+
+- Stage Gate: `PASS`
+- 结论: Core9 success rate=100.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/core9-summary.json`
+- 未解决问题: rust diagnostics callback count=0 (non-blocking)
+- 下一阶段入口条件: 工具 1-9 每语言至少成功 1 次，且 success_rate>=98%
+
+## P1 (2026-02-23T03:53:49+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P1 跨文件/层级能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/xref-hierarchy-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 10-14 至少两种语言出现非空结果；空结果已记录原因
+
+## P2 (2026-02-23T03:53:53+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P2 编辑动作与语义展示能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/actions-semantic-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 15-19 每项至少 1 个正样例，formatting 幂等
+
+## P3 (2026-02-23T03:54:04+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P3 并发/恢复/soak 已执行，soak failure rate=0.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/stability-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: panic=0，恢复成功，soak 累计失败率<2%
+
+## P0-A (2026-02-23T03:55:20+08:00)
+
+- Stage Gate: `PASS`
+- 结论: 目录探测与 smoke 流程通过
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/p0a-summary.json`
+- 未解决问题: probe ok: go <- /Users/mima0000/Desktop/wj/e2e测试/go (corpus-infer)
+- 未解决问题: probe ok: rust <- /Users/mima0000/Desktop/wj/e2e测试/rust (corpus-infer)
+- 未解决问题: probe ok: typescript <- /Users/mima0000/Desktop/wj/e2e测试/js (corpus-infer)
+- 下一阶段入口条件: 每种语言至少 1 个文件完成 open->documentSymbol
+
+## P0-B (2026-02-23T03:55:34+08:00)
+
+- Stage Gate: `PASS`
+- 结论: Core9 success rate=100.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/core9-summary.json`
+- 未解决问题: rust diagnostics callback count=0 (non-blocking)
+- 下一阶段入口条件: 工具 1-9 每语言至少成功 1 次，且 success_rate>=98%
+
+## P1 (2026-02-23T03:55:40+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P1 跨文件/层级能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/xref-hierarchy-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 10-14 至少两种语言出现非空结果；空结果已记录原因
+
+## P2 (2026-02-23T03:55:43+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P2 编辑动作与语义展示能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/actions-semantic-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 15-19 每项至少 1 个正样例，formatting 幂等
+
+## P0-A (2026-02-23T03:55:53+08:00)
+
+- Stage Gate: `PASS`
+- 结论: 目录探测与 smoke 流程通过
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/p0a-summary.json`
+- 未解决问题: probe ok: go <- /Users/mima0000/Desktop/wj/e2e测试/go (corpus-infer)
+- 未解决问题: probe ok: rust <- /Users/mima0000/Desktop/wj/e2e测试/rust (corpus-infer)
+- 未解决问题: probe ok: typescript <- /Users/mima0000/Desktop/wj/e2e测试/js (corpus-infer)
+- 下一阶段入口条件: 每种语言至少 1 个文件完成 open->documentSymbol
+
+## P0-B (2026-02-23T03:56:08+08:00)
+
+- Stage Gate: `PASS`
+- 结论: Core9 success rate=100.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/core9-summary.json`
+- 未解决问题: rust diagnostics callback count=0 (non-blocking)
+- 下一阶段入口条件: 工具 1-9 每语言至少成功 1 次，且 success_rate>=98%
+
+## P1 (2026-02-23T03:56:13+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P1 跨文件/层级能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/xref-hierarchy-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 10-14 至少两种语言出现非空结果；空结果已记录原因
+
+## P2 (2026-02-23T03:56:17+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P2 编辑动作与语义展示能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/actions-semantic-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 15-19 每项至少 1 个正样例，formatting 幂等
+
+## P3 (2026-02-23T03:56:21+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P3 并发/恢复/soak 已执行，soak failure rate=0.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/stability-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: panic=0，恢复成功，soak 累计失败率<2%
+
+## P0-A (2026-02-23T04:00:38+08:00)
+
+- Stage Gate: `PASS`
+- 结论: 目录探测与 smoke 流程通过
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/p0a-summary.json`
+- 未解决问题: probe ok: go <- /Users/mima0000/Desktop/wj/e2e测试/go (corpus-infer)
+- 未解决问题: probe ok: rust <- /Users/mima0000/Desktop/wj/e2e测试/rust (corpus-infer)
+- 未解决问题: probe ok: typescript <- /Users/mima0000/Desktop/wj/e2e测试/js (corpus-infer)
+- 下一阶段入口条件: 每种语言至少 1 个文件完成 open->documentSymbol
+
+## P0-B (2026-02-23T04:00:52+08:00)
+
+- Stage Gate: `PASS`
+- 结论: Core9 success rate=100.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/core9-summary.json`
+- 未解决问题: rust diagnostics callback count=0 (non-blocking)
+- 下一阶段入口条件: 工具 1-9 每语言至少成功 1 次，且 success_rate>=98%
+
+## P1 (2026-02-23T04:00:57+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P1 跨文件/层级能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/xref-hierarchy-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 10-14 至少两种语言出现非空结果；空结果已记录原因
+
+## P2 (2026-02-23T04:01:01+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P2 编辑动作与语义展示能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/actions-semantic-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 15-19 每项至少 1 个正样例，formatting 幂等
+
+## P0-A (2026-02-23T04:01:01+08:00)
+
+- Stage Gate: `PASS`
+- 结论: 目录探测与 smoke 流程通过
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/p0a-summary.json`
+- 未解决问题: probe ok: go <- /Users/mima0000/Desktop/wj/e2e测试/go (corpus-infer)
+- 未解决问题: probe ok: rust <- /Users/mima0000/Desktop/wj/e2e测试/rust (corpus-infer)
+- 未解决问题: probe ok: typescript <- /Users/mima0000/Desktop/wj/e2e测试/js (corpus-infer)
+- 下一阶段入口条件: 每种语言至少 1 个文件完成 open->documentSymbol
+
+## P3 (2026-02-23T04:01:05+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P3 并发/恢复/soak 已执行，soak failure rate=0.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/stability-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: panic=0，恢复成功，soak 累计失败率<2%
+
+## P0-B (2026-02-23T04:01:18+08:00)
+
+- Stage Gate: `PASS`
+- 结论: Core9 success rate=100.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/core9-summary.json`
+- 未解决问题: rust diagnostics callback count=0 (non-blocking)
+- 下一阶段入口条件: 工具 1-9 每语言至少成功 1 次，且 success_rate>=98%
+
+## P1 (2026-02-23T04:01:24+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P1 跨文件/层级能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/xref-hierarchy-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 10-14 至少两种语言出现非空结果；空结果已记录原因
+
+## P2 (2026-02-23T04:01:28+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P2 编辑动作与语义展示能力 smoke 完成
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/actions-semantic-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: 工具 15-19 每项至少 1 个正样例，formatting 幂等
+
+## P3 (2026-02-23T04:01:38+08:00)
+
+- Stage Gate: `PASS`
+- 结论: P3 并发/恢复/soak 已执行，soak failure rate=0.00%
+- 产物: `/Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2/test-results/lsp-stress/2026-02-22/stability-summary.json`
+- 未解决问题: 无
+- 下一阶段入口条件: panic=0，恢复成功，soak 累计失败率<2%
+
+
+## Gate Replay (2026-02-23T04:02:12+0800)
+
+- Quick Gate: `PASS` (`go test ./internal/lsp -run 'TestLSP_Stress_P0A|TestLSP_Stress_P0B_Core9|TestLSP_Stress_P1_Smoke|TestLSP_Stress_P2_Smoke' -count=1 -timeout 20m`)
+- Full Gate (`-tags lspstress`): `PASS` (`go test -tags lspstress ./internal/lsp -run 'TestLSP_Stress_' -count=1 -timeout 60m`)
+- Full Gate (`-race`): `PASS` (`go test -race ./internal/lsp -run 'TestLSP_Stress_' -count=1 -timeout 60m`)
+- Cache Gate (6.4): `PASS` (`go test ./internal/lsp -run 'TestCacheDir_DefaultAndCustom|TestCacheFallback_UnwritableDirectoryDowngradesToMemory|TestCacheRecover_BootstrapStillChecksDiskFreshness|TestCacheFailClosed_OpenSyncFailureDoesNotUpsert|TestCacheTTL_ExpiredEntryCleaned' -count=1 -timeout 20m`)
+- 结论: 最新计划要求门禁全部通过，可复现。

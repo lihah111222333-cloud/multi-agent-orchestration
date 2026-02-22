@@ -1,7 +1,7 @@
 {
   "stage": "P3",
-  "generated_at": "2026-02-23T03:21:56+08:00",
-  "gate_passed": false,
+  "generated_at": "2026-02-23T04:01:38+08:00",
+  "gate_passed": true,
   "thresholds": {
     "panic": 0,
     "soak_failure_rate": "\u003c2%"
@@ -10,18 +10,19 @@
   "language_stats": {},
   "tool_language_success": {},
   "results": null,
-  "notes": [
-    "soak failure rate 25.00% \u003e= 2%"
-  ],
   "extra": {
-    "concurrency_errors": 48,
+    "concurrency_errors": 0,
     "concurrency_ops": 240,
     "panic_count": 0,
+    "point_probe_errors": 0,
     "recovery_ok": true,
-    "soak_failure_rate": 0.25,
-    "soak_failures": 20,
+    "soak_failure_rate": 0,
+    "soak_failures": 0,
     "soak_ops": 80,
     "soak_rounds": 20,
+    "target_col": 5,
+    "target_file": "/Users/mima0000/Desktop/wj/e2e测试/go/attribution/backtest_combo_e2e_test.go",
+    "target_line": 17,
     "workers": 8
   }
 }

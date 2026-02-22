@@ -1,7 +1,7 @@
 {
   "stage": "P2",
-  "generated_at": "2026-02-23T03:21:53+08:00",
-  "gate_passed": false,
+  "generated_at": "2026-02-23T04:01:28+08:00",
+  "gate_passed": true,
   "thresholds": {
     "format_idempotence": true,
     "positive_sample_each_tool": true
@@ -23,11 +23,16 @@
       "success_rate": 1
     },
     "lsp_open_file": {
-      "attempts": 1,
-      "successes": 1,
+      "attempts": 2,
+      "successes": 2,
       "success_rate": 1
     },
     "lsp_semantic_tokens": {
+      "attempts": 2,
+      "successes": 2,
+      "success_rate": 1
+    },
+    "lsp_signature_help": {
       "attempts": 1,
       "successes": 1,
       "success_rate": 1
@@ -35,8 +40,13 @@
   },
   "language_stats": {
     "go": {
-      "attempts": 5,
-      "successes": 5,
+      "attempts": 6,
+      "successes": 6,
+      "success_rate": 1
+    },
+    "typescript": {
+      "attempts": 2,
+      "successes": 2,
       "success_rate": 1
     }
   },
@@ -51,9 +61,14 @@
       "go": 1
     },
     "lsp_open_file": {
-      "go": 1
+      "go": 1,
+      "typescript": 1
     },
     "lsp_semantic_tokens": {
+      "go": 1,
+      "typescript": 1
+    },
+    "lsp_signature_help": {
       "go": 1
     }
   },
@@ -62,15 +77,23 @@
       "stage": "P2",
       "tool": "lsp_open_file",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke2553600555/001/main.go",
-      "duration_ms": 42,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke907357124/001/main.go",
+      "duration_ms": 41,
       "success": true
     },
     {
       "stage": "P2",
       "tool": "lsp_code_action",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke2553600555/001/main.go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke907357124/001/main.go",
+      "duration_ms": 8,
+      "success": true
+    },
+    {
+      "stage": "P2",
+      "tool": "lsp_signature_help",
+      "language": "go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke907357124/001/main.go",
       "duration_ms": 2,
       "success": true
     },
@@ -78,8 +101,8 @@
       "stage": "P2",
       "tool": "lsp_format_document",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke2553600555/001/main.go",
-      "duration_ms": 803,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke907357124/001/main.go",
+      "duration_ms": 805,
       "success": true,
       "note": "format idempotence"
     },
@@ -87,7 +110,7 @@
       "stage": "P2",
       "tool": "lsp_semantic_tokens",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke2553600555/001/main.go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke907357124/001/main.go",
       "duration_ms": 1,
       "success": true
     },
@@ -95,22 +118,36 @@
       "stage": "P2",
       "tool": "lsp_folding_range",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke2553600555/001/main.go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke907357124/001/main.go",
       "duration_ms": 1,
       "success": true
+    },
+    {
+      "stage": "P2",
+      "tool": "lsp_open_file",
+      "language": "typescript",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke907357124/002/main.ts",
+      "duration_ms": 125,
+      "success": true,
+      "note": "fallback"
+    },
+    {
+      "stage": "P2",
+      "tool": "lsp_semantic_tokens",
+      "language": "typescript",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P2_Smoke907357124/002/main.ts",
+      "duration_ms": 10,
+      "success": true,
+      "note": "fallback"
     }
-  ],
-  "notes": [
-    "lsp_semantic_tokens no positive sample",
-    "lsp_signature_help no positive sample"
   ],
   "extra": {
     "positive_tools": {
       "lsp_code_action": true,
       "lsp_folding_range": true,
       "lsp_format_document": true,
-      "lsp_semantic_tokens": false,
-      "lsp_signature_help": false
+      "lsp_semantic_tokens": true,
+      "lsp_signature_help": true
     }
   }
 }

@@ -9,6 +9,7 @@
 - 在真实三语言语料（Go / JS / Rust）上验证 19 个 LSP 工具的正确性、稳定性和可恢复性。
 - 把测试拆成可落地阶段（`P0-A` 到 `P3`），每阶段可独立验收。
 - 提供 `Quick Gate`（开发快速回归）和 `Full Gate`（发布前全量门禁）。
+- 增加缓存门禁：确认启用、确认命中、确认无脏污染。
 
 ## 2. 测试语料与目录约定
 
@@ -63,10 +64,14 @@
 - 任务 A1：实现 `discoverAppDirs()`，按 2.1 的顺序探测并输出日志。
 - 任务 A2：统一 `open + bootstrap` 辅助函数，封装重试、超时和错误分级。
 - 任务 A3：输出统一结果结构（JSON），包含：工具名、耗时、是否成功、错误码、错误文本。
+- 任务 A4：增加缓存门禁测试（启用/命中/无污染）。
 
 验收：
 - 三语言目录探测成功；失败时错误信息完整。
 - 可跑通单文件 `open -> documentSymbol` 的 smoke。
+- 缓存启用检查通过：`MULTI_AGENT_LSP_CACHE_ENABLED=true` 时 `cache.Enabled()==true`。
+- 缓存命中检查通过：重启 Manager 后 `BootstrapDocument` 可从缓存基线恢复并刷新记录。
+- 缓存无污染检查通过：同步失败不写入缓存，TTL 清理后无过期脏记录。
 
 ### P0-B：Core 9 工具基线
 
@@ -171,6 +176,20 @@ go test -race ./internal/lsp -run 'TestLSP_Stress_' -count=1 -timeout 60m
   - `stability-summary.json`
   - `final-report.md`
 
+### 6.4 缓存门禁（必跑）
+
+```bash
+cd /Users/mima0000/Desktop/wj/multi-agent-orchestration/go-agent-v2
+
+go test ./internal/lsp -run 'TestCacheDir_DefaultAndCustom|TestCacheFallback_UnwritableDirectoryDowngradesToMemory|TestCacheRecover_BootstrapStillChecksDiskFreshness|TestCacheFailClosed_OpenSyncFailureDoesNotUpsert|TestCacheTTL_ExpiredEntryCleaned' -count=1 -timeout 20m
+```
+
+判定规则：
+
+1. 启用成功：`TestCacheDir_DefaultAndCustom`、`TestCacheFallback_UnwritableDirectoryDowngradesToMemory` 通过。
+2. 命中成功：`TestCacheRecover_BootstrapStillChecksDiskFreshness` 通过（先持久化再恢复）。
+3. 无脏污染：`TestCacheFailClosed_OpenSyncFailureDoesNotUpsert` 与 `TestCacheTTL_ExpiredEntryCleaned` 通过。
+
 ## 7. 失败分级与处理
 
 - `P0` 阻塞：目录探测失败、open 失败率高、rename/didChange 不一致
@@ -196,4 +215,5 @@ go test -race ./internal/lsp -run 'TestLSP_Stress_' -count=1 -timeout 60m
 - 19 个工具均有执行记录。
 - Core 9 与 Extended 10 达到第 5 节阈值。
 - Quick Gate 与 Full Gate 均可复现通过。
+- 第 6.4 节缓存门禁全部通过（启用/命中/无污染）。
 - 报告和 JSON 产物完整，且可追溯到具体失败样本。

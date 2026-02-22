@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Markdown List E2E</title>
+  <link rel="stylesheet" href="../../cmd/agent-terminal/frontend/vue-app/styles.css" />
+</head>
+<body>
+  <div id="ordered" class="chat-item-body chat-item-markdown codex-markdown-root"></div>
+  <div id="unordered" class="chat-item-body chat-item-markdown codex-markdown-root"></div>
+  <script type="module">
+    import { renderAssistantMarkdown } from '../../cmd/agent-terminal/frontend/vue-app/utils/assistant-markdown.js';
+
+    const ordered = '1. 第一项\n\n1. 第二项\n\n1. 第三项';
+    const unordered = '- 第一项\n\n- 第二项\n\n- 第三项';
+
+    document.getElementById('ordered').innerHTML = renderAssistantMarkdown(ordered);
+    document.getElementById('unordered').innerHTML = renderAssistantMarkdown(unordered);
+  </script>
+</body>
+</html>

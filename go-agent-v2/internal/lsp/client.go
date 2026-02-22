@@ -179,19 +179,35 @@ func (c *Client) Hover(ctx context.Context, uri string, line, character int) (*H
 }
 
 // Definition 跳转定义 — 返回符号的定义位置。
+//
+// LSP 规范: 返回值可能是 Location | Location[] | null。
+// 此方法统一返回 []Location。
 func (c *Client) Definition(ctx context.Context, uri string, line, character int) ([]Location, error) {
 	if !c.Running() {
 		return nil, fmt.Errorf("lsp client not running")
 	}
-	var result []Location
+	var raw json.RawMessage
 	err := c.call("textDocument/definition", DefinitionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     Position{Line: line, Character: character},
-	}, &result)
+	}, &raw)
 	if err != nil {
 		return nil, err
 	}
-	return result, nil
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	// 尝试解析为 []Location
+	var locs []Location
+	if err := json.Unmarshal(raw, &locs); err == nil {
+		return locs, nil
+	}
+	// 回退: 解析为单个 Location
+	var loc Location
+	if err := json.Unmarshal(raw, &loc); err == nil {
+		return []Location{loc}, nil
+	}
+	return nil, nil
 }
 
 // References 查找引用 — 返回符号的所有引用位置。

@@ -2704,20 +2704,60 @@ a,
   margin: 4px 0;
   padding: 14px 12px;
   border-radius: 10px;
-  border: 1px solid var(--color-border, #ffffff14);
-  background: var(--color-background-surface-under, #000);
-  overflow-x: auto;
-  white-space: pre;
+  border: 1px solid #3c3c3c;
+  background: #1e1e1e;
+  --code-token-comment: #6a9955;
+  --code-token-string: #ce9178;
+  --code-token-number: #b5cea8;
+  --code-token-constant: #4fc1ff;
+  --code-token-keyword: #c586c0;
+  --code-token-function: #dcdcaa;
+  --code-token-operator: #d4d4d4;
+  overflow-x: hidden;
+  white-space: pre-wrap;
   position: relative;
   box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.15);
 }
 
 .chat-item-markdown .chat-md-code code {
   display: block;
-  color: var(--color-text-foreground, #fff);
+  color: #d4d4d4;
   font-family: "SF Mono", "Menlo", monospace;
   font-size: 12.5px;
   line-height: 1.58;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-item-markdown .chat-md-code code .chat-md-token-comment {
+  color: var(--code-token-comment);
+  font-style: italic;
+}
+
+.chat-item-markdown .chat-md-code code .chat-md-token-string {
+  color: var(--code-token-string);
+}
+
+.chat-item-markdown .chat-md-code code .chat-md-token-number {
+  color: var(--code-token-number);
+}
+
+.chat-item-markdown .chat-md-code code .chat-md-token-constant {
+  color: var(--code-token-constant);
+}
+
+.chat-item-markdown .chat-md-code code .chat-md-token-keyword {
+  color: var(--code-token-keyword);
+  font-weight: 600;
+}
+
+.chat-item-markdown .chat-md-code code .chat-md-token-function {
+  color: var(--code-token-function);
+}
+
+.chat-item-markdown .chat-md-code code .chat-md-token-operator {
+  color: var(--code-token-operator);
 }
 
 .chat-item-markdown .chat-md-code-lang {
@@ -2726,9 +2766,9 @@ a,
   top: 8px;
   padding: 2px 8px;
   border-radius: 6px;
-  border: 1px solid var(--color-border, #ffffff14);
-  background: var(--color-background-elevated-primary, #212121f5);
-  color: #d1d5db;
+  border: 1px solid #3c3c3c;
+  background: #252526;
+  color: #9da7b3;
   font-size: 9px;
   font-family: "SF Mono", "Menlo", monospace;
   letter-spacing: 0.06em;

@@ -60,6 +60,18 @@ export const ChatTimeline = {
       return kind === 'thinking' || kind === 'command';
     }
 
+    function resolvePlanTimelineKey(item) {
+      if (!item || typeof item !== 'object') return '';
+      const id = (item.id || '').toString().trim();
+      if (id) return `id:${id}`;
+      const timestamp = (item.ts || '').toString().trim();
+      const done = item.done ? '1' : '0';
+      const text = (item.text || '').toString().trim();
+      if (!text) return '';
+      if (timestamp) return `ts:${timestamp}|done:${done}|${text}`;
+      return `done:${done}|${text}`;
+    }
+
     const timelineItems = computed(() => {
       const all = Array.isArray(props.items) ? props.items : [];
       const filtered = all.filter((item) => !isBottomOnlyStatusItem(item));
@@ -70,7 +82,10 @@ export const ChatTimeline = {
       const targetId = pinnedId.toString();
       return filtered.filter((item) => {
         if (item?.kind !== 'plan') return true;
-        return (item?.id ?? '').toString() !== targetId;
+        const itemId = (item?.id ?? '').toString();
+        if (itemId && itemId === targetId) return false;
+        const itemKey = resolvePlanTimelineKey(item);
+        return itemKey !== targetId;
       });
     });
 

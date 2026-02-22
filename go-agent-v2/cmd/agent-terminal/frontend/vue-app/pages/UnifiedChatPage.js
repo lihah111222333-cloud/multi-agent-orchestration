@@ -897,6 +897,7 @@ export const UnifiedChatPage = {
       const text = (item.text || '').toString().trim();
       if (!text) return null;
       return {
+        id: ((item?.id ?? '') || key).toString(),
         key,
         threadId,
         done: Boolean(item.done),

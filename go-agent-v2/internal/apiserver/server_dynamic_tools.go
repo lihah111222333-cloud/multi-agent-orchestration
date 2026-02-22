@@ -35,6 +35,8 @@ func (s *Server) registerDynamicTools() {
 	s.dynTools["lsp_references"] = s.lspReferences
 	s.dynTools["lsp_document_symbol"] = s.lspDocumentSymbol
 	s.dynTools["lsp_rename"] = s.lspRename
+	s.dynTools["lsp_completion"] = s.lspCompletion
+	s.dynTools["lsp_did_change"] = s.lspDidChange
 
 	// 编排工具
 	s.dynTools["orchestration_list_agents"] = func(_ json.RawMessage) string { return s.orchestrationListAgents() }
@@ -195,6 +197,32 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 					"new_name":  map[string]any{"type": "string", "description": "New name for the symbol"},
 				},
 				"required": []string{"file_path", "line", "column", "new_name"},
+			},
+		},
+		{
+			Name:        "lsp_completion",
+			Description: "Get code completion suggestions at a position. Returns candidate items with labels and kinds. The file must be opened with lsp_open_file first.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_path": map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
+					"line":      map[string]any{"type": "number", "description": "0-indexed line number"},
+					"column":    map[string]any{"type": "number", "description": "0-indexed column number"},
+				},
+				"required": []string{"file_path", "line", "column"},
+			},
+		},
+		{
+			Name:        "lsp_did_change",
+			Description: "Notify the language server that file content has changed. Use after editing a file to keep LSP in sync. The file must be opened with lsp_open_file first.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_path":   map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
+					"new_content": map[string]any{"type": "string", "description": "Full new content of the file"},
+					"version":     map[string]any{"type": "number", "description": "Document version (increment each change, default: 2)"},
+				},
+				"required": []string{"file_path", "new_content"},
 			},
 		},
 	}
@@ -580,4 +608,60 @@ func (s *Server) lspRename(args json.RawMessage) string {
 	}
 	data, _ := json.Marshal(edit)
 	return string(data)
+}
+
+// lspCompletion 代码补全。
+func (s *Server) lspCompletion(args json.RawMessage) string {
+	if s.lsp == nil {
+		return "error: lsp manager unavailable"
+	}
+	var p struct {
+		FilePath string `json:"file_path"`
+		Line     int    `json:"line"`
+		Column   int    `json:"column"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "error: " + err.Error()
+	}
+	if strings.TrimSpace(p.FilePath) == "" {
+		return "error: file_path is required"
+	}
+	items, err := s.lsp.Completion(p.FilePath, p.Line, p.Column)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	if len(items) == 0 {
+		return "no completions"
+	}
+	// 限制返回数量避免 token 爆炸
+	if len(items) > 50 {
+		items = items[:50]
+	}
+	data, _ := json.Marshal(items)
+	return string(data)
+}
+
+// lspDidChange 通知文件内容变更。
+func (s *Server) lspDidChange(args json.RawMessage) string {
+	if s.lsp == nil {
+		return "error: lsp manager unavailable"
+	}
+	var p struct {
+		FilePath   string `json:"file_path"`
+		NewContent string `json:"new_content"`
+		Version    int    `json:"version"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "error: " + err.Error()
+	}
+	if strings.TrimSpace(p.FilePath) == "" {
+		return "error: file_path is required"
+	}
+	if p.Version == 0 {
+		p.Version = 2
+	}
+	if err := s.lsp.ChangeFile(p.FilePath, p.Version, p.NewContent); err != nil {
+		return "error: " + err.Error()
+	}
+	return "ok: file content updated"
 }

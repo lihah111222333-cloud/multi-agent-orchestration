@@ -1234,22 +1234,32 @@ func TestLSP_Stress_CrossFileDefinition(t *testing.T) {
 	sameFileCount := 0
 	tested := 0
 
+nextFile:
 	for _, filePath := range opened {
-		point, ok := firstPointForFile(t, mgr, filePath)
-		if !ok {
+		content, readErr := os.ReadFile(filePath)
+		if readErr != nil {
 			continue
 		}
-		locs, err := mgr.Definition(filePath, point.line, point.character)
-		if err != nil || len(locs) == 0 {
-			continue
-		}
-		tested++
 
-		defPath := normalizePath(uriToPath(locs[0].URI))
-		if defPath != normalizePath(filePath) {
-			crossFileCount++
-			t.Logf("  跨文件: %s -> %s", filepath.Base(filePath), filepath.Base(defPath))
-		} else {
+		symbols, err := mgr.DocumentSymbol(filePath)
+		if err != nil || len(symbols) == 0 {
+			continue
+		}
+
+		points := collectSymbolPoints(string(content), symbols, 24)
+		for _, point := range points {
+			locs, defErr := mgr.Definition(filePath, point.line, point.character)
+			if defErr != nil || len(locs) == 0 {
+				continue
+			}
+			tested++
+
+			defPath := normalizePath(uriToPath(locs[0].URI))
+			if defPath != normalizePath(filePath) {
+				crossFileCount++
+				t.Logf("  跨文件: %s -> %s", filepath.Base(filePath), filepath.Base(defPath))
+				continue nextFile
+			}
 			sameFileCount++
 		}
 	}
@@ -1258,8 +1268,8 @@ func TestLSP_Stress_CrossFileDefinition(t *testing.T) {
 	if tested == 0 {
 		t.Skip("no definition targets available for verification")
 	}
-	if crossFileCount == 0 && tested > 10 {
-		t.Log("WARNING: 未发现跨文件 definition 跳转")
+	if crossFileCount == 0 {
+		t.Fatalf("cross-file definition expected >=1, got 0 (tested=%d)", tested)
 	}
 }
 
@@ -1840,19 +1850,21 @@ func TestLSP_Stress_MultiLanguageIsolation(t *testing.T) {
 	skipIfNotAvailable(t, "typescript-language-server")
 	skipIfNotAvailable(t, "rust-analyzer")
 
-	goFiles := collectFiles(t, filepath.Join(testCorpusDir, "go"), ".go")
-	tsFiles := collectFiles(t, filepath.Join(testCorpusDir, "js", "src"), ".ts", ".tsx")
-	rsFiles := collectFiles(t, filepath.Join(testCorpusDir, "rust", "src"), ".rs")
-	if len(goFiles) == 0 || len(tsFiles) == 0 || len(rsFiles) == 0 {
-		t.Skip("missing corpus files for one or more languages")
-	}
+	workRoot := t.TempDir()
+	goFile := filepath.Join(workRoot, "main.go")
+	tsFile := filepath.Join(workRoot, "index.ts")
+	rsFile := filepath.Join(workRoot, "src", "main.rs")
 
-	goFile := goFiles[0]
-	tsFile := tsFiles[0]
-	rsFile := rsFiles[0]
+	must(t, os.WriteFile(filepath.Join(workRoot, "go.mod"), []byte("module multiisol\n\ngo 1.22\n"), 0644))
+	must(t, os.WriteFile(goFile, []byte("package main\n\nfunc add(a, b int) int { return a + b }\n\nfunc main() { _ = add(1, 2) }\n"), 0644))
+	must(t, os.WriteFile(filepath.Join(workRoot, "tsconfig.json"), []byte("{\"compilerOptions\":{\"strict\":true},\"include\":[\"*.ts\"]}\n"), 0644))
+	must(t, os.WriteFile(tsFile, []byte("function sum(a: number, b: number): number { return a + b; }\nconst value = sum(1, 2);\nconsole.log(value);\n"), 0644))
+	must(t, os.MkdirAll(filepath.Dir(rsFile), 0755))
+	must(t, os.WriteFile(filepath.Join(workRoot, "Cargo.toml"), []byte("[package]\nname = \"multiisol\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"), 0644))
+	must(t, os.WriteFile(rsFile, []byte("fn add(a: i32, b: i32) -> i32 { a + b }\nfn main() { let _v = add(1, 2); }\n"), 0644))
 
 	mgr := NewManager(nil)
-	mgr.SetRootURI("file://" + testCorpusDir)
+	mgr.SetRootURI("file://" + workRoot)
 	defer mgr.StopAll()
 
 	for _, filePath := range []string{goFile, tsFile, rsFile} {
@@ -1866,7 +1878,13 @@ func TestLSP_Stress_MultiLanguageIsolation(t *testing.T) {
 	}
 	time.Sleep(15 * time.Second)
 
-	checkFile := func(filePath, wantExt string) {
+	allowedExts := map[string]map[string]bool{
+		"go":         {".go": true},
+		"typescript": {".ts": true, ".tsx": true, ".d.ts": true, ".js": true, ".jsx": true},
+		"rust":       {".rs": true},
+	}
+
+	checkFile := func(filePath, language string) {
 		t.Helper()
 		point, ok := firstPointForFile(t, mgr, filePath)
 		if !ok {
@@ -1883,8 +1901,8 @@ func TestLSP_Stress_MultiLanguageIsolation(t *testing.T) {
 		}
 		if len(locs) > 0 {
 			defExt := strings.ToLower(filepath.Ext(uriToPath(locs[0].URI)))
-			if defExt != wantExt {
-				t.Errorf("%s definition crossed language boundary: got %s want %s", filepath.Base(filePath), defExt, wantExt)
+			if !allowedExts[language][defExt] {
+				t.Errorf("%s definition crossed language boundary: got ext=%s language=%s", filepath.Base(filePath), defExt, language)
 			}
 		}
 		if _, err := mgr.Hover(filePath, point.line, point.character); err != nil {
@@ -1892,9 +1910,9 @@ func TestLSP_Stress_MultiLanguageIsolation(t *testing.T) {
 		}
 	}
 
-	checkFile(goFile, ".go")
-	checkFile(tsFile, strings.ToLower(filepath.Ext(tsFile)))
-	checkFile(rsFile, ".rs")
+	checkFile(goFile, "go")
+	checkFile(tsFile, "typescript")
+	checkFile(rsFile, "rust")
 
 	running := runningByLanguage(mgr.Statuses())
 	for _, lang := range []string{"go", "typescript", "rust"} {
@@ -2079,7 +2097,7 @@ func summaryFromResults(results []TestResult) goldenLanguageSummary {
 	if total == 0 {
 		return goldenLanguageSummary{}
 	}
-	var openOK, symbolOK, defOK, refOK, hoverOK, errors int
+	var openOK, symbolOK, defOK, refOK, hoverOK, filesWithErrors int
 	for _, r := range results {
 		if r.OpenOK {
 			openOK++
@@ -2096,7 +2114,9 @@ func summaryFromResults(results []TestResult) goldenLanguageSummary {
 		if r.HoverOK {
 			hoverOK++
 		}
-		errors += len(r.Errors)
+		if len(r.Errors) > 0 {
+			filesWithErrors++
+		}
 	}
 	toRate := func(v int) float64 { return float64(v) / float64(total) }
 	return goldenLanguageSummary{
@@ -2105,7 +2125,7 @@ func summaryFromResults(results []TestResult) goldenLanguageSummary {
 		DefinitionRate: toRate(defOK),
 		ReferenceRate:  toRate(refOK),
 		HoverRate:      toRate(hoverOK),
-		ErrorRate:      toRate(errors),
+		ErrorRate:      toRate(filesWithErrors),
 	}
 }
 
@@ -2127,6 +2147,19 @@ func baselinePath() string {
 		return path
 	}
 	return filepath.Join("internal", "lsp", "testdata", "lsp_stress_baseline.json")
+}
+
+func languageServerCommand(language string) string {
+	switch language {
+	case "go":
+		return "gopls"
+	case "typescript":
+		return "typescript-language-server"
+	case "rust":
+		return "rust-analyzer"
+	default:
+		return ""
+	}
 }
 
 func readBaseline(path string) (goldenBaseline, error) {
@@ -2171,6 +2204,9 @@ func compareLanguageSummary(t *testing.T, language string, base, cur goldenLangu
 	compareRate("definition_rate", base.DefinitionRate, cur.DefinitionRate)
 	compareRate("reference_rate", base.ReferenceRate, cur.ReferenceRate)
 	compareRate("hover_rate", base.HoverRate, cur.HoverRate)
+	if base.ErrorRate > 0 && cur.ErrorRate > base.ErrorRate+0.05 {
+		t.Errorf("%s error_rate regressed beyond +5pp: current=%.1f%% baseline=%.1f%%", language, cur.ErrorRate*100, base.ErrorRate*100)
+	}
 
 	for metric, baseP95 := range base.P95MS {
 		if baseP95 <= 0 {
@@ -2251,7 +2287,12 @@ func TestLSP_Stress_GoldenBaseline(t *testing.T) {
 	for language, baseSummary := range baseline.Languages {
 		curSummary, ok := current.Languages[language]
 		if !ok {
-			t.Logf("language %s unavailable in current run; skipping baseline compare", language)
+			cmd := languageServerCommand(language)
+			if cmd != "" && commandAvailable(cmd) {
+				t.Errorf("language %s available via %s but missing in current baseline run", language, cmd)
+				continue
+			}
+			t.Logf("language %s unavailable in current environment; skipping baseline compare", language)
 			continue
 		}
 		compareLanguageSummary(t, language, baseSummary, curSummary)

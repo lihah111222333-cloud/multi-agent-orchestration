@@ -305,7 +305,7 @@ func (c *Client) Rename(ctx context.Context, uri string, line, character int, ne
 
 // Stop 优雅关闭: shutdown → exit → wait。
 func (c *Client) Stop() error {
-	if c.stopped.Swap(true) {
+	if c.stopped.Load() {
 		return nil // 已停止
 	}
 
@@ -315,18 +315,34 @@ func (c *Client) Stop() error {
 		_ = c.stderrCollector.Close()
 	}
 
-	// shutdown 请求
-	_ = c.call("shutdown", nil, nil)
+	// 在标记 stopped 之前尝试优雅关闭，
+	// 让 readLoop 还能读取 shutdown 响应，避免固定 30s 超时。
+	if c.Running() {
+		_ = c.callWithTimeout("shutdown", nil, nil, 2*time.Second)
+		_ = c.notify("exit", nil)
+	}
 
-	// exit 通知
-	_ = c.notify("exit", nil)
+	if c.stopped.Swap(true) {
+		return nil
+	}
 
 	if c.stdin != nil {
 		_ = c.stdin.Close()
 	}
 
 	if c.cmd != nil && c.cmd.Process != nil {
-		_ = c.cmd.Wait()
+		waitDone := make(chan struct{})
+		go func() {
+			_ = c.cmd.Wait()
+			close(waitDone)
+		}()
+
+		select {
+		case <-waitDone:
+		case <-time.After(2 * time.Second):
+			_ = c.cmd.Process.Kill()
+			<-waitDone
+		}
 	}
 
 	// 清理 pending
@@ -346,6 +362,14 @@ func (c *Client) Stop() error {
 
 // call 发送请求并等待响应 (30 秒超时防止 goroutine 泄漏)。
 func (c *Client) call(method string, params any, result any) error {
+	return c.callWithTimeout(method, params, result, 30*time.Second)
+}
+
+func (c *Client) callWithTimeout(method string, params any, result any, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+
 	id := int(c.nextID.Add(1))
 	ch := make(chan *Response, 1)
 
@@ -363,7 +387,7 @@ func (c *Client) call(method string, params any, result any) error {
 		return err
 	}
 
-	timer := time.NewTimer(30 * time.Second)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case resp, ok := <-ch:
@@ -379,7 +403,7 @@ func (c *Client) call(method string, params any, result any) error {
 		return nil
 	case <-timer.C:
 		logger.Warn("lsp: call timeout", logger.FieldMethod, method, logger.FieldLanguage, c.language)
-		return apperrors.Newf("LSP.call", "%s timeout (30s)", method)
+		return apperrors.Newf("LSP.call", "%s timeout (%s)", method, timeout)
 	}
 }
 
@@ -428,6 +452,16 @@ func (c *Client) writeMessage(v any) error {
 
 // readLoop 持续读取 server→client 消息 (响应 + 通知)。
 func (c *Client) readLoop() {
+	defer func() {
+		// readLoop 退出后不再有任何响应，关闭 pending 以立即唤醒等待中的请求。
+		c.mu.Lock()
+		for id, ch := range c.pending {
+			close(ch)
+			delete(c.pending, id)
+		}
+		c.mu.Unlock()
+	}()
+
 	for !c.stopped.Load() {
 		data, err := c.readFrame()
 		if err != nil {

@@ -14,73 +14,11 @@ import (
 var codexThreadIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 const (
-	defaultLSPUsagePromptHint = "已注入 LSP/Playwright/json-render/code_run 工具。使用规则：\n" +
-		"1. 分析/修改源码前，建议优先使用 lsp_open_file 打开目标文件（非强制，可按需直接使用其他 LSP 工具）\n" +
-		"2. 凡是源代码的分析、定位、修改与解释，须优先调用下述工具增强代码理解能力\n" +
-		"3. 未使用工具前，不得基于猜测给出结论\n" +
-		"4. 当需要结构化展示步骤、指标、图表等内容时，请使用 json-render 代码块\n\n" +
-		"## LSP 工具指南\n\n" +
-		"### 高频工具（日常首选）\n" +
-		"- lsp_open_file — 打开目标文件（推荐，非强制前置）\n" +
-		"- lsp_hover — 查看符号类型和文档\n" +
-		"- lsp_definition — 跳转到定义\n" +
-		"- lsp_references — 查找所有引用\n" +
-		"- lsp_diagnostics — 获取错误和警告\n" +
-		"- lsp_document_symbol — 查看文件结构大纲\n\n" +
-		"### 中频工具（按需使用）\n" +
-		"- lsp_completion — 代码补全建议\n" +
-		"- lsp_rename — 安全重命名符号\n" +
-		"- lsp_workspace_symbol — 跨文件搜索符号\n" +
-		"- lsp_implementation — 查找接口实现\n" +
-		"- lsp_type_definition — 跳转到类型定义\n" +
-		"- lsp_did_change — 同步编辑内容到 LSP\n\n" +
-		"### 深度分析工具（复杂任务时使用）\n" +
-		"- lsp_call_hierarchy — 分析调用链\n" +
-		"- lsp_type_hierarchy — 分析类型继承关系\n" +
-		"- lsp_code_action — 获取修复建议\n" +
-		"- lsp_signature_help — 查看函数签名\n" +
-		"- lsp_format — 格式化代码\n" +
-		"- lsp_semantic_tokens — 语义级代码理解\n" +
-		"- lsp_folding_range — 代码折叠区域\n\n" +
-		"## Generative UI (json-render)\n\n" +
-		"当需要展示结构化数据 (如 Dashboard、指标、表格、步骤、图表) 时，在回复中使用 json-render 代码块输出 UI spec:\n\n" +
-		"```json-render\n" +
-		"{\n" +
-		"  \"root\": \"element-id\",\n" +
-		"  \"elements\": {\n" +
-		"    \"element-id\": {\n" +
-		"      \"type\": \"ComponentType\",\n" +
-		"      \"props\": { ... },\n" +
-		"      \"children\": [\"child-id\"]\n" +
-		"    }\n" +
-		"  }\n" +
-		"}\n" +
-		"```\n\n" +
-		"可用组件:\n" +
-		"布局: Card, Stack, Tabs, Accordion\n" +
-		"数据展示: Heading, Metric, Stat, Table, List, Badge, Progress, Timeline\n" +
-		"图表: Chart (ECharts option)\n" +
-		"反馈: Alert\n" +
-		"代码: CodeBlock\n" +
-		"交互: Button\n" +
-		"媒体: Separator, Image, Link\n\n" +
-		"## Playwright 浏览器自动化\n\n" +
-		"当需要访问网页、截图、提取页面内容、填写表单测试或执行浏览器操作时，优先使用 shell 调用 npx playwright 命令行工具。\n" +
-		"常用操作:\n" +
-		"- 截图: npx playwright screenshot <url> <output.png>\n" +
-		"- 生成代码: npx playwright codegen <url>\n" +
-		"- 复杂场景可编写 Node.js 脚本使用 playwright API（导航、点击、填表、提取文本、执行 JS）\n" +
-		"使用完毕后确保关闭浏览器释放资源。\n\n" +
-		"## 代码执行工具\n\n" +
-		"1. 运行代码片段: code_run (mode=run) — 支持 Go, JavaScript, TypeScript\n" +
-		"  - Go 代码默认 auto_wrap=true, 自动补全 package main 和 imports\n" +
-		"  - JS/TS 代码直接执行, 无需额外配置\n" +
-		"2. 执行测试: code_run_test — go test -v -run ^TestFunc$ [package]\n" +
-		"3. 项目命令: code_run (mode=project_cmd) — 执行 shell 命令 (仅高风险命令需要用户审批)\n" +
-		"安全约束: 输出上限 512KB, 默认超时 30s, 代码在临时目录隔离执行。\n" +
-		"优先使用 code_run 验证代码逻辑, 使用 code_run_test 验证测试结果。"
-	prefKeyLSPUsagePromptHint = "settings.lspUsagePromptHint"
-	maxLSPUsagePromptHintLen  = 16000
+	// DB-only: 无内置默认提示词，未配置 settings.lspUsagePromptHint 时不注入。
+	defaultLSPUsagePromptHint       = ""
+	prefKeyLSPUsagePromptHint       = "settings.lspUsagePromptHint"
+	prefKeyShowInjectedPromptInChat = "settings.showInjectedPromptInChat"
+	maxLSPUsagePromptHintLen        = 16000
 )
 
 // registerMethods 注册所有 JSON-RPC 方法 (完整对标 APP-SERVER-PROTOCOL.md)。

@@ -3686,6 +3686,33 @@ body.is-row-resizing * {
   color: var(--text);
 }
 
+.composer-compact-result-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(33, 33, 33, 0.9);
+  color: var(--text-sec);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.composer-compact-result-chip.is-success {
+  border-color: rgba(123, 220, 160, 0.56);
+  background: rgba(20, 61, 37, 0.85);
+  color: #dffbe8;
+}
+
+.composer-compact-result-chip.is-error {
+  border-color: rgba(255, 122, 122, 0.58);
+  background: rgba(88, 27, 27, 0.86);
+  color: #ffd7d7;
+}
+
 .composer-skill-selector {
   margin-bottom: 8px;
   display: flex;
@@ -4119,6 +4146,58 @@ body.is-row-resizing * {
   color: var(--text-muted);
 }
 
+.settings-prompt-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(33, 33, 33, 0.46);
+  padding: 9px 11px;
+}
+
+.settings-prompt-toggle-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-prompt-toggle-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-pri);
+}
+
+.settings-prompt-toggle-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.settings-prompt-toggle-input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.settings-prompt-toggle-input:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.settings-prompt-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.settings-prompt-label {
+  font-size: 12px;
+  color: var(--text-pri);
+  margin-top: 2px;
+  font-weight: 600;
+}
+
 .settings-prompt-textarea {
   width: 100%;
   min-height: 120px;
@@ -4131,6 +4210,12 @@ body.is-row-resizing * {
   font-size: 12px;
   line-height: 1.55;
   padding: 10px 12px;
+}
+
+.settings-prompt-textarea-readonly {
+  min-height: 220px;
+  border-style: dashed;
+  background: rgba(28, 28, 28, 0.82);
 }
 
 .settings-prompt-textarea:focus {

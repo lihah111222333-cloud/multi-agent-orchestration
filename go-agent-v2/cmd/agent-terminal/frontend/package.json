@@ -2,12 +2,11 @@
     "name": "agent-terminal-frontend",
     "version": "0.1.0",
     "private": true,
-    "description": "Agent Terminal React 前端 (基于 Codex React 提取, 适配 Wails)",
+    "description": "Agent Terminal Vue 前端 (适配 Wails)",
     "type": "module",
     "scripts": {
         "dev": "vite",
         "build": "vite build",
-        "build:react": "vite build",
         "preview": "vite preview",
         "test:e2e": "playwright test",
         "test:e2e:headed": "playwright test --headed",

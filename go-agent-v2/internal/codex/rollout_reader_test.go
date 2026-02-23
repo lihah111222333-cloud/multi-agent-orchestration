@@ -188,6 +188,38 @@ func TestReadRolloutMessages_TrimsSkillInjection(t *testing.T) {
 	}
 }
 
+func TestReadRolloutMessagesWithTrim_FalseKeepsLSPInjection(t *testing.T) {
+	content := `{"timestamp":"2026-02-20T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"my question\n已注入 LSP context"}]}}
+`
+	path := writeTemp(t, content)
+	msgs, err := ReadRolloutMessagesWithTrim(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Content != "my question\n已注入 LSP context" {
+		t.Fatalf("msg[0].Content = %q, want full injected content", msgs[0].Content)
+	}
+}
+
+func TestReadRolloutMessagesWithTrim_FalseKeepsSkillInjection(t *testing.T) {
+	content := `{"timestamp":"2026-02-20T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"前面一句话\n[skill:品牌设计规范] 摘要: 品牌规范摘要\n可选段落: 品牌设计规范 (SKILL.md:4)\n使用方式: 按任务选择相关段落，忽略无关内容。"}]}}
+`
+	path := writeTemp(t, content)
+	msgs, err := ReadRolloutMessagesWithTrim(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Content != "前面一句话\n[skill:品牌设计规范] 摘要: 品牌规范摘要\n可选段落: 品牌设计规范 (SKILL.md:4)\n使用方式: 按任务选择相关段落，忽略无关内容。" {
+		t.Fatalf("msg[0].Content = %q, want full skill injected content", msgs[0].Content)
+	}
+}
+
 func TestReadRolloutMessages_SkipsNonResponseItem(t *testing.T) {
 	content := `{"timestamp":"2026-02-20T01:00:00Z","type":"session_start","payload":{}}
 {"timestamp":"2026-02-20T01:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}}

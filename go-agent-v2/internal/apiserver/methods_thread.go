@@ -60,8 +60,9 @@ func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any
 	// 构建全部动态工具注入 agent (LSP + 编排 + 资源)
 	dynamicTools := s.buildAllDynamicTools()
 
-	// 提示词注入统一走 turn/start 与 turn/steer，thread 启动不再附加独立注入。
-	if err := s.mgr.Launch(ctx, id, id, "", p.Cwd, "", dynamicTools); err != nil {
+	// 统一工具使用提示词仅在会话创建时注入一次，避免每轮 turn 重复注入。
+	startInstructions := s.resolveStartInstructionsForLaunch(ctx, dynamicTools)
+	if err := s.mgr.Launch(ctx, id, id, "", p.Cwd, startInstructions, dynamicTools); err != nil {
 		return nil, apperrors.Wrap(err, "Server.threadStart", "launch thread")
 	}
 	if proc := s.mgr.Get(id); proc != nil {
@@ -895,7 +896,8 @@ func (s *Server) loadAllThreadMessagesFromCodexRollout(ctx context.Context, thre
 		return []threadHistoryMessage{}, nil
 	}
 
-	rolloutMsgs, err := codex.ReadRolloutMessages(path)
+	trimInjected := !s.showInjectedPromptInChat(ctx)
+	rolloutMsgs, err := codex.ReadRolloutMessagesWithTrim(path, trimInjected)
 	if err != nil {
 		return nil, err
 	}

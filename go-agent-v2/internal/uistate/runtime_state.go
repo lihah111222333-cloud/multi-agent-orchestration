@@ -17,6 +17,9 @@ type RuntimeManager struct {
 	snapshot RuntimeSnapshot
 	runtime  map[string]*threadRuntime
 	seq      uint64
+	// sanitizeInjectedUserMessage 控制是否在 UI timeline 中裁剪自动注入提示词。
+	// true  = 保持当前行为(裁剪)；false = 调试模式(完整显示)。
+	sanitizeInjectedUserMessage bool
 }
 
 // NewRuntimeManager creates an empty runtime manager.
@@ -36,8 +39,16 @@ func NewRuntimeManager() *RuntimeManager {
 			ActivityStatsByThread: map[string]ActivityStats{},
 			AlertsByThread:        map[string][]AlertEntry{},
 		},
-		runtime: map[string]*threadRuntime{},
+		runtime:                   map[string]*threadRuntime{},
+		sanitizeInjectedUserMessage: true,
 	}
+}
+
+// SetSanitizeInjectedUserMessage 设置是否裁剪自动注入提示词。
+func (m *RuntimeManager) SetSanitizeInjectedUserMessage(enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sanitizeInjectedUserMessage = enabled
 }
 
 // Snapshot returns a deep-copied runtime snapshot for JSON-RPC responses.

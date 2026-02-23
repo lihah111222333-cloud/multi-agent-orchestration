@@ -1,11 +1,8 @@
 package apiserver
 
 import (
-	"context"
 	"strings"
 	"testing"
-
-	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 
 func TestBuildUserTimelineAttachments(t *testing.T) {
@@ -130,30 +127,5 @@ func TestBuildUserTimelineAttachmentsFromInputs_FileContentWithoutPath(t *testin
 	}
 	if attachments[0].Path != "" {
 		t.Fatalf("attachments[0].Path = %q, want empty", attachments[0].Path)
-	}
-}
-
-func TestAppendUnifiedToolingHint_InjectsUnifiedPrompt(t *testing.T) {
-	srv := &Server{prefManager: uistate.NewPreferenceManager(nil)}
-	original := "请帮我分析这个 Go 文件"
-	got := srv.appendUnifiedToolingHint(context.Background(), original)
-
-	if !strings.Contains(got, original) {
-		t.Fatalf("prompt missing original text: %q", got)
-	}
-	if !strings.Contains(got, defaultLSPUsagePromptHint) {
-		t.Fatalf("prompt missing lsp hint: %q", got)
-	}
-	if !strings.Contains(got, "## Generative UI (json-render)") {
-		t.Fatalf("prompt missing json-render section: %q", got)
-	}
-	if !strings.Contains(got, "## Playwright 浏览器自动化") {
-		t.Fatalf("prompt missing browser section: %q", got)
-	}
-	if !strings.Contains(got, "## 代码执行工具") {
-		t.Fatalf("prompt missing code-run section: %q", got)
-	}
-	if strings.Count(got, "已注入 LSP/Playwright/json-render/code_run 工具。使用规则：") != 1 {
-		t.Fatalf("unified hint injected multiple times: %q", got)
 	}
 }

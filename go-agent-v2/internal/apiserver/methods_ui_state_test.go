@@ -222,3 +222,74 @@ func TestUIStateGetCmdFallsBackToMainWhenOnlyMainThread(t *testing.T) {
 		t.Fatalf("activeCmdThreadId = %#v, want main-1", got)
 	}
 }
+
+func TestUIPreferencesSet_ShowInjectedPromptInChatUpdatesRuntime(t *testing.T) {
+	srv := &Server{
+		prefManager: uistate.NewPreferenceManager(nil),
+		uiRuntime:   uistate.NewRuntimeManager(),
+	}
+	ctx := context.Background()
+	userText := "问题本体\n已注入 LSP/Playwright/json-render/code_run 工具。"
+
+	if _, err := srv.uiPreferencesSet(ctx, uiPrefSetParams{
+		Key:   prefKeyShowInjectedPromptInChat,
+		Value: true,
+	}); err != nil {
+		t.Fatalf("uiPreferencesSet(show=true) error: %v", err)
+	}
+	srv.uiRuntime.ApplyAgentEvent("thread-show", uistate.NormalizedEvent{
+		UIType: uistate.UITypeUserMessage,
+		Text:   userText,
+	}, nil)
+	showTimeline := srv.uiRuntime.ThreadTimeline("thread-show")
+	if len(showTimeline) != 1 {
+		t.Fatalf("show timeline len=%d, want 1", len(showTimeline))
+	}
+	if showTimeline[0].Text != userText {
+		t.Fatalf("show timeline text=%q, want full injected text", showTimeline[0].Text)
+	}
+
+	if _, err := srv.uiPreferencesSet(ctx, uiPrefSetParams{
+		Key:   prefKeyShowInjectedPromptInChat,
+		Value: false,
+	}); err != nil {
+		t.Fatalf("uiPreferencesSet(show=false) error: %v", err)
+	}
+	srv.uiRuntime.ApplyAgentEvent("thread-hide", uistate.NormalizedEvent{
+		UIType: uistate.UITypeUserMessage,
+		Text:   userText,
+	}, nil)
+	hideTimeline := srv.uiRuntime.ThreadTimeline("thread-hide")
+	if len(hideTimeline) != 1 {
+		t.Fatalf("hide timeline len=%d, want 1", len(hideTimeline))
+	}
+	if hideTimeline[0].Text != "问题本体" {
+		t.Fatalf("hide timeline text=%q, want trimmed text", hideTimeline[0].Text)
+	}
+}
+
+func TestApplyInjectedPromptVisibilityPreference_LoadsFromStoredPref(t *testing.T) {
+	srv := &Server{
+		prefManager: uistate.NewPreferenceManager(nil),
+		uiRuntime:   uistate.NewRuntimeManager(),
+	}
+	ctx := context.Background()
+	userText := "问题本体\n已注入 LSP/Playwright/json-render/code_run 工具。"
+
+	if err := srv.prefManager.Set(ctx, prefKeyShowInjectedPromptInChat, true); err != nil {
+		t.Fatalf("set %s: %v", prefKeyShowInjectedPromptInChat, err)
+	}
+	srv.applyInjectedPromptVisibilityPreference(ctx)
+
+	srv.uiRuntime.ApplyAgentEvent("thread-pref", uistate.NormalizedEvent{
+		UIType: uistate.UITypeUserMessage,
+		Text:   userText,
+	}, nil)
+	timeline := srv.uiRuntime.ThreadTimeline("thread-pref")
+	if len(timeline) != 1 {
+		t.Fatalf("timeline len=%d, want 1", len(timeline))
+	}
+	if timeline[0].Text != userText {
+		t.Fatalf("timeline text=%q, want full injected text", timeline[0].Text)
+	}
+}

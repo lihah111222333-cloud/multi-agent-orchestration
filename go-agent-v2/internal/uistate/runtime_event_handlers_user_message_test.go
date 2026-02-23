@@ -31,3 +31,31 @@ func TestHandleUserMessageEvent_SkipsSkillOnlyInjectedMessage(t *testing.T) {
 		t.Fatalf("timeline len=%d, want=0", len(timeline))
 	}
 }
+
+func TestSanitizeUserMessageTextWithMode_NoTrimKeepsInjectedBlocks(t *testing.T) {
+	input := "问题本体\n已注入 LSP/Playwright/json-render/code_run 工具。使用规则：\n..."
+	got := sanitizeUserMessageTextWithMode(input, false)
+	if got != input {
+		t.Fatalf("sanitizeUserMessageTextWithMode=%q, want original text", got)
+	}
+}
+
+func TestHandleUserMessageEvent_NoTrimModeKeepsInjectedBlocks(t *testing.T) {
+	mgr := NewRuntimeManager()
+	mgr.SetSanitizeInjectedUserMessage(false)
+	threadID := "thread-user-no-trim"
+	input := "问题本体\n已注入 LSP/Playwright/json-render/code_run 工具。使用规则：\n..."
+
+	mgr.ApplyAgentEvent(threadID, NormalizedEvent{
+		UIType: UITypeUserMessage,
+		Text:   input,
+	}, nil)
+
+	timeline := mgr.ThreadTimeline(threadID)
+	if len(timeline) != 1 {
+		t.Fatalf("timeline len=%d, want=1", len(timeline))
+	}
+	if timeline[0].Text != input {
+		t.Fatalf("timeline text=%q, want original text", timeline[0].Text)
+	}
+}

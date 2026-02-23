@@ -10,6 +10,8 @@ export const ComposerBar = {
     threadId: { type: String, default: '' },
     interruptible: { type: Boolean, default: false },
     compacting: { type: Boolean, default: false },
+    compactResultText: { type: String, default: '' },
+    compactResultTone: { type: String, default: '' },
     tokenInline: { type: String, default: '' },
     tokenTooltip: { type: String, default: '' },
     skillMatches: { type: Array, default: () => [] },
@@ -274,6 +276,13 @@ export const ComposerBar = {
       emit('compact');
     }
 
+    function compactResultToneClass() {
+      const tone = (props.compactResultTone || '').toString().trim().toLowerCase();
+      if (tone === 'success') return 'is-success';
+      if (tone === 'error') return 'is-error';
+      return '';
+    }
+
     function onAttach() {
       logDebug('ui', 'composerBar.attach.click', {
         disabled: props.disabled || props.composer.state.attaching,
@@ -389,6 +398,7 @@ export const ComposerBar = {
       onPrimaryAction,
       onEscape,
       onCompact,
+      compactResultToneClass,
       onAttach,
       onRemoveAttachment,
       skillMatchClass,
@@ -498,10 +508,16 @@ export const ComposerBar = {
             </svg>
           </button>
           <span
+            v-if="compactResultText && !compacting"
+            class="composer-compact-result-chip"
+            :class="compactResultToneClass()"
+            :title="compactResultText"
+          >{{ compactResultText }}</span>
+          <span
             v-if="tokenInline || compacting"
             class="composer-token-chip"
             :class="{ loading: compacting }"
-            :title="compacting ? '正在暂停并压缩上下文，等待 token 使用量刷新' : tokenTooltip"
+            :title="compacting ? '正在暂停并压缩上下文，等待压缩完成信号' : tokenTooltip"
           ><span :class="{ 'loading-shimmer': compacting }">{{ compacting ? 'CTX 更新中…' : ('CTX ' + tokenInline) }}</span></span>
         </div>
         <div class="composer-action-stack">

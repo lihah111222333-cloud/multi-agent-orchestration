@@ -34,6 +34,9 @@ const state = reactive({
 });
 
 const compactPendingByThread = reactive({});
+const compactResultByThread = reactive({});
+const compactWaitersByThread = new Map();
+const COMPACT_COMPLETION_TIMEOUT_MS = 45000;
 
 const runtimeRootState = reactive({
   threads: [],
@@ -120,6 +123,10 @@ function waitMs(ms) {
   });
 }
 
+function normalizeThreadID(threadId) {
+  return (threadId || '').toString().trim();
+}
+
 function tokenUsageSignature(threadId) {
   const usage = state.tokenUsageByThread?.[threadId];
   if (!usage || typeof usage !== 'object') return '';
@@ -133,21 +140,110 @@ function tokenUsageSignature(threadId) {
   ].join('|');
 }
 
-async function waitCompactTokenUsageRefresh(threadId, baselineSignature) {
-  const checkpoints = [180, 420, 900, 1600, 2600];
-  for (const delay of checkpoints) {
-    await waitMs(delay);
-    try {
-      await syncRuntimeState();
-    } catch {
-      // ignore: keep waiting until timeout checkpoints exhausted
-    }
-    const nextSignature = tokenUsageSignature(threadId);
-    if (nextSignature && nextSignature !== baselineSignature) {
-      return true;
-    }
+function createCompactError(code, threadId, message, extra = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.threadId = threadId;
+  if (extra && typeof extra === 'object') {
+    Object.assign(error, extra);
   }
-  return false;
+  return error;
+}
+
+function setCompactResult(threadId, status, message, extra = {}) {
+  const id = normalizeThreadID(threadId);
+  if (!id) return;
+  compactResultByThread[id] = {
+    status: (status || '').toString().trim(),
+    message: (message || '').toString(),
+    updatedAt: Date.now(),
+    ...extra,
+  };
+}
+
+function getBridgeEventThreadId(evt) {
+  const candidates = [
+    evt?.threadId,
+    evt?.thread_id,
+    evt?.params?.threadId,
+    evt?.params?.thread_id,
+    evt?.payload?.threadId,
+    evt?.payload?.thread_id,
+    evt?.data?.threadId,
+    evt?.data?.thread_id,
+  ];
+  for (const value of candidates) {
+    const id = normalizeThreadID(value);
+    if (id) return id;
+  }
+  return '';
+}
+
+function settleCompactWaiter(threadId, outcome, payload) {
+  const id = normalizeThreadID(threadId);
+  if (!id) return false;
+  const waiter = compactWaitersByThread.get(id);
+  if (!waiter) return false;
+  compactWaitersByThread.delete(id);
+  if (waiter.timeoutID) {
+    globalThis.clearTimeout(waiter.timeoutID);
+    waiter.timeoutID = 0;
+  }
+  if (outcome === 'resolve') {
+    waiter.resolve(payload || {});
+    return true;
+  }
+  waiter.reject(payload);
+  return true;
+}
+
+function cancelCompactWaiter(threadId, reason = 'cancelled') {
+  const id = normalizeThreadID(threadId);
+  if (!id) return false;
+  return settleCompactWaiter(
+    id,
+    'reject',
+    createCompactError(
+      'compact_wait_cancelled',
+      id,
+      `compact_wait_cancelled:${reason}`,
+      { reason },
+    ),
+  );
+}
+
+function waitForCompactCompletion(threadId, timeoutMs = COMPACT_COMPLETION_TIMEOUT_MS) {
+  const id = normalizeThreadID(threadId);
+  if (!id) {
+    return Promise.reject(
+      createCompactError('compact_wait_invalid_thread', '', 'compact_wait_invalid_thread'),
+    );
+  }
+  if (compactWaitersByThread.has(id)) {
+    cancelCompactWaiter(id, 'replaced');
+  }
+  const timeout = Math.max(1000, Number(timeoutMs) || COMPACT_COMPLETION_TIMEOUT_MS);
+  return new Promise((resolve, reject) => {
+    const timeoutID = globalThis.setTimeout(() => {
+      settleCompactWaiter(
+        id,
+        'reject',
+        createCompactError(
+          'compact_timeout',
+          id,
+          `compact_timeout:${id}:${timeout}`,
+          { timeoutMs: timeout },
+        ),
+      );
+    }, timeout);
+    compactWaitersByThread.set(id, {
+      resolve,
+      reject,
+      timeoutID,
+      createdAt: Date.now(),
+      timeoutMs: timeout,
+    });
+  });
 }
 
 function persistRemote(prefKey, value) {
@@ -729,6 +825,17 @@ const SYNC_THROTTLE_MS = 500;
 
 function handleBridgeEvent(evt) {
   const eventType = (evt?.type || evt?.method || '').toString();
+  const eventThreadId = getBridgeEventThreadId(evt);
+  if (eventType === 'thread/compacted') {
+    const settled = settleCompactWaiter(eventThreadId, 'resolve', { evt });
+    if (!settled && eventThreadId) {
+      setCompactResult(eventThreadId, 'success', '上下文压缩完成');
+    }
+    logInfo('thread', 'compact.signal.received', {
+      thread_id: eventThreadId,
+      waiter_settled: settled,
+    });
+  }
   if (
     eventType === 'ui/state/changed'
     || eventType === 'thread/messages/page'
@@ -1001,22 +1108,27 @@ async function sendMessage(threadId, prompt, attachments = [], options = {}) {
 }
 
 async function compactThread(threadId) {
-  const id = (threadId || '').toString().trim();
+  const id = normalizeThreadID(threadId);
   if (!id) return;
   if (compactPendingByThread[id]) return;
   const start = perfNow();
-  const baselineSignature = tokenUsageSignature(id);
+  const signalPromise = waitForCompactCompletion(id, COMPACT_COMPLETION_TIMEOUT_MS);
+  let baselineSignature = tokenUsageSignature(id);
+  let compactCommandSent = false;
+  let compactSignalReceived = false;
   let interruptAttempted = false;
   let interruptConfirmed = false;
   let interruptSettled = false;
   let interruptMode = '';
   compactPendingByThread[id] = true;
+  setCompactResult(id, 'pending', '上下文压缩中…');
   logInfo('thread', 'compact.start', {
     thread_id: id,
     token_usage_sig_before: baselineSignature,
   });
   try {
     await syncRuntimeState();
+    baselineSignature = tokenUsageSignature(id) || baselineSignature;
     if (getThreadInterruptible(id)) {
       interruptAttempted = true;
       logInfo('thread', 'compact.interrupt.before', {
@@ -1038,12 +1150,22 @@ async function compactThread(threadId) {
       await waitMs(120);
     }
     await callAPI('thread/compact/start', { threadId: id });
+    compactCommandSent = true;
+    logInfo('thread', 'compact.command.sent', {
+      thread_id: id,
+      wait_timeout_ms: COMPACT_COMPLETION_TIMEOUT_MS,
+    });
+    await signalPromise;
+    compactSignalReceived = true;
     await syncRuntimeState();
-    const refreshed = await waitCompactTokenUsageRefresh(id, baselineSignature);
+    const afterSignature = tokenUsageSignature(id);
+    const tokenUsageChanged = Boolean(afterSignature && afterSignature !== baselineSignature);
+    setCompactResult(id, 'success', '上下文压缩完成');
     logInfo('thread', 'compact.done', {
       thread_id: id,
-      token_usage_refreshed: refreshed,
-      token_usage_sig_after: tokenUsageSignature(id),
+      compact_signal_received: compactSignalReceived,
+      token_usage_sig_after: afterSignature,
+      token_usage_changed: tokenUsageChanged,
       interrupt_attempted: interruptAttempted,
       interrupt_confirmed: interruptConfirmed,
       interrupt_settled: interruptSettled,
@@ -1051,8 +1173,23 @@ async function compactThread(threadId) {
       duration_ms: Math.round(perfNow() - start),
     });
   } catch (error) {
+    const isTimeout = (error && typeof error === 'object' && error.code === 'compact_timeout');
+    if (!compactCommandSent) {
+      cancelCompactWaiter(id, 'compact_start_failed');
+      await signalPromise.catch(() => { });
+    }
+    setCompactResult(
+      id,
+      'failed',
+      isTimeout ? '压缩超时：未收到完成信号，请重试。' : '压缩失败，请重试。',
+      {
+        code: isTimeout ? 'compact_timeout' : 'compact_failed',
+      },
+    );
     logWarn('thread', 'compact.failed', {
       thread_id: id,
+      compact_command_sent: compactCommandSent,
+      compact_signal_received: compactSignalReceived,
       interrupt_attempted: interruptAttempted,
       interrupt_confirmed: interruptConfirmed,
       interrupt_settled: interruptSettled,
@@ -1062,6 +1199,7 @@ async function compactThread(threadId) {
     });
     throw error;
   } finally {
+    cancelCompactWaiter(id, 'compact_finished');
     delete compactPendingByThread[id];
   }
 }
@@ -1130,6 +1268,13 @@ function getThreadTokenUsage(threadId) {
 function getThreadCompacting(threadId) {
   if (!threadId) return false;
   return Boolean(compactPendingByThread[threadId]);
+}
+
+function getThreadCompactResult(threadId) {
+  if (!threadId) return null;
+  const value = compactResultByThread[threadId];
+  if (!value || typeof value !== 'object') return null;
+  return value;
 }
 
 function getThreadActivityStats(threadId) {
@@ -1279,6 +1424,7 @@ export function useThreadStore() {
     getThreadStatusDetails,
     getThreadTokenUsage,
     getThreadCompacting,
+    getThreadCompactResult,
     getThreadActivityStats,
     getThreadAlerts,
     getThreadPinnedAt,

@@ -1,6 +1,6 @@
 {
   "stage": "P0-B",
-  "generated_at": "2026-02-23T05:02:26+08:00",
+  "generated_at": "2026-02-23T08:28:29+08:00",
   "gate_passed": true,
   "thresholds": {
     "core9_success_rate": "\u003e= 0.98"
@@ -130,7 +130,7 @@
       "tool": "lsp_open_file",
       "language": "go",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/go/attribution/backtest_combo_e2e_test.go",
-      "duration_ms": 44,
+      "duration_ms": 38,
       "success": true
     },
     {
@@ -298,7 +298,7 @@
       "tool": "lsp_hover",
       "language": "go",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/go/attribution/backtest_combo_e2e_test.go",
-      "duration_ms": 26,
+      "duration_ms": 30,
       "success": true
     },
     {
@@ -573,7 +573,7 @@
       "tool": "lsp_completion",
       "language": "go",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/go/attribution/backtest_statistics_stats_test.go",
-      "duration_ms": 17,
+      "duration_ms": 16,
       "success": true
     },
     {
@@ -1289,15 +1289,15 @@
       "stage": "P0-B",
       "tool": "lsp_rename",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P0B_Core9go2224960726/001/main.go",
-      "duration_ms": 0,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P0B_Core9go2708982184/001/main.go",
+      "duration_ms": 1,
       "success": true
     },
     {
       "stage": "P0-B",
       "tool": "lsp_did_change",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P0B_Core9go2224960726/001/main.go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P0B_Core9go2708982184/001/main.go",
       "duration_ms": 0,
       "success": true
     },
@@ -1306,7 +1306,7 @@
       "tool": "lsp_open_file",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/eslint.config.js",
-      "duration_ms": 95,
+      "duration_ms": 101,
       "success": true
     },
     {
@@ -1466,7 +1466,7 @@
       "tool": "lsp_document_symbol",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/eslint.config.js",
-      "duration_ms": 10,
+      "duration_ms": 26,
       "success": true
     },
     {
@@ -1474,7 +1474,7 @@
       "tool": "lsp_hover",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/eslint.config.js",
-      "duration_ms": 11,
+      "duration_ms": 16,
       "success": true
     },
     {
@@ -1482,7 +1482,7 @@
       "tool": "lsp_definition",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/eslint.config.js",
-      "duration_ms": 1,
+      "duration_ms": 2,
       "success": true
     },
     {
@@ -1490,7 +1490,7 @@
       "tool": "lsp_references",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/eslint.config.js",
-      "duration_ms": 4,
+      "duration_ms": 5,
       "success": true,
       "note": "best-effort-point-scan"
     },
@@ -1499,7 +1499,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/eslint.config.js",
-      "duration_ms": 107,
+      "duration_ms": 104,
       "success": true
     },
     {
@@ -1540,7 +1540,7 @@
       "tool": "lsp_references",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/app/App.tsx",
-      "duration_ms": 2,
+      "duration_ms": 1,
       "success": true,
       "note": "best-effort-point-scan"
     },
@@ -1590,7 +1590,7 @@
       "tool": "lsp_references",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/app/providers/AppProviders.tsx",
-      "duration_ms": 11,
+      "duration_ms": 9,
       "success": true,
       "note": "best-effort-point-scan"
     },
@@ -1599,7 +1599,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/app/providers/AppProviders.tsx",
-      "duration_ms": 143,
+      "duration_ms": 135,
       "success": true
     },
     {
@@ -1640,7 +1640,7 @@
       "tool": "lsp_references",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/app/providers/ProtectedRoute.tsx",
-      "duration_ms": 6,
+      "duration_ms": 5,
       "success": true,
       "note": "best-effort-point-scan"
     },
@@ -1649,7 +1649,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/app/providers/ProtectedRoute.tsx",
-      "duration_ms": 130,
+      "duration_ms": 117,
       "success": true
     },
     {
@@ -1699,7 +1699,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/app/providers/index.ts",
-      "duration_ms": 127,
+      "duration_ms": 114,
       "success": true
     },
     {
@@ -1740,7 +1740,7 @@
       "tool": "lsp_references",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/layout/AdminLayout.tsx",
-      "duration_ms": 18,
+      "duration_ms": 17,
       "success": true,
       "note": "best-effort-point-scan"
     },
@@ -1790,7 +1790,7 @@
       "tool": "lsp_references",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/layout/Header.tsx",
-      "duration_ms": 5,
+      "duration_ms": 4,
       "success": true,
       "note": "best-effort-point-scan"
     },
@@ -1799,7 +1799,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/layout/Header.tsx",
-      "duration_ms": 118,
+      "duration_ms": 107,
       "success": true
     },
     {
@@ -1816,7 +1816,7 @@
       "tool": "lsp_document_symbol",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/layout/Sidebar.tsx",
-      "duration_ms": 3,
+      "duration_ms": 2,
       "success": true
     },
     {
@@ -1840,7 +1840,7 @@
       "tool": "lsp_references",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/layout/Sidebar.tsx",
-      "duration_ms": 25,
+      "duration_ms": 24,
       "success": true,
       "note": "best-effort-point-scan"
     },
@@ -1849,7 +1849,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/layout/Sidebar.tsx",
-      "duration_ms": 34,
+      "duration_ms": 29,
       "success": true
     },
     {
@@ -1899,7 +1899,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/layout/index.ts",
-      "duration_ms": 116,
+      "duration_ms": 113,
       "success": true
     },
     {
@@ -1949,7 +1949,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/shared/AlertBanner.tsx",
-      "duration_ms": 115,
+      "duration_ms": 103,
       "success": true
     },
     {
@@ -1999,7 +1999,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/shared/index.ts",
-      "duration_ms": 118,
+      "duration_ms": 109,
       "success": true
     },
     {
@@ -2040,7 +2040,7 @@
       "tool": "lsp_references",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/Badge.tsx",
-      "duration_ms": 24,
+      "duration_ms": 22,
       "success": true,
       "note": "best-effort-point-scan"
     },
@@ -2049,7 +2049,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/Badge.tsx",
-      "duration_ms": 114,
+      "duration_ms": 107,
       "success": true
     },
     {
@@ -2074,7 +2074,7 @@
       "tool": "lsp_hover",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/Button.tsx",
-      "duration_ms": 2,
+      "duration_ms": 3,
       "success": true
     },
     {
@@ -2140,7 +2140,7 @@
       "tool": "lsp_references",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/Card.tsx",
-      "duration_ms": 40,
+      "duration_ms": 38,
       "success": true,
       "note": "best-effort-point-scan"
     },
@@ -2149,7 +2149,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/Card.tsx",
-      "duration_ms": 116,
+      "duration_ms": 115,
       "success": true
     },
     {
@@ -2190,7 +2190,7 @@
       "tool": "lsp_references",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/EChart.tsx",
-      "duration_ms": 711,
+      "duration_ms": 613,
       "success": true,
       "note": "best-effort-point-scan"
     },
@@ -2199,7 +2199,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/EChart.tsx",
-      "duration_ms": 176,
+      "duration_ms": 144,
       "success": true
     },
     {
@@ -2240,7 +2240,7 @@
       "tool": "lsp_references",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/Input.tsx",
-      "duration_ms": 14,
+      "duration_ms": 12,
       "success": true,
       "note": "best-effort-point-scan"
     },
@@ -2249,7 +2249,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/Input.tsx",
-      "duration_ms": 124,
+      "duration_ms": 107,
       "success": true
     },
     {
@@ -2290,116 +2290,116 @@
       "tool": "lsp_references",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/index.ts",
+      "duration_ms": 13,
+      "success": true,
+      "note": "best-effort-point-scan"
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_completion",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/index.ts",
+      "duration_ms": 108,
+      "success": true
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_diagnostics",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/index.ts",
+      "duration_ms": 0,
+      "success": true,
+      "note": "diagnostics=0 callbacks=1"
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_document_symbol",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/constants/index.ts",
+      "duration_ms": 2,
+      "success": true
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_hover",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/constants/index.ts",
+      "duration_ms": 0,
+      "success": true
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_definition",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/constants/index.ts",
+      "duration_ms": 0,
+      "success": true
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_references",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/constants/index.ts",
+      "duration_ms": 2,
+      "success": true,
+      "note": "best-effort-point-scan"
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_completion",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/constants/index.ts",
+      "duration_ms": 0,
+      "success": true
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_diagnostics",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/constants/index.ts",
+      "duration_ms": 0,
+      "success": true,
+      "note": "diagnostics=0 callbacks=1"
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_document_symbol",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/factories/hook/createCRUDHook.ts",
+      "duration_ms": 1,
+      "success": true
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_hover",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/factories/hook/createCRUDHook.ts",
+      "duration_ms": 0,
+      "success": true
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_definition",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/factories/hook/createCRUDHook.ts",
+      "duration_ms": 0,
+      "success": true
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_references",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/factories/hook/createCRUDHook.ts",
+      "duration_ms": 1,
+      "success": true,
+      "note": "best-effort-point-scan"
+    },
+    {
+      "stage": "P0-B",
+      "tool": "lsp_completion",
+      "language": "typescript",
+      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/factories/hook/createCRUDHook.ts",
       "duration_ms": 20,
-      "success": true,
-      "note": "best-effort-point-scan"
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_completion",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/index.ts",
-      "duration_ms": 136,
-      "success": true
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_diagnostics",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/components/ui/index.ts",
-      "duration_ms": 0,
-      "success": true,
-      "note": "diagnostics=0 callbacks=1"
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_document_symbol",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/constants/index.ts",
-      "duration_ms": 2,
-      "success": true
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_hover",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/constants/index.ts",
-      "duration_ms": 0,
-      "success": true
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_definition",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/constants/index.ts",
-      "duration_ms": 0,
-      "success": true
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_references",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/constants/index.ts",
-      "duration_ms": 3,
-      "success": true,
-      "note": "best-effort-point-scan"
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_completion",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/constants/index.ts",
-      "duration_ms": 0,
-      "success": true
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_diagnostics",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/constants/index.ts",
-      "duration_ms": 0,
-      "success": true,
-      "note": "diagnostics=0 callbacks=1"
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_document_symbol",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/factories/hook/createCRUDHook.ts",
-      "duration_ms": 2,
-      "success": true
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_hover",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/factories/hook/createCRUDHook.ts",
-      "duration_ms": 0,
-      "success": true
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_definition",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/factories/hook/createCRUDHook.ts",
-      "duration_ms": 0,
-      "success": true
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_references",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/factories/hook/createCRUDHook.ts",
-      "duration_ms": 0,
-      "success": true,
-      "note": "best-effort-point-scan"
-    },
-    {
-      "stage": "P0-B",
-      "tool": "lsp_completion",
-      "language": "typescript",
-      "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/factories/hook/createCRUDHook.ts",
-      "duration_ms": 23,
       "success": true
     },
     {
@@ -2449,7 +2449,7 @@
       "tool": "lsp_completion",
       "language": "typescript",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/js/src/factories/hook/createMutationHook.ts",
-      "duration_ms": 23,
+      "duration_ms": 20,
       "success": true
     },
     {
@@ -2465,16 +2465,16 @@
       "stage": "P0-B",
       "tool": "lsp_rename",
       "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P0B_Core9typescript1724397429/001/main.ts",
-      "duration_ms": 7,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P0B_Core9typescript4067753407/001/main.ts",
+      "duration_ms": 13,
       "success": true
     },
     {
       "stage": "P0-B",
       "tool": "lsp_did_change",
       "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P0B_Core9typescript1724397429/001/main.ts",
-      "duration_ms": 10,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P0B_Core9typescript4067753407/001/main.ts",
+      "duration_ms": 15,
       "success": true
     },
     {
@@ -2482,7 +2482,7 @@
       "tool": "lsp_open_file",
       "language": "rust",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/bespoke_event_handling.rs",
-      "duration_ms": 7,
+      "duration_ms": 9,
       "success": true
     },
     {
@@ -2642,7 +2642,7 @@
       "tool": "lsp_document_symbol",
       "language": "rust",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/bespoke_event_handling.rs",
-      "duration_ms": 5,
+      "duration_ms": 14,
       "success": true
     },
     {
@@ -2658,7 +2658,7 @@
       "tool": "lsp_definition",
       "language": "rust",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/bespoke_event_handling.rs",
-      "duration_ms": 1,
+      "duration_ms": 2,
       "success": true
     },
     {
@@ -2666,7 +2666,7 @@
       "tool": "lsp_references",
       "language": "rust",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/bespoke_event_handling.rs",
-      "duration_ms": 1,
+      "duration_ms": 2,
       "success": true,
       "note": "best-effort-point-scan"
     },
@@ -2675,7 +2675,7 @@
       "tool": "lsp_completion",
       "language": "rust",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/bespoke_event_handling.rs",
-      "duration_ms": 4,
+      "duration_ms": 6,
       "success": true
     },
     {
@@ -2692,7 +2692,7 @@
       "tool": "lsp_document_symbol",
       "language": "rust",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/codex_message_processor.rs",
-      "duration_ms": 15,
+      "duration_ms": 20,
       "success": true
     },
     {
@@ -2725,7 +2725,7 @@
       "tool": "lsp_completion",
       "language": "rust",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/codex_message_processor.rs",
-      "duration_ms": 9,
+      "duration_ms": 10,
       "success": true
     },
     {
@@ -2942,7 +2942,7 @@
       "tool": "lsp_document_symbol",
       "language": "rust",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/fuzzy_file_search.rs",
-      "duration_ms": 1,
+      "duration_ms": 0,
       "success": true
     },
     {
@@ -3642,7 +3642,7 @@
       "tool": "lsp_diagnostics_probe",
       "language": "rust",
       "file": "/Users/mima0000/Desktop/wj/e2e测试/rust/src/bespoke_event_handling.rs",
-      "duration_ms": 2511,
+      "duration_ms": 2510,
       "success": true,
       "note": "diagnostics callback probe"
     },
@@ -3650,27 +3650,27 @@
       "stage": "P0-B",
       "tool": "lsp_rename",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P0B_Core9rust16002245/001/src/main.rs",
-      "duration_ms": 630,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P0B_Core9rust2237816978/001/src/main.rs",
+      "duration_ms": 632,
       "success": true
     },
     {
       "stage": "P0-B",
       "tool": "lsp_did_change",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P0B_Core9rust16002245/001/src/main.rs",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P0B_Core9rust2237816978/001/src/main.rs",
       "duration_ms": 4,
       "success": true
     }
-  ],
-  "notes": [
-    "rust diagnostics callback count=0 after probe (non-blocking)"
   ],
   "extra": {
     "core9_attempts": 426,
     "core9_success_rate": 1,
     "core9_successes": 426,
     "coverage_missing": null,
+    "non_blocking": [
+      "rust diagnostics callback count=0 after probe"
+    ],
     "sample_per_lang": 20
   }
 }

@@ -274,7 +274,7 @@ func startDebugServer(ctx context.Context, uiPort int, apiBaseURL string) {
 	// 使用 dist/ 子目录 (Vite 构建产物)
 	distDir := filepath.Join(frontendDir, "dist")
 	if info, err := os.Stat(distDir); err != nil || !info.IsDir() {
-		logger.Error("debug: frontend/dist not found — run 'npm run build:react' first",
+		logger.Error("debug: frontend/dist not found — run 'npm run build' first",
 			logger.FieldPath, distDir)
 		return
 	}
@@ -297,7 +297,7 @@ func startDebugServer(ctx context.Context, uiPort int, apiBaseURL string) {
 	serveIndexWithShim := func(w http.ResponseWriter, _ *http.Request) {
 		data, err := os.ReadFile(filepath.Join(distDir, "index.html"))
 		if err != nil {
-			http.Error(w, "dist/index.html not found — run 'npm run build:react'", 404)
+			http.Error(w, "dist/index.html not found — run 'npm run build'", 404)
 			return
 		}
 		html := string(data)
@@ -323,7 +323,7 @@ func startDebugServer(ctx context.Context, uiPort int, apiBaseURL string) {
 			http.FileServer(http.Dir(distDir)).ServeHTTP(w, r)
 			return
 		}
-		// SPA fallback: 路径不匹配静态文件 → 返回 index.html (React Router 处理)
+		// SPA fallback: 路径不匹配静态文件 → 返回 index.html (Vue Router 处理)
 		serveIndexWithShim(w, r)
 	})
 

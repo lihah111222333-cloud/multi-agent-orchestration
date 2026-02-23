@@ -40,7 +40,14 @@ type rolloutContentItem struct {
 }
 
 // ReadRolloutMessages 从 rollout JSONL 文件提取 user/assistant 消息。
+// 默认会裁剪 user 消息中的自动注入段（skill 摘要 / LSP 提示块）。
 func ReadRolloutMessages(rolloutPath string) ([]RolloutMessage, error) {
+	return ReadRolloutMessagesWithTrim(rolloutPath, true)
+}
+
+// ReadRolloutMessagesWithTrim 从 rollout JSONL 文件提取 user/assistant 消息。
+// trimInjectedUserContent=false 时保留 user 消息中的自动注入段，便于调试。
+func ReadRolloutMessagesWithTrim(rolloutPath string, trimInjectedUserContent bool) ([]RolloutMessage, error) {
 	f, err := os.Open(rolloutPath)
 	if err != nil {
 		return nil, fmt.Errorf("open rollout file: %w", err)
@@ -80,8 +87,10 @@ func ReadRolloutMessages(rolloutPath string) ([]RolloutMessage, error) {
 			if isSystemNoise(text) {
 				continue
 			}
-			text = trimSkillInjection(text)
-			text = trimLSPInjection(text)
+			if trimInjectedUserContent {
+				text = trimSkillInjection(text)
+				text = trimLSPInjection(text)
+			}
 			if strings.TrimSpace(text) == "" {
 				continue
 			}

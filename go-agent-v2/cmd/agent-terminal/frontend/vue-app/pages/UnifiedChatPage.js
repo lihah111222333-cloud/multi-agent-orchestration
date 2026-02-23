@@ -679,6 +679,19 @@ export const UnifiedChatPage = {
       if (typeof props.threadStore.getThreadCompacting !== 'function') return false;
       return props.threadStore.getThreadCompacting(selectedThreadId.value);
     });
+    const activeCompactResult = computed(() => {
+      if (typeof props.threadStore.getThreadCompactResult !== 'function') return null;
+      return props.threadStore.getThreadCompactResult(selectedThreadId.value);
+    });
+    const compactResultText = computed(() => {
+      return (activeCompactResult.value?.message || '').toString().trim();
+    });
+    const compactResultTone = computed(() => {
+      const status = (activeCompactResult.value?.status || '').toString().trim().toLowerCase();
+      if (status === 'failed') return 'error';
+      if (status === 'success') return 'success';
+      return '';
+    });
     const displayStatusText = computed(() => {
       if (!selectedThreadId.value) return '未选择会话';
       return activeStatusHeader.value || '等待指示';
@@ -2349,6 +2362,8 @@ export const UnifiedChatPage = {
       activeTokenInline,
       activeTokenTooltip,
       compacting,
+      compactResultText,
+      compactResultTone,
       canInterrupt,
       displayStatusText,
       noActiveThread,
@@ -2815,6 +2830,8 @@ export const UnifiedChatPage = {
                   :thread-id="selectedThreadId"
                   :interruptible="canInterrupt"
                   :compacting="compacting"
+                  :compact-result-text="compactResultText"
+                  :compact-result-tone="compactResultTone"
                   :token-inline="activeTokenInline"
                   :token-tooltip="activeTokenTooltip"
                   :disabled="noActiveThread"

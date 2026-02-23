@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from '../../lib/vue.esm-browser.prod.js';
-import { callAPI } from '../services/api.js';
+import { callAPI, copyTextToClipboard } from '../services/api.js';
 import { logInfo, readLogBuffer, readLogLevel } from '../services/log.js';
 
 export const SettingsPage = {
@@ -10,6 +10,7 @@ export const SettingsPage = {
   emits: ['refresh'],
   setup(props, { emit }) {
     const LOG_LIST_LIMIT = 14;
+    const PREF_KEY_SHOW_INJECTED_PROMPT = 'settings.showInjectedPromptInChat';
     const versionText = computed(() => `Agent Orchestrator ${props.buildInfo.version || 'dev'}`);
     const runtimeText = computed(() => props.buildInfo.runtime
       ? `Wails WebKit · Go Backend · ${props.buildInfo.runtime}`
@@ -19,10 +20,14 @@ export const SettingsPage = {
     const logLevel = ref('info');
     const logEntries = ref([]);
     const lspPromptHint = ref('');
+    const lspPromptEffectiveHint = ref('');
     const lspPromptDefaultHint = ref('');
+    const lspPromptUsingDefault = ref(true);
     const lspPromptLoading = ref(false);
     const lspPromptSaving = ref(false);
     const lspPromptNotice = reactive({ level: 'info', message: '' });
+    const showInjectedPromptInChat = ref(false);
+    const showInjectedPromptSaving = ref(false);
 
     let logRefreshTimer = 0;
 
@@ -31,6 +36,21 @@ export const SettingsPage = {
     const stallHeartbeat = ref(300);
     const stallLoading = ref(false);
     const stallNotice = reactive({ level: 'info', message: '' });
+
+    const lspPromptDisplayHint = computed(() => {
+      const text = (lspPromptEffectiveHint.value || lspPromptDefaultHint.value || '').toString().trim();
+      return text || '暂无可用提示词';
+    });
+    const lspPromptLineCount = computed(() => {
+      const text = lspPromptDisplayHint.value;
+      if (!text || text === '暂无可用提示词') return 0;
+      return text.split('\n').length;
+    });
+    const lspPromptCharCount = computed(() => {
+      const text = lspPromptDisplayHint.value;
+      if (!text || text === '暂无可用提示词') return 0;
+      return text.length;
+    });
 
     function formatLogTime(value) {
       if (!value) return '--:--:--';
@@ -55,14 +75,29 @@ export const SettingsPage = {
       stallNotice.message = (message || '').toString().trim();
     }
 
+    function parseBoolPreference(value) {
+      if (typeof value === 'boolean') return value;
+      if (typeof value === 'number') return value !== 0;
+      if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+        if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+      }
+      return false;
+    }
+
     async function loadLSPPromptHint() {
       lspPromptLoading.value = true;
       try {
         const res = await callAPI('config/lspPromptHint/read', {});
         const hint = (res?.hint || '').toString();
         const defaultHint = (res?.defaultHint || '').toString();
-        lspPromptHint.value = hint;
+        const overrideHint = (res?.overrideHint || '').toString();
+        const usingDefault = Boolean(res?.usingDefault);
+        lspPromptHint.value = overrideHint;
+        lspPromptEffectiveHint.value = hint;
         lspPromptDefaultHint.value = defaultHint;
+        lspPromptUsingDefault.value = usingDefault || overrideHint.trim() === '';
         setLSPPromptNotice('info', '');
       } catch (error) {
         setLSPPromptNotice('error', `加载失败：${error?.message || error}`);
@@ -78,8 +113,11 @@ export const SettingsPage = {
         const res = await callAPI('config/lspPromptHint/write', {
           hint: lspPromptHint.value,
         });
-        lspPromptHint.value = (res?.hint || '').toString();
-        if (res?.usingDefault) {
+        lspPromptEffectiveHint.value = (res?.hint || '').toString();
+        lspPromptDefaultHint.value = (res?.defaultHint || lspPromptDefaultHint.value || '').toString();
+        lspPromptHint.value = (res?.overrideHint || '').toString();
+        lspPromptUsingDefault.value = Boolean(res?.usingDefault);
+        if (lspPromptUsingDefault.value) {
           setLSPPromptNotice('info', '已恢复默认提示词');
         } else {
           setLSPPromptNotice('info', '提示词已保存');
@@ -95,6 +133,48 @@ export const SettingsPage = {
       if (lspPromptSaving.value) return;
       lspPromptHint.value = '';
       await saveLSPPromptHint();
+    }
+
+    async function copyEffectivePromptHint() {
+      const text = lspPromptDisplayHint.value;
+      if (!text || text === '暂无可用提示词') {
+        setLSPPromptNotice('error', '暂无可复制内容');
+        return;
+      }
+      try {
+        const ok = await copyTextToClipboard(text);
+        if (ok) {
+          setLSPPromptNotice('info', '已复制生效提示词');
+        } else {
+          setLSPPromptNotice('error', '复制失败');
+        }
+      } catch (error) {
+        setLSPPromptNotice('error', `复制失败：${error?.message || error}`);
+      }
+    }
+
+    async function loadInjectedPromptVisibility() {
+      try {
+        const value = await callAPI('ui/preferences/get', { key: PREF_KEY_SHOW_INJECTED_PROMPT });
+        showInjectedPromptInChat.value = parseBoolPreference(value);
+      } catch (error) {
+        setLSPPromptNotice('error', `加载聊天注入显示开关失败：${error?.message || error}`);
+      }
+    }
+
+    async function saveInjectedPromptVisibility() {
+      if (showInjectedPromptSaving.value) return;
+      showInjectedPromptSaving.value = true;
+      const next = Boolean(showInjectedPromptInChat.value);
+      try {
+        await callAPI('ui/preferences/set', { key: PREF_KEY_SHOW_INJECTED_PROMPT, value: next });
+        setLSPPromptNotice('info', next ? '聊天区已改为显示自动注入内容' : '聊天区已改为隐藏自动注入内容');
+      } catch (error) {
+        setLSPPromptNotice('error', `保存聊天注入显示开关失败：${error?.message || error}`);
+        await loadInjectedPromptVisibility();
+      } finally {
+        showInjectedPromptSaving.value = false;
+      }
     }
 
     // Turn Tracker: 加载
@@ -146,6 +226,7 @@ export const SettingsPage = {
       logInfo('page', 'settings.mounted', {});
       refreshLogPanel();
       loadLSPPromptHint();
+      loadInjectedPromptVisibility();
       loadStallSettings();
       logRefreshTimer = window.setInterval(refreshLogPanel, 1000);
     });
@@ -164,15 +245,25 @@ export const SettingsPage = {
       logLevel,
       logEntries,
       lspPromptHint,
+      lspPromptEffectiveHint,
       lspPromptDefaultHint,
+      lspPromptUsingDefault,
+      lspPromptDisplayHint,
+      lspPromptLineCount,
+      lspPromptCharCount,
       lspPromptLoading,
       lspPromptSaving,
       lspPromptNotice,
+      showInjectedPromptInChat,
+      showInjectedPromptSaving,
       refresh,
       refreshLogPanel,
       loadLSPPromptHint,
       saveLSPPromptHint,
       resetLSPPromptHint,
+      copyEffectivePromptHint,
+      loadInjectedPromptVisibility,
+      saveInjectedPromptVisibility,
       formatLogTime,
       stallThreshold,
       stallHeartbeat,
@@ -248,14 +339,38 @@ export const SettingsPage = {
         <div class="section-header">PROMPT</div>
         <div class="data-card-vue settings-prompt-card" data-testid="settings-lsp-prompt-card">
           <div class="data-row-vue">
-            <strong>Playwright/json-render /LSP 系统提示词注入</strong>
-            <span>{{ lspPromptLoading ? '加载中...' : '已启用' }}</span>
+            <strong>自动注入提示词（LSP / Playwright / json-render / code_run）</strong>
+            <span>{{ lspPromptLoading ? '加载中...' : (lspPromptUsingDefault ? '默认注入' : '自定义覆盖') }}</span>
           </div>
-          <div class="settings-prompt-desc">单一注入点。留空并保存可恢复默认值。</div>
+          <div class="settings-prompt-desc">下方“生效内容”是后端每轮实际注入文本；“覆盖编辑”用于调试，留空保存可恢复默认。</div>
+          <label class="settings-prompt-toggle" data-testid="settings-show-injected-toggle">
+            <div class="settings-prompt-toggle-copy">
+              <span class="settings-prompt-toggle-title">聊天区显示自动注入内容（调试）</span>
+              <span class="settings-prompt-toggle-desc">开启后将保留每轮消息里的“已注入 ...”段。</span>
+            </div>
+            <input
+              type="checkbox"
+              class="settings-prompt-toggle-input"
+              data-testid="settings-show-injected-toggle-input"
+              v-model="showInjectedPromptInChat"
+              @change="saveInjectedPromptVisibility"
+              :disabled="lspPromptLoading || showInjectedPromptSaving"
+            />
+          </label>
+          <div class="settings-prompt-meta">生效行数 {{ lspPromptLineCount }} · 字符 {{ lspPromptCharCount }}</div>
+          <div class="settings-prompt-label">当前生效内容（只读）</div>
+          <textarea
+            class="settings-prompt-textarea settings-prompt-textarea-readonly"
+            data-testid="settings-lsp-effective-output"
+            rows="12"
+            :value="lspPromptDisplayHint"
+            readonly
+          ></textarea>
+          <div class="settings-prompt-label">自定义覆盖（可编辑，空=默认）</div>
           <textarea
             class="settings-prompt-textarea"
             data-testid="settings-lsp-prompt-input"
-            rows="6"
+            rows="8"
             v-model="lspPromptHint"
             :placeholder="lspPromptDefaultHint || '请输入提示词'"
             :disabled="lspPromptLoading || lspPromptSaving"
@@ -265,6 +380,7 @@ export const SettingsPage = {
           </div>
           <div class="settings-action-row settings-action-inline">
             <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-lsp-refresh-button" @click="loadLSPPromptHint" :disabled="lspPromptSaving">刷新</button>
+            <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-lsp-copy-button" @click="copyEffectivePromptHint" :disabled="lspPromptLoading || lspPromptSaving">复制生效提示词</button>
             <button class="btn btn-secondary btn-toolbar-sm" data-testid="settings-lsp-reset-button" @click="resetLSPPromptHint" :disabled="lspPromptLoading || lspPromptSaving">恢复默认</button>
             <button class="btn btn-primary btn-toolbar-sm" data-testid="settings-lsp-save-button" @click="saveLSPPromptHint" :disabled="lspPromptLoading || lspPromptSaving">
               {{ lspPromptSaving ? '保存中...' : '保存提示词' }}

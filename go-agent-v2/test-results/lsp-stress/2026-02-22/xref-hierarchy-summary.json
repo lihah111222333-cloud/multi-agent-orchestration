@@ -1,6 +1,6 @@
 {
   "stage": "P1",
-  "generated_at": "2026-02-23T05:02:32+08:00",
+  "generated_at": "2026-02-23T08:28:35+08:00",
   "gate_passed": true,
   "thresholds": {
     "non_empty_languages_per_tool": "\u003e=2"
@@ -91,8 +91,8 @@
       "stage": "P1",
       "tool": "lsp_open_file",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego77991093/001/main.go",
-      "duration_ms": 42,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego2610236202/001/main.go",
+      "duration_ms": 38,
       "success": true,
       "note": "fixture bootstrap"
     },
@@ -100,7 +100,7 @@
       "stage": "P1",
       "tool": "lsp_workspace_symbol",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego77991093/001/main.go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego2610236202/001/main.go",
       "duration_ms": 0,
       "success": true
     },
@@ -108,7 +108,7 @@
       "stage": "P1",
       "tool": "lsp_implementation",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego77991093/001/main.go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego2610236202/001/main.go",
       "duration_ms": 0,
       "success": true
     },
@@ -116,7 +116,7 @@
       "stage": "P1",
       "tool": "lsp_type_definition",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego77991093/001/main.go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego2610236202/001/main.go",
       "duration_ms": 0,
       "success": true
     },
@@ -124,7 +124,7 @@
       "stage": "P1",
       "tool": "lsp_call_hierarchy",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego77991093/001/main.go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego2610236202/001/main.go",
       "duration_ms": 0,
       "success": true
     },
@@ -132,7 +132,7 @@
       "stage": "P1",
       "tool": "lsp_type_hierarchy",
       "language": "go",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego77991093/001/main.go",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokego2610236202/001/main.go",
       "duration_ms": 0,
       "success": true
     },
@@ -140,8 +140,8 @@
       "stage": "P1",
       "tool": "lsp_open_file",
       "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1847563087/001/main.ts",
-      "duration_ms": 95,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1138546458/001/main.ts",
+      "duration_ms": 88,
       "success": true,
       "note": "fixture bootstrap"
     },
@@ -149,39 +149,39 @@
       "stage": "P1",
       "tool": "lsp_workspace_symbol",
       "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1847563087/001/main.ts",
-      "duration_ms": 2,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1138546458/001/main.ts",
+      "duration_ms": 6,
       "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_implementation",
       "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1847563087/001/main.ts",
-      "duration_ms": 21,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1138546458/001/main.ts",
+      "duration_ms": 33,
       "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_type_definition",
       "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1847563087/001/main.ts",
-      "duration_ms": 0,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1138546458/001/main.ts",
+      "duration_ms": 1,
       "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_call_hierarchy",
       "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1847563087/001/main.ts",
-      "duration_ms": 2,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1138546458/001/main.ts",
+      "duration_ms": 3,
       "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_type_hierarchy",
       "language": "typescript",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1847563087/001/main.ts",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smoketypescript1138546458/001/main.ts",
       "duration_ms": 0,
       "success": true
     },
@@ -189,8 +189,8 @@
       "stage": "P1",
       "tool": "lsp_open_file",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust2089169828/001/src/main.rs",
-      "duration_ms": 9,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust3918324415/001/src/main.rs",
+      "duration_ms": 7,
       "success": true,
       "note": "fixture bootstrap"
     },
@@ -198,15 +198,15 @@
       "stage": "P1",
       "tool": "lsp_workspace_symbol",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust2089169828/001/src/main.rs",
-      "duration_ms": 331,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust3918324415/001/src/main.rs",
+      "duration_ms": 241,
       "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_implementation",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust2089169828/001/src/main.rs",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust3918324415/001/src/main.rs",
       "duration_ms": 0,
       "success": true
     },
@@ -214,15 +214,15 @@
       "stage": "P1",
       "tool": "lsp_type_definition",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust2089169828/001/src/main.rs",
-      "duration_ms": 415,
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust3918324415/001/src/main.rs",
+      "duration_ms": 412,
       "success": true
     },
     {
       "stage": "P1",
       "tool": "lsp_call_hierarchy",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust2089169828/001/src/main.rs",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust3918324415/001/src/main.rs",
       "duration_ms": 252,
       "success": true
     },
@@ -230,7 +230,7 @@
       "stage": "P1",
       "tool": "lsp_type_hierarchy",
       "language": "rust",
-      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust2089169828/001/src/main.rs",
+      "file": "/var/folders/fw/w5nyk55978gd500t0kx64bn00000gp/T/TestLSP_Stress_P1_Smokerust3918324415/001/src/main.rs",
       "duration_ms": 0,
       "success": true
     }

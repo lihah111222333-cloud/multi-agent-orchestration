@@ -904,7 +904,7 @@ func handleDiffUpdateEvent(m *RuntimeManager, threadID string, _ resolvedFields,
 }
 
 func handleUserMessageEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
-	text := sanitizeUserMessageText(fields.text)
+	text := sanitizeUserMessageTextWithMode(fields.text, m.sanitizeInjectedUserMessage)
 	if strings.TrimSpace(text) == "" {
 		return
 	}
@@ -923,6 +923,13 @@ func handleErrorEvent(m *RuntimeManager, threadID string, fields resolvedFields,
 }
 
 func sanitizeUserMessageText(text string) string {
+	return sanitizeUserMessageTextWithMode(text, true)
+}
+
+func sanitizeUserMessageTextWithMode(text string, trimInjected bool) string {
+	if !trimInjected {
+		return text
+	}
 	trimmed := trimInjectedSkillBlock(text)
 	trimmed = trimInjectedLSPHint(trimmed)
 	return trimmed

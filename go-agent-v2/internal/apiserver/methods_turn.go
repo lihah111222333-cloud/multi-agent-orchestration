@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -124,6 +126,40 @@ func mergePromptText(prompt, extra string) string {
 	return prompt + "\n" + extra
 }
 
+// composeUserTimelineTextForTurn 组装 UI timeline 中展示的 user 文本。
+//
+// 默认仅展示用户原始输入；当调试开关开启时，展示提交给后端的文本并附带注入提示词，
+// 便于排查“自动注入”是否符合预期。
+func composeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint string, showInjected bool) string {
+	if !showInjected {
+		return prompt
+	}
+	hint := strings.TrimSpace(injectedHint)
+	if hint == "" {
+		return submitPrompt
+	}
+	if strings.Contains(submitPrompt, hint) {
+		return submitPrompt
+	}
+	return mergePromptText(submitPrompt, hint)
+}
+
+func (s *Server) threadTimelineAlreadyShowsInjectedPrompt(threadID string) bool {
+	if s == nil || s.uiRuntime == nil {
+		return false
+	}
+	const marker = "\n已注入"
+	for _, item := range s.uiRuntime.ThreadTimeline(threadID) {
+		if item.Kind != "user" {
+			continue
+		}
+		if strings.Contains(item.Text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func validateLSPUsagePromptHint(hint string) error {
 	if len(hint) > maxLSPUsagePromptHintLen {
 		return apperrors.Newf("Server.configLSPPromptHintWrite", "hint length exceeds %d", maxLSPUsagePromptHintLen)
@@ -151,12 +187,87 @@ func (s *Server) resolveLSPUsagePromptHint(ctx context.Context) string {
 	return hint
 }
 
-func (s *Server) resolveUnifiedToolingPrompt(ctx context.Context) string {
-	return s.resolveLSPUsagePromptHint(ctx)
+var inlineCodeTokenPattern = regexp.MustCompile("`([^`\\n]+)`")
+
+func collectReferencedLSPToolNames(hint string) []string {
+	trimmed := strings.TrimSpace(hint)
+	if trimmed == "" {
+		return nil
+	}
+	matches := inlineCodeTokenPattern.FindAllStringSubmatch(trimmed, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(matches))
+	names := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(match[1])
+		if !strings.HasPrefix(name, "lsp_") {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	return names
 }
 
-func (s *Server) appendUnifiedToolingHint(ctx context.Context, prompt string) string {
-	return mergePromptText(prompt, s.resolveUnifiedToolingPrompt(ctx))
+func collectDynamicToolNames(dynamicTools []codex.DynamicTool) map[string]struct{} {
+	if len(dynamicTools) == 0 {
+		return nil
+	}
+	toolNames := make(map[string]struct{}, len(dynamicTools))
+	for _, tool := range dynamicTools {
+		name := strings.TrimSpace(tool.Name)
+		if name == "" {
+			continue
+		}
+		toolNames[name] = struct{}{}
+	}
+	return toolNames
+}
+
+func prependLSPAvailabilityWarning(hint string, dynamicTools []codex.DynamicTool) (string, []string) {
+	referenced := collectReferencedLSPToolNames(hint)
+	if len(referenced) == 0 {
+		return hint, nil
+	}
+	available := collectDynamicToolNames(dynamicTools)
+	missing := make([]string, 0, len(referenced))
+	for _, name := range referenced {
+		if _, ok := available[name]; ok {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	if len(missing) == 0 {
+		return hint, nil
+	}
+	warning := "注意：当前会话未注入以下 LSP 工具（无可用 language server）：" +
+		strings.Join(missing, ", ") +
+		"。不要调用这些工具，请改用当前可用工具完成任务。"
+	return mergePromptText(warning, hint), missing
+}
+
+func (s *Server) resolveStartInstructionsForLaunch(ctx context.Context, dynamicTools []codex.DynamicTool) string {
+	hint := s.resolveLSPUsagePromptHint(ctx)
+	instructions, missing := prependLSPAvailabilityWarning(hint, dynamicTools)
+	if len(missing) == 0 {
+		return instructions
+	}
+	logger.Warn("lsp hint references unavailable tools during launch",
+		"missing_lsp_tools", strings.Join(missing, ","),
+	)
+	return instructions
 }
 
 func (s *Server) buildConfiguredSkillPrompt(agentID string, input []UserInput) (string, int) {
@@ -474,7 +585,6 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 	prompt, images, files := extractInputs(p.Input)
 	skillPrompt, selectedSkillCount, autoMatchedSkillCount := s.buildTurnSkillPrompt(p.ThreadID, prompt, p.Input, selectedSkills, p.ManualSkillSelection)
 	submitPrompt := mergePromptText(prompt, skillPrompt)
-	submitPrompt = s.appendUnifiedToolingHint(ctx, submitPrompt)
 	logger.Info("turn/start: input prepared",
 		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 		"text_len", len(prompt),
@@ -493,7 +603,14 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 		if len(attachments) == 0 {
 			attachments = buildUserTimelineAttachments(images, files)
 		}
-		s.uiRuntime.AppendUserMessage(p.ThreadID, prompt, attachments)
+		showInjected := s.showInjectedPromptInChat(ctx)
+		appendInjectedHint := showInjected && !s.threadTimelineAlreadyShowsInjectedPrompt(p.ThreadID)
+		injectedHint := ""
+		if appendInjectedHint {
+			injectedHint = s.resolveLSPUsagePromptHint(ctx)
+		}
+		timelineText := composeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint, showInjected)
+		s.uiRuntime.AppendUserMessage(p.ThreadID, timelineText, attachments)
 	}
 
 	resolvedTurnID := resolveClientActiveTurnID(proc.Client)
@@ -524,7 +641,6 @@ func (s *Server) turnSteerTyped(ctx context.Context, p turnSteerParams) (any, er
 		prompt, images, files := extractInputs(p.Input)
 		skillPrompt, _, _ := s.buildTurnSkillPrompt(p.ThreadID, prompt, p.Input, selectedSkills, p.ManualSkillSelection)
 		submitPrompt := mergePromptText(prompt, skillPrompt)
-		submitPrompt = s.appendUnifiedToolingHint(ctx, submitPrompt)
 		if err := proc.Client.Submit(submitPrompt, images, files, nil); err != nil {
 			return nil, err
 		}

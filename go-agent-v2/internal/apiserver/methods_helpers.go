@@ -368,8 +368,9 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	)
 
 	dynamicTools := s.buildAllDynamicTools()
+	startInstructions := s.resolveStartInstructionsForLaunch(ctx, dynamicTools)
 
-	if err := s.mgr.Launch(ctx, id, id, "", launchCwd, "", dynamicTools); err != nil {
+	if err := s.mgr.Launch(ctx, id, id, "", launchCwd, startInstructions, dynamicTools); err != nil {
 		// 并发补加载时可能已被其他请求拉起，二次确认后再报错。
 		if proc := s.mgr.Get(id); proc != nil {
 			s.setAgentWorkDir(id, launchCwd)
@@ -460,7 +461,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 		if s.mgr.Get(id) == nil {
 			_ = s.cancelCodeRuns(id)
 			_ = s.mgr.Stop(id)
-			if launchErr := s.mgr.Launch(ctx, id, id, "", launchCwd, "", dynamicTools); launchErr != nil {
+			if launchErr := s.mgr.Launch(ctx, id, id, "", launchCwd, startInstructions, dynamicTools); launchErr != nil {
 				return nil, apperrors.Wrapf(launchErr, "Server.ensureThreadReady", "final re-spawn thread %s", id)
 			}
 			proc = s.mgr.Get(id)

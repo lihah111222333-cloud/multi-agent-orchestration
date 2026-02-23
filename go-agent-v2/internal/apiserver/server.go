@@ -284,6 +284,7 @@ func New(deps Deps) *Server {
 		s.codeRunner = cr
 	}
 
+	s.applyInjectedPromptVisibilityPreference(context.Background())
 	s.registerDynamicTools()
 	return s
 }

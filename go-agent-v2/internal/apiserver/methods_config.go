@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
@@ -13,6 +14,43 @@ import (
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
+
+func (s *Server) lspAvailabilitySummary() map[string]any {
+	servers := []map[string]any{}
+	summary := map[string]any{
+		"hasManager":           s.lsp != nil,
+		"hasAvailableServer":   false,
+		"availableServerCount": 0,
+		"servers":              servers,
+	}
+	if s.lsp == nil {
+		return summary
+	}
+
+	statuses := s.lsp.Statuses()
+	sort.SliceStable(statuses, func(i, j int) bool {
+		return statuses[i].Language < statuses[j].Language
+	})
+
+	serverRows := make([]map[string]any, 0, len(statuses))
+	availableCount := 0
+	for _, st := range statuses {
+		if st.Available {
+			availableCount++
+		}
+		serverRows = append(serverRows, map[string]any{
+			"language":  st.Language,
+			"command":   st.Command,
+			"available": st.Available,
+			"running":   st.Running,
+		})
+	}
+
+	summary["servers"] = serverRows
+	summary["availableServerCount"] = availableCount
+	summary["hasAvailableServer"] = availableCount > 0
+	return summary
+}
 
 func (s *Server) modelList(_ context.Context, _ json.RawMessage) (any, error) {
 	models := []map[string]string{
@@ -150,10 +188,24 @@ func (s *Server) configBatchWriteTyped(_ context.Context, p configBatchWritePara
 }
 
 func (s *Server) configLSPPromptHintRead(ctx context.Context, _ json.RawMessage) (any, error) {
+	overrideHint := ""
+	usingDefault := true
+	if s.prefManager != nil {
+		value, err := s.prefManager.Get(ctx, prefKeyLSPUsagePromptHint)
+		if err != nil {
+			logger.Warn("config/lspPromptHint/read: load override failed", logger.FieldError, err)
+		} else {
+			overrideHint = strings.TrimSpace(asString(value))
+			usingDefault = overrideHint == ""
+		}
+	}
 	return map[string]any{
-		"hint":        s.resolveLSPUsagePromptHint(ctx),
-		"defaultHint": defaultLSPUsagePromptHint,
-		"prefKey":     prefKeyLSPUsagePromptHint,
+		"hint":            s.resolveLSPUsagePromptHint(ctx),
+		"defaultHint":     defaultLSPUsagePromptHint,
+		"overrideHint":    overrideHint,
+		"usingDefault":    usingDefault,
+		"prefKey":         prefKeyLSPUsagePromptHint,
+		"lspAvailability": s.lspAvailabilitySummary(),
 	}, nil
 }
 
@@ -175,6 +227,8 @@ func (s *Server) configLSPPromptHintWriteTyped(ctx context.Context, p configLSPP
 	return map[string]any{
 		"ok":           true,
 		"hint":         s.resolveLSPUsagePromptHint(ctx),
+		"defaultHint":  defaultLSPUsagePromptHint,
+		"overrideHint": normalized,
 		"usingDefault": normalized == "",
 	}, nil
 }

@@ -53,6 +53,12 @@ func (s *Server) uiPreferencesSet(ctx context.Context, p uiPrefSetParams) (any, 
 			s.stallHeartbeat = time.Duration(sec) * time.Second
 			logger.Info("stall heartbeat updated via ui/preferences/set", "seconds", sec)
 		}
+	case prefKeyShowInjectedPromptInChat:
+		if s.uiRuntime != nil {
+			show := asBool(p.Value, false)
+			s.uiRuntime.SetSanitizeInjectedUserMessage(!show)
+			logger.Info("chat injected prompt visibility updated via ui/preferences/set", "show", show)
+		}
 	}
 	return map[string]any{"ok": true}, nil
 }
@@ -160,6 +166,9 @@ func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error)
 	if value, ok := prefs[prefThreadArchivesChat]; ok {
 		result[prefThreadArchivesChat] = value
 	}
+	if value, ok := prefs[prefKeyShowInjectedPromptInChat]; ok {
+		result[prefKeyShowInjectedPromptInChat] = value
+	}
 	logger.Debug("ui/state/get: snapshot prepared",
 		"threads_count", len(snapshot.Threads),
 		"active_thread_id", resolvedActiveThreadID,
@@ -209,6 +218,54 @@ func asPositiveInt(value any, minVal int) int {
 		return 0
 	}
 	return n
+}
+
+func asBool(value any, fallback bool) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
+		}
+	case int:
+		return v != 0
+	case int64:
+		return v != 0
+	case float64:
+		return v != 0
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return i != 0
+		}
+		if f, err := v.Float64(); err == nil {
+			return f != 0
+		}
+	}
+	return fallback
+}
+
+func (s *Server) showInjectedPromptInChat(ctx context.Context) bool {
+	if s.prefManager == nil {
+		return false
+	}
+	value, err := s.prefManager.Get(ctx, prefKeyShowInjectedPromptInChat)
+	if err != nil {
+		logger.Warn("ui preferences: load injected prompt visibility failed", logger.FieldError, err)
+		return false
+	}
+	return asBool(value, false)
+}
+
+func (s *Server) applyInjectedPromptVisibilityPreference(ctx context.Context) {
+	if s.uiRuntime == nil {
+		return
+	}
+	show := s.showInjectedPromptInChat(ctx)
+	s.uiRuntime.SetSanitizeInjectedUserMessage(!show)
 }
 
 func (s *Server) persistThreadAlias(ctx context.Context, threadID, alias string) error {

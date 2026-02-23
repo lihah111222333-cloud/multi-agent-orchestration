@@ -758,6 +758,8 @@ function applyRuntimeSnapshot(snapshot) {
         (newItems[newItems.length - 1]?.command || '') &&
         (oldItems[oldItems.length - 1]?.status || '') ===
         (newItems[newItems.length - 1]?.status || '') &&
+        Number(oldItems[oldItems.length - 1]?.requestId || 0) ===
+        Number(newItems[newItems.length - 1]?.requestId || 0) &&
         Boolean(oldItems[oldItems.length - 1]?.done) ===
         Boolean(newItems[newItems.length - 1]?.done)
       ) {

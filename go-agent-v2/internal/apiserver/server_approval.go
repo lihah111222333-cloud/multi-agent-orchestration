@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
@@ -116,6 +117,17 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 				payload = make(map[string]any)
 			}
 			payload["requestId"] = reqID
+
+			// 同步回灌到 uiRuntime，确保 timeline 审批卡拿到 requestId 可交互。
+			if s.uiRuntime != nil {
+				threadID := strings.TrimSpace(agentID)
+				normalized := uistate.NormalizeEventFromPayload(method, method, payload)
+				s.uiRuntime.ApplyAgentEvent(threadID, normalized, payload)
+				s.throttledUIStateChanged(map[string]any{
+					"source":   method,
+					"threadId": threadID,
+				})
+			}
 
 			// 推送审批请求到前端 (→ notifyHook → Wails Event)
 			s.broadcastNotification(method, payload)

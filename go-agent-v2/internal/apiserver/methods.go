@@ -97,6 +97,7 @@ func (s *Server) registerMethods() {
 
 	// § 9. 命令执行 / 其他 (2 methods)
 	s.methods["command/exec"] = typedHandler(s.commandExecTyped)
+	s.methods["approval/respond"] = typedHandler(s.approvalRespondTyped)
 	s.methods["feedback/upload"] = noop
 
 	// § 10. 斜杠命令 (SOCKS 独有, JSON-RPC 化)

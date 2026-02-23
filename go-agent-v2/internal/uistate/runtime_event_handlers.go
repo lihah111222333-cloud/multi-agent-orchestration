@@ -11,13 +11,14 @@ import (
 )
 
 type resolvedFields struct {
-	text     string
-	command  string
-	file     string
-	files    []string
-	exitCode *int
-	planDone *bool
-	planSet  bool
+	text      string
+	command   string
+	file      string
+	files     []string
+	exitCode  *int
+	requestID int64
+	planDone  *bool
+	planSet   bool
 }
 
 type runtimeEventHandler func(*RuntimeManager, string, resolvedFields, map[string]any, time.Time)
@@ -83,6 +84,25 @@ func resolveEventFields(normalized NormalizedEvent, payload map[string]any) reso
 		fields.text = planText
 		fields.planSet = true
 		fields.planDone = &planDone
+	}
+	if requestID, ok := extractFirstIntDeep(payload, "requestId", "request_id"); ok && requestID > 0 {
+		fields.requestID = int64(requestID)
+	} else if requestID, ok := extractFirstIntByPaths(
+		payload,
+		[]string{"item", "requestId"},
+		[]string{"item", "request_id"},
+		[]string{"msg", "requestId"},
+		[]string{"msg", "request_id"},
+		[]string{"data", "requestId"},
+		[]string{"data", "request_id"},
+		[]string{"payload", "requestId"},
+		[]string{"payload", "request_id"},
+		[]string{"args", "requestId"},
+		[]string{"args", "request_id"},
+		[]string{"params", "requestId"},
+		[]string{"params", "request_id"},
+	); ok && requestID > 0 {
+		fields.requestID = int64(requestID)
 	}
 	return fields
 }
@@ -875,7 +895,7 @@ func handleToolCallEvent(m *RuntimeManager, threadID string, _ resolvedFields, p
 }
 
 func handleApprovalRequestEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
-	m.showApprovalLocked(threadID, fields.command, ts)
+	m.showApprovalLocked(threadID, fields.command, fields.requestID, ts)
 }
 
 func handlePlanDeltaEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {

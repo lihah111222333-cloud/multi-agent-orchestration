@@ -1,5 +1,6 @@
 import { watch, computed, ref } from '../../lib/vue.esm-browser.prod.js';
 import { logDebug, logInfo, logWarn } from '../services/log.js';
+import { callAPI } from '../services/api.js';
 import { renderAssistantMarkdown } from '../utils/assistant-markdown.js';
 import { hasJsonRenderSpec, extractSpecBlocks } from '../services/json-render-engine.js';
 import { JsonRenderer } from './JsonRenderer.js';
@@ -32,6 +33,8 @@ export const ChatTimeline = {
     const visibleCount = ref(VISIBLE_WINDOW);
     const assistantMarkdownCache = new Map();
     const attachmentHoverPreview = ref(null);
+    const approvalBusyByRequestId = ref({});
+    const approvalResolvedByRequestId = ref({});
 
     // items 引用变化时重置窗口
     watch(
@@ -174,6 +177,13 @@ export const ChatTimeline = {
       return `Exit code ${Math.trunc(code)}`;
     }
 
+    function approvalRequestId(item) {
+      const raw = Number(item?.requestId);
+      if (!Number.isFinite(raw)) return 0;
+      const requestId = Math.trunc(raw);
+      return requestId > 0 ? requestId : 0;
+    }
+
     function displayFilePath(path) {
       const raw = (path || '').toString().trim();
       if (!raw) return '';
@@ -194,8 +204,71 @@ export const ChatTimeline = {
       if (item.kind === 'tool') return item.status === 'failed' ? '失败' : '调用';
       if (item.kind === 'file') return item.status === 'saved' ? '已保存' : '修改中';
       if (item.kind === 'plan') return item.done ? '完成' : '进行中';
-      if (item.kind === 'approval') return '待确认';
+      if (item.kind === 'approval') {
+        const requestId = approvalRequestId(item);
+        if (requestId > 0 && approvalResolvedByRequestId.value[requestId]) return '已提交';
+        if (requestId <= 0) return '不可交互';
+        return '待确认';
+      }
       return '';
+    }
+
+    function approvalActionDisabled(item) {
+      const requestId = approvalRequestId(item);
+      if (requestId <= 0) return true;
+      if (approvalBusyByRequestId.value[requestId]) return true;
+      if (approvalResolvedByRequestId.value[requestId]) return true;
+      return false;
+    }
+
+    function approvalHint(item) {
+      const requestId = approvalRequestId(item);
+      if (requestId <= 0) return '当前审批不可交互，请重试';
+      if (approvalBusyByRequestId.value[requestId]) return '正在提交审批结果...';
+      if (approvalResolvedByRequestId.value[requestId]) return '审批结果已提交';
+      return '请选择同意或拒绝';
+    }
+
+    async function respondApproval(item, approved) {
+      const requestId = approvalRequestId(item);
+      const decision = Boolean(approved);
+      if (requestId <= 0) {
+        logWarn('ui', 'timeline.approval.request_id_missing', {
+          command: (item?.command || '').toString(),
+        });
+        return;
+      }
+      if (approvalBusyByRequestId.value[requestId] || approvalResolvedByRequestId.value[requestId]) {
+        return;
+      }
+
+      approvalBusyByRequestId.value = {
+        ...approvalBusyByRequestId.value,
+        [requestId]: true,
+      };
+      try {
+        const result = await callAPI('approval/respond', { requestId, approved: decision });
+        if (Boolean(result?.ok)) {
+          approvalResolvedByRequestId.value = {
+            ...approvalResolvedByRequestId.value,
+            [requestId]: true,
+          };
+          logInfo('ui', 'timeline.approval.responded', { requestId, approved: decision });
+        } else {
+          logWarn('ui', 'timeline.approval.respond_not_pending', { requestId, approved: decision });
+        }
+      } catch (error) {
+        logWarn('ui', 'timeline.approval.respond_failed', {
+          requestId,
+          approved: decision,
+          error: String(error || ''),
+        });
+      } finally {
+        approvalBusyByRequestId.value = {
+          ...approvalBusyByRequestId.value,
+          [requestId]: false,
+        };
+      }
     }
 
     function attachmentType(att) {
@@ -742,6 +815,9 @@ export const ChatTimeline = {
       attachmentHoverPreview,
       copyFilePath,
       copyPlanText,
+      approvalActionDisabled,
+      approvalHint,
+      respondApproval,
       planCardSpec,
       itemHasSpec,
       splitBySpec,
@@ -953,6 +1029,21 @@ export const ChatTimeline = {
 
           <template v-else-if="item.kind === 'approval'">
             <div class="chat-process-text chat-process-meta">{{ item.command || '需要用户确认' }}</div>
+            <div class="approval-actions">
+              <button
+                class="approval-action-btn approval-action-btn--approve"
+                type="button"
+                :disabled="approvalActionDisabled(item)"
+                @click.stop="respondApproval(item, true)"
+              >同意</button>
+              <button
+                class="approval-action-btn approval-action-btn--reject"
+                type="button"
+                :disabled="approvalActionDisabled(item)"
+                @click.stop="respondApproval(item, false)"
+              >拒绝</button>
+            </div>
+            <div class="chat-process-foot approval-hint">{{ approvalHint(item) }}</div>
           </template>
         </section>
       </article>

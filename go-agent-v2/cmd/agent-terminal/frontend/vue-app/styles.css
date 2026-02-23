@@ -2845,6 +2845,52 @@ body.is-row-resizing * {
   background: rgba(255, 210, 64, 0.06);
 }
 
+.approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.approval-action-btn {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-foreground-primary, #f8fafc);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background-color 0.16s ease, opacity 0.16s ease;
+}
+
+.approval-action-btn:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.38);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.approval-action-btn--approve:hover:not(:disabled) {
+  border-color: rgba(48, 211, 133, 0.7);
+  background: rgba(48, 211, 133, 0.16);
+}
+
+.approval-action-btn--reject:hover:not(:disabled) {
+  border-color: rgba(255, 103, 100, 0.7);
+  background: rgba(255, 103, 100, 0.16);
+}
+
+.approval-action-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.approval-hint {
+  margin-top: 6px;
+  color: var(--color-text-foreground-tertiary, #ffffff80);
+}
+
 .chat-item.process.kind-error .chat-process-line {
   border-left-color: var(--color-accent-red, #ff6764);
   background: rgba(255, 103, 100, 0.06);

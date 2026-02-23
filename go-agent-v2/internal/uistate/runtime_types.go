@@ -31,6 +31,7 @@ type TimelineItem struct {
 	Command     string               `json:"command,omitempty"`
 	Output      string               `json:"output,omitempty"`
 	Status      string               `json:"status,omitempty"`
+	RequestID   int64                `json:"requestId,omitempty"`
 	ExitCode    *int                 `json:"exitCode,omitempty"`
 	File        string               `json:"file,omitempty"`
 	Tool        string               `json:"tool,omitempty"`

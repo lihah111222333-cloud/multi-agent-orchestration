@@ -115,6 +115,7 @@ var classifyMethodMap = map[string]classifyResult{
 	"codex/event/plan_delta":                    {UITypePlanDelta},
 	"codex/event/task_started":                  {UITypeTurnStarted},
 	"codex/event/task_complete":                 {UITypeTurnComplete},
+	"item/commandExecution/requestApproval":     {UITypeApprovalRequest},
 	"item/commandExecution/terminalInteraction": {UITypeSystem},
 	"codex/event/mcp_startup_update":            {UITypeSystem},
 	"codex/event/background_event":              {UITypeSystem},

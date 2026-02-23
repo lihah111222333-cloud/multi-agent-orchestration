@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,7 +23,6 @@ import (
 	"syscall"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
-	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -127,14 +127,75 @@ type AgentManager struct {
 }
 
 // NewAgentManager 创建管理器。
-func NewAgentManager() *AgentManager {
+func NewAgentManager(appFactory, restFactory any) (*AgentManager, error) {
+	if appFactory == nil {
+		return nil, apperrors.New("AgentManager.NewAgentManager", "appFactory must not be nil")
+	}
+	if restFactory == nil {
+		return nil, apperrors.New("AgentManager.NewAgentManager", "restFactory must not be nil")
+	}
+
+	normalizedAppFactory, err := normalizeClientFactory(appFactory, "appFactory")
+	if err != nil {
+		return nil, err
+	}
+	normalizedRestFactory, err := normalizeClientFactory(restFactory, "restFactory")
+	if err != nil {
+		return nil, err
+	}
+
 	m := &AgentManager{
 		agents:           make(map[string]*AgentProcess),
-		appServerFactory: func(port int, agentID string) agentcore.Client { return codex.NewAppServerClient(port, agentID) },
-		restFactory:      func(port int, agentID string) agentcore.Client { return codex.NewClient(port, agentID) },
+		appServerFactory: normalizedAppFactory,
+		restFactory:      normalizedRestFactory,
 	}
 	m.nextPort.Store(int32(basePort))
-	return m
+	return m, nil
+}
+
+var clientIfaceType = reflect.TypeOf((*agentcore.Client)(nil)).Elem()
+
+func normalizeClientFactory(factory any, field string) (agentcore.ClientFactory, error) {
+	switch fn := factory.(type) {
+	case agentcore.ClientFactory:
+		if fn == nil {
+			return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must not be nil", field)
+		}
+		return fn, nil
+	case func(port int, agentID string) agentcore.Client:
+		if fn == nil {
+			return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must not be nil", field)
+		}
+		return fn, nil
+	}
+
+	value := reflect.ValueOf(factory)
+	if !value.IsValid() {
+		return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must be a function", field)
+	}
+	if value.Kind() != reflect.Func {
+		return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must be a function", field)
+	}
+	if value.IsNil() {
+		return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must not be nil", field)
+	}
+
+	typ := value.Type()
+	if typ.NumIn() != 2 || typ.In(0).Kind() != reflect.Int || typ.In(1).Kind() != reflect.String {
+		return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must have signature func(int, string) Client", field)
+	}
+	if typ.NumOut() != 1 || !typ.Out(0).Implements(clientIfaceType) {
+		return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must return a type implementing agentcore.Client", field)
+	}
+
+	return func(port int, agentID string) agentcore.Client {
+		out := value.Call([]reflect.Value{reflect.ValueOf(port), reflect.ValueOf(agentID)})[0]
+		if (out.Kind() == reflect.Pointer || out.Kind() == reflect.Interface) && out.IsNil() {
+			return nil
+		}
+		client, _ := out.Interface().(agentcore.Client)
+		return client
+	}, nil
 }
 
 // SetClientFactories 设置 app-server / REST 客户端工厂（线程安全）。

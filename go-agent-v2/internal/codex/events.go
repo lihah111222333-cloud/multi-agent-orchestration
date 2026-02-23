@@ -66,6 +66,9 @@ type ListSkillsResponseData struct {
 // ========================================
 // 事件类型常量
 // ========================================
+//
+// NOTE: 保留 codex.Event* 导出是本阶段白名单要求。
+// internal/bus 仍通过 codex.Event / codex.Event* 消费事件，P5 不迁移该路径。
 
 const (
 	EventSessionConfigured           = agentcore.EventSessionConfigured

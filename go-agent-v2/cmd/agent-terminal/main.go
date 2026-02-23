@@ -369,7 +369,10 @@ func setupDatabase(ctx context.Context, cfg *config.Config) *pgxpool.Pool {
 
 // setupAppServer 创建 apiserver + runner manager 并启动监听。
 func setupAppServer(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, addr string) (*apiserver.Server, *runner.AgentManager) {
-	mgr := runner.NewAgentManager()
+	mgr, err := runner.NewAgentManager(codex.NewAppServerClient, codex.NewClient)
+	if err != nil {
+		logger.Fatal("runner manager init failed", logger.FieldError, err)
+	}
 	runner.CleanOrphanedProcesses()
 	lspMgr := lsp.NewManager(nil)
 

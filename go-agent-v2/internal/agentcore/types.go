@@ -123,6 +123,7 @@ const (
 	EventSessionConfigured = "session_configured"
 	EventTurnStarted       = "turn_started"
 	EventTurnComplete      = "turn_complete"
+	EventTurnAborted       = "turn_aborted"
 	EventIdle              = "idle"
 	EventError             = "error"
 	EventShutdownComplete  = "shutdown_complete"
@@ -139,21 +140,34 @@ const (
 	EventAgentMessageCompleted      = "agent_message_completed"
 
 	// Command execution.
-	EventExecApprovalRequest    = "exec_approval_request"
-	EventExecCommandBegin       = "exec_command_begin"
-	EventExecCommandOutputDelta = "exec_command_output_delta"
-	EventExecCommandEnd         = "exec_command_end"
+	EventExecApprovalRequest       = "exec_approval_request"
+	EventExecCommandBegin          = "exec_command_begin"
+	EventExecCommandOutputDelta    = "exec_command_output_delta"
+	EventExecTerminalInteraction   = "exec_terminal_interaction"
+	EventExecCommandEnd            = "exec_command_end"
+	EventFileChangeApprovalRequest = "file_change_approval_request"
 
 	// Code changes.
+	EventPatchApply      = "patch_apply"
 	EventPatchApplyBegin = "patch_apply_begin"
 	EventPatchApplyEnd   = "patch_apply_end"
+	EventFileRead        = "file_read"
+	EventFileUpdated     = "file_updated"
 	EventTurnDiff        = "turn_diff"
 	EventUndoStarted     = "undo_started"
 	EventUndoCompleted   = "undo_completed"
 
+	// Reasoning compatibility events.
+	EventReasoning            = "reasoning"
+	EventReasoningDelta       = "reasoning_delta"
+	EventReasoningSummary     = "reasoning_summary"
+	EventReasoningSummaryPart = "reasoning_summary_part"
+
 	// MCP / Skills / Review.
 	EventMCPToolCallBegin     = "mcp_tool_call_begin"
 	EventMCPToolCallEnd       = "mcp_tool_call_end"
+	EventMCPToolCall          = "mcp_tool_call"
+	EventMCPToolProgress      = "mcp_tool_progress"
 	EventMCPListToolsResponse = "mcp_list_tools_response"
 	EventListSkillsResponse   = "list_skills_response"
 	EventEnteredReviewMode    = "entered_review_mode"
@@ -172,6 +186,8 @@ const (
 
 	// MCP startup.
 	EventMCPStartupComplete = "mcp_startup_complete"
+	EventMCPStartupUpdate   = "mcp_startup_update"
+	EventMCPOAuthCompleted  = "mcp_oauth_completed"
 
 	// Others.
 	EventTokenCount        = "token_count"
@@ -181,6 +197,7 @@ const (
 	EventWarning           = "warning"
 	EventStreamError       = "stream_error"
 	EventBackgroundEvent   = "background_event"
+	EventTurnPlan          = "turn_plan"
 	EventPlanDelta         = "plan_delta"
 	EventPlanUpdate        = "plan_update"
 )

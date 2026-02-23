@@ -1026,7 +1026,7 @@ export const ChatTimeline = {
             <circle class="chat-status-spinner-arc" cx="12" cy="12" r="8.5"></circle>
           </svg>
           <span v-else class="status-dot" :class="activeStatus"></span>
-          <span :class="{ 'loading-shimmer': activeStatus === 'thinking' || activeStatus === 'responding' }">{{ presenceLabel }}</span>
+          <span class="chat-status-label" :class="{ 'loading-shimmer': activeStatus === 'thinking' || activeStatus === 'responding' }">{{ presenceLabel }}</span>
           <span v-if="sharedStatusMeta" class="chat-status-meta" :class="{ 'hyperspeed-model-shimmer': activeStatus === 'thinking' }">{{ sharedStatusMeta }}</span>
         </div>
       </div>

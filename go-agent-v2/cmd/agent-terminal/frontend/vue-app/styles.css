@@ -2284,6 +2284,8 @@ body.is-row-resizing * {
   gap: 10px;
   margin-top: 4px;
   padding: 6px 0;
+  width: 100%;
+  min-width: 0;
 }
 
 .chat-item-avatar-presence {
@@ -2292,7 +2294,7 @@ body.is-row-resizing * {
 }
 
 .chat-status.chat-status-presence {
-  height: 40px;
+  min-height: 40px;
   padding: 0 18px;
   gap: 10px;
   border-color: var(--color-border, #ffffff14);
@@ -2302,11 +2304,29 @@ body.is-row-resizing * {
   font-size: 13px;
   font-weight: 600;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .chat-status.chat-status-presence .status-dot {
   width: 10px;
   height: 10px;
+}
+
+.chat-status.chat-status-presence .chat-status-label,
+.chat-status.chat-status-presence .chat-status-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-status.chat-status-presence .chat-status-label {
+  flex: 1 1 auto;
+  line-height: 1.2;
+  font-size: 13px;
 }
 
 .chat-status-spinner {
@@ -2333,7 +2353,51 @@ body.is-row-resizing * {
 
 .chat-status.chat-status-presence .chat-status-meta {
   color: var(--color-text-foreground-tertiary, #ffffff80);
+  flex: 0 1 auto;
+  line-height: 1.2;
   font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .chat-status.chat-status-presence {
+    min-height: 36px;
+    padding: 0 14px;
+    gap: 8px;
+  }
+
+  .chat-status.chat-status-presence .chat-status-label {
+    font-size: 12px;
+  }
+
+  .chat-status.chat-status-presence .chat-status-meta {
+    font-size: 11px;
+  }
+
+  .chat-status.chat-status-presence .chat-status-spinner {
+    width: 12px;
+    height: 12px;
+  }
+}
+
+@media (max-width: 520px) {
+  .chat-presence-row {
+    gap: 8px;
+  }
+
+  .chat-status.chat-status-presence {
+    min-height: 34px;
+    padding: 0 10px;
+    gap: 6px;
+  }
+
+  .chat-status.chat-status-presence .chat-status-label {
+    font-size: 11px;
+  }
+
+  .chat-status.chat-status-presence .chat-status-meta {
+    max-width: 48%;
+    font-size: 10px;
+  }
 }
 
 .chat-item-bubble {

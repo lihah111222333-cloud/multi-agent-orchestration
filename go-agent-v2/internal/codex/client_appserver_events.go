@@ -257,10 +257,13 @@ func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 	switch event.Type {
 	case EventTurnStarted:
 		if turnID := extractTurnIDFromEventData(event.Data); turnID != "" {
+			prevTurnID := activeTurnID
 			c.setActiveTurnID(turnID)
-			logger.Debug("codex: active turn set",
+			logger.Warn("DIAG: codex: active turn set (turn_started)",
 				logger.FieldAgentID, c.AgentID,
 				logger.FieldTurnID, turnID,
+				"prev_turn_id", prevTurnID,
+				logger.FieldMethod, method,
 			)
 			return
 		}
@@ -274,11 +277,17 @@ func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 	case EventTurnComplete, "turn_aborted", EventIdle, EventError, EventShutdownComplete:
 		if activeTurnID != "" {
 			c.clearActiveTurnID()
-			logger.Debug("codex: active turn cleared",
+			logger.Warn("DIAG: codex: active turn cleared (terminal event)",
 				logger.FieldAgentID, c.AgentID,
 				logger.FieldEventType, event.Type,
 				logger.FieldMethod, method,
-				"prev_turn_id", activeTurnID,
+				"cleared_turn_id", activeTurnID,
+			)
+		} else {
+			logger.Warn("DIAG: codex: terminal event but no active turn to clear",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldEventType, event.Type,
+				logger.FieldMethod, method,
 			)
 		}
 	case EventStreamError:

@@ -204,4 +204,3 @@ func (s *Server) uiProjectsSetActive(ctx context.Context, p uiProjectsSetActiveP
 		"active":   next,
 	}, nil
 }
-

@@ -69,10 +69,14 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 	}
 
 	var superseded map[string]any
+	var prevTurnID string
+	var hadPrevTurn bool
 
 	s.turnMu.Lock()
 	s.ensureTurnTrackerLocked()
 	if prev, ok := s.activeTurns[id]; ok {
+		hadPrevTurn = true
+		prevTurnID = prev.ID
 		delete(s.activeTurns, id)
 		if prev.timer != nil {
 			prev.timer.Stop()
@@ -80,12 +84,15 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 		if prev.stallTimer != nil {
 			prev.stallTimer.Stop()
 		}
+		doneSent := false
 		select {
 		case prev.done <- "failed":
+			doneSent = true
 		default:
 		}
 		// Short-lived turns superseded without interrupt are normal (rapid user input).
 		prevAge := time.Since(prev.StartedAt)
+		prevLastEventAge := time.Since(prev.LastEventAt)
 		logFn := logger.Warn
 		if prevAge < 5*time.Second && !prev.InterruptRequested {
 			logFn = logger.Info
@@ -95,7 +102,12 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 			"prev_turn_id", prev.ID,
 			"next_turn_id", tid,
 			"prev_age_ms", prevAge.Milliseconds(),
+			"prev_last_event_age_ms", prevLastEventAge.Milliseconds(),
 			"prev_interrupt_requested", prev.InterruptRequested,
+			"prev_done_sent", doneSent,
+			"prev_stall_hint_logged", prev.stallHintLogged,
+			"prev_stall_grace_started", prev.stallGraceStarted,
+			"prev_stall_auto_interrupted", prev.stallAutoInterrupted,
 		)
 		superseded = map[string]any{
 			"threadId": id,
@@ -106,6 +118,12 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 			"status": "failed",
 			"reason": "superseded_by_new_turn",
 		}
+	} else {
+		logger.Warn("DIAG: beginTrackedTurn no prev turn in activeTurns",
+			logger.FieldThreadID, id,
+			"new_turn_id", tid,
+			"active_turns_count", len(s.activeTurns),
+		)
 	}
 
 	turn := &trackedTurn{
@@ -149,10 +167,22 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 		logger.FieldTurnID, tid,
 		"source_turn_id", strings.TrimSpace(turnID),
 		"watchdog_timeout_ms", s.turnWatchdogTimeout.Milliseconds(),
+		"had_prev_turn", hadPrevTurn,
+		"prev_turn_id", prevTurnID,
 	)
 
 	if superseded != nil {
+		logger.Warn("DIAG: emitting turn/completed for superseded turn BEFORE returning",
+			logger.FieldThreadID, id,
+			"superseded_turn_id", prevTurnID,
+			"new_turn_id", tid,
+		)
 		s.Notify("turn/completed", superseded)
+		logger.Warn("DIAG: emitted turn/completed for superseded turn AFTER notify",
+			logger.FieldThreadID, id,
+			"superseded_turn_id", prevTurnID,
+			"new_turn_id", tid,
+		)
 	}
 	return tid
 }
@@ -531,6 +561,38 @@ func normalizeTrackedTurnStatus(status string) string {
 	}
 }
 
+func trackedTurnPayloadDiagKV(payload map[string]any) []any {
+	if payload == nil {
+		return []any{"payload_nil", true}
+	}
+
+	keys := make([]string, 0, len(payload))
+	for key := range payload {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	const maxKeySample = 12
+	keysTruncated := false
+	if len(keys) > maxKeySample {
+		keys = keys[:maxKeySample]
+		keysTruncated = true
+	}
+	_, hasTurnObj := payload["turn"].(map[string]any)
+
+	return []any{
+		"payload_key_count", len(payload),
+		"payload_keys_sample", strings.Join(keys, ","),
+		"payload_keys_truncated", keysTruncated,
+		"payload_has_turn_obj", hasTurnObj,
+		"payload_turn_id", extractTrackedTurnID(payload),
+		"payload_turn_status", extractTrackedTurnStatus(payload),
+		"payload_turn_reason", extractTrackedTurnReason(payload),
+		"payload_status_raw", extractTrackedString(payload, "status", "state"),
+		"payload_reason_raw", extractTrackedString(payload, "reason", "message"),
+	}
+}
+
 func (s *Server) maybeFinalizeTrackedTurn(threadID, eventType, method string, payload map[string]any) {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -544,7 +606,7 @@ func (s *Server) maybeFinalizeTrackedTurn(threadID, eventType, method string, pa
 	eventTurnID, status, reason, terminal, synthetic := trackedTurnTerminalFromEvent(eventType, method, payload)
 	if !terminal {
 		if shouldLogTrackedTurnStallHint(eventType, method, startedAt) && s.markTrackedTurnStallHint(id, turnID) {
-			logger.Warn("turn tracker: active turn not terminal yet at tail event",
+			fields := []any{
 				logger.FieldThreadID, id,
 				"tracked_turn_id", turnID,
 				"event_turn_id", eventTurnID,
@@ -552,14 +614,29 @@ func (s *Server) maybeFinalizeTrackedTurn(threadID, eventType, method string, pa
 				logger.FieldMethod, strings.TrimSpace(method),
 				"turn_age_ms", time.Since(startedAt).Milliseconds(),
 				"interrupt_requested", interruptRequested,
-			)
+			}
+			fields = append(fields, trackedTurnPayloadDiagKV(payload)...)
+			logger.Warn("turn tracker: active turn not terminal yet at tail event", fields...)
 		}
 		return
 	}
 
+	if strings.TrimSpace(eventTurnID) == "" {
+		fields := []any{
+			logger.FieldThreadID, id,
+			"tracked_turn_id", turnID,
+			logger.FieldEventType, strings.TrimSpace(eventType),
+			logger.FieldMethod, strings.TrimSpace(method),
+			logger.FieldStatus, strings.TrimSpace(status),
+			"reason", strings.TrimSpace(reason),
+		}
+		fields = append(fields, trackedTurnPayloadDiagKV(payload)...)
+		logger.Warn("DIAG: terminal event missing turn_id", fields...)
+	}
+
 	completion, ok := s.completeTrackedTurnByID(id, eventTurnID, status, reason)
 	if !ok {
-		logger.Warn("turn tracker: terminal event failed to close tracked turn",
+		fields := []any{
 			logger.FieldThreadID, id,
 			"tracked_turn_id", turnID,
 			"event_turn_id", eventTurnID,
@@ -567,7 +644,9 @@ func (s *Server) maybeFinalizeTrackedTurn(threadID, eventType, method string, pa
 			"reason", strings.TrimSpace(reason),
 			logger.FieldEventType, strings.TrimSpace(eventType),
 			logger.FieldMethod, strings.TrimSpace(method),
-		)
+		}
+		fields = append(fields, trackedTurnPayloadDiagKV(payload)...)
+		logger.Warn("turn tracker: terminal event failed to close tracked turn", fields...)
 		return
 	}
 	logger.Info("turn tracker: finalized by event",
@@ -815,10 +894,17 @@ func (s *Server) touchTrackedTurnLastEvent(threadID string) {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
 	if s.activeTurns == nil {
+		logger.Warn("DIAG: touchTrackedTurnLastEvent called but activeTurns map is nil",
+			logger.FieldThreadID, id,
+		)
 		return
 	}
 	turn, ok := s.activeTurns[id]
 	if !ok || turn == nil {
+		logger.Warn("DIAG: touchTrackedTurnLastEvent called but no active turn found",
+			logger.FieldThreadID, id,
+			"active_turns_count", len(s.activeTurns),
+		)
 		return
 	}
 	turn.LastEventAt = time.Now()

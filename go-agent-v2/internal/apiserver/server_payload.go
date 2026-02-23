@@ -563,6 +563,15 @@ func (s *Server) AgentEventHandler(agentID string) agentcore.EventHandler {
 		}
 
 		s.touchTrackedTurnLastEvent(agentID)
+		// DIAG: log terminal events to detect race with beginTrackedTurn
+		if isTerminalEventType(event.Type, method) {
+			logger.Warn("DIAG: AgentEventHandler received terminal event",
+				logger.FieldAgentID, agentID,
+				logger.FieldEventType, event.Type,
+				logger.FieldMethod, method,
+				"has_active_tracked_turn", s.hasActiveTrackedTurn(agentID),
+			)
+		}
 		s.maybeFinalizeTrackedTurn(agentID, event.Type, method, payload)
 		s.maybeAutoReportOrchestrationCompletion(agentID, event.Type, method, payload)
 
@@ -726,5 +735,26 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			logger.Info("sse: client disconnected", logger.FieldRemote, r.RemoteAddr)
 			return
 		}
+	}
+}
+
+// isTerminalEventType returns true if the event type or method indicates a turn-terminal event.
+// Used for diagnostic logging only.
+func isTerminalEventType(eventType, method string) bool {
+	et := strings.ToLower(strings.TrimSpace(eventType))
+	mt := strings.ToLower(strings.TrimSpace(method))
+	switch {
+	case et == "turn_complete" || et == "turn/completed" || et == "idle" ||
+		et == "turn_aborted" || et == "codex/event/task_complete" ||
+		et == "shutdown_complete":
+		return true
+	case mt == "turn/completed" || mt == "turn/aborted" ||
+		mt == "codex/event/task_complete" || mt == "thread/status/changed":
+		return true
+	case et == "error" || et == "stream_error" ||
+		mt == "error" || mt == "codex/event/stream_error":
+		return true
+	default:
+		return false
 	}
 }

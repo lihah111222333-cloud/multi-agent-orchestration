@@ -598,9 +598,23 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 		"manual_skill_selection", p.ManualSkillSelection,
 		"auto_matched_skills", autoMatchedSkillCount,
 	)
+	// DIAG: measure the gap between Submit and beginTrackedTurn
+	submitStart := time.Now()
+	logger.Warn("DIAG: turn/start: about to Submit (events may arrive before tracker setup)",
+		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+		logger.FieldPort, proc.Client.GetPort(),
+		"has_active_tracked_turn", s.hasActiveTrackedTurn(p.ThreadID),
+	)
 	if err := proc.Client.Submit(submitPrompt, images, files, p.OutputSchema); err != nil {
 		return nil, apperrors.Wrap(err, "Server.turnStart", "submit prompt")
 	}
+	submitElapsed := time.Since(submitStart)
+	logger.Warn("DIAG: turn/start: Submit returned",
+		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+		"submit_ms", submitElapsed.Milliseconds(),
+		"has_active_tracked_turn", s.hasActiveTrackedTurn(p.ThreadID),
+	)
+
 	if s.uiRuntime != nil {
 		attachments := buildUserTimelineAttachmentsFromInputs(p.Input)
 		if len(attachments) == 0 {
@@ -622,7 +636,18 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
 		)
 	}
+	logger.Warn("DIAG: turn/start: about to beginTrackedTurn",
+		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+		"resolved_turn_id", resolvedTurnID,
+		"gap_since_submit_ms", time.Since(submitStart).Milliseconds(),
+		"has_active_tracked_turn", s.hasActiveTrackedTurn(p.ThreadID),
+	)
 	turnID := s.beginTrackedTurn(p.ThreadID, resolvedTurnID)
+	logger.Warn("DIAG: turn/start: beginTrackedTurn completed",
+		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
+		"turn_id", turnID,
+		"total_gap_ms", time.Since(submitStart).Milliseconds(),
+	)
 	return turnStartResponse{
 		Turn: turnInfo{ID: turnID, Status: "inProgress"},
 	}, nil

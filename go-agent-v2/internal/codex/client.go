@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -36,7 +37,7 @@ const (
 )
 
 // EventHandler 事件回调。
-type EventHandler func(event Event)
+type EventHandler = agentcore.EventHandler
 
 // Client Codex HTTP API 客户端 (纯 REST, 无 socket)。
 //

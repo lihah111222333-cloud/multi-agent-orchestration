@@ -4,92 +4,28 @@
 // 参考: http-api-usage.md v8.8.90
 package codex
 
-import "encoding/json"
+import (
+	"encoding/json"
 
-// Event Codex WebSocket 事件信封。
-type Event struct {
-	Type      string          `json:"type"`
-	Data      json.RawMessage `json:"data,omitempty"`
-	RequestID *int64          `json:"-"` // 非零 = codex 发起的 Server Request, 需要 JSON-RPC response。
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+)
 
-	// RespondFunc 允许在不依赖 proc 查找的情况下回复 codex server request。
-	// 由 readLoop/handleRPCEvent 在检测到 server request 时注入,
-	// 闭包捕获发送该请求的 client, 绕过 mgr.Get(agentID) 查找。
-	RespondFunc func(code int, message string) error `json:"-"`
-
-	// DenyFunc 允许在 proc==nil 时自动拒绝审批请求。
-	// 闭包捕获发送该事件的 client.Submit("no"), 绕过 mgr.Get(agentID) 查找。
-	DenyFunc func() error `json:"-"`
-}
-
-// ========================================
-// 事件数据类型 (合并同构类型, 消除空结构体)
-// ========================================
-
-// TextData 文本增量/完整内容 (统一用于 agent_message_delta, reasoning_delta, exec_output_delta)。
-type TextData struct {
-	Delta   string `json:"delta,omitempty"`
-	Content string `json:"content,omitempty"`
-	Role    string `json:"role,omitempty"`
-}
-
-// ErrorData 错误。
-type ErrorData struct {
-	Message string `json:"message"`
-	Code    string `json:"code,omitempty"`
-}
-
-// WarningData 非致命警告。
-type WarningData struct {
-	Message string `json:"message"`
-}
-
-// SessionConfiguredData 会话初始化完成。
-type SessionConfiguredData struct {
-	ThreadID string `json:"thread_id,omitempty"`
-}
-
-// ExecApprovalRequestData 请求执行审批。
-type ExecApprovalRequestData struct {
-	Command string `json:"command,omitempty"`
-	Reason  string `json:"reason,omitempty"`
-}
-
-// ExecCommandBeginData 命令开始执行。
-type ExecCommandBeginData struct {
-	Command string `json:"command,omitempty"`
-}
-
-// ExecCommandEndData 命令执行结束。
-type ExecCommandEndData struct {
-	ExitCode int `json:"exit_code"`
-}
-
-// PatchApplyData 补丁应用。
-type PatchApplyData struct {
-	File string `json:"file,omitempty"`
-}
-
-// DynamicTool 动态工具定义 (通过 thread/start 注入 agent)。
-type DynamicTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
-}
-
-// DynamicToolCallData codex 发起的动态工具调用 (Server Request)。
-//
-// codex 使用 camelCase 字段 (确认自 Rust v2.rs:3131-3140):
-//
-//	{"threadId": "xxx", "turnId": "xxx", "callId": "xxx",
-//	 "tool": "lsp_hover", "arguments": {"file_path": "...", "line": 42, "column": 10}}
-type DynamicToolCallData struct {
-	ThreadID  string          `json:"threadId"`
-	TurnID    string          `json:"turnId"`
-	CallID    string          `json:"callId"`
-	Tool      string          `json:"tool"`
-	Arguments json.RawMessage `json:"arguments"`
-}
+// CLI-agnostic types are aliased to agentcore in Phase 1.
+type Event = agentcore.Event
+type TextData = agentcore.TextData
+type ErrorData = agentcore.ErrorData
+type WarningData = agentcore.WarningData
+type TokenCountData = agentcore.TokenCountData
+type SessionConfiguredData = agentcore.SessionConfiguredData
+type ExecApprovalRequestData = agentcore.ExecApprovalRequestData
+type ExecCommandBeginData = agentcore.ExecCommandBeginData
+type ExecCommandEndData = agentcore.ExecCommandEndData
+type PatchApplyData = agentcore.PatchApplyData
+type CollabAgentData = agentcore.CollabAgentData
+type ThreadNameUpdatedData = agentcore.ThreadNameUpdatedData
+type TurnDiffData = agentcore.TurnDiffData
+type DynamicTool = agentcore.DynamicTool
+type DynamicToolCallData = agentcore.DynamicToolCallData
 
 // DynamicToolCallResponse codex 期望的动态工具结果格式。
 //
@@ -127,99 +63,58 @@ type ListSkillsResponseData struct {
 	Skills []string `json:"skills,omitempty"`
 }
 
-// CollabAgentData 协作代理事件数据。
-type CollabAgentData struct {
-	AgentID string `json:"agent_id,omitempty"`
-	Name    string `json:"name,omitempty"`
-}
-
-// TokenCountData Token 统计。
-type TokenCountData struct {
-	Input  int `json:"input"`
-	Output int `json:"output"`
-}
-
-// ThreadNameUpdatedData 线程名称更新。
-type ThreadNameUpdatedData struct {
-	Name string `json:"name,omitempty"`
-}
-
-// TurnDiffData 本次 turn 的文件差异。
-type TurnDiffData struct {
-	Diff string `json:"diff,omitempty"`
-}
-
 // ========================================
 // 事件类型常量
 // ========================================
 
 const (
-	// 核心生命周期
-	EventSessionConfigured = "session_configured"
-	EventTurnStarted       = "turn_started"
-	EventTurnComplete      = "turn_complete"
-	EventIdle              = "idle"
-	EventError             = "error"
-	EventShutdownComplete  = "shutdown_complete"
-
-	// Agent 输出
-	EventAgentMessage               = "agent_message"
-	EventAgentMessageDelta          = "agent_message_delta"
-	EventAgentMessageContentDelta   = "agent_message_content_delta"
-	EventAgentReasoning             = "agent_reasoning"
-	EventAgentReasoningDelta        = "agent_reasoning_delta"
-	EventAgentReasoningRaw          = "agent_reasoning_raw"
-	EventAgentReasoningRawDelta     = "agent_reasoning_raw_delta"
-	EventAgentReasoningSectionBreak = "agent_reasoning_section_break"
-
-	// 命令执行
-	EventExecApprovalRequest    = "exec_approval_request"
-	EventExecCommandBegin       = "exec_command_begin"
-	EventExecCommandOutputDelta = "exec_command_output_delta"
-	EventExecCommandEnd         = "exec_command_end"
-
-	// 代码修改
-	EventPatchApplyBegin = "patch_apply_begin"
-	EventPatchApplyEnd   = "patch_apply_end"
-	EventTurnDiff        = "turn_diff"
-	EventUndoStarted     = "undo_started"
-	EventUndoCompleted   = "undo_completed"
-
-	// MCP / Skills / Review
-	EventMCPToolCallBegin     = "mcp_tool_call_begin"
-	EventMCPToolCallEnd       = "mcp_tool_call_end"
-	EventMCPListToolsResponse = "mcp_list_tools_response"
-	EventListSkillsResponse   = "list_skills_response"
-	EventEnteredReviewMode    = "entered_review_mode"
-	EventExitedReviewMode     = "exited_review_mode"
-
-	// 协作代理
-	EventCollabAgentSpawnBegin       = "collab_agent_spawn_begin"
-	EventCollabAgentSpawnEnd         = "collab_agent_spawn_end"
-	EventCollabAgentInteractionBegin = "collab_agent_interaction_begin"
-	EventCollabAgentInteractionEnd   = "collab_agent_interaction_end"
-	EventCollabWaitingBegin          = "collab_waiting_begin"
-	EventCollabWaitingEnd            = "collab_waiting_end"
-
-	// Dynamic Tools (自定义工具回调)
-	EventDynamicToolCall = "dynamic_tool_call"
-
-	// MCP 启动
-	EventMCPStartupComplete = "mcp_startup_complete"
-
-	// Agent 消息完成
-	EventAgentMessageCompleted = "agent_message_completed"
-
-	// 其他
-	EventTokenCount        = "token_count"
-	EventContextCompacted  = "context_compacted"
-	EventThreadNameUpdated = "thread_name_updated"
-	EventThreadRolledBack  = "thread_rolled_back"
-	EventWarning           = "warning"
-	EventStreamError       = "stream_error"
-	EventBackgroundEvent   = "background_event"
-	EventPlanDelta         = "plan_delta"
-	EventPlanUpdate        = "plan_update"
+	EventSessionConfigured           = agentcore.EventSessionConfigured
+	EventTurnStarted                 = agentcore.EventTurnStarted
+	EventTurnComplete                = agentcore.EventTurnComplete
+	EventIdle                        = agentcore.EventIdle
+	EventError                       = agentcore.EventError
+	EventShutdownComplete            = agentcore.EventShutdownComplete
+	EventAgentMessage                = agentcore.EventAgentMessage
+	EventAgentMessageDelta           = agentcore.EventAgentMessageDelta
+	EventAgentMessageContentDelta    = agentcore.EventAgentMessageContentDelta
+	EventAgentReasoning              = agentcore.EventAgentReasoning
+	EventAgentReasoningDelta         = agentcore.EventAgentReasoningDelta
+	EventAgentReasoningRaw           = agentcore.EventAgentReasoningRaw
+	EventAgentReasoningRawDelta      = agentcore.EventAgentReasoningRawDelta
+	EventAgentReasoningSectionBreak  = agentcore.EventAgentReasoningSectionBreak
+	EventExecApprovalRequest         = agentcore.EventExecApprovalRequest
+	EventExecCommandBegin            = agentcore.EventExecCommandBegin
+	EventExecCommandOutputDelta      = agentcore.EventExecCommandOutputDelta
+	EventExecCommandEnd              = agentcore.EventExecCommandEnd
+	EventPatchApplyBegin             = agentcore.EventPatchApplyBegin
+	EventPatchApplyEnd               = agentcore.EventPatchApplyEnd
+	EventTurnDiff                    = agentcore.EventTurnDiff
+	EventUndoStarted                 = agentcore.EventUndoStarted
+	EventUndoCompleted               = agentcore.EventUndoCompleted
+	EventMCPToolCallBegin            = agentcore.EventMCPToolCallBegin
+	EventMCPToolCallEnd              = agentcore.EventMCPToolCallEnd
+	EventMCPListToolsResponse        = agentcore.EventMCPListToolsResponse
+	EventListSkillsResponse          = agentcore.EventListSkillsResponse
+	EventEnteredReviewMode           = agentcore.EventEnteredReviewMode
+	EventExitedReviewMode            = agentcore.EventExitedReviewMode
+	EventCollabAgentSpawnBegin       = agentcore.EventCollabAgentSpawnBegin
+	EventCollabAgentSpawnEnd         = agentcore.EventCollabAgentSpawnEnd
+	EventCollabAgentInteractionBegin = agentcore.EventCollabAgentInteractionBegin
+	EventCollabAgentInteractionEnd   = agentcore.EventCollabAgentInteractionEnd
+	EventCollabWaitingBegin          = agentcore.EventCollabWaitingBegin
+	EventCollabWaitingEnd            = agentcore.EventCollabWaitingEnd
+	EventDynamicToolCall             = agentcore.EventDynamicToolCall
+	EventMCPStartupComplete          = agentcore.EventMCPStartupComplete
+	EventAgentMessageCompleted       = agentcore.EventAgentMessageCompleted
+	EventTokenCount                  = agentcore.EventTokenCount
+	EventContextCompacted            = agentcore.EventContextCompacted
+	EventThreadNameUpdated           = agentcore.EventThreadNameUpdated
+	EventThreadRolledBack            = agentcore.EventThreadRolledBack
+	EventWarning                     = agentcore.EventWarning
+	EventStreamError                 = agentcore.EventStreamError
+	EventBackgroundEvent             = agentcore.EventBackgroundEvent
+	EventPlanDelta                   = agentcore.EventPlanDelta
+	EventPlanUpdate                  = agentcore.EventPlanUpdate
 )
 
 // ========================================
@@ -287,29 +182,10 @@ type HealthResponse struct {
 	PID    int    `json:"pid"`
 }
 
-// ThreadInfo GET /threads 列表项。
-type ThreadInfo struct {
-	ThreadID string `json:"thread_id"`
-}
-
-// ResumeThreadRequest 恢复已有会话 (对应 CLI: codex resume <id> [path])。
-type ResumeThreadRequest struct {
-	ThreadID string `json:"thread_id"`
-	Path     string `json:"path,omitempty"`
-	Cwd      string `json:"cwd,omitempty"`
-}
-
-// ForkThreadRequest 分叉会话 (对应 CLI: codex fork <id> [path])。
-type ForkThreadRequest struct {
-	SourceThreadID string `json:"source_thread_id"`
-	Cwd            string `json:"cwd,omitempty"`
-}
-
-// ForkThreadResponse POST /threads/:id/fork 响应。
-type ForkThreadResponse struct {
-	ThreadID string `json:"thread_id"`
-	Port     int    `json:"port,omitempty"`
-}
+type ThreadInfo = agentcore.ThreadInfo
+type ResumeThreadRequest = agentcore.ResumeThreadRequest
+type ForkThreadRequest = agentcore.ForkThreadRequest
+type ForkThreadResponse = agentcore.ForkThreadResponse
 
 // ========================================
 // 斜杠命令

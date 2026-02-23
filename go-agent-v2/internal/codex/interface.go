@@ -1,44 +1,9 @@
 package codex
 
-import (
-	"context"
-	"encoding/json"
-)
+import "github.com/multi-agent/go-agent-v2/internal/agentcore"
 
-// CodexClient codex 客户端接口 — 统一 http-api (Client) 和 app-server (AppServerClient)。
-//
-// AgentProcess.Client 使用此接口, 允许根据是否需要 dynamicTools 选择传输层。
-type CodexClient interface {
-	// GetPort 返回端口号。
-	GetPort() int
-	// GetThreadID 返回当前 thread ID。
-	GetThreadID() string
+// CodexClient alias to phase-1 abstract client contract.
+type CodexClient = agentcore.Client
 
-	// SetEventHandler 注册事件回调。
-	SetEventHandler(h EventHandler)
-	// SpawnAndConnect 一键启动: spawn → 连接 → 创建 thread。
-	SpawnAndConnect(ctx context.Context, prompt, cwd, model, instructions string, dynamicTools []DynamicTool) error
-
-	// Submit 发送用户 prompt (可附带 outputSchema 约束输出格式)。
-	Submit(prompt string, images, files []string, outputSchema json.RawMessage) error
-	// SendCommand 发送斜杠命令。
-	SendCommand(cmd, args string) error
-	// SendDynamicToolResult 回传动态工具执行结果 (requestID = codex server request ID)。
-	SendDynamicToolResult(callID, output string, requestID *int64) error
-	// RespondError 向 codex 发送 JSON-RPC 错误响应 (server request 失败时避免 turn 挂起)。
-	RespondError(id int64, code int, message string) error
-
-	// ListThreads 获取线程列表。
-	ListThreads() ([]ThreadInfo, error)
-	// ResumeThread 恢复已有会话。
-	ResumeThread(req ResumeThreadRequest) error
-	// ForkThread 分叉会话。
-	ForkThread(req ForkThreadRequest) (*ForkThreadResponse, error)
-
-	// Shutdown 优雅关闭。
-	Shutdown() error
-	// Kill 强制终止。
-	Kill() error
-	// Running 返回是否运行中。
-	Running() bool
-}
+// ClientFactory alias for phased migration compatibility.
+type ClientFactory = agentcore.ClientFactory

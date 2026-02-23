@@ -329,6 +329,8 @@ func fileLanguageByPath(path string) string {
 		return "yaml"
 	case "md":
 		return "markdown"
+	case "markdown":
+		return "markdown"
 	case "css":
 		return "css"
 	case "html":
@@ -345,7 +347,8 @@ func fileLanguageByPath(path string) string {
 }
 
 func isMarkdownFilePath(path string) bool {
-	return strings.EqualFold(strings.TrimPrefix(filepath.Ext(path), "."), "md")
+	ext := strings.TrimPrefix(filepath.Ext(path), ".")
+	return strings.EqualFold(ext, "md") || strings.EqualFold(ext, "markdown")
 }
 
 func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, error) {
@@ -545,6 +548,9 @@ func supportsLSPFileType(path string) bool {
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
 	if ext == "" {
 		return false
+	}
+	if ext == "md" || ext == "markdown" {
+		return true
 	}
 	for _, item := range lsp.DefaultServers {
 		for _, supportedExt := range item.Extensions {

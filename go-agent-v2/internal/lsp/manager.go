@@ -259,8 +259,17 @@ func (m *Manager) References(filePath string, line, character int, includeDecl b
 
 // DocumentSymbol 获取文件大纲。
 func (m *Manager) DocumentSymbol(filePath string) ([]DocumentSymbol, error) {
+	path := strings.TrimSpace(filePath)
+	if path == "" {
+		return nil, apperrors.Newf("LSP.DocumentSymbol", "file_path is required")
+	}
+	ext := strings.TrimPrefix(strings.ToLower(filepathExt(path)), ".")
+	if isMarkdownExtension(ext) {
+		return m.markdownDocumentSymbols(path)
+	}
+
 	var out []DocumentSymbol
-	err := m.withBootstrappedDocument(filePath, func(client *Client, uri string) error {
+	err := m.withBootstrappedDocument(path, func(client *Client, uri string) error {
 		result, err := client.DocumentSymbol(m.ctx, uri)
 		if err != nil {
 			return err

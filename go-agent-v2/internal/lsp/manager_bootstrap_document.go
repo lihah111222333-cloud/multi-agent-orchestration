@@ -23,7 +23,22 @@ type documentSyncState struct {
 
 // BootstrapDocument 自动保证文档与 LSP 服务端状态同步。
 func (m *Manager) BootstrapDocument(filePath string) error {
-	return m.withBootstrappedDocument(filePath, func(_ *Client, _ string) error { return nil })
+	path := strings.TrimSpace(filePath)
+	if path == "" {
+		return apperrors.Newf("LSP.BootstrapDocument", "file_path is required")
+	}
+
+	ext := strings.TrimPrefix(strings.ToLower(filepathExt(path)), ".")
+	if isMarkdownExtension(ext) {
+		uri := pathToURI(path)
+		lock := m.documentLock(uri)
+		lock.Lock()
+		defer lock.Unlock()
+		_, err := m.bootstrapDocumentWithoutClientLocked(path, uri, "markdown")
+		return err
+	}
+
+	return m.withBootstrappedDocument(path, func(_ *Client, _ string) error { return nil })
 }
 
 func (m *Manager) withBootstrappedDocument(filePath string, fn func(client *Client, uri string) error) error {
@@ -117,10 +132,59 @@ func (m *Manager) bootstrapDocumentLocked(filePath, uri string) (*Client, *Serve
 	return restarted, restartedCfg, state, nil
 }
 
+func (m *Manager) bootstrapDocumentWithoutClientLocked(filePath, uri, language string) (*documentSyncState, error) {
+	state := m.documentState(uri)
+	m.restoreDocumentStateFromCache(filePath, uri, language, state)
+
+	// 最新内容来自 lsp_did_change（未落盘）时，不可用磁盘快照回写旧内容。
+	// 若磁盘已追平内存哈希，则切回 disk-backed。
+	if state.Open && !state.DiskBacked {
+		if content, stat, hash, readErr := loadDocumentSnapshot(filePath); readErr == nil && hash == state.ContentHash {
+			version := state.Version
+			if version <= 0 {
+				version = 1
+			}
+			state.openWith(version, stat.ModTime().UnixNano(), stat.Size(), hash, content, language, true)
+			m.upsertDocumentStateCache(filePath, uri, state)
+		}
+		return state, nil
+	}
+
+	content, stat, hash, err := loadDocumentSnapshot(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	if !state.Open {
+		openVersion := nextOpenVersionFromBaseline(state, stat.ModTime().UnixNano(), stat.Size(), hash)
+		state.openWith(openVersion, stat.ModTime().UnixNano(), stat.Size(), hash, content, language, true)
+		m.upsertDocumentStateCache(filePath, uri, state)
+		return state, nil
+	}
+
+	isStale := state.MtimeNS != stat.ModTime().UnixNano() || state.Size != stat.Size() || state.ContentHash != hash
+	if !isStale {
+		return state, nil
+	}
+
+	nextVersion := state.Version + 1
+	if nextVersion <= 0 {
+		nextVersion = 1
+	}
+	state.openWith(nextVersion, stat.ModTime().UnixNano(), stat.Size(), hash, content, language, true)
+	m.upsertDocumentStateCache(filePath, uri, state)
+	return state, nil
+}
+
 func (m *Manager) openDocument(filePath, content string) error {
 	path := strings.TrimSpace(filePath)
 	if path == "" {
 		return apperrors.Newf("LSP.openDocument", "file_path is required")
+	}
+
+	ext := strings.TrimPrefix(strings.ToLower(filepathExt(path)), ".")
+	if isMarkdownExtension(ext) {
+		return m.openDocumentWithoutClient(path, content, "markdown")
 	}
 
 	client, cfg, err := m.ensureClientForFile(path)
@@ -153,6 +217,30 @@ func (m *Manager) openDocument(filePath, content string) error {
 
 	state.openWith(openVersion, 0, int64(len(content)), hash, content, cfg.Language, false)
 	m.upsertDocumentStateCache(path, uri, state)
+	return nil
+}
+
+func (m *Manager) openDocumentWithoutClient(filePath, content, language string) error {
+	uri := pathToURI(filePath)
+	lock := m.documentLock(uri)
+	lock.Lock()
+	defer lock.Unlock()
+
+	state := m.documentState(uri)
+	openVersion := state.Version + 1
+	if openVersion <= 0 {
+		openVersion = 1
+	}
+
+	hash := hashBytes([]byte(content))
+	if stat, err := os.Stat(filePath); err == nil {
+		state.openWith(openVersion, stat.ModTime().UnixNano(), stat.Size(), hash, content, language, true)
+		m.upsertDocumentStateCache(filePath, uri, state)
+		return nil
+	}
+
+	state.openWith(openVersion, 0, int64(len(content)), hash, content, language, false)
+	m.upsertDocumentStateCache(filePath, uri, state)
 	return nil
 }
 
@@ -201,6 +289,11 @@ func (m *Manager) changeDocument(filePath string, version int, newContent string
 	path := strings.TrimSpace(filePath)
 	if path == "" {
 		return apperrors.Newf("LSP.changeDocument", "file_path is required")
+	}
+
+	ext := strings.TrimPrefix(strings.ToLower(filepathExt(path)), ".")
+	if isMarkdownExtension(ext) {
+		return m.changeDocumentWithoutClient(path, version, newContent, "markdown")
 	}
 
 	uri := pathToURI(path)
@@ -261,6 +354,39 @@ func (m *Manager) changeDocument(filePath string, version int, newContent string
 		state.MtimeNS = 0
 	}
 	m.upsertDocumentStateCache(path, uri, state)
+	return nil
+}
+
+func (m *Manager) changeDocumentWithoutClient(filePath string, version int, newContent, language string) error {
+	uri := pathToURI(filePath)
+	lock := m.documentLock(uri)
+	lock.Lock()
+	defer lock.Unlock()
+
+	state := m.documentState(uri)
+	m.restoreDocumentStateFromCache(filePath, uri, language, state)
+
+	hash := hashBytes([]byte(newContent))
+	if version <= state.Version {
+		version = state.Version + 1
+	}
+	if version <= 0 {
+		version = 1
+	}
+
+	state.Version = version
+	state.Content = newContent
+	state.ContentHash = hash
+	state.Size = int64(len(newContent))
+	state.DiskBacked = false
+	state.Language = normalizeLanguage(language)
+	state.Open = true
+	if stat, err := os.Stat(filePath); err == nil {
+		state.MtimeNS = stat.ModTime().UnixNano()
+	} else {
+		state.MtimeNS = 0
+	}
+	m.upsertDocumentStateCache(filePath, uri, state)
 	return nil
 }
 
@@ -415,4 +541,9 @@ func filepathExt(path string) string {
 		return ""
 	}
 	return path[lastDot:]
+}
+
+func isMarkdownExtension(ext string) bool {
+	normalized := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(ext)), ".")
+	return normalized == "md" || normalized == "markdown"
 }

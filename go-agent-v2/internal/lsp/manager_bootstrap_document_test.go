@@ -51,6 +51,21 @@ func newRunningStubClient(language string, wc *countingWriteCloser) *Client {
 	return cli
 }
 
+func setTestEnvForBootstrapDoc(t *testing.T, key, value string) {
+	t.Helper()
+	old, existed := os.LookupEnv(key)
+	if err := os.Setenv(key, value); err != nil {
+		t.Fatalf("set env %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(key, old)
+			return
+		}
+		_ = os.Unsetenv(key)
+	})
+}
+
 func TestBootstrapDocument_DoesNotOverwriteUnsavedDidChangeContent(t *testing.T) {
 	m := NewManager(nil)
 
@@ -123,8 +138,8 @@ func TestWorkspaceSymbol_LanguageOnlyBootstrap(t *testing.T) {
 
 func TestCacheDisabled_DefaultBehavior_NoPersistedCache(t *testing.T) {
 	cacheDir := filepath.Join(t.TempDir(), "cache-disabled")
-	setTestEnv(t, envLSPCacheEnabled, "false")
-	setTestEnv(t, envLSPCacheDir, cacheDir)
+	setTestEnvForBootstrapDoc(t, envLSPCacheEnabled, "false")
+	setTestEnvForBootstrapDoc(t, envLSPCacheDir, cacheDir)
 
 	m := NewManager(nil)
 	if m.cache == nil {
@@ -165,8 +180,8 @@ func TestCacheDisabled_DefaultBehavior_NoPersistedCache(t *testing.T) {
 
 func TestCacheFailClosed_OpenSyncFailureDoesNotUpsert(t *testing.T) {
 	cacheDir := filepath.Join(t.TempDir(), "cache-fail-closed")
-	setTestEnv(t, envLSPCacheEnabled, "true")
-	setTestEnv(t, envLSPCacheDir, cacheDir)
+	setTestEnvForBootstrapDoc(t, envLSPCacheEnabled, "true")
+	setTestEnvForBootstrapDoc(t, envLSPCacheDir, cacheDir)
 
 	tmp := t.TempDir()
 	filePath := filepath.Join(tmp, "main.go")
@@ -196,8 +211,8 @@ func TestCacheFailClosed_OpenSyncFailureDoesNotUpsert(t *testing.T) {
 
 func TestCacheRecover_BootstrapStillChecksDiskFreshness(t *testing.T) {
 	cacheDir := filepath.Join(t.TempDir(), "lsp-cache")
-	setTestEnv(t, envLSPCacheEnabled, "true")
-	setTestEnv(t, envLSPCacheDir, cacheDir)
+	setTestEnvForBootstrapDoc(t, envLSPCacheEnabled, "true")
+	setTestEnvForBootstrapDoc(t, envLSPCacheDir, cacheDir)
 
 	tmp := t.TempDir()
 	filePath := filepath.Join(tmp, "main.go")
@@ -260,5 +275,134 @@ func TestCacheRecover_BootstrapStillChecksDiskFreshness(t *testing.T) {
 		t.Fatal("expected refreshed cache record after bootstrap")
 	} else if record.ContentHash != hashBytes([]byte(newContent)) {
 		t.Fatalf("refreshed cache hash = %q, want %q", record.ContentHash, hashBytes([]byte(newContent)))
+	}
+}
+
+func TestOpenFileAllowsMarkdownWithoutLanguageServer(t *testing.T) {
+	t.Parallel()
+
+	mgr := NewManager(nil)
+
+	mdPath := filepath.Join(t.TempDir(), "review.md")
+	content := "# Title\n\n- item\n"
+
+	if err := mgr.OpenFile(mdPath, content); err != nil {
+		t.Fatalf("OpenFile(.md) error = %v", err)
+	}
+
+	uri := pathToURI(mdPath)
+	state := mgr.documentState(uri)
+	if !state.Open {
+		t.Fatalf("expected markdown file to be marked open")
+	}
+	if state.Language != "markdown" {
+		t.Fatalf("state.Language = %q, want %q", state.Language, "markdown")
+	}
+	if state.Content != content {
+		t.Fatalf("state.Content mismatch")
+	}
+	if state.Version != 1 {
+		t.Fatalf("state.Version = %d, want 1", state.Version)
+	}
+
+	mgr.mu.RLock()
+	clientCount := len(mgr.clients)
+	mgr.mu.RUnlock()
+	if clientCount != 0 {
+		t.Fatalf("expected no LSP clients started for markdown, got %d", clientCount)
+	}
+}
+
+func TestOpenFileAllowsDotMarkdownWithoutLanguageServer(t *testing.T) {
+	t.Parallel()
+
+	mgr := NewManager(nil)
+	markdownPath := filepath.Join(t.TempDir(), "notes.markdown")
+
+	if err := mgr.OpenFile(markdownPath, "content"); err != nil {
+		t.Fatalf("OpenFile(.markdown) error = %v", err)
+	}
+}
+
+func TestBootstrapDocumentAllowsMarkdownWithoutLanguageServer(t *testing.T) {
+	t.Parallel()
+
+	mgr := NewManager(nil)
+	mdPath := filepath.Join(t.TempDir(), "workflow.md")
+	content := "# Title\n\n## Section\n"
+	if err := os.WriteFile(mdPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write markdown file: %v", err)
+	}
+
+	if err := mgr.BootstrapDocument(mdPath); err != nil {
+		t.Fatalf("BootstrapDocument(.md) error = %v", err)
+	}
+
+	uri := pathToURI(mdPath)
+	state := mgr.documentState(uri)
+	if !state.Open {
+		t.Fatal("expected markdown document state to be open after bootstrap")
+	}
+	if state.Language != "markdown" {
+		t.Fatalf("state.Language = %q, want markdown", state.Language)
+	}
+	if state.Content != content {
+		t.Fatalf("state.Content mismatch")
+	}
+
+	mgr.mu.RLock()
+	clientCount := len(mgr.clients)
+	mgr.mu.RUnlock()
+	if clientCount != 0 {
+		t.Fatalf("expected no LSP clients started for markdown bootstrap, got %d", clientCount)
+	}
+}
+
+func TestDocumentSymbolMarkdownFallbackWithoutLanguageServer(t *testing.T) {
+	t.Parallel()
+
+	mgr := NewManager(nil)
+	mdPath := filepath.Join(t.TempDir(), "outline.md")
+	content := "# Root\n\n## Child A\n\n### Grandchild\n\nSubtopic\n---\n"
+	if err := os.WriteFile(mdPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write markdown file: %v", err)
+	}
+
+	symbols, err := mgr.DocumentSymbol(mdPath)
+	if err != nil {
+		t.Fatalf("DocumentSymbol(.md) error = %v", err)
+	}
+	if len(symbols) != 1 {
+		t.Fatalf("expected one root heading symbol, got %d", len(symbols))
+	}
+	if symbols[0].Name != "Root" {
+		t.Fatalf("root symbol name = %q, want Root", symbols[0].Name)
+	}
+	if len(symbols[0].Children) < 2 {
+		t.Fatalf("expected Root to have at least two children, got %d", len(symbols[0].Children))
+	}
+	if symbols[0].Children[0].Name != "Child A" {
+		t.Fatalf("first child symbol name = %q, want Child A", symbols[0].Children[0].Name)
+	}
+	if len(symbols[0].Children[0].Children) != 1 || symbols[0].Children[0].Children[0].Name != "Grandchild" {
+		t.Fatalf("expected Child A -> Grandchild hierarchy, got %#v", symbols[0].Children[0].Children)
+	}
+
+	foundSubtopic := false
+	for _, child := range symbols[0].Children {
+		if child.Name == "Subtopic" {
+			foundSubtopic = true
+			break
+		}
+	}
+	if !foundSubtopic {
+		t.Fatalf("expected setext heading Subtopic in root children, got %#v", symbols[0].Children)
+	}
+
+	mgr.mu.RLock()
+	clientCount := len(mgr.clients)
+	mgr.mu.RUnlock()
+	if clientCount != 0 {
+		t.Fatalf("expected no LSP clients started for markdown symbols, got %d", clientCount)
 	}
 }

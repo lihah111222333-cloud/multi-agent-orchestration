@@ -16,6 +16,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // ========================================
@@ -652,7 +653,10 @@ func extractInputs(inputs []UserInput) (prompt string, images, files []string) {
 	for _, inp := range inputs {
 		switch strings.ToLower(strings.TrimSpace(inp.Type)) {
 		case "text":
-			texts = append(texts, inp.Text)
+			text := util.StripLeadingSystemNoise(inp.Text)
+			if strings.TrimSpace(text) != "" {
+				texts = append(texts, text)
+			}
 		case "image":
 			if value := strings.TrimSpace(inp.URL); value != "" {
 				images = append(images, value)

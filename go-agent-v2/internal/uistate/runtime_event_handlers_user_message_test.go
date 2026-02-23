@@ -40,6 +40,28 @@ func TestSanitizeUserMessageTextWithMode_NoTrimKeepsInjectedBlocks(t *testing.T)
 	}
 }
 
+func TestSanitizeUserMessageText_TrimsLeadingSystemNoise(t *testing.T) {
+	input := "# AGENTS.md instructions for /repo\n<INSTRUCTIONS>\nrule\n</INSTRUCTIONS>\n<environment_context>\nctx\n</environment_context>\n真正的问题"
+	got := sanitizeUserMessageText(input)
+	if got != "真正的问题" {
+		t.Fatalf("sanitizeUserMessageText=%q, want %q", got, "真正的问题")
+	}
+}
+
+func TestHandleUserMessageEvent_SkipsSystemNoiseOnlyMessage(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-user-system-noise"
+	mgr.ApplyAgentEvent(threadID, NormalizedEvent{
+		UIType: UITypeUserMessage,
+		Text:   "<permissions instructions>\nnoise\n</permissions instructions>",
+	}, nil)
+
+	timeline := mgr.ThreadTimeline(threadID)
+	if len(timeline) != 0 {
+		t.Fatalf("timeline len=%d, want=0", len(timeline))
+	}
+}
+
 func TestHandleUserMessageEvent_NoTrimModeKeepsInjectedBlocks(t *testing.T) {
 	mgr := NewRuntimeManager()
 	mgr.SetSanitizeInjectedUserMessage(false)

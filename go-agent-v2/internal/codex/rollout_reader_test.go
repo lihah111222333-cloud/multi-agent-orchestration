@@ -156,6 +156,22 @@ func TestReadRolloutMessages_FiltersSystemNoise(t *testing.T) {
 	}
 }
 
+func TestReadRolloutMessages_StripsSystemNoisePrefixAndKeepsQuestion(t *testing.T) {
+	content := `{"timestamp":"2026-02-20T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /repo\n<INSTRUCTIONS>\nrule\n</INSTRUCTIONS>\n<environment_context>\nctx\n</environment_context>\nactual question"}]}}
+`
+	path := writeTemp(t, content)
+	msgs, err := ReadRolloutMessages(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Content != "actual question" {
+		t.Fatalf("msg[0].Content = %q, want 'actual question'", msgs[0].Content)
+	}
+}
+
 func TestReadRolloutMessages_TrimsLSPInjection(t *testing.T) {
 	content := `{"timestamp":"2026-02-20T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"my question\n已注入 LSP context"}]}}
 `

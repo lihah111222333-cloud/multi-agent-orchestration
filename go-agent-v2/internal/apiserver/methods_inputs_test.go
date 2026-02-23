@@ -67,6 +67,42 @@ func TestExtractInputs_SkillContentIsIgnored(t *testing.T) {
 	}
 }
 
+func TestExtractInputs_StripsLeadingSystemNoise(t *testing.T) {
+	prompt, images, files := extractInputs([]UserInput{
+		{
+			Type: "text",
+			Text: "# AGENTS.md instructions for /repo\n<INSTRUCTIONS>\nrule\n</INSTRUCTIONS>\n<environment_context>\nctx\n</environment_context>\n真实问题",
+		},
+	})
+	if prompt != "真实问题" {
+		t.Fatalf("prompt = %q, want 真实问题", prompt)
+	}
+	if len(images) != 0 {
+		t.Fatalf("images = %#v, want empty", images)
+	}
+	if len(files) != 0 {
+		t.Fatalf("files = %#v, want empty", files)
+	}
+}
+
+func TestExtractInputs_DropsNoiseOnlyText(t *testing.T) {
+	prompt, images, files := extractInputs([]UserInput{
+		{
+			Type: "text",
+			Text: "<permissions instructions>\nnoise only\n</permissions instructions>",
+		},
+	})
+	if prompt != "" {
+		t.Fatalf("prompt = %q, want empty", prompt)
+	}
+	if len(images) != 0 {
+		t.Fatalf("images = %#v, want empty", images)
+	}
+	if len(files) != 0 {
+		t.Fatalf("files = %#v, want empty", files)
+	}
+}
+
 func TestBuildUserTimelineAttachmentsFromInputs_PreferLocalImageURL(t *testing.T) {
 	attachments := buildUserTimelineAttachmentsFromInputs([]UserInput{
 		{

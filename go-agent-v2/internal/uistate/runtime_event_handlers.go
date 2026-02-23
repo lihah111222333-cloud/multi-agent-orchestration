@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 type resolvedFields struct {
@@ -927,6 +928,10 @@ func sanitizeUserMessageText(text string) string {
 }
 
 func sanitizeUserMessageTextWithMode(text string, trimInjected bool) string {
+	text = util.StripLeadingSystemNoise(text)
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
 	if !trimInjected {
 		return text
 	}

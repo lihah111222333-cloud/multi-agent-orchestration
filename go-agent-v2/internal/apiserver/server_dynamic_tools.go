@@ -148,6 +148,7 @@ func (s *Server) SetupLSP(rootDir string) {
 // buildLSPDynamicTools 构建 LSP 动态工具列表 (注入 codex agent)。
 func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 	if s.lsp == nil {
+		logger.Info("lsp dynamic tools disabled: lsp manager is not initialized")
 		return nil
 	}
 	statuses := s.lsp.Statuses()

@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // RolloutMessage 从 rollout 文件提取的消息。
@@ -84,6 +86,10 @@ func ReadRolloutMessagesWithTrim(rolloutPath string, trimInjectedUserContent boo
 		}
 
 		if payload.Role == "user" {
+			text = util.StripLeadingSystemNoise(text)
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
 			if isSystemNoise(text) {
 				continue
 			}
@@ -167,19 +173,7 @@ func extractRolloutText(content []rolloutContentItem) string {
 }
 
 func isSystemNoise(text string) bool {
-	t := strings.TrimSpace(text)
-	switch {
-	case strings.HasPrefix(t, "# AGENTS.md"):
-		return true
-	case strings.HasPrefix(t, "<environment_context>"):
-		return true
-	case strings.HasPrefix(t, "<INSTRUCTIONS>"):
-		return true
-	case strings.HasPrefix(t, "<permissions instructions>"):
-		return true
-	default:
-		return false
-	}
+	return util.IsSystemNoiseText(text)
 }
 
 func trimLSPInjection(text string) string {

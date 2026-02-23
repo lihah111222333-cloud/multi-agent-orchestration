@@ -1,0 +1,201 @@
+===== Phase 4 Validation Log =====
+time: 2026-02-24 01:57:03 +0800
+phase: P4
+owner: P4 Agent
+branch: test
+head: 857f3a9
+skill: @后端 (active)
+
+[LSP] full-scope diagnostics executed via lsp_diagnostics on: cmd/app-server/main.go, internal/{runner,apiserver,agentcore,bus}/*.go
+[LSP] note: workspace emitted module-scope warnings for .worktrees/test/go-agent-v2 on these files: internal/agentcore/client.go, internal/agentcore/phase1_contract_test.go, internal/agentcore/types.go, internal/runner/manager.go, internal/runner/manager_test.go
+[LSP] other scoped files reported no diagnostics in this pass
+
+===== Skill Availability Check =====
+$ rg --files /Users/mima0000/.codex/skills /Users/mima0000/.agents/skills | rg '测试驱动开发|TDD|tdd|test-driven'
+
+[result] FAIL (skill unavailable)
+[note] @测试驱动开发 skill not found locally; continue per requirement with fail-first evidence/rollback-only policy.
+
+===== Check 1: go test all packages =====
+$ bash <<'EOF'
+go test ./... -count=1
+EOF
+?   	github.com/multi-agent/go-agent-v2/cmd/agent-terminal	[no test files]
+?   	github.com/multi-agent/go-agent-v2/cmd/app-server	[no test files]
+?   	github.com/multi-agent/go-agent-v2/cmd/mcp-server	[no test files]
+?   	github.com/multi-agent/go-agent-v2/cmd/migrate	[no test files]
+?   	github.com/multi-agent/go-agent-v2/cmd/server	[no test files]
+ok  	github.com/multi-agent/go-agent-v2/internal/agentcore	3.207s
+?   	github.com/multi-agent/go-agent-v2/internal/apiserver	[no test files]
+?   	github.com/multi-agent/go-agent-v2/internal/bus	[no test files]
+?   	github.com/multi-agent/go-agent-v2/internal/codex	[no test files]
+?   	github.com/multi-agent/go-agent-v2/internal/config	[no test files]
+?   	github.com/multi-agent/go-agent-v2/internal/dashboard	[no test files]
+?   	github.com/multi-agent/go-agent-v2/internal/database	[no test files]
+?   	github.com/multi-agent/go-agent-v2/internal/executor	[no test files]
+ok  	github.com/multi-agent/go-agent-v2/internal/lsp	3.328s
+?   	github.com/multi-agent/go-agent-v2/internal/mcp	[no test files]
+?   	github.com/multi-agent/go-agent-v2/internal/monitor	[no test files]
+?   	github.com/multi-agent/go-agent-v2/internal/orchestrator	[no test files]
+?   	github.com/multi-agent/go-agent-v2/internal/protocolsync	[no test files]
+ok  	github.com/multi-agent/go-agent-v2/internal/runner	3.431s
+?   	github.com/multi-agent/go-agent-v2/internal/service	[no test files]
+?   	github.com/multi-agent/go-agent-v2/internal/store	[no test files]
+?   	github.com/multi-agent/go-agent-v2/internal/uistate	[no test files]
+?   	github.com/multi-agent/go-agent-v2/pkg/errors	[no test files]
+?   	github.com/multi-agent/go-agent-v2/pkg/logger	[no test files]
+?   	github.com/multi-agent/go-agent-v2/pkg/util	[no test files]
+[result] SUCCESS
+
+===== Check 2: runner generic codex type residue =====
+$ bash <<'EOF'
+runner_violations="$(rg -n 'codex\.(Event(?:[A-Z][A-Za-z0-9_]*)?|DynamicTool|DynamicToolCallData|Client|CodexClient|EventHandler|ThreadInfo|ResumeThreadRequest|ForkThreadRequest|ForkThreadResponse|TextData|ErrorData|WarningData|TokenCountData|SessionConfiguredData|ExecApprovalRequestData|ExecCommandBeginData|ExecCommandEndData|PatchApplyData|CollabAgentData|ThreadNameUpdatedData|TurnDiffData)\b' internal/runner --glob '!**/*_test.go' | rg -v '^[^:]+:[0-9]+:\s*(//|/\*|\*/|\*[[:space:]])' || true)"
+test -z "$runner_violations" || { printf '%s\n' "$runner_violations"; exit 1; }
+EOF
+[result] SUCCESS
+
+===== Check 3: runner codex import outside manager.go =====
+$ bash <<'EOF'
+runner_import_violations="$(rg -n '"github.com/multi-agent/go-agent-v2/internal/codex"' internal/runner --glob '!internal/runner/manager.go' --glob '!**/*_test.go' || true)"
+test -z "$runner_import_violations" || { printf '%s\n' "$runner_import_violations"; exit 1; }
+EOF
+[result] SUCCESS
+
+===== Check 4: runner manager.go codex import count <= 1 =====
+$ bash <<'EOF'
+runner_import_count="$(rg -c '"github.com/multi-agent/go-agent-v2/internal/codex"' internal/runner/manager.go || echo 0)"
+test "$runner_import_count" -le 1 || { echo "runner codex import count: $runner_import_count"; exit 1; }
+EOF
+[result] SUCCESS
+
+===== Check 4.1: runner manager.go codex refs factory-only alias-safe =====
+$ bash <<'EOF'
+source .agent/workflows/cli-abstraction-handoffs/verify-helpers.sh
+runner_manager_codex_aliases_raw="$(extract_codex_aliases internal/runner/manager.go | sort -u)"
+runner_manager_invalid_aliases="$(printf '%s\n' "$runner_manager_codex_aliases_raw" | rg '^(\\.|_)$' || true)"
+test -z "$runner_manager_invalid_aliases" || { echo "invalid codex import alias in manager.go:"; printf '%s\n' "$runner_manager_invalid_aliases"; exit 1; }
+runner_manager_codex_aliases="$(printf '%s\n' "$runner_manager_codex_aliases_raw" | rg -v '^(\\.|_)$' || true)"
+runner_manager_codex_non_factory_refs=""
+for alias in $runner_manager_codex_aliases; do
+  refs="$(strip_go_noise < internal/runner/manager.go | rg -o "\\b${alias}\\.[A-Za-z_][A-Za-z0-9_]*\\b" || true)"
+  [ -z "$refs" ] && continue
+  disallowed_refs="$(printf '%s\n' "$refs" | rg -v "^${alias}\\.(NewAppServerClient|NewClient)$" || true)"
+  if [ -n "$disallowed_refs" ]; then
+    runner_manager_codex_non_factory_refs="${runner_manager_codex_non_factory_refs}${disallowed_refs}"$'\n'
+  fi
+done
+test -z "$(printf '%s' "$runner_manager_codex_non_factory_refs" | tr -d '[:space:]')" || { printf '%s\n' "$runner_manager_codex_non_factory_refs"; exit 1; }
+EOF
+[result] SUCCESS
+
+===== Check 5: apiserver generic codex type residue =====
+$ bash <<'EOF'
+apiserver_violations="$(rg -n 'codex\.(Event(?:[A-Z][A-Za-z0-9_]*)?|DynamicTool|DynamicToolCallData|Client|CodexClient|ClientFactory|EventHandler|ThreadInfo|ResumeThreadRequest|ForkThreadRequest|ForkThreadResponse|TextData|ErrorData|WarningData|TokenCountData|SessionConfiguredData|ExecApprovalRequestData|ExecCommandBeginData|ExecCommandEndData|PatchApplyData|CollabAgentData|ThreadNameUpdatedData|TurnDiffData)\b' internal/apiserver --glob '!**/*_test.go' | rg -v '^[^:]+:[0-9]+:\s*(//|/\*|\*/|\*[[:space:]])' || true)"
+test -z "$apiserver_violations" || { printf '%s\n' "$apiserver_violations"; exit 1; }
+EOF
+[result] SUCCESS
+
+===== Check 5.1: apiserver codex import only methods_thread.go =====
+$ bash <<'EOF'
+apiserver_import_violations="$(rg -n '"github.com/multi-agent/go-agent-v2/internal/codex"' internal/apiserver --glob '!internal/apiserver/methods_thread.go' --glob '!**/*_test.go' || true)"
+test -z "$apiserver_import_violations" || { printf '%s\n' "$apiserver_import_violations"; exit 1; }
+EOF
+[result] SUCCESS
+
+===== Check 5.2: methods_thread codex refs whitelist-only alias-safe =====
+$ bash <<'EOF'
+source .agent/workflows/cli-abstraction-handoffs/verify-helpers.sh
+methods_thread_codex_aliases_raw="$(extract_codex_aliases internal/apiserver/methods_thread.go | sort -u)"
+methods_thread_invalid_aliases="$(printf '%s\n' "$methods_thread_codex_aliases_raw" | rg '^(\\.|_)$' || true)"
+test -z "$methods_thread_invalid_aliases" || { echo "invalid codex import alias in methods_thread.go:"; printf '%s\n' "$methods_thread_invalid_aliases"; exit 1; }
+methods_thread_codex_aliases="$(printf '%s\n' "$methods_thread_codex_aliases_raw" | rg -v '^(\\.|_)$' || true)"
+methods_thread_codex_non_whitelist_refs=""
+for alias in $methods_thread_codex_aliases; do
+  refs="$(strip_go_noise < internal/apiserver/methods_thread.go | rg -o "\\b${alias}\\.[A-Za-z_][A-Za-z0-9_]*\\b" || true)"
+  [ -z "$refs" ] && continue
+  disallowed_refs="$(printf '%s\n' "$refs" | rg -v "^${alias}\\.(FindRolloutPath|ReadRolloutMessagesWithTrim)$" || true)"
+  if [ -n "$disallowed_refs" ]; then
+    methods_thread_codex_non_whitelist_refs="${methods_thread_codex_non_whitelist_refs}${disallowed_refs}"$'\n'
+  fi
+done
+test -z "$(printf '%s' "$methods_thread_codex_non_whitelist_refs" | tr -d '[:space:]')" || { printf '%s\n' "$methods_thread_codex_non_whitelist_refs"; exit 1; }
+EOF
+[result] SUCCESS
+
+===== Check 6: agentcore must not import codex =====
+$ bash <<'EOF'
+go list ./internal/agentcore/... >/dev/null || { echo "internal/agentcore package not found"; exit 1; }
+agentcore_codex_imports="$(go list -f '{{join .Imports "\\n"}}' ./internal/agentcore/... | rg "internal/codex" || true)"
+test -z "$agentcore_codex_imports" || { printf '%s\n' "$agentcore_codex_imports"; exit 1; }
+EOF
+[result] SUCCESS
+
+===== Check 7: app-server main must not use codex.Event/EventHandler =====
+$ bash <<'EOF'
+source .agent/workflows/cli-abstraction-handoffs/verify-helpers.sh
+main_codex_aliases_raw="$(extract_codex_aliases cmd/app-server/main.go | sort -u)"
+main_invalid_aliases="$(printf '%s\n' "$main_codex_aliases_raw" | rg '^(\\.|_)$' || true)"
+test -z "$main_invalid_aliases" || { echo "invalid codex import alias in main.go:"; printf '%s\n' "$main_invalid_aliases"; exit 1; }
+main_codex_aliases="$(printf '%s\n' "$main_codex_aliases_raw" | rg -v '^(\\.|_)$' || true)"
+app_server_event_type_violations=""
+for alias in $main_codex_aliases; do
+  found="$(strip_go_noise < cmd/app-server/main.go | rg -o "\\b${alias}\\.(Event|EventHandler)\\b" || true)"
+  if [ -n "$found" ]; then
+    app_server_event_type_violations="${app_server_event_type_violations}${found}"$'\n'
+  fi
+done
+test -z "$(printf '%s' "$app_server_event_type_violations" | tr -d '[:space:]')" || { printf '%s\n' "$app_server_event_type_violations"; exit 1; }
+EOF
+[result] SUCCESS
+
+===== Check 8: app-server main codex refs factory-only =====
+$ bash <<'EOF'
+source .agent/workflows/cli-abstraction-handoffs/verify-helpers.sh
+main_codex_aliases_raw="$(extract_codex_aliases cmd/app-server/main.go | sort -u)"
+main_invalid_aliases="$(printf '%s\n' "$main_codex_aliases_raw" | rg '^(\\.|_)$' || true)"
+test -z "$main_invalid_aliases" || { echo "invalid codex import alias in main.go:"; printf '%s\n' "$main_invalid_aliases"; exit 1; }
+main_codex_aliases="$(printf '%s\n' "$main_codex_aliases_raw" | rg -v '^(\\.|_)$' || true)"
+app_server_codex_non_factory_refs=""
+for alias in $main_codex_aliases; do
+  refs="$(strip_go_noise < cmd/app-server/main.go | rg -o "\\b${alias}\\.[A-Za-z_][A-Za-z0-9_]*\\b" || true)"
+  [ -z "$refs" ] && continue
+  disallowed_refs="$(printf '%s\n' "$refs" | rg -v "^${alias}\\.(NewAppServerClient|NewClient)$" || true)"
+  if [ -n "$disallowed_refs" ]; then
+    app_server_codex_non_factory_refs="${app_server_codex_non_factory_refs}${disallowed_refs}"$'\n'
+  fi
+done
+test -z "$(printf '%s' "$app_server_codex_non_factory_refs" | tr -d '[:space:]')" || { printf '%s\n' "$app_server_codex_non_factory_refs"; exit 1; }
+EOF
+[result] SUCCESS
+
+===== Check 9: bus must keep codex event dependency (whitelist) =====
+$ bash <<'EOF'
+source .agent/workflows/cli-abstraction-handoffs/verify-helpers.sh
+bus_codex_event_refs=""
+bus_codex_import_files="$(rg -l '"github.com/multi-agent/go-agent-v2/internal/codex"' internal/bus --glob '!**/*_test.go' || true)"
+for file in $bus_codex_import_files; do
+  aliases_raw="$(extract_codex_aliases "$file" | sort -u)"
+  invalid_aliases="$(printf '%s\n' "$aliases_raw" | rg '^(\\.|_)$' || true)"
+  test -z "$invalid_aliases" || { echo "invalid codex import alias in $file:"; printf '%s\n' "$invalid_aliases"; exit 1; }
+  aliases="$(printf '%s\n' "$aliases_raw" | rg -v '^(\\.|_)$' || true)"
+  for alias in $aliases; do
+    refs="$(strip_go_noise < "$file" | rg -o "\\b${alias}\\.Event([A-Z][A-Za-z0-9_]*)?\\b" || true)"
+    [ -z "$refs" ] && continue
+    bus_codex_event_refs="${bus_codex_event_refs}${file}:"$'\n'"${refs}"$'\n'
+  done
+done
+test -n "$(printf '%s' "$bus_codex_event_refs" | tr -d '[:space:]')" || { echo "internal/bus lost expected codex event dependency"; exit 1; }
+EOF
+[result] SUCCESS
+
+===== Check 10: bus must not import/use agentcore =====
+$ bash <<'EOF'
+bus_agentcore_refs="$(rg -n 'agentcore\.|internal/agentcore' internal/bus || true)"
+test -z "$bus_agentcore_refs" || { printf '%s\n' "$bus_agentcore_refs"; exit 1; }
+EOF
+[result] SUCCESS
+
+===== Summary =====
+overall: PASS
+first_failure: none
+failed_checks: 0

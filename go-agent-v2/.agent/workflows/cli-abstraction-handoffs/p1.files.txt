@@ -1,2 +1,15 @@
-# one file path per line
+# agentcore
+internal/agentcore/client.go
+internal/agentcore/types.go
+internal/agentcore/phase1_contract_test.go
 
+# codex
+internal/codex/client.go
+internal/codex/events.go
+internal/codex/interface.go
+
+# handoff docs
+.agent/workflows/cli-abstraction-handoffs/p1.md
+.agent/workflows/cli-abstraction-handoffs/p1.checks.log
+.agent/workflows/cli-abstraction-handoffs/p1.files.txt
+.agent/workflows/cli-abstraction-handoffs/LATEST.md

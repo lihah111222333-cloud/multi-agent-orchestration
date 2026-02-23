@@ -1,2 +1,11 @@
-# one file path per line
-
+cmd/agent-terminal/main.go
+cmd/app-server/main.go
+internal/agentcore/types.go
+internal/apiserver/notifications.go
+internal/codex/events.go
+internal/runner/manager.go
+internal/runner/manager_test.go
+.agent/workflows/cli-abstraction-handoffs/p5.md
+.agent/workflows/cli-abstraction-handoffs/p5.checks.log
+.agent/workflows/cli-abstraction-handoffs/p5.files.txt
+.agent/workflows/cli-abstraction-handoffs/LATEST.md

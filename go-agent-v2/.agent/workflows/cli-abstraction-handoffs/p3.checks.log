@@ -1,0 +1,94 @@
+===== 2026-02-24 01:24:xx +0800 =====
+$ rg --files /Users/mima0000/.codex/skills /Users/mima0000/.agents/skills | rg '测试驱动开发|test-driven|tdd|testing'
+(no output; exit 1)
+note: `@测试驱动开发` 本地未发现独立技能文件，按用户提示中的 TDD 规则执行。
+
+===== 2026-02-24 01:25:xx +0800 =====
+$ rg -l 'codex\.' internal/apiserver/ --glob '!**/*_test.go' | sort
+internal/apiserver/code_run_tools.go
+internal/apiserver/methods_helpers.go
+internal/apiserver/methods_thread.go
+internal/apiserver/methods_turn.go
+internal/apiserver/orchestration_tools.go
+internal/apiserver/resource_tools.go
+internal/apiserver/server_approval.go
+internal/apiserver/server_dynamic_tools.go
+internal/apiserver/server_dynamic_tools_actions_ext.go
+internal/apiserver/server_dynamic_tools_ext_registry.go
+internal/apiserver/server_dynamic_tools_hierarchy_ext.go
+internal/apiserver/server_dynamic_tools_semantic_ext.go
+internal/apiserver/server_dynamic_tools_xref_ext.go
+internal/apiserver/server_payload.go
+[exit_code] 0
+
+===== 2026-02-24 01:26:xx +0800 =====
+$ [LSP-PRE] lsp_open_file + lsp_diagnostics (all target files)
+files:
+- internal/apiserver/code_run_tools.go
+- internal/apiserver/methods_helpers.go
+- internal/apiserver/methods_thread.go
+- internal/apiserver/methods_turn.go
+- internal/apiserver/orchestration_tools.go
+- internal/apiserver/resource_tools.go
+- internal/apiserver/server_approval.go
+- internal/apiserver/server_dynamic_tools.go
+- internal/apiserver/server_dynamic_tools_actions_ext.go
+- internal/apiserver/server_dynamic_tools_ext_registry.go
+- internal/apiserver/server_dynamic_tools_hierarchy_ext.go
+- internal/apiserver/server_dynamic_tools_semantic_ext.go
+- internal/apiserver/server_dynamic_tools_xref_ext.go
+- internal/apiserver/server_payload.go
+- cmd/app-server/main.go
+result: 无新增语义错误；存在历史级别提示（unused/CutPrefix 建议），未由本次迁移引入。
+
+===== 2026-02-24 01:27:xx +0800 =====
+$ [LSP-REF] lsp_references AgentEventHandler / resolveClientActiveTurnID / handleDynamicToolCall
+- AgentEventHandler: 覆盖 cmd/app-server/main.go 调用点
+- resolveClientActiveTurnID: 覆盖定义与调用点
+- handleDynamicToolCall: 覆盖 server_payload.go 调用点
+[exit_code] 0
+
+===== 2026-02-24 01:28:xx +0800 =====
+$ [TDD-RED] generic codex residue check before migration (expected fail)
+[TDD-RED] expected failures found
+... (multiple codex.Event/codex.DynamicTool/codex.* DTO refs in apiserver) ...
+[exit_code] 1
+
+===== 2026-02-24 01:31:xx +0800 =====
+$ gofmt -w internal/apiserver/*.go cmd/app-server/main.go (phase-3 touched files)
+[exit_code] 0
+
+===== 2026-02-24 01:33:xx +0800 =====
+$ [LSP-POST] lsp_open_file + lsp_diagnostics (all target files)
+result: 无新增语义错误；无 gopls workspace 告警。
+
+===== 2026-02-24 01:34:xx +0800 =====
+$ go test ./internal/apiserver/... -count=1
+?   	github.com/multi-agent/go-agent-v2/internal/apiserver	[no test files]
+[exit_code] 0
+
+===== 2026-02-24 01:34:xx +0800 =====
+$ source .agent/workflows/cli-abstraction-handoffs/verify-helpers.sh
+$ [Step3 alias-safe codex whitelist check]
+step3 alias-safe codex whitelist check: PASS
+[exit_code] 0
+
+===== 2026-02-24 01:35:xx +0800 =====
+$ go test ./internal/runner/... -count=1
+ok  	github.com/multi-agent/go-agent-v2/internal/runner	4.057s
+[exit_code] 0
+
+===== 2026-02-24 01:36:xx +0800 =====
+$ go test ./cmd/app-server -count=1
+?   	github.com/multi-agent/go-agent-v2/cmd/app-server	[no test files]
+[exit_code] 0
+
+===== 2026-02-24 01:36:xx +0800 =====
+$ rg -n 'AgentEventHandler\(|agentcore\.EventHandler|handleApprovalRequest\(|handleDynamicToolCall\(|DynamicToolCallData|resolveClientActiveTurnID\(|activeTurnIDReader|ResumeThreadRequest|ForkThreadRequest|EventAgentMessage|SetOnEvent\(' internal/apiserver/server_payload.go internal/apiserver/server_approval.go internal/apiserver/server_dynamic_tools.go internal/apiserver/methods_turn.go internal/apiserver/methods_thread.go cmd/app-server/main.go
+result: all required high-risk signatures/constants migrated to agentcore (see command output).
+[exit_code] 0
+
+===== 2026-02-24 01:37:xx +0800 =====
+$ apiserver generic codex residue check (workflow Step4 item 5 + 5.1)
+apiserver codex generic-type residue check: PASS
+[exit_code] 0

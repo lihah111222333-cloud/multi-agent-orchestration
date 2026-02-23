@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
@@ -18,12 +18,12 @@ import (
 )
 
 // buildResourceTools 返回资源类工具定义 (注入 codex agent)。
-func (s *Server) buildResourceTools() []codex.DynamicTool {
+func (s *Server) buildResourceTools() []agentcore.DynamicTool {
 	// 没有 DB 连接时不暴露资源工具
 	if s.dagStore == nil {
 		return nil
 	}
-	tools := []codex.DynamicTool{
+	tools := []agentcore.DynamicTool{
 		// ── Task DAG ──
 		{
 			Name:        "task_create_dag",
@@ -224,7 +224,7 @@ func (s *Server) buildResourceTools() []codex.DynamicTool {
 
 	// workspace manager 未启用时，隐藏 workspace_* 工具定义，避免暴露不可用能力。
 	if s.workspaceMgr == nil {
-		filtered := make([]codex.DynamicTool, 0, len(tools))
+		filtered := make([]agentcore.DynamicTool, 0, len(tools))
 		for _, tool := range tools {
 			if strings.HasPrefix(tool.Name, "workspace_") {
 				continue

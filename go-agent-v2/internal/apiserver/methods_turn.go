@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -50,11 +50,14 @@ type turnStartResponse struct {
 	Turn turnInfo `json:"turn"`
 }
 
+// activeTurnIDReader 是具体实现扩展契约:
+// 当前仅 *codex.AppServerClient 保证实现 GetActiveTurnID()，
+// 不要求所有 agentcore.Client 都提供该方法。
 type activeTurnIDReader interface {
 	GetActiveTurnID() string
 }
 
-func resolveClientActiveTurnID(client codex.CodexClient) string {
+func resolveClientActiveTurnID(client agentcore.Client) string {
 	if client == nil {
 		return ""
 	}
@@ -221,7 +224,7 @@ func collectReferencedLSPToolNames(hint string) []string {
 	return names
 }
 
-func collectDynamicToolNames(dynamicTools []codex.DynamicTool) map[string]struct{} {
+func collectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]struct{} {
 	if len(dynamicTools) == 0 {
 		return nil
 	}
@@ -236,7 +239,7 @@ func collectDynamicToolNames(dynamicTools []codex.DynamicTool) map[string]struct
 	return toolNames
 }
 
-func prependLSPAvailabilityWarning(hint string, dynamicTools []codex.DynamicTool) (string, []string) {
+func prependLSPAvailabilityWarning(hint string, dynamicTools []agentcore.DynamicTool) (string, []string) {
 	referenced := collectReferencedLSPToolNames(hint)
 	if len(referenced) == 0 {
 		return hint, nil
@@ -258,7 +261,7 @@ func prependLSPAvailabilityWarning(hint string, dynamicTools []codex.DynamicTool
 	return mergePromptText(warning, hint), missing
 }
 
-func (s *Server) resolveStartInstructionsForLaunch(ctx context.Context, dynamicTools []codex.DynamicTool) string {
+func (s *Server) resolveStartInstructionsForLaunch(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
 	hint := s.resolveLSPUsagePromptHint(ctx)
 	instructions, missing := prependLSPAvailabilityWarning(hint, dynamicTools)
 	if len(missing) == 0 {

@@ -1,2 +1,19 @@
-# one file path per line
-
+cmd/app-server/main.go
+internal/apiserver/code_run_tools.go
+internal/apiserver/methods_helpers.go
+internal/apiserver/methods_thread.go
+internal/apiserver/methods_turn.go
+internal/apiserver/orchestration_tools.go
+internal/apiserver/resource_tools.go
+internal/apiserver/server_approval.go
+internal/apiserver/server_dynamic_tools.go
+internal/apiserver/server_dynamic_tools_actions_ext.go
+internal/apiserver/server_dynamic_tools_ext_registry.go
+internal/apiserver/server_dynamic_tools_hierarchy_ext.go
+internal/apiserver/server_dynamic_tools_semantic_ext.go
+internal/apiserver/server_dynamic_tools_xref_ext.go
+internal/apiserver/server_payload.go
+.agent/workflows/cli-abstraction-handoffs/p3.md
+.agent/workflows/cli-abstraction-handoffs/p3.checks.log
+.agent/workflows/cli-abstraction-handoffs/p3.files.txt
+.agent/workflows/cli-abstraction-handoffs/LATEST.md

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
@@ -491,12 +491,12 @@ func (s *Server) enrichFileChangePayload(threadID, eventType, method string, pay
 	}
 }
 
-// AgentEventHandler 返回一个 codex.EventHandler，将 Agent 事件转为 JSON-RPC 通知/请求。
+// AgentEventHandler 返回一个 agentcore.EventHandler，将 Agent 事件转为 JSON-RPC 通知/请求。
 //
 // 普通事件: 广播为通知 (无需客户端回复)。
 // 审批事件: 发送 Server→Client 请求, 等待客户端回复, 回传 codex (§ 二)。
-func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
-	return func(event codex.Event) {
+func (s *Server) AgentEventHandler(agentID string) agentcore.EventHandler {
+	return func(event agentcore.Event) {
 		method := mapEventToMethod(event.Type)
 
 		// 统一日志: 记录所有 codex 事件
@@ -531,7 +531,7 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 		if method == "error" {
 			willRetry, hasWillRetry := extractBoolFromPayload(payload, "willRetry", "will_retry", "recoverable")
 			if !hasWillRetry {
-				willRetry = strings.EqualFold(strings.TrimSpace(event.Type), codex.EventStreamError)
+				willRetry = strings.EqualFold(strings.TrimSpace(event.Type), agentcore.EventStreamError)
 			}
 			payload["willRetry"] = willRetry
 			payload["will_retry"] = willRetry
@@ -574,7 +574,7 @@ func (s *Server) AgentEventHandler(agentID string) codex.EventHandler {
 		case "file_change_approval_request":
 			util.SafeGo(func() { s.handleApprovalRequest(agentID, "item/fileChange/requestApproval", payload, event) })
 			return
-		case codex.EventDynamicToolCall:
+		case agentcore.EventDynamicToolCall:
 			util.SafeGo(func() { s.handleDynamicToolCall(agentID, event) })
 			return
 		}

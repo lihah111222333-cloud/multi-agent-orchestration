@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -20,8 +20,8 @@ import (
 const maxAgents = 20
 
 // buildOrchestrationTools 返回 Agent 编排工具定义 (注入 codex agent)。
-func (s *Server) buildOrchestrationTools() []codex.DynamicTool {
-	return []codex.DynamicTool{
+func (s *Server) buildOrchestrationTools() []agentcore.DynamicTool {
+	return []agentcore.DynamicTool{
 		{
 			Name:        "orchestration_list_agents",
 			Description: "List all running agents with their ID, name, state, port and thread ID.",
@@ -200,8 +200,8 @@ func (s *Server) orchestrationStopAgent(args json.RawMessage) string {
 }
 
 // buildAllDynamicTools 构建全部动态工具列表 (LSP + 编排 + 资源 + 代码执行)。
-func (s *Server) buildAllDynamicTools() []codex.DynamicTool {
-	var tools []codex.DynamicTool
+func (s *Server) buildAllDynamicTools() []agentcore.DynamicTool {
+	var tools []agentcore.DynamicTool
 	tools = append(tools, s.buildLSPDynamicTools()...)
 	tools = append(tools, s.buildOrchestrationTools()...)
 	tools = append(tools, s.buildResourceTools()...)

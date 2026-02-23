@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
 )
 
@@ -16,8 +16,8 @@ func init() {
 			s.dynTools["lsp_implementation"] = s.lspImplementation
 			s.dynTools["lsp_type_definition"] = s.lspTypeDefinition
 		},
-		func(_ *Server) []codex.DynamicTool {
-			return []codex.DynamicTool{
+		func(_ *Server) []agentcore.DynamicTool {
+			return []agentcore.DynamicTool{
 				{
 					Name:        "lsp_workspace_symbol",
 					Description: "Search symbols in workspace by query. Requires exactly one selector: file_path+query or language+query.",

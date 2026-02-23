@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 )
 
 func init() {
@@ -15,8 +15,8 @@ func init() {
 			s.dynTools["lsp_signature_help"] = s.lspSignatureHelp
 			s.dynTools["lsp_format"] = s.lspFormat
 		},
-		func(_ *Server) []codex.DynamicTool {
-			return []codex.DynamicTool{
+		func(_ *Server) []agentcore.DynamicTool {
+			return []agentcore.DynamicTool{
 				{
 					Name:        "lsp_code_action",
 					Description: "Get code actions/commands at a document range. Supports optional end_line/end_column and action kinds filter.",

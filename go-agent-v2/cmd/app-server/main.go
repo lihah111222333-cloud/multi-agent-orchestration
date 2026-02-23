@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver"
 	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/config"
@@ -23,17 +24,20 @@ import (
 )
 
 func main() {
+	cfg := config.Load()
+	logger.Init(cfg.LogLevel)
+
+	// Runner (Agent 进程管理)
+	mgr, err := runner.NewAgentManager(codex.NewAppServerClient, codex.NewClient)
+	if err != nil {
+		logger.Fatal("runner manager init failed", logger.FieldError, err)
+	}
+
 	listen := flag.String("listen", "ws://127.0.0.1:4500", "WebSocket 监听地址")
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-
-	cfg := config.Load()
-	logger.Init(cfg.LogLevel)
-
-	// Runner (Agent 进程管理)
-	mgr := runner.NewAgentManager()
 
 	// LSP Manager (延迟启动)
 	lspMgr := lsp.NewManager(nil)
@@ -70,7 +74,7 @@ func main() {
 	})
 
 	// 注册 Agent 事件 → JSON-RPC Notification 转发
-	mgr.SetOnEvent(func(agentID string, event codex.Event) {
+	mgr.SetOnEvent(func(agentID string, event agentcore.Event) {
 		handler := srv.AgentEventHandler(agentID)
 		handler(event)
 	})

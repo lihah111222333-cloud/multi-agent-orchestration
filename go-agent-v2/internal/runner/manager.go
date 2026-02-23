@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,7 +22,7 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -48,13 +49,13 @@ const (
 
 // AgentProcess 单个 Codex Agent 实例。
 type AgentProcess struct {
-	ID          string            // 唯一标识
-	Name        string            // 显示名称
-	Client      codex.CodexClient // Codex API 客户端 (支持 http-api 或 app-server)
-	State       AgentState        // 当前状态
-	LastReport  string            // 最近一次 turn 完成时的 agent 报告 (对应 Rust TurnCompleteEvent.last_agent_message)
-	SessionLost bool              // 重启后 codex session 丢失, 下次 turn 需注入 DB 历史上下文
-	mu          sync.Mutex        // 保护 State / LastReport / SessionLost 字段读写
+	ID          string           // 唯一标识
+	Name        string           // 显示名称
+	Client      agentcore.Client // Codex API 客户端 (支持 http-api 或 app-server)
+	State       AgentState       // 当前状态
+	LastReport  string           // 最近一次 turn 完成时的 agent 报告 (对应 Rust TurnCompleteEvent.last_agent_message)
+	SessionLost bool             // 重启后 codex session 丢失, 下次 turn 需注入 DB 历史上下文
+	mu          sync.Mutex       // 保护 State / LastReport / SessionLost 字段读写
 }
 
 // MarkSessionLost 标记 session 丢失 (线程安全)。
@@ -90,8 +91,8 @@ type AgentInfo struct {
 
 // AgentEvent 封装 Agent 事件 (用于 UI 展示)。
 type AgentEvent struct {
-	AgentID string      `json:"agent_id"`
-	Event   codex.Event `json:"event"`
+	AgentID string          `json:"agent_id"`
+	Event   agentcore.Event `json:"event"`
 }
 
 // AgentMessage 兼容旧 WebSocket 消息格式。
@@ -103,9 +104,7 @@ type AgentMessage struct {
 }
 
 // EventHandler Agent 事件回调。
-type EventHandler func(agentID string, event codex.Event)
-
-type clientFactory func(port int, agentID string) codex.CodexClient
+type EventHandler func(agentID string, event agentcore.Event)
 
 // AgentManager 管理多个 Codex Agent 子进程。
 type AgentManager struct {
@@ -123,19 +122,92 @@ type AgentManager struct {
 	onEvent  EventHandler
 
 	// 传输构造器 (便于测试注入 + fallback)
-	appServerFactory clientFactory
-	restFactory      clientFactory
+	appServerFactory agentcore.ClientFactory
+	restFactory      agentcore.ClientFactory
 }
 
 // NewAgentManager 创建管理器。
-func NewAgentManager() *AgentManager {
+func NewAgentManager(appFactory, restFactory any) (*AgentManager, error) {
+	if appFactory == nil {
+		return nil, apperrors.New("AgentManager.NewAgentManager", "appFactory must not be nil")
+	}
+	if restFactory == nil {
+		return nil, apperrors.New("AgentManager.NewAgentManager", "restFactory must not be nil")
+	}
+
+	normalizedAppFactory, err := normalizeClientFactory(appFactory, "appFactory")
+	if err != nil {
+		return nil, err
+	}
+	normalizedRestFactory, err := normalizeClientFactory(restFactory, "restFactory")
+	if err != nil {
+		return nil, err
+	}
+
 	m := &AgentManager{
 		agents:           make(map[string]*AgentProcess),
-		appServerFactory: func(port int, agentID string) codex.CodexClient { return codex.NewAppServerClient(port, agentID) },
-		restFactory:      func(port int, agentID string) codex.CodexClient { return codex.NewClient(port, agentID) },
+		appServerFactory: normalizedAppFactory,
+		restFactory:      normalizedRestFactory,
 	}
 	m.nextPort.Store(int32(basePort))
-	return m
+	return m, nil
+}
+
+var clientIfaceType = reflect.TypeOf((*agentcore.Client)(nil)).Elem()
+
+func normalizeClientFactory(factory any, field string) (agentcore.ClientFactory, error) {
+	switch fn := factory.(type) {
+	case agentcore.ClientFactory:
+		if fn == nil {
+			return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must not be nil", field)
+		}
+		return fn, nil
+	case func(port int, agentID string) agentcore.Client:
+		if fn == nil {
+			return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must not be nil", field)
+		}
+		return fn, nil
+	}
+
+	value := reflect.ValueOf(factory)
+	if !value.IsValid() {
+		return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must be a function", field)
+	}
+	if value.Kind() != reflect.Func {
+		return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must be a function", field)
+	}
+	if value.IsNil() {
+		return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must not be nil", field)
+	}
+
+	typ := value.Type()
+	if typ.NumIn() != 2 || typ.In(0).Kind() != reflect.Int || typ.In(1).Kind() != reflect.String {
+		return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must have signature func(int, string) Client", field)
+	}
+	if typ.NumOut() != 1 || !typ.Out(0).Implements(clientIfaceType) {
+		return nil, apperrors.Newf("AgentManager.NewAgentManager", "%s must return a type implementing agentcore.Client", field)
+	}
+
+	return func(port int, agentID string) agentcore.Client {
+		out := value.Call([]reflect.Value{reflect.ValueOf(port), reflect.ValueOf(agentID)})[0]
+		if (out.Kind() == reflect.Pointer || out.Kind() == reflect.Interface) && out.IsNil() {
+			return nil
+		}
+		client, _ := out.Interface().(agentcore.Client)
+		return client
+	}, nil
+}
+
+// SetClientFactories 设置 app-server / REST 客户端工厂（线程安全）。
+func (m *AgentManager) SetClientFactories(appFactory, restFactory agentcore.ClientFactory) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if appFactory != nil {
+		m.appServerFactory = appFactory
+	}
+	if restFactory != nil {
+		m.restFactory = restFactory
+	}
 }
 
 // SetOnEvent 设置事件回调 (线程安全)。
@@ -147,8 +219,8 @@ func (m *AgentManager) SetOnEvent(fn EventHandler) {
 
 // SetOnOutput 设置输出回调 (兼容旧 API, 将 agent_message_delta 转为 []byte)。
 func (m *AgentManager) SetOnOutput(fn func(agentID string, data []byte)) {
-	m.SetOnEvent(func(agentID string, event codex.Event) {
-		if event.Type == codex.EventAgentMessageDelta || event.Type == codex.EventExecCommandOutputDelta {
+	m.SetOnEvent(func(agentID string, event agentcore.Event) {
+		if event.Type == agentcore.EventAgentMessageDelta || event.Type == agentcore.EventExecCommandOutputDelta {
 			fn(agentID, event.Data)
 		}
 	})
@@ -191,7 +263,7 @@ func (m *AgentManager) findFreePort() (int, error) {
 // 流程: 探测空闲端口 → spawn codex app-server → JSON-RPC initialize → thread/start。
 // ctx 控制 spawn 超时和子进程生命周期。
 // dynamicTools 为 nil 时不注入自定义工具。
-func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string, instructions string, dynamicTools []codex.DynamicTool) error {
+func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string, instructions string, dynamicTools []agentcore.DynamicTool) error {
 	logger.Info("runner: launching agent",
 		logger.FieldAgentID, id,
 		logger.FieldName, name,
@@ -228,7 +300,7 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 	m.mu.Unlock()
 
 	// 注册事件回调 — 更新 Agent 状态 + 转发给 UI
-	client.SetEventHandler(func(event codex.Event) {
+	client.SetEventHandler(func(event agentcore.Event) {
 		m.handleEvent(proc, event)
 	})
 
@@ -246,7 +318,7 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 			proc.mu.Lock()
 			proc.Client = fallback
 			proc.mu.Unlock()
-			fallback.SetEventHandler(func(event codex.Event) {
+			fallback.SetEventHandler(func(event agentcore.Event) {
 				m.handleEvent(proc, event)
 			})
 			if fallbackErr := fallback.SpawnAndConnect(ctx, prompt, cwd, "", instructions, dynamicTools); fallbackErr == nil {
@@ -260,8 +332,8 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 				if err != nil {
 					logger.Warn("runner: fallback event marshal failed", logger.FieldAgentID, id, logger.FieldError, err)
 				}
-				m.handleEvent(proc, codex.Event{
-					Type: codex.EventBackgroundEvent,
+				m.handleEvent(proc, agentcore.Event{
+					Type: agentcore.EventBackgroundEvent,
 					Data: payload,
 				})
 				logger.Warn("runner: launched with REST fallback",
@@ -306,7 +378,7 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 //	Rust codex 的 TurnCompleteEvent 携带 last_agent_message (agent 完成任务时的总结消息)。
 //	该字段通过 codex/event/task_complete 或 turn/completed 事件的 JSON payload 传递。
 //	此处从 event.Data 中提取并存储到 proc.LastReport, 供 orchestrator 层读取。
-func (m *AgentManager) handleEvent(proc *AgentProcess, event codex.Event) {
+func (m *AgentManager) handleEvent(proc *AgentProcess, event agentcore.Event) {
 	// 归一化事件以确定状态
 	normalized := uistate.NormalizeEvent(event.Type, "", event.Data)
 
@@ -333,18 +405,18 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event codex.Event) {
 		newState = StateError
 	case uistate.UITypeSystem:
 		switch normalized.RawType {
-		case codex.EventCollabAgentSpawnBegin,
-			codex.EventCollabAgentInteractionBegin,
-			codex.EventCollabWaitingBegin,
-			codex.EventCollabAgentSpawnEnd,
-			codex.EventCollabAgentInteractionEnd,
-			codex.EventCollabWaitingEnd:
+		case agentcore.EventCollabAgentSpawnBegin,
+			agentcore.EventCollabAgentInteractionBegin,
+			agentcore.EventCollabWaitingBegin,
+			agentcore.EventCollabAgentSpawnEnd,
+			agentcore.EventCollabAgentInteractionEnd,
+			agentcore.EventCollabWaitingEnd:
 			newState = StateRunning
 		}
 	}
 
 	// 特殊状态处理
-	if event.Type == codex.EventShutdownComplete {
+	if event.Type == agentcore.EventShutdownComplete {
 		newState = StateStopped
 	}
 

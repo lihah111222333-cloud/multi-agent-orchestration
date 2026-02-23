@@ -1,2 +1,4 @@
-# one file path per line
-
+.agent/workflows/cli-abstraction-handoffs/p4.md
+.agent/workflows/cli-abstraction-handoffs/p4.checks.log
+.agent/workflows/cli-abstraction-handoffs/p4.files.txt
+.agent/workflows/cli-abstraction-handoffs/LATEST.md

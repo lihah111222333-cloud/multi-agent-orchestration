@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
@@ -146,7 +146,7 @@ func (s *Server) SetupLSP(rootDir string) {
 }
 
 // buildLSPDynamicTools 构建 LSP 动态工具列表 (注入 codex agent)。
-func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
+func (s *Server) buildLSPDynamicTools() []agentcore.DynamicTool {
 	if s.lsp == nil {
 		logger.Info("lsp dynamic tools disabled: lsp manager is not initialized")
 		return nil
@@ -163,7 +163,7 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 		logger.Info("lsp dynamic tools disabled: no language server available on PATH")
 		return nil
 	}
-	tools := []codex.DynamicTool{
+	tools := []agentcore.DynamicTool{
 		{
 			Name:        "lsp_hover",
 			Description: "Get type info and documentation for a symbol at a specific position in a file via LSP hover.",
@@ -282,7 +282,7 @@ func (s *Server) buildLSPDynamicTools() []codex.DynamicTool {
 }
 
 // handleDynamicToolCall 处理 codex 发回的动态工具调用 — 调 LSP 并回传结果。
-func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
+func (s *Server) handleDynamicToolCall(agentID string, event agentcore.Event) {
 	// 心跳: 防止 stall 检测在等待 tool 执行期间误杀
 	// 使用 stallThreshold/6 而非 stallHeartbeat，确保在 stall 阈值内多次 touch。
 	heartbeatDone := make(chan struct{})
@@ -331,7 +331,7 @@ func (s *Server) handleDynamicToolCall(agentID string, event codex.Event) {
 		raw = envelope.Msg
 	}
 
-	var call codex.DynamicToolCallData
+	var call agentcore.DynamicToolCallData
 	if err := json.Unmarshal(raw, &call); err != nil {
 		logger.Warn("app-server: bad dynamic_tool_call data", logger.FieldAgentID, agentID, logger.FieldError, err,
 			"raw", string(event.Data))
@@ -458,7 +458,7 @@ func extractToolFilePath(args map[string]any) string {
 
 func buildToolNotifyPayload(
 	agentID string,
-	call codex.DynamicToolCallData,
+	call agentcore.DynamicToolCallData,
 	argMap map[string]any,
 	filePath string,
 	success bool,

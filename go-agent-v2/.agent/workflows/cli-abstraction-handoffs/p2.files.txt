@@ -1,2 +1,6 @@
-# one file path per line
-
+internal/runner/manager.go
+internal/runner/manager_test.go
+.agent/workflows/cli-abstraction-handoffs/p2.md
+.agent/workflows/cli-abstraction-handoffs/p2.checks.log
+.agent/workflows/cli-abstraction-handoffs/p2.files.txt
+.agent/workflows/cli-abstraction-handoffs/LATEST.md

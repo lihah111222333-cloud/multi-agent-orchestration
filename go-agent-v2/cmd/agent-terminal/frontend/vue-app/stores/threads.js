@@ -36,7 +36,7 @@ const state = reactive({
 const compactPendingByThread = reactive({});
 const compactResultByThread = reactive({});
 const compactWaitersByThread = new Map();
-const COMPACT_COMPLETION_TIMEOUT_MS = 45000;
+const COMPACT_COMPLETION_TIMEOUT_MS = 180000;
 
 const runtimeRootState = reactive({
   threads: [],
@@ -127,6 +127,10 @@ function normalizeThreadID(threadId) {
   return (threadId || '').toString().trim();
 }
 
+function toNormalizedEventString(value) {
+  return (value || '').toString().trim().toLowerCase();
+}
+
 function tokenUsageSignature(threadId) {
   const usage = state.tokenUsageByThread?.[threadId];
   if (!usage || typeof usage !== 'object') return '';
@@ -165,18 +169,117 @@ function getBridgeEventThreadId(evt) {
   const candidates = [
     evt?.threadId,
     evt?.thread_id,
+    evt?.agent_id,
     evt?.params?.threadId,
     evt?.params?.thread_id,
+    evt?.params?.agent_id,
     evt?.payload?.threadId,
     evt?.payload?.thread_id,
+    evt?.payload?.agent_id,
     evt?.data?.threadId,
     evt?.data?.thread_id,
+    evt?.data?.agent_id,
+    evt?.item?.threadId,
+    evt?.params?.item?.threadId,
+    evt?.payload?.item?.threadId,
+    evt?.data?.item?.threadId,
   ];
   for (const value of candidates) {
     const id = normalizeThreadID(value);
     if (id) return id;
   }
   return '';
+}
+
+function getBridgeEventMethod(evt) {
+  const candidates = [
+    evt?.method,
+    evt?.params?.method,
+    evt?.payload?.method,
+    evt?.data?.method,
+  ];
+  for (const value of candidates) {
+    const method = (value || '').toString().trim();
+    if (method) return method;
+  }
+  return '';
+}
+
+function getBridgeEventCodexType(evt) {
+  const candidates = [
+    evt?.type,
+    evt?.params?.type,
+    evt?.payload?.type,
+    evt?.data?.type,
+  ];
+  for (const value of candidates) {
+    const type = (value || '').toString().trim();
+    if (type) return type;
+  }
+  return '';
+}
+
+function getBridgeEventCommand(evt) {
+  const candidates = [
+    evt?.command,
+    evt?.cmd,
+    evt?.uiCommand,
+    evt?.params?.command,
+    evt?.params?.cmd,
+    evt?.params?.uiCommand,
+    evt?.payload?.command,
+    evt?.payload?.cmd,
+    evt?.payload?.uiCommand,
+    evt?.item?.command,
+    evt?.item?.cmd,
+    evt?.params?.item?.command,
+    evt?.params?.item?.cmd,
+    evt?.payload?.item?.command,
+    evt?.payload?.item?.cmd,
+  ];
+  for (const value of candidates) {
+    const command = (value || '').toString().trim();
+    if (command) return command;
+  }
+  return '';
+}
+
+function collectBridgeEventItemKinds(evt) {
+  const values = [
+    evt?.item?.type,
+    evt?.item?.kind,
+    evt?.params?.item?.type,
+    evt?.params?.item?.kind,
+    evt?.payload?.item?.type,
+    evt?.payload?.item?.kind,
+    evt?.data?.item?.type,
+    evt?.data?.item?.kind,
+    evt?.type,
+    evt?.params?.type,
+    evt?.payload?.type,
+    evt?.data?.type,
+  ];
+  return values
+    .map((value) => (value || '').toString().trim())
+    .filter(Boolean);
+}
+
+function isContextCompactionItemKind(value) {
+  const normalized = toNormalizedEventString(value)
+    .replace(/[_\s-]+/g, '')
+    .replace(/[^\w/]/g, '');
+  return normalized.includes('contextcompaction') || normalized === 'contextcompacted';
+}
+
+function isCompactCommand(value) {
+  const normalized = toNormalizedEventString(value).replace(/\s+/g, '');
+  return normalized === '/compact';
+}
+
+function getCompactWaiter(threadId) {
+  const id = normalizeThreadID(threadId);
+  if (!id) return null;
+  return compactWaitersByThread.get(id) || null;
 }
 
 function settleCompactWaiter(threadId, outcome, payload) {
@@ -242,6 +345,8 @@ function waitForCompactCompletion(threadId, timeoutMs = COMPACT_COMPLETION_TIMEO
       timeoutID,
       createdAt: Date.now(),
       timeoutMs: timeout,
+      compactLifecycleStarted: false,
+      compactCommandObserved: false,
     });
   });
 }
@@ -824,25 +929,76 @@ let _syncThrottleLastRun = 0;
 const SYNC_THROTTLE_MS = 500;
 
 function handleBridgeEvent(evt) {
-  const eventType = (evt?.type || evt?.method || '').toString();
-  const eventThreadId = getBridgeEventThreadId(evt);
-  if (eventType === 'thread/compacted') {
+  const eventMethod = getBridgeEventMethod(evt);
+  const eventCodexType = getBridgeEventCodexType(evt);
+  const methodLower = toNormalizedEventString(eventMethod);
+  const typeLower = toNormalizedEventString(eventCodexType);
+  const eventName = eventMethod || eventCodexType || '';
+  let eventThreadId = getBridgeEventThreadId(evt);
+
+  const itemKinds = collectBridgeEventItemKinds(evt);
+  const compactItemSignal = itemKinds.some((value) => isContextCompactionItemKind(value));
+  const compactCommandSignal = isCompactCommand(getBridgeEventCommand(evt));
+  const compactDoneSignal = methodLower === 'thread/compacted'
+    || typeLower === 'context_compacted'
+    || (
+      methodLower === 'item/completed'
+      && (compactItemSignal || compactCommandSignal)
+    );
+  const compactStartSignal = methodLower === 'item/started'
+    && (compactItemSignal || compactCommandSignal);
+
+  if (!eventThreadId && (compactDoneSignal || compactStartSignal) && compactWaitersByThread.size === 1) {
+    const onlyEntry = compactWaitersByThread.entries().next();
+    if (!onlyEntry.done && Array.isArray(onlyEntry.value)) {
+      eventThreadId = normalizeThreadID(onlyEntry.value[0]);
+    }
+  }
+
+  const compactWaiter = getCompactWaiter(eventThreadId);
+  if (compactWaiter && (compactStartSignal || compactCommandSignal)) {
+    compactWaiter.compactCommandObserved = compactWaiter.compactCommandObserved || compactCommandSignal;
+    compactWaiter.compactLifecycleStarted = compactWaiter.compactLifecycleStarted || compactStartSignal || compactItemSignal;
+    logInfo('thread', 'compact.signal.progress', {
+      thread_id: eventThreadId,
+      method: eventMethod,
+      type: eventCodexType,
+      compact_item_signal: compactItemSignal,
+      compact_command_signal: compactCommandSignal,
+      lifecycle_started: compactWaiter.compactLifecycleStarted,
+    });
+  }
+
+  const compactTurnDoneSignal = methodLower === 'turn/completed'
+    && Boolean(compactWaiter?.compactLifecycleStarted);
+
+  if (compactDoneSignal || compactTurnDoneSignal) {
     const settled = settleCompactWaiter(eventThreadId, 'resolve', { evt });
     if (!settled && eventThreadId) {
       setCompactResult(eventThreadId, 'success', '上下文压缩完成');
     }
     logInfo('thread', 'compact.signal.received', {
       thread_id: eventThreadId,
+      method: eventMethod,
+      type: eventCodexType,
+      compact_item_signal: compactItemSignal,
+      compact_command_signal: compactCommandSignal,
+      turn_completed_after_lifecycle: compactTurnDoneSignal,
       waiter_settled: settled,
     });
   }
   if (
-    eventType === 'ui/state/changed'
-    || eventType === 'thread/messages/page'
-    || eventType === 'thread/compacted'
-    || eventType === 'thread/tokenUsage/updated'
+    methodLower === 'ui/state/changed'
+    || methodLower === 'thread/messages/page'
+    || methodLower === 'thread/compacted'
+    || methodLower === 'thread/tokenusage/updated'
+    || typeLower === 'context_compacted'
   ) {
-    const debounceMs = (eventType === 'thread/compacted' || eventType === 'thread/tokenUsage/updated')
+    const debounceMs = (
+      methodLower === 'thread/compacted'
+      || methodLower === 'thread/tokenusage/updated'
+      || typeLower === 'context_compacted'
+    )
       ? 80
       : 200;
 
@@ -851,7 +1007,7 @@ function handleBridgeEvent(evt) {
     if (now - _syncThrottleLastRun >= SYNC_THROTTLE_MS) {
       _syncThrottleLastRun = now;
       syncRuntimeState().catch((error) => {
-        logWarn('thread', 'state.sync.throttle.failed', { error, by_event: eventType });
+        logWarn('thread', 'state.sync.throttle.failed', { error, by_event: eventName });
       });
     }
 
@@ -860,16 +1016,16 @@ function handleBridgeEvent(evt) {
     _syncDebounceTimer = setTimeout(() => {
       _syncThrottleLastRun = typeof performance !== 'undefined' ? performance.now() : Date.now();
       syncRuntimeState().catch((error) => {
-        logWarn('thread', 'state.sync.failed', { error, by_event: eventType });
+        logWarn('thread', 'state.sync.failed', { error, by_event: eventName });
       });
     }, debounceMs);
   }
 
   // turn 终态事件: 延迟 600ms 后强制最终同步 (兜底, 确保 UI 拿到完整数据)
-  if (eventType === 'turn/completed' || eventType === 'turn/aborted') {
+  if (methodLower === 'turn/completed' || methodLower === 'turn/aborted') {
     setTimeout(() => {
       syncRuntimeState().catch((error) => {
-        logWarn('thread', 'state.sync.turn-settle.failed', { error, by_event: eventType });
+        logWarn('thread', 'state.sync.turn-settle.failed', { error, by_event: eventName });
       });
     }, 600);
   }

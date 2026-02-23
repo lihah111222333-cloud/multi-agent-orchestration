@@ -568,12 +568,49 @@ export const ChatTimeline = {
         return assistantMarkdownCache.get(key) || '';
       }
       const html = renderAssistantMarkdown(key);
+      logRenderedFileRefPaths(key, html);
       assistantMarkdownCache.set(key, html);
       if (assistantMarkdownCache.size > 280) {
         const first = assistantMarkdownCache.keys().next().value;
         assistantMarkdownCache.delete(first);
       }
       return html;
+    }
+
+    function decodeHtmlAttr(value) {
+      return (value || '')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>');
+    }
+
+    function whitespaceMeta(value) {
+      const raw = (value || '').toString();
+      const compact = raw.replace(/\s+/g, ' ').trim();
+      return {
+        value: raw,
+        compact,
+        has_multi_space: /\s{2,}/.test(raw),
+        char_len: raw.length,
+      };
+    }
+
+    function logRenderedFileRefPaths(rawText, html) {
+      const source = (rawText || '').toString();
+      const rendered = (html || '').toString();
+      if (!rendered.includes('data-file-path="')) return;
+      const matches = Array.from(rendered.matchAll(/data-file-path="([^"]+)"/g));
+      if (matches.length === 0) return;
+      const paths = matches.slice(0, 8).map((item) => whitespaceMeta(decodeHtmlAttr(item[1])));
+      logInfo('ui', 'chat.fileRef.render.paths', {
+        refs: paths.length,
+        refs_truncated: Math.max(matches.length - paths.length, 0),
+        paths,
+        source_len: source.length,
+        source_preview: source.slice(0, 280),
+      });
     }
 
     function describeClickNode(node) {
@@ -609,10 +646,18 @@ export const ChatTimeline = {
         });
         return;
       }
-      const path = (refNode.getAttribute('data-file-path') || '').toString().trim();
+      const attrPathRaw = (refNode.getAttribute('data-file-path') || '').toString();
+      const path = attrPathRaw.trim();
       const lineRaw = Number(refNode.getAttribute('data-file-line') || 0);
       const line = Number.isFinite(lineRaw) && lineRaw > 0 ? Math.floor(lineRaw) : 1;
       const column = Number(refNode.getAttribute('data-file-column') || 0);
+      logInfo('ui', 'chat.fileRef.click.path_attr', {
+        path_attr: whitespaceMeta(attrPathRaw),
+        path_trimmed: whitespaceMeta(path),
+        line_raw: lineRaw,
+        column_raw: column,
+        ref_text: (refNode.textContent || '').toString().trim(),
+      });
       if (!path) {
         logWarn('ui', 'chat.fileRef.click.no_path', {
           ref_text: (refNode.textContent || '').toString().trim(),

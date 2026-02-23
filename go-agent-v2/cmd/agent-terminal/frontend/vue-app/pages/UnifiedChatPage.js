@@ -167,6 +167,20 @@ function normalizeDiffPath(rawPath) {
 }
 
 /**
+ * @param {string} value
+ * @returns {{ value: string, compact: string, hasMultiSpace: boolean, charLen: number }}
+ */
+function whitespaceTrace(value) {
+  const raw = (value || '').toString();
+  return {
+    value: raw,
+    compact: raw.replace(/\s+/g, ' ').trim(),
+    hasMultiSpace: /\s{2,}/.test(raw),
+    charLen: raw.length,
+  };
+}
+
+/**
  * @param {string} path
  * @returns {string}
  */
@@ -1808,6 +1822,7 @@ export const UnifiedChatPage = {
       logInfo('ui', 'chat.fileRef.handle.received', {
         thread_id: threadId,
         path: rawPath,
+        path_meta: whitespaceTrace(rawPath),
         line,
         column,
         diff_len: diffText.length,
@@ -1880,12 +1895,31 @@ export const UnifiedChatPage = {
         if (!/[\\/]/.test(rawPath) && /\.log$/i.test(rawPath)) {
           codeOpenCandidates.push(`logs/${rawPath}`);
         }
+        logInfo('ui', 'chat.fileRef.code_open.candidates', {
+          thread_id: threadId,
+          requested_path: rawPath,
+          candidates: codeOpenCandidates.map((item) => whitespaceTrace(item)),
+          line,
+          column,
+        });
         /** @type {CodeOpenResult | null} */
         let codeOpenResult = null;
         let codeOpenInputPath = '';
         /** @type {any} */
         let codeOpenError = null;
-        for (const candidatePath of codeOpenCandidates) {
+        for (let index = 0; index < codeOpenCandidates.length; index += 1) {
+          const candidatePath = codeOpenCandidates[index];
+          logInfo('ui', 'chat.fileRef.code_open.attempt', {
+            thread_id: threadId,
+            requested_path: rawPath,
+            requested_path_meta: whitespaceTrace(rawPath),
+            candidate_path: candidatePath,
+            candidate_path_meta: whitespaceTrace(candidatePath),
+            line,
+            column,
+            attempt: index + 1,
+            total: codeOpenCandidates.length,
+          });
           try {
             const result = /** @type {CodeOpenResult | null} */ (await callAPI('ui/code/open', {
               filePath: candidatePath,
@@ -1901,6 +1935,17 @@ export const UnifiedChatPage = {
             }
           } catch (error) {
             codeOpenError = error;
+            logWarn('ui', 'chat.fileRef.code_open.attempt_failed', {
+              thread_id: threadId,
+              requested_path: rawPath,
+              candidate_path: candidatePath,
+              candidate_path_meta: whitespaceTrace(candidatePath),
+              line,
+              column,
+              attempt: index + 1,
+              total: codeOpenCandidates.length,
+              error,
+            });
           }
         }
         if (codeOpenResult?.ok) {
@@ -1979,9 +2024,11 @@ export const UnifiedChatPage = {
           logWarn('ui', 'chat.diff.focus.code_open.failed', {
             thread_id: threadId,
             requested_path: rawPath,
+            requested_path_meta: whitespaceTrace(rawPath),
             line,
             column,
             tried_paths: codeOpenCandidates,
+            tried_paths_meta: codeOpenCandidates.map((item) => whitespaceTrace(item)),
             error: codeOpenError,
           });
         }

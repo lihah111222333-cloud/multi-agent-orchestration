@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 )
 
 func init() {
@@ -14,8 +14,8 @@ func init() {
 			s.dynTools["lsp_semantic_tokens"] = s.lspSemanticTokens
 			s.dynTools["lsp_folding_range"] = s.lspFoldingRange
 		},
-		func(_ *Server) []codex.DynamicTool {
-			return []codex.DynamicTool{
+		func(_ *Server) []agentcore.DynamicTool {
+			return []agentcore.DynamicTool{
 				{
 					Name:        "lsp_semantic_tokens",
 					Description: "Get semantic tokens for a file. Decoded token output is limited to 200 items.",

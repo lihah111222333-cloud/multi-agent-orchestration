@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
@@ -53,7 +53,7 @@ func extractFirstString(payload map[string]any, keys ...string) string {
 //  1. AllocPendingRequest 分配 pending ID
 //  2. broadcastNotification 推送审批请求 (→ notifyHook → Wails Event → 前端)
 //  3. 等待前端 CallAPI("approval/respond") → ResolvePendingRequest 写入 channel
-func (s *Server) handleApprovalRequest(agentID, method string, payload map[string]any, event codex.Event) {
+func (s *Server) handleApprovalRequest(agentID, method string, payload map[string]any, event agentcore.Event) {
 	// 去重: 同一 agentID+method 正在处理中 → 跳过重复调用
 	inflightKey := agentID + ":" + method
 	if _, loaded := s.approvalInFlight.LoadOrStore(inflightKey, struct{}{}); loaded {

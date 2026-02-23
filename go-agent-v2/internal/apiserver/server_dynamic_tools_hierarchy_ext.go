@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 )
 
 func init() {
@@ -14,8 +14,8 @@ func init() {
 			s.dynTools["lsp_call_hierarchy"] = s.lspCallHierarchy
 			s.dynTools["lsp_type_hierarchy"] = s.lspTypeHierarchy
 		},
-		func(_ *Server) []codex.DynamicTool {
-			return []codex.DynamicTool{
+		func(_ *Server) []agentcore.DynamicTool {
+			return []agentcore.DynamicTool{
 				{
 					Name:        "lsp_call_hierarchy",
 					Description: "Get call hierarchy for symbol at file_path:line:column. Direction: incoming|outgoing|both.",

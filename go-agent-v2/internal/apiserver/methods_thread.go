@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/store"
@@ -108,7 +109,7 @@ func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (a
 			"cwd", strings.TrimSpace(p.Cwd),
 		)
 		resumedID, err := tryResumeCandidates(candidates, p.ThreadID, func(id string) error {
-			return proc.Client.ResumeThread(codex.ResumeThreadRequest{
+			return proc.Client.ResumeThread(agentcore.ResumeThreadRequest{
 				ThreadID: id,
 				Path:     p.Path,
 				Cwd:      p.Cwd,
@@ -142,7 +143,7 @@ type threadForkResponse struct {
 
 func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, error) {
 	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		resp, err := proc.Client.ForkThread(codex.ForkThreadRequest{
+		resp, err := proc.Client.ForkThread(agentcore.ForkThreadRequest{
 			SourceThreadID: p.ThreadID,
 		})
 		if err != nil {
@@ -914,7 +915,7 @@ func (s *Server) loadAllThreadMessagesFromCodexRollout(ctx context.Context, thre
 		createdAt := parseRolloutTimestamp(item.Timestamp)
 		eventType := ""
 		if role == "assistant" {
-			eventType = codex.EventAgentMessage
+			eventType = agentcore.EventAgentMessage
 		}
 		all = append(all, threadHistoryMessage{
 			ID:        int64(i + 1),

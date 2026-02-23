@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
@@ -399,7 +399,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 	}
 	var lastResumeErr error
 	for _, resumeThreadID := range resumeCandidates {
-		err := proc.Client.ResumeThread(codex.ResumeThreadRequest{
+		err := proc.Client.ResumeThread(agentcore.ResumeThreadRequest{
 			ThreadID: resumeThreadID,
 			Cwd:      launchCwd,
 		})

@@ -5,13 +5,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 )
 
 type extendedLSPDynamicToolProvider struct {
 	name     string
 	register func(*Server)
-	build    func(*Server) []codex.DynamicTool
+	build    func(*Server) []agentcore.DynamicTool
 }
 
 var (
@@ -22,7 +22,7 @@ var (
 func registerExtendedLSPDynamicToolProvider(
 	name string,
 	register func(*Server),
-	build func(*Server) []codex.DynamicTool,
+	build func(*Server) []agentcore.DynamicTool,
 ) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" || build == nil {
@@ -58,13 +58,13 @@ func (s *Server) registerExtendedLSPDynamicTools() {
 	}
 }
 
-func (s *Server) buildExtendedLSPDynamicTools() []codex.DynamicTool {
+func (s *Server) buildExtendedLSPDynamicTools() []agentcore.DynamicTool {
 	providers := snapshotExtendedLSPDynamicToolProviders()
 	if len(providers) == 0 {
 		return nil
 	}
 
-	tools := make([]codex.DynamicTool, 0, len(providers))
+	tools := make([]agentcore.DynamicTool, 0, len(providers))
 	for _, provider := range providers {
 		tools = append(tools, provider.build(s)...)
 	}
@@ -75,12 +75,12 @@ func (s *Server) buildExtendedLSPDynamicTools() []codex.DynamicTool {
 	return dedupeDynamicToolsByName(tools)
 }
 
-func dedupeDynamicToolsByName(tools []codex.DynamicTool) []codex.DynamicTool {
+func dedupeDynamicToolsByName(tools []agentcore.DynamicTool) []agentcore.DynamicTool {
 	if len(tools) == 0 {
 		return nil
 	}
 	seen := make(map[string]struct{}, len(tools))
-	out := make([]codex.DynamicTool, 0, len(tools))
+	out := make([]agentcore.DynamicTool, 0, len(tools))
 	for _, tool := range tools {
 		name := strings.TrimSpace(tool.Name)
 		if name == "" {

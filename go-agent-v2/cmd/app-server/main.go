@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver"
-	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/config"
 	"github.com/multi-agent/go-agent-v2/internal/database"
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
@@ -70,7 +70,7 @@ func main() {
 	})
 
 	// 注册 Agent 事件 → JSON-RPC Notification 转发
-	mgr.SetOnEvent(func(agentID string, event codex.Event) {
+	mgr.SetOnEvent(func(agentID string, event agentcore.Event) {
 		handler := srv.AgentEventHandler(agentID)
 		handler(event)
 	})

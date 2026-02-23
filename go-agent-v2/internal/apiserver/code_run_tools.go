@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -31,12 +31,12 @@ import (
 // buildCodeRunTools 返回代码执行工具定义 (注入 codex agent)。
 //
 // 不可用的语言不影响工具注册 — 运行时按语言返回错误。
-func (s *Server) buildCodeRunTools() []codex.DynamicTool {
+func (s *Server) buildCodeRunTools() []agentcore.DynamicTool {
 	if s.codeRunner == nil {
 		return nil
 	}
 
-	tools := []codex.DynamicTool{
+	tools := []agentcore.DynamicTool{
 		{
 			Name:        "code_run",
 			Description: "Execute a code snippet (Go, JavaScript, TypeScript) or a project shell command. Go snippets can be auto-wrapped with main function and imports. Use mode='project_cmd' for shell commands (only high-risk commands require approval).",

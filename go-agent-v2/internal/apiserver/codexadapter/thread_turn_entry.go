@@ -9,20 +9,18 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
-	"github.com/multi-agent/go-agent-v2/internal/store"
-	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 // ThreadStartOptions carries dependencies for thread/start.
 type ThreadStartOptions struct {
-	ThreadID         string
-	Cwd              string
-	Model            string
-	ModelProvider    string
-	ApprovalPolicy   string
-	DynamicTools     []agentcore.DynamicTool
+	ThreadID          string
+	Cwd               string
+	Model             string
+	ModelProvider     string
+	ApprovalPolicy    string
+	DynamicTools      []agentcore.DynamicTool
 	StartInstructions string
 
 	RegisterBinding func(context.Context, string, *runner.AgentProcess)
@@ -67,20 +65,20 @@ func (a *Adapter) ThreadStart(ctx context.Context, opt ThreadStartOptions) (Thre
 		}
 	}
 	if runtime := a.ctx.UIRuntime(); runtime != nil {
-		runtime.ReplaceThreads(buildThreadSnapshots(a.ctx.Manager().List()))
+		runtime.ReplaceThreads(toThreadSnapshots(a.ctx.Manager().List()))
 	}
 	return result, nil
 }
 
 // ThreadResumeOptions carries dependencies for thread/resume.
 type ThreadResumeOptions struct {
-	ThreadID                    string
-	Path                        string
-	Cwd                         string
-	Model                       string
-	WithThread                  func(string, func(*runner.AgentProcess) (any, error)) (any, error)
+	ThreadID                     string
+	Path                         string
+	Cwd                          string
+	Model                        string
+	WithThread                   func(string, func(*runner.AgentProcess) (any, error)) (any, error)
 	ResolveCodexThreadCandidates func(context.Context, string) []string
-	NormalizeCodexThreadID      func(string) string
+	NormalizeCodexThreadID       func(string) string
 }
 
 // ThreadResumeResult is the normalized thread/resume payload.
@@ -145,8 +143,8 @@ func (a *Adapter) ThreadResume(ctx context.Context, opt ThreadResumeOptions) (Th
 
 // ThreadForkOptions carries dependencies for thread/fork.
 type ThreadForkOptions struct {
-	ThreadID    string
-	WithThread  func(string, func(*runner.AgentProcess) (any, error)) (any, error)
+	ThreadID     string
+	WithThread   func(string, func(*runner.AgentProcess) (any, error)) (any, error)
 	NowUnixMilli func() int64
 }
 
@@ -158,44 +156,31 @@ type ThreadForkResult struct {
 
 // ThreadFork creates a fork from source thread.
 func (a *Adapter) ThreadFork(opt ThreadForkOptions) (ThreadForkResult, error) {
-	threadID := strings.TrimSpace(opt.ThreadID)
-	if threadID == "" {
-		return ThreadForkResult{}, apperrors.New("Server.threadFork", "threadId is required")
-	}
-	if opt.WithThread == nil {
-		return ThreadForkResult{}, apperrors.New("Server.threadFork", "thread resolver is not configured")
-	}
-	out, err := opt.WithThread(threadID, func(proc *runner.AgentProcess) (any, error) {
-		resp, forkErr := a.ForkThread(proc, agentcore.ForkThreadRequest{
-			SourceThreadID: threadID,
-		})
-		if forkErr != nil {
-			return nil, apperrors.Wrap(forkErr, "Server.threadFork", "fork thread")
-		}
-		newID := ""
-		if resp != nil {
-			newID = strings.TrimSpace(resp.ThreadID)
-		}
-		if newID == "" {
-			now := time.Now().UnixMilli()
-			if opt.NowUnixMilli != nil {
-				now = opt.NowUnixMilli()
+	return withThreadTyped(opt.ThreadID, opt.WithThread, "Server.threadFork",
+		func(proc *runner.AgentProcess) (ThreadForkResult, error) {
+			threadID := strings.TrimSpace(opt.ThreadID)
+			resp, forkErr := a.ForkThread(proc, agentcore.ForkThreadRequest{
+				SourceThreadID: threadID,
+			})
+			if forkErr != nil {
+				return ThreadForkResult{}, apperrors.Wrap(forkErr, "Server.threadFork", "fork thread")
 			}
-			newID = fmt.Sprintf("thread-%d", now)
-		}
-		return ThreadForkResult{
-			ThreadID:   newID,
-			ForkedFrom: threadID,
-		}, nil
-	})
-	if err != nil {
-		return ThreadForkResult{}, err
-	}
-	result, ok := out.(ThreadForkResult)
-	if !ok {
-		return ThreadForkResult{}, apperrors.New("Server.threadFork", "invalid fork result type")
-	}
-	return result, nil
+			newID := ""
+			if resp != nil {
+				newID = strings.TrimSpace(resp.ThreadID)
+			}
+			if newID == "" {
+				now := time.Now().UnixMilli()
+				if opt.NowUnixMilli != nil {
+					now = opt.NowUnixMilli()
+				}
+				newID = fmt.Sprintf("thread-%d", now)
+			}
+			return ThreadForkResult{
+				ThreadID:   newID,
+				ForkedFrom: threadID,
+			}, nil
+		})
 }
 
 // ThreadRollbackOptions carries dependencies for thread/rollback.
@@ -207,27 +192,13 @@ type ThreadRollbackOptions struct {
 
 // ThreadRollback sends /undo index command.
 func (a *Adapter) ThreadRollback(opt ThreadRollbackOptions) (map[string]any, error) {
-	threadID := strings.TrimSpace(opt.ThreadID)
-	if threadID == "" {
-		return nil, apperrors.New("Server.threadRollback", "threadId is required")
-	}
-	if opt.WithThread == nil {
-		return nil, apperrors.New("Server.threadRollback", "thread resolver is not configured")
-	}
-	out, err := opt.WithThread(threadID, func(proc *runner.AgentProcess) (any, error) {
-		if cmdErr := a.SendCommand(proc, "/undo", fmt.Sprintf("%d", opt.TurnIndex)); cmdErr != nil {
-			return nil, apperrors.Wrap(cmdErr, "Server.threadRollback", "send undo command")
-		}
-		return map[string]any{}, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	result, ok := out.(map[string]any)
-	if !ok {
-		return nil, apperrors.New("Server.threadRollback", "invalid rollback result type")
-	}
-	return result, nil
+	return withThreadTyped(opt.ThreadID, opt.WithThread, "Server.threadRollback",
+		func(proc *runner.AgentProcess) (map[string]any, error) {
+			if cmdErr := a.SendCommand(proc, "/undo", fmt.Sprintf("%d", opt.TurnIndex)); cmdErr != nil {
+				return nil, apperrors.Wrap(cmdErr, "Server.threadRollback", "send undo command")
+			}
+			return map[string]any{}, nil
+		})
 }
 
 // ReviewStartOptions carries dependencies for review/start.
@@ -239,61 +210,33 @@ type ReviewStartOptions struct {
 
 // ReviewStart dispatches /review command.
 func (a *Adapter) ReviewStart(opt ReviewStartOptions) (map[string]any, error) {
-	threadID := strings.TrimSpace(opt.ThreadID)
-	if threadID == "" {
-		return nil, apperrors.New("Server.reviewStart", "threadId is required")
-	}
-	if opt.WithThread == nil {
-		return nil, apperrors.New("Server.reviewStart", "thread resolver is not configured")
-	}
-	out, err := opt.WithThread(threadID, func(proc *runner.AgentProcess) (any, error) {
-		if cmdErr := a.SendCommand(proc, "/review", opt.Delivery); cmdErr != nil {
-			return nil, apperrors.Wrap(cmdErr, "Server.reviewStart", "send review command")
-		}
-		return map[string]any{}, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	result, ok := out.(map[string]any)
-	if !ok {
-		return nil, apperrors.New("Server.reviewStart", "invalid review result type")
-	}
-	return result, nil
+	return withThreadTyped(opt.ThreadID, opt.WithThread, "Server.reviewStart",
+		func(proc *runner.AgentProcess) (map[string]any, error) {
+			if cmdErr := a.SendCommand(proc, "/review", opt.Delivery); cmdErr != nil {
+				return nil, apperrors.Wrap(cmdErr, "Server.reviewStart", "send review command")
+			}
+			return map[string]any{}, nil
+		})
 }
 
 // TurnSteerOptions carries dependencies for turn/steer.
 type TurnSteerOptions struct {
-	ThreadID    string
+	ThreadID     string
 	SubmitPrompt string
-	Images      []string
-	Files       []string
-	WithThread  func(string, func(*runner.AgentProcess) (any, error)) (any, error)
+	Images       []string
+	Files        []string
+	WithThread   func(string, func(*runner.AgentProcess) (any, error)) (any, error)
 }
 
 // TurnSteer submits steering prompt to existing thread.
 func (a *Adapter) TurnSteer(opt TurnSteerOptions) (map[string]any, error) {
-	threadID := strings.TrimSpace(opt.ThreadID)
-	if threadID == "" {
-		return nil, apperrors.New("Server.turnSteer", "threadId is required")
-	}
-	if opt.WithThread == nil {
-		return nil, apperrors.New("Server.turnSteer", "thread resolver is not configured")
-	}
-	out, err := opt.WithThread(threadID, func(proc *runner.AgentProcess) (any, error) {
-		if submitErr := a.Submit(proc, opt.SubmitPrompt, opt.Images, opt.Files, nil); submitErr != nil {
-			return nil, submitErr
-		}
-		return map[string]any{}, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	result, ok := out.(map[string]any)
-	if !ok {
-		return nil, apperrors.New("Server.turnSteer", "invalid steer result type")
-	}
-	return result, nil
+	return withThreadTyped(opt.ThreadID, opt.WithThread, "Server.turnSteer",
+		func(proc *runner.AgentProcess) (map[string]any, error) {
+			if submitErr := a.Submit(proc, opt.SubmitPrompt, opt.Images, opt.Files, nil); submitErr != nil {
+				return nil, submitErr
+			}
+			return map[string]any{}, nil
+		})
 }
 
 // ThreadListItem models thread list entry payload.
@@ -305,11 +248,11 @@ type ThreadListItem struct {
 
 // ThreadListOptions configures thread/list and thread/loaded/list behavior.
 type ThreadListOptions struct {
-	MethodName          string
+	MethodName           string
 	LoadThreadArchiveMap func(context.Context) (map[string]int64, error)
-	LoadThreadAliases   func(context.Context) map[string]string
-	ApplyThreadAliases  func([]ThreadListItem, map[string]string)
-	SyncRuntime         bool
+	LoadThreadAliases    func(context.Context) map[string]string
+	ApplyThreadAliases   func([]ThreadListItem, map[string]string)
+	SyncRuntime          bool
 }
 
 // ThreadList returns thread/list payload and syncs runtime snapshots.
@@ -360,7 +303,7 @@ func (a *Adapter) threadList(ctx context.Context, opt ThreadListOptions) ([]Thre
 		opt.ApplyThreadAliases(threads, opt.LoadThreadAliases(ctx))
 	}
 	if opt.SyncRuntime && a != nil && a.ctx != nil && a.ctx.UIRuntime() != nil {
-		a.ctx.UIRuntime().ReplaceThreads(buildThreadSnapshotsFromListItems(threads))
+		a.ctx.UIRuntime().ReplaceThreads(toThreadSnapshots(threads))
 	}
 	return threads, nil
 }
@@ -386,7 +329,7 @@ func (a *Adapter) appendThreadHistoryFromStores(
 		if err != nil {
 			logger.Warn(idMethod+": load history threads from agent_codex_binding failed", logger.FieldError, err)
 		} else {
-			threads = appendBindingThreads(threads, seen, bindings)
+			threads = appendThreadItems(threads, seen, bindings)
 		}
 	}
 	if statusStore := a.ctx.AgentStatusStore(); statusStore != nil {
@@ -396,7 +339,7 @@ func (a *Adapter) appendThreadHistoryFromStores(
 		if err != nil {
 			logger.Warn(idMethod+": load history threads from agent_status failed", logger.FieldError, err)
 		} else {
-			threads = appendAgentStatusThreads(threads, seen, items)
+			threads = appendThreadItems(threads, seen, items)
 		}
 	}
 	if loadThreadArchiveMap != nil {
@@ -408,48 +351,6 @@ func (a *Adapter) appendThreadHistoryFromStores(
 		} else {
 			threads = appendArchivedThreads(threads, seen, archivedMap)
 		}
-	}
-	return threads
-}
-
-func appendBindingThreads(threads []ThreadListItem, seen map[string]struct{}, bindings []store.AgentCodexBinding) []ThreadListItem {
-	for _, item := range bindings {
-		agentID := strings.TrimSpace(item.AgentID)
-		if agentID == "" {
-			continue
-		}
-		if _, ok := seen[agentID]; ok {
-			continue
-		}
-		threads = append(threads, ThreadListItem{
-			ID:    agentID,
-			Name:  agentID,
-			State: "idle",
-		})
-		seen[agentID] = struct{}{}
-	}
-	return threads
-}
-
-func appendAgentStatusThreads(threads []ThreadListItem, seen map[string]struct{}, items []store.AgentStatus) []ThreadListItem {
-	for _, item := range items {
-		agentID := strings.TrimSpace(item.AgentID)
-		if agentID == "" {
-			continue
-		}
-		if _, ok := seen[agentID]; ok {
-			continue
-		}
-		name := strings.TrimSpace(item.AgentName)
-		if name == "" {
-			name = agentID
-		}
-		threads = append(threads, ThreadListItem{
-			ID:    agentID,
-			Name:  name,
-			State: "idle",
-		})
-		seen[agentID] = struct{}{}
 	}
 	return threads
 }
@@ -487,76 +388,22 @@ func appendArchivedThreads(threads []ThreadListItem, seen map[string]struct{}, a
 	return threads
 }
 
-func buildThreadSnapshots(items []runner.AgentInfo) []uistate.ThreadSnapshot {
-	snapshots := make([]uistate.ThreadSnapshot, 0, len(items))
-	for _, item := range items {
-		id := strings.TrimSpace(item.ID)
-		if id == "" {
-			continue
-		}
-		name := strings.TrimSpace(item.Name)
-		if name == "" {
-			name = id
-		}
-		snapshots = append(snapshots, uistate.ThreadSnapshot{
-			ID:    id,
-			Name:  name,
-			State: string(item.State),
-		})
-	}
-	return snapshots
-}
-
-func buildThreadSnapshotsFromListItems(items []ThreadListItem) []uistate.ThreadSnapshot {
-	snapshots := make([]uistate.ThreadSnapshot, 0, len(items))
-	for _, item := range items {
-		id := strings.TrimSpace(item.ID)
-		if id == "" {
-			continue
-		}
-		name := strings.TrimSpace(item.Name)
-		if name == "" {
-			name = id
-		}
-		snapshots = append(snapshots, uistate.ThreadSnapshot{
-			ID:    id,
-			Name:  name,
-			State: item.State,
-		})
-	}
-	return snapshots
-}
-
 // ThreadReadOptions carries dependencies for thread/read.
 type ThreadReadOptions struct {
-	ThreadID  string
+	ThreadID   string
 	WithThread func(string, func(*runner.AgentProcess) (any, error)) (any, error)
 }
 
 // ThreadRead fetches codex history list for the target thread.
 func (a *Adapter) ThreadRead(_ context.Context, opt ThreadReadOptions) (map[string]any, error) {
-	threadID := strings.TrimSpace(opt.ThreadID)
-	if threadID == "" {
-		return nil, apperrors.New("Server.threadRead", "threadId is required")
-	}
-	if opt.WithThread == nil {
-		return nil, apperrors.New("Server.threadRead", "thread resolver is not configured")
-	}
-	out, err := opt.WithThread(threadID, func(proc *runner.AgentProcess) (any, error) {
-		threads, listErr := a.ListThreads(proc)
-		if listErr != nil {
-			return nil, listErr
-		}
-		return map[string]any{"history": threads}, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	result, ok := out.(map[string]any)
-	if !ok {
-		return nil, apperrors.New("Server.threadRead", "invalid read result type")
-	}
-	return result, nil
+	return withThreadTyped(opt.ThreadID, opt.WithThread, "Server.threadRead",
+		func(proc *runner.AgentProcess) (map[string]any, error) {
+			threads, listErr := a.ListThreads(proc)
+			if listErr != nil {
+				return nil, listErr
+			}
+			return map[string]any{"history": threads}, nil
+		})
 }
 
 // ThreadResolveOptions carries dependencies for thread/resolve.

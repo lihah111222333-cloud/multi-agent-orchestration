@@ -1,5 +1,13 @@
 .PHONY: build run test vet clean protocol-sync-check ui-cover-build ui-cover-run ui-cover-report app-cover-build app-cover-run app-cover-report
 
+MIN_MACOS_VERSION ?= 11.0
+
+ifeq ($(shell uname -s),Darwin)
+export CGO_CFLAGS := $(strip $(CGO_CFLAGS) -mmacosx-version-min=$(MIN_MACOS_VERSION))
+export CGO_CXXFLAGS := $(strip $(CGO_CXXFLAGS) -mmacosx-version-min=$(MIN_MACOS_VERSION))
+export CGO_LDFLAGS := $(strip $(CGO_LDFLAGS) -mmacosx-version-min=$(MIN_MACOS_VERSION))
+endif
+
 build:
 	go build ./...
 

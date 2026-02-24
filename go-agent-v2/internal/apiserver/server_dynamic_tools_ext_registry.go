@@ -6,12 +6,13 @@ import (
 	"sync"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/internal/tools"
 )
 
 type extendedLSPDynamicToolProvider struct {
 	name     string
-	register func(*Server)
-	build    func(*Server) []agentcore.DynamicTool
+	register func(tools.LSPProvider)
+	build    func() []agentcore.DynamicTool
 }
 
 var (
@@ -19,10 +20,23 @@ var (
 	extendedLSPDynamicToolProviders   []extendedLSPDynamicToolProvider
 )
 
+type lspExtProviderContext struct {
+	tools.LSPHandlerProvider
+	dynTools map[string]tools.LSPDynamicToolHandler
+}
+
+func (c lspExtProviderContext) BindDynamicTool(name string, handler tools.LSPDynamicToolHandler) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" || handler == nil || c.dynTools == nil {
+		return
+	}
+	c.dynTools[trimmed] = handler
+}
+
 func registerExtendedLSPDynamicToolProvider(
 	name string,
-	register func(*Server),
-	build func(*Server) []agentcore.DynamicTool,
+	register func(tools.LSPProvider),
+	build func() []agentcore.DynamicTool,
 ) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" || build == nil {
@@ -39,9 +53,37 @@ func registerExtendedLSPDynamicToolProvider(
 }
 
 func snapshotExtendedLSPDynamicToolProviders() []extendedLSPDynamicToolProvider {
+	defaultProviders := tools.LSPExtTools()
+
 	extendedLSPDynamicToolProvidersMu.RLock()
-	providers := append([]extendedLSPDynamicToolProvider(nil), extendedLSPDynamicToolProviders...)
+	customProviders := append([]extendedLSPDynamicToolProvider(nil), extendedLSPDynamicToolProviders...)
 	extendedLSPDynamicToolProvidersMu.RUnlock()
+
+	providers := make([]extendedLSPDynamicToolProvider, 0, len(defaultProviders)+len(customProviders))
+	seen := make(map[string]struct{}, len(defaultProviders)+len(customProviders))
+	appendProvider := func(provider extendedLSPDynamicToolProvider) {
+		name := strings.TrimSpace(provider.name)
+		if name == "" || provider.build == nil {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		provider.name = name
+		providers = append(providers, provider)
+	}
+
+	for _, provider := range defaultProviders {
+		appendProvider(extendedLSPDynamicToolProvider{
+			name:     provider.Name,
+			register: provider.Register,
+			build:    provider.Build,
+		})
+	}
+	for _, provider := range customProviders {
+		appendProvider(provider)
+	}
 
 	sort.SliceStable(providers, func(i, j int) bool {
 		return providers[i].name < providers[j].name
@@ -51,9 +93,13 @@ func snapshotExtendedLSPDynamicToolProviders() []extendedLSPDynamicToolProvider 
 
 func (s *Server) registerExtendedLSPDynamicTools() {
 	providers := snapshotExtendedLSPDynamicToolProviders()
+	contextProvider := lspExtProviderContext{
+		LSPHandlerProvider: s.lspTools,
+		dynTools:           s.dynTools,
+	}
 	for _, provider := range providers {
 		if provider.register != nil {
-			provider.register(s)
+			provider.register(contextProvider)
 		}
 	}
 }
@@ -64,15 +110,15 @@ func (s *Server) buildExtendedLSPDynamicTools() []agentcore.DynamicTool {
 		return nil
 	}
 
-	tools := make([]agentcore.DynamicTool, 0, len(providers))
+	toolsOut := make([]agentcore.DynamicTool, 0, len(providers))
 	for _, provider := range providers {
-		tools = append(tools, provider.build(s)...)
+		toolsOut = append(toolsOut, provider.build()...)
 	}
 
-	sort.SliceStable(tools, func(i, j int) bool {
-		return tools[i].Name < tools[j].Name
+	sort.SliceStable(toolsOut, func(i, j int) bool {
+		return toolsOut[i].Name < toolsOut[j].Name
 	})
-	return dedupeDynamicToolsByName(tools)
+	return dedupeDynamicToolsByName(toolsOut)
 }
 
 func dedupeDynamicToolsByName(tools []agentcore.DynamicTool) []agentcore.DynamicTool {

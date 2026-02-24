@@ -33,6 +33,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/service"
+	skillsruntime "github.com/multi-agent/go-agent-v2/internal/skills"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/internal/tooladapter"
 	"github.com/multi-agent/go-agent-v2/internal/tools"
@@ -66,7 +67,6 @@ type Server struct {
 	// codeRunMu:    activeCodeRuns (code_run 执行上下文取消函数)
 	// agentWorkDirMu: agentWorkDirs (agent 默认工作目录)
 	// fileChangeMu: fileChangeByThread (文件变更跟踪)
-	// skillsMu:     agentSkills (技能配置)
 	// sseMu:        sseClients (SSE 推送)
 	// notifyHookMu: notifyHook (桌面端通知钩子)
 	// turnMu:       activeTurns (turn 生命周期跟踪)
@@ -101,6 +101,7 @@ type Server struct {
 	taskAckStore     *store.TaskAckStore
 	taskTraceStore   *store.TaskTraceStore
 	skillSvc         *service.SkillService
+	skillsMgr        *skillsruntime.Manager
 	skillsDir        string
 	workspaceMgr     *service.WorkspaceManager
 	prefManager      *uistate.PreferenceManager
@@ -147,7 +148,7 @@ type Server struct {
 	turnMu              sync.Mutex
 	activeTurns         map[string]*trackedTurn
 	turnWatchdogTimeout time.Duration
-	turnSummaryCache    map[string]trackedTurnSummaryCacheEntry
+	turnSummaryCache    map[string]codexadapter.TrackedTurnSummaryCacheEntry
 	turnSummaryTTL      time.Duration
 	stallThreshold      time.Duration // 无事件多久(秒)触发 stall 自动中断
 	stallHeartbeat      time.Duration // dynamic tool call / 审批等待时的保活心跳间隔
@@ -156,10 +157,6 @@ type Server struct {
 	orchestrationReportMu       sync.Mutex
 	orchestrationPendingReports map[string]map[string]time.Time
 	orchestrationReportTTL      time.Duration
-
-	// Per-session 技能配置 (agentID → skills 列表)
-	skillsMu    sync.RWMutex
-	agentSkills map[string][]string // agentID → ["skill1", "skill2"]
 
 	// SSE 客户端 (debug 模式浏览器事件推送)
 	sseMu      sync.RWMutex
@@ -208,11 +205,10 @@ func New(deps Deps) *Server {
 		turnWatchdogTimeout:         defaultTurnWatchdogTimeout,
 		stallThreshold:              defaultStallThreshold,
 		stallHeartbeat:              defaultStallHeartbeat,
-		turnSummaryCache:            make(map[string]trackedTurnSummaryCacheEntry),
+		turnSummaryCache:            make(map[string]codexadapter.TrackedTurnSummaryCacheEntry),
 		turnSummaryTTL:              defaultTrackedTurnSummaryTTL,
 		orchestrationPendingReports: make(map[string]map[string]time.Time),
 		orchestrationReportTTL:      defaultOrchestrationReportTTL,
-		agentSkills:                 make(map[string][]string),
 		sseClients:                  make(map[chan []byte]struct{}),
 		prefManager:                 uistate.NewPreferenceManager(nil),
 		uiRuntime:                   uistate.NewRuntimeManager(),
@@ -279,6 +275,7 @@ func New(deps Deps) *Server {
 	}
 	s.skillsDir = skillsDir
 	s.skillSvc = service.NewSkillService(skillsDir)
+	s.skillsMgr = newSkillsManager(s)
 	s.registerMethods()
 
 	// 从 Config 加载 stall 参数

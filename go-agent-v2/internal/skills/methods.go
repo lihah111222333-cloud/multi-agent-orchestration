@@ -1,15 +1,11 @@
-// methods_skills.go — skills/* JSON-RPC 方法实现 (列表/导入/读写/配置/预览)。
-package apiserver
+package skills
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -18,15 +14,76 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-// ========================================
-// skills/list, app/list
-// ========================================
+type SkillsLocalReadParams struct {
+	Path string `json:"path"`
+}
 
-func (s *Server) skillsList(_ context.Context, _ json.RawMessage) (any, error) {
-	if s.skillSvc == nil {
+type SkillsLocalImportDirParams struct {
+	Path  string   `json:"path"`
+	Paths []string `json:"paths,omitempty"`
+	Name  string   `json:"name,omitempty"`
+}
+
+type SkillsLocalDeleteParams struct {
+	Name string `json:"name"`
+}
+
+// SkillsConfigWriteParams skills/config/write 请求参数。
+type SkillsConfigWriteParams struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+// SkillsSummaryWriteParams skills/summary/write 请求参数。
+type SkillsSummaryWriteParams struct {
+	Name    string `json:"name"`
+	Summary string `json:"summary"`
+}
+
+type UserInput struct {
+	Type    string `json:"type"`
+	Text    string `json:"text,omitempty"`
+	URL     string `json:"url,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
+type SkillsMatchPreviewParams struct {
+	ThreadID string      `json:"threadId"`
+	AgentID  string      `json:"agent_id,omitempty"`
+	Text     string      `json:"text"`
+	Input    []UserInput `json:"input,omitempty"`
+}
+
+type skillsMatchPreviewItem struct {
+	Name         string   `json:"name"`
+	MatchedBy    string   `json:"matched_by"`
+	MatchedTerms []string `json:"matched_terms,omitempty"`
+}
+
+type SkillsConfigReadParams struct {
+	AgentID string `json:"agent_id"`
+}
+
+// SkillsRemoteReadParams skills/remote/read 请求参数。
+type SkillsRemoteReadParams struct {
+	URL string `json:"url"`
+}
+
+// SkillsRemoteWriteParams skills/remote/write 请求参数。
+type SkillsRemoteWriteParams struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+// SkillsList handles skills/list.
+func (m *Manager) SkillsList(_ context.Context) (any, error) {
+	skillSvc := m.skillService()
+	if skillSvc == nil {
 		return map[string]any{"skills": []map[string]any{}}, nil
 	}
-	list, err := s.skillSvc.ListSkills()
+	list, err := skillSvc.ListSkills()
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsList", "list skills")
 	}
@@ -44,142 +101,21 @@ func (s *Server) skillsList(_ context.Context, _ json.RawMessage) (any, error) {
 	return map[string]any{"skills": skills}, nil
 }
 
-func (s *Server) appList(_ context.Context, _ json.RawMessage) (any, error) {
+// AppList handles app/list.
+func (m *Manager) AppList(_ context.Context) (any, error) {
 	return map[string]any{"apps": []any{}}, nil
 }
 
-// ========================================
-// skills/local/read, skills/local/importDir, skills/local/delete
-// ========================================
-
-type skillsLocalReadParams struct {
-	Path string `json:"path"`
-}
-
-type skillsLocalImportDirParams struct {
-	Path  string   `json:"path"`
-	Paths []string `json:"paths,omitempty"`
-	Name  string   `json:"name,omitempty"`
-}
-
-type skillsLocalDeleteParams struct {
-	Name string `json:"name"`
-}
-
-type skillImportFailure struct {
-	Source string `json:"source"`
-	Error  string `json:"error"`
-}
-
-type skillImportResult struct {
-	Name      string `json:"name"`
-	Dir       string `json:"dir"`
-	SkillFile string `json:"skill_file"`
-	Source    string `json:"source"`
-	Files     int    `json:"files"`
-	Bytes     int64  `json:"bytes"`
-}
-
-func skillImportDirName(rawName, sourceDir string) (string, error) {
-	name := strings.TrimSpace(rawName)
-	if name != "" {
-		return normalizeSkillName(name)
-	}
-	candidate := strings.TrimSpace(strings.TrimRight(sourceDir, `/\`))
-	if candidate == "" {
-		return "", apperrors.New("skillImportDirName", "source directory is required")
-	}
-	base := filepath.Base(candidate)
-	return normalizeSkillName(base)
-}
-
-func collectSkillImportSources(path string, paths []string) []string {
-	candidates := make([]string, 0, len(paths)+1)
-	if strings.TrimSpace(path) != "" {
-		candidates = append(candidates, path)
-	}
-	candidates = append(candidates, paths...)
-
-	out := make([]string, 0, len(candidates))
-	seen := make(map[string]struct{}, len(candidates))
-	for _, raw := range candidates {
-		source := strings.TrimSpace(raw)
-		if source == "" {
-			continue
-		}
-		abs, err := filepath.Abs(source)
-		if err == nil {
-			source = abs
-		}
-		key := strings.ToLower(filepath.Clean(source))
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, source)
-	}
-	return out
-}
-
-func sourceDirHasSkillFile(source string) (bool, error) {
-	info, err := os.Stat(filepath.Join(source, "SKILL.md"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return !info.IsDir(), nil
-}
-
-func expandSkillImportSource(source string) ([]string, error) {
-	info, err := os.Stat(source)
-	if err != nil || !info.IsDir() {
-		return []string{source}, nil
-	}
-
-	hasSkillFile, err := sourceDirHasSkillFile(source)
-	if err != nil {
-		return nil, err
-	}
-	if hasSkillFile {
-		return []string{source}, nil
-	}
-
-	entries, err := os.ReadDir(source)
-	if err != nil {
-		return nil, err
-	}
-	children := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		child := filepath.Join(source, entry.Name())
-		childHasSkillFile, statErr := sourceDirHasSkillFile(child)
-		if statErr != nil {
-			return nil, statErr
-		}
-		if childHasSkillFile {
-			children = append(children, child)
-		}
-	}
-	if len(children) == 0 {
-		return []string{source}, nil
-	}
-	sort.Strings(children)
-	return children, nil
-}
-
-func (s *Server) importSingleSkillDirectory(sourceDir, name string) (skillImportResult, error) {
-	if s.skillSvc == nil {
+func (m *Manager) importSingleSkillDirectory(sourceDir, name string) (skillImportResult, error) {
+	skillSvc := m.skillService()
+	if skillSvc == nil {
 		return skillImportResult{}, apperrors.New("Server.importSingleSkillDirectory", "skill service unavailable")
 	}
 	skillName, err := skillImportDirName(name, sourceDir)
 	if err != nil {
 		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "resolve skill name")
 	}
-	result, err := s.skillSvc.ImportSkillDirectory(sourceDir, skillName)
+	result, err := skillSvc.ImportSkillDirectory(sourceDir, skillName)
 	if err != nil {
 		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "import directory")
 	}
@@ -200,7 +136,8 @@ func (s *Server) importSingleSkillDirectory(sourceDir, name string) (skillImport
 	}, nil
 }
 
-func (s *Server) skillsLocalReadTyped(_ context.Context, p skillsLocalReadParams) (any, error) {
+// SkillsLocalRead handles skills/local/read.
+func (m *Manager) SkillsLocalRead(_ context.Context, p SkillsLocalReadParams) (any, error) {
 	path := strings.TrimSpace(p.Path)
 	if path == "" {
 		return nil, apperrors.New("Server.skillsLocalRead", "path is required")
@@ -231,7 +168,8 @@ func (s *Server) skillsLocalReadTyped(_ context.Context, p skillsLocalReadParams
 	}, nil
 }
 
-func (s *Server) skillsLocalImportDirTyped(_ context.Context, p skillsLocalImportDirParams) (any, error) {
+// SkillsLocalImportDir handles skills/local/importDir.
+func (m *Manager) SkillsLocalImportDir(_ context.Context, p SkillsLocalImportDirParams) (any, error) {
 	requestedSources := collectSkillImportSources(p.Path, p.Paths)
 	if len(requestedSources) == 0 {
 		return nil, apperrors.New("Server.skillsLocalImportDir", "path or paths is required")
@@ -247,7 +185,7 @@ func (s *Server) skillsLocalImportDirTyped(_ context.Context, p skillsLocalImpor
 	sources := collectSkillImportSources("", expandedSources)
 
 	if len(sources) == 1 {
-		result, err := s.importSingleSkillDirectory(sources[0], p.Name)
+		result, err := m.importSingleSkillDirectory(sources[0], p.Name)
 		if err != nil {
 			return nil, apperrors.Wrap(err, "Server.skillsLocalImportDir", "import directory")
 		}
@@ -299,7 +237,7 @@ func (s *Server) skillsLocalImportDirTyped(_ context.Context, p skillsLocalImpor
 		}
 		seenNames[nameKey] = source
 
-		result, err := s.importSingleSkillDirectory(source, "")
+		result, err := m.importSingleSkillDirectory(source, "")
 		if err != nil {
 			failures = append(failures, skillImportFailure{
 				Source: source,
@@ -341,15 +279,17 @@ func (s *Server) skillsLocalImportDirTyped(_ context.Context, p skillsLocalImpor
 	}, nil
 }
 
-func (s *Server) skillsLocalDeleteTyped(_ context.Context, p skillsLocalDeleteParams) (any, error) {
-	if s.skillSvc == nil {
+// SkillsLocalDelete handles skills/local/delete.
+func (m *Manager) SkillsLocalDelete(_ context.Context, p SkillsLocalDeleteParams) (any, error) {
+	skillSvc := m.skillService()
+	if skillSvc == nil {
 		return nil, apperrors.New("Server.skillsLocalDelete", "skill service unavailable")
 	}
 	skillName, err := normalizeSkillName(p.Name)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsLocalDelete", "normalize skill name")
 	}
-	resolvedName, targetDir, err := s.skillSvc.DeleteSkill(skillName)
+	resolvedName, targetDir, err := skillSvc.DeleteSkill(skillName)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, apperrors.Newf("Server.skillsLocalDelete", "skill not found: %s", skillName)
@@ -372,53 +312,16 @@ func (s *Server) skillsLocalDeleteTyped(_ context.Context, p skillsLocalDeletePa
 	}, nil
 }
 
-// ========================================
-// skills/config, skills/match/preview
-// ========================================
-
-// skillsConfigWriteParams skills/config/write 请求参数。
-type skillsConfigWriteParams struct {
-	Name    string `json:"name"`
-	Content string `json:"content"`
-}
-
-// skillsSummaryWriteParams skills/summary/write 请求参数。
-type skillsSummaryWriteParams struct {
-	Name    string `json:"name"`
-	Summary string `json:"summary"`
-}
-
-type skillsMatchPreviewParams struct {
-	ThreadID string      `json:"threadId"`
-	AgentID  string      `json:"agent_id,omitempty"`
-	Text     string      `json:"text"`
-	Input    []UserInput `json:"input,omitempty"`
-}
-
-type skillsMatchPreviewItem struct {
-	Name         string   `json:"name"`
-	MatchedBy    string   `json:"matched_by"`
-	MatchedTerms []string `json:"matched_terms,omitempty"`
-}
-
-func resolveSkillMatchPreviewThreadID(p skillsMatchPreviewParams) string {
-	threadID := strings.TrimSpace(p.ThreadID)
-	if threadID != "" {
-		return threadID
-	}
-	return strings.TrimSpace(p.AgentID)
-}
-
-type skillsConfigReadParams struct {
-	AgentID string `json:"agent_id"`
-}
-
-func (s *Server) skillsMatchPreviewTyped(_ context.Context, p skillsMatchPreviewParams) (any, error) {
+// SkillsMatchPreview handles skills/match/preview.
+func (m *Manager) SkillsMatchPreview(_ context.Context, p SkillsMatchPreviewParams) (any, error) {
 	threadID := resolveSkillMatchPreviewThreadID(p)
-	matches := s.collectAutoMatchedSkillMatches(threadID, p.Text, p.Input, autoSkillMatchOptions{
-		IncludeConfiguredExplicit: true,
-		IncludeConfiguredForce:    true,
-	})
+	var matches []AutoMatchedSkillMatch
+	if matcher := m.autoMatcher(); matcher != nil {
+		matches = matcher.CollectAutoMatchedSkillMatches(threadID, p.Text, p.Input, AutoSkillMatchOptions{
+			IncludeConfiguredExplicit: true,
+			IncludeConfiguredForce:    true,
+		})
+	}
 	items := make([]skillsMatchPreviewItem, 0, len(matches))
 	for _, match := range matches {
 		name := strings.TrimSpace(match.Name)
@@ -440,7 +343,8 @@ func (s *Server) skillsMatchPreviewTyped(_ context.Context, p skillsMatchPreview
 	}, nil
 }
 
-func (s *Server) skillsConfigReadTyped(_ context.Context, p skillsConfigReadParams) (any, error) {
+// SkillsConfigRead handles skills/config/read.
+func (m *Manager) SkillsConfigRead(_ context.Context, p SkillsConfigReadParams) (any, error) {
 	agentID := strings.TrimSpace(p.AgentID)
 	if agentID == "" {
 		return nil, apperrors.New("Server.skillsConfigRead", "agent_id is required")
@@ -452,11 +356,12 @@ func (s *Server) skillsConfigReadTyped(_ context.Context, p skillsConfigReadPara
 	}, nil
 }
 
-func (s *Server) skillsConfigWriteTyped(_ context.Context, p skillsConfigWriteParams) (any, error) {
-	if s.skillSvc == nil {
+// SkillsConfigWrite handles skills/config/write.
+func (m *Manager) SkillsConfigWrite(_ context.Context, p SkillsConfigWriteParams) (any, error) {
+	skillSvc := m.skillService()
+	if skillSvc == nil {
 		return nil, apperrors.New("Server.skillsConfigWrite", "skill service unavailable")
 	}
-
 	if strings.TrimSpace(p.Name) == "" {
 		return nil, apperrors.New("Server.skillsConfigWrite", "name is required")
 	}
@@ -464,7 +369,7 @@ func (s *Server) skillsConfigWriteTyped(_ context.Context, p skillsConfigWritePa
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "normalize skill name")
 	}
-	path, err := s.skillSvc.WriteSkillContent(skillName, p.Content)
+	path, err := skillSvc.WriteSkillContent(skillName, p.Content)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "write skill content")
 	}
@@ -472,8 +377,10 @@ func (s *Server) skillsConfigWriteTyped(_ context.Context, p skillsConfigWritePa
 	return map[string]any{"ok": true, "path": path}, nil
 }
 
-func (s *Server) skillsSummaryWriteTyped(_ context.Context, p skillsSummaryWriteParams) (any, error) {
-	if s.skillSvc == nil {
+// SkillsSummaryWrite handles skills/summary/write.
+func (m *Manager) SkillsSummaryWrite(_ context.Context, p SkillsSummaryWriteParams) (any, error) {
+	skillSvc := m.skillService()
+	if skillSvc == nil {
 		return nil, apperrors.New("Server.skillsSummaryWrite", "skill service unavailable")
 	}
 	if strings.TrimSpace(p.Name) == "" {
@@ -484,7 +391,7 @@ func (s *Server) skillsSummaryWriteTyped(_ context.Context, p skillsSummaryWrite
 		return nil, apperrors.Wrap(err, "Server.skillsSummaryWrite", "normalize skill name")
 	}
 	summary := strings.TrimSpace(p.Summary)
-	path, resolvedName, err := s.skillSvc.UpdateSkillSummary(skillName, summary)
+	path, resolvedName, err := skillSvc.UpdateSkillSummary(skillName, summary)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsSummaryWrite", "update skill summary")
 	}
@@ -497,30 +404,8 @@ func (s *Server) skillsSummaryWriteTyped(_ context.Context, p skillsSummaryWrite
 	}, nil
 }
 
-// GetAgentSkills 返回指定 agent 配置的技能列表。
-func (s *Server) GetAgentSkills(agentID string) []string {
-	s.skillsMu.RLock()
-	defer s.skillsMu.RUnlock()
-	values := s.agentSkills[agentID]
-	if len(values) == 0 {
-		return nil
-	}
-	out := make([]string, len(values))
-	copy(out, values)
-	return out
-}
-
-// ========================================
-// skills/remote/read, skills/remote/write
-// ========================================
-
-// skillsRemoteReadParams skills/remote/read 请求参数。
-type skillsRemoteReadParams struct {
-	URL string `json:"url"`
-}
-
-// skillsRemoteReadTyped 读取远程 Skill。
-func (s *Server) skillsRemoteReadTyped(_ context.Context, p skillsRemoteReadParams) (any, error) {
+// SkillsRemoteRead handles skills/remote/read.
+func (m *Manager) SkillsRemoteRead(_ context.Context, p SkillsRemoteReadParams) (any, error) {
 	logger.Info("skills/remote/read: fetching", logger.FieldURL, p.URL)
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(p.URL)
@@ -547,22 +432,17 @@ func (s *Server) skillsRemoteReadTyped(_ context.Context, p skillsRemoteReadPara
 	}, nil
 }
 
-// skillsRemoteWriteParams skills/remote/write 请求参数。
-type skillsRemoteWriteParams struct {
-	Name    string `json:"name"`
-	Content string `json:"content"`
-}
-
-// skillsRemoteWriteTyped 写入远程 Skill 到本地。
-func (s *Server) skillsRemoteWriteTyped(_ context.Context, p skillsRemoteWriteParams) (any, error) {
-	if s.skillSvc == nil {
+// SkillsRemoteWrite handles skills/remote/write.
+func (m *Manager) SkillsRemoteWrite(_ context.Context, p SkillsRemoteWriteParams) (any, error) {
+	skillSvc := m.skillService()
+	if skillSvc == nil {
 		return nil, apperrors.New("Server.skillsRemoteWrite", "skill service unavailable")
 	}
 	skillName, err := normalizeSkillName(p.Name)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "normalize skill name")
 	}
-	path, err := s.skillSvc.WriteSkillContent(skillName, p.Content)
+	path, err := skillSvc.WriteSkillContent(skillName, p.Content)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "write skill content")
 	}

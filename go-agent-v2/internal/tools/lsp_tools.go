@@ -10,6 +10,8 @@ type LSPDynamicToolHandler = func(json.RawMessage) string
 
 // LSPHandlerProvider defines the LSP dynamic-tool handler surface.
 type LSPHandlerProvider interface {
+	AvailabilitySummary() map[string]any
+	DiagnosticsQuery(filePath string) map[string]any
 	Hover(json.RawMessage) string
 	OpenFile(json.RawMessage) string
 	Diagnostics(json.RawMessage) string

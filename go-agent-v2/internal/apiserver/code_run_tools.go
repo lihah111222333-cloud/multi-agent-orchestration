@@ -1,45 +1,18 @@
-// code_run_tools.go — 代码执行动态工具 apiserver 薄委派 + 运行时状态。
+// code_run_tools.go — 代码执行运行时状态与审批（生命周期层）。
 package apiserver
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
 	"github.com/multi-agent/go-agent-v2/internal/store"
-	"github.com/multi-agent/go-agent-v2/internal/tools"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
-
-func (s *Server) codeRunToolset() []tools.Tool {
-	return tools.CodeRunTools(s, s, s)
-}
-
-func (s *Server) codeRunToolSchemas() []agentcore.DynamicTool {
-	return tools.Schemas(s.codeRunToolset())
-}
-
-func (s *Server) codeRunWithAgent(ctx context.Context, agentID, callID string, args json.RawMessage) string {
-	tool, ok := tools.FindTool(s.codeRunToolset(), "code_run")
-	if !ok || tool.Handler == nil {
-		return `{"error":"code_run tool unavailable","exit_code":-1}`
-	}
-	return tool.Handler(tools.ToolCallContext{AgentID: agentID, CallID: callID, Ctx: ctx}, args)
-}
-
-func (s *Server) codeRunTestWithAgent(ctx context.Context, agentID, callID string, args json.RawMessage) string {
-	tool, ok := tools.FindTool(s.codeRunToolset(), "code_run_test")
-	if !ok || tool.Handler == nil {
-		return `{"error":"code_run_test tool unavailable","exit_code":-1}`
-	}
-	return tool.Handler(tools.ToolCallContext{AgentID: agentID, CallID: callID, Ctx: ctx}, args)
-}
 
 func normalizeAgentWorkDir(cwd string) string {
 	trimmed := strings.TrimSpace(cwd)

@@ -34,6 +34,8 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	"github.com/multi-agent/go-agent-v2/internal/store"
+	"github.com/multi-agent/go-agent-v2/internal/tooladapter"
+	"github.com/multi-agent/go-agent-v2/internal/tools"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -71,14 +73,14 @@ type Server struct {
 	// ========================================
 	mgr        *runner.AgentManager
 	lsp        *lsp.Manager
-	lspTools   *lsp.ToolHandlers
+	lspTools   tools.LSPProvider
 	cfg        *config.Config
 	codeRunner *executor.CodeRunner // 代码块执行引擎
 	// adapter 层: codex 专属能力与通用能力的聚合入口。
 	codexAdapter  *codexadapter.Adapter
 	commonAdapter *commonadapter.Adapter
 	methods       map[string]Handler
-	dynTools      map[string]func(json.RawMessage) string // 动态工具注册表
+	dynTools      map[string]tooladapter.RuntimeToolHandler // 动态工具注册表
 	// submitAgentMessage 统一消息下发入口，便于测试替换。
 	submitAgentMessage       func(agentID, prompt string, images, files []string) error
 	lspDiagnosticsQueryTyped func(ctx context.Context, p lspDiagnosticsQueryParams) (any, error)
@@ -194,7 +196,7 @@ func New(deps Deps) *Server {
 		lsp:                         deps.LSP,
 		cfg:                         deps.Config,
 		methods:                     make(map[string]Handler),
-		dynTools:                    make(map[string]func(json.RawMessage) string),
+		dynTools:                    make(map[string]tooladapter.RuntimeToolHandler),
 		conns:                       make(map[string]*connEntry),
 		pending:                     make(map[int64]chan *Response),
 		diagCache:                   make(map[string][]lsp.Diagnostic),

@@ -3,7 +3,6 @@ package store
 
 import (
 	"context"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multi-agent/go-agent-v2/internal/discovery"
@@ -31,7 +30,7 @@ type AgentThreadStore struct{ BaseStore }
 // Ensure AgentThreadStore satisfies discovery contract at compile time.
 var _ discovery.Discoverer = (*AgentThreadStore)(nil)
 
-// Deprecated: NewAgentThreadStore 无外部调用者，整个 AgentThreadStore 构造函数未被使用。
+// NewAgentThreadStore 创建 AgentThreadStore。
 func NewAgentThreadStore(pool *pgxpool.Pool) *AgentThreadStore {
 	return &AgentThreadStore{NewBaseStore(pool)}
 }
@@ -39,32 +38,9 @@ func NewAgentThreadStore(pool *pgxpool.Pool) *AgentThreadStore {
 const atCols = "thread_id, prompt, model, cwd, status, port, pid, created_at, updated_at, finished_at, last_event_type, error_message"
 const atRunningCols = "thread_id, port, pid, status"
 
-// Deprecated: Register 无外部调用者。
-func (s *AgentThreadStore) Register(ctx context.Context, t *AgentThread) error {
-	now := time.Now().Unix()
-	t.CreatedAt = now
-	t.UpdatedAt = now
-	if t.Status == "" {
-		t.Status = "running"
-	}
-
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO agent_threads (thread_id, prompt, model, cwd, status, port, pid, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		 ON CONFLICT (thread_id) DO UPDATE SET
-		   status=EXCLUDED.status, port=EXCLUDED.port, pid=EXCLUDED.pid, updated_at=EXCLUDED.updated_at`,
-		t.ThreadID, t.Prompt, t.Model, t.Cwd, t.Status, t.Port, t.PID, t.CreatedAt, t.UpdatedAt)
-	return err
-}
-
 // FindByPort 按端口查找运行中的线程。
 func (s *AgentThreadStore) FindByPort(ctx context.Context, port int) (*AgentThread, error) {
 	return s.findRunning(ctx, "port", port)
-}
-
-// Deprecated: FindByPID 无外部调用者。
-func (s *AgentThreadStore) FindByPID(ctx context.Context, pid int) (*AgentThread, error) {
-	return s.findRunning(ctx, "pid", pid)
 }
 
 // findRunning 按指定列查找运行中的线程 (内部 DRY)。
@@ -85,39 +61,6 @@ func (s *AgentThreadStore) ListRunning(ctx context.Context) ([]discovery.Running
 		return nil, err
 	}
 	return collectRows[discovery.RunningAgent](rows)
-}
-
-// Deprecated: ListRunningThreads 保留完整 AgentThread 字段视图。
-func (s *AgentThreadStore) ListRunningThreads(ctx context.Context) ([]AgentThread, error) {
-	rows, err := s.pool.Query(ctx,
-		"SELECT "+atCols+" FROM agent_threads WHERE status = 'running' ORDER BY created_at DESC")
-	if err != nil {
-		return nil, err
-	}
-	return collectRows[AgentThread](rows)
-}
-
-// Deprecated: UpdateStatus 无外部调用者。
-func (s *AgentThreadStore) UpdateStatus(ctx context.Context, threadID, status string, errMsg string) error {
-	now := time.Now().Unix()
-	if status == "stopped" || status == "error" {
-		_, err := s.pool.Exec(ctx,
-			`UPDATE agent_threads SET status=$1, updated_at=$2, error_message=$3, finished_at=$4 WHERE thread_id=$5`,
-			status, now, errMsg, now, threadID)
-		return err
-	}
-	_, err := s.pool.Exec(ctx,
-		`UPDATE agent_threads SET status=$1, updated_at=$2, error_message=$3 WHERE thread_id=$4`,
-		status, now, errMsg, threadID)
-	return err
-}
-
-// Deprecated: UpdateLastEvent 无外部调用者。
-func (s *AgentThreadStore) UpdateLastEvent(ctx context.Context, threadID, eventType string) error {
-	_, err := s.pool.Exec(ctx,
-		"UPDATE agent_threads SET last_event_type=$1, updated_at=$2 WHERE thread_id=$3",
-		eventType, time.Now().Unix(), threadID)
-	return err
 }
 
 // Delete 删除线程记录。

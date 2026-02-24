@@ -5,8 +5,6 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 // BusLogStore 总线异常日志存储。
@@ -14,19 +12,6 @@ type BusLogStore struct{ BaseStore }
 
 // NewBusLogStore 创建总线异常日志存储。
 func NewBusLogStore(pool *pgxpool.Pool) *BusLogStore { return &BusLogStore{NewBaseStore(pool)} }
-
-// Deprecated: Record 无外部调用者。
-func (s *BusLogStore) Record(ctx context.Context, e *BusException) error {
-	extraJSON := mustMarshalJSON(e.Extra)
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO bus_exception_logs (ts, category, severity, source, tool_name, message, traceback, extra)
-		 VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7::jsonb)`,
-		e.Category, e.Severity, e.Source, e.ToolName, e.Message, e.Traceback, string(extraJSON))
-	if err != nil {
-		logger.Warn("bus: log write failed", logger.FieldError, err)
-	}
-	return err
-}
 
 // List 查询异常日志。
 func (s *BusLogStore) List(ctx context.Context, category, severity, keyword string, limit int) ([]BusException, error) {

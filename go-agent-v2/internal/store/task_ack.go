@@ -4,8 +4,6 @@ package store
 
 import (
 	"context"
-	"fmt"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -60,48 +58,4 @@ func (s *TaskAckStore) List(ctx context.Context, keyword, status, priority, assi
 		return nil, err
 	}
 	return collectRows[TaskAck](rows)
-}
-
-// Deprecated: UpdateStatus 无外部调用者。
-func (s *TaskAckStore) UpdateStatus(ctx context.Context, ackKey, status string, progress *int, ackMessage, resultSummary string) (*TaskAck, error) {
-	sets := []string{"status = $1", "updated_at = NOW()"}
-	params := []any{status}
-	n := 1
-
-	// 自动设置时间戳
-	switch status {
-	case "acked":
-		sets = append(sets, "acked_at = COALESCE(acked_at, NOW())")
-	case "in_progress":
-		sets = append(sets, "started_at = COALESCE(started_at, NOW())")
-	case "done", "failed", "cancelled":
-		sets = append(sets, "finished_at = NOW()")
-	}
-
-	if progress != nil {
-		n++
-		sets = append(sets, fmt.Sprintf("progress = $%d", n))
-		params = append(params, util.ClampInt(*progress, 0, 100))
-	}
-	if ackMessage != "" {
-		n++
-		sets = append(sets, fmt.Sprintf("ack_message = $%d", n))
-		params = append(params, ackMessage)
-	}
-	if resultSummary != "" {
-		n++
-		sets = append(sets, fmt.Sprintf("result_summary = $%d", n))
-		params = append(params, resultSummary)
-	}
-
-	n++
-	params = append(params, ackKey)
-	sql := fmt.Sprintf("UPDATE task_acks SET %s WHERE ack_key = $%d RETURNING %s",
-		strings.Join(sets, ", "), n, taCols)
-
-	rows, err := s.pool.Query(ctx, sql, params...)
-	if err != nil {
-		return nil, err
-	}
-	return collectOne[TaskAck](rows)
 }

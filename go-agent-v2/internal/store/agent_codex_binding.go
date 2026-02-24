@@ -102,16 +102,6 @@ func (s *AgentCodexBindingStore) FindByAgentID(ctx context.Context, agentID stri
 	return collectOne[AgentCodexBinding](rows)
 }
 
-// Deprecated: FindByCodexThreadID 无外部调用者。
-func (s *AgentCodexBindingStore) FindByCodexThreadID(ctx context.Context, codexThreadID string) (*AgentCodexBinding, error) {
-	rows, err := s.pool.Query(ctx,
-		"SELECT "+acbCols+" FROM agent_codex_binding WHERE codex_thread_id = $1", codexThreadID)
-	if err != nil {
-		return nil, err
-	}
-	return collectOne[AgentCodexBinding](rows)
-}
-
 // ListAll 返回所有绑定 (调试/运维用)。
 func (s *AgentCodexBindingStore) ListAll(ctx context.Context) ([]AgentCodexBinding, error) {
 	rows, err := s.pool.Query(ctx,

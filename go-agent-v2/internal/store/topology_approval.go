@@ -61,16 +61,3 @@ func (s *TopologyApprovalStore) GetPending(ctx context.Context) ([]TopologyAppro
 	}
 	return collectRows[TopologyApproval](rows)
 }
-
-// Deprecated: ListRecent 无外部调用者。
-func (s *TopologyApprovalStore) ListRecent(ctx context.Context, limit int) ([]TopologyApproval, error) {
-	q := NewQueryBuilder()
-	sql, params := q.Build(
-		`SELECT id, proposal_hash, proposal_json, status, requested_by, approved_by, rejected_by, expires_at, created_at, updated_at
-		 FROM topology_approvals`, "created_at DESC", limit)
-	rows, err := s.pool.Query(ctx, sql, params...)
-	if err != nil {
-		return nil, err
-	}
-	return collectRows[TopologyApproval](rows)
-}

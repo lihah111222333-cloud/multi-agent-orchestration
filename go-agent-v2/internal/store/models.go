@@ -96,23 +96,6 @@ type PromptTemplate struct {
 	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
 
-// Deprecated: PromptVersion 无外部引用。
-type PromptVersion struct {
-	ID              int        `db:"id" json:"id"`
-	PromptKey       string     `db:"prompt_key" json:"prompt_key"`
-	Title           string     `db:"title" json:"title"`
-	AgentKey        string     `db:"agent_key" json:"agent_key"`
-	ToolName        string     `db:"tool_name" json:"tool_name"`
-	PromptText      string     `db:"prompt_text" json:"prompt_text"`
-	Variables       any        `db:"variables" json:"variables"`
-	Tags            any        `db:"tags" json:"tags"`
-	Enabled         bool       `db:"enabled" json:"enabled"`
-	CreatedBy       string     `db:"created_by" json:"created_by"`
-	UpdatedBy       string     `db:"updated_by" json:"updated_by"`
-	SourceUpdatedAt *time.Time `db:"source_updated_at" json:"source_updated_at"`
-	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
-}
-
 // ========================================
 // 命令卡 (CommandCard) — 表 command_cards
 // Python: agent_ops_store.py save_command_card
@@ -135,22 +118,6 @@ type CommandCard struct {
 	// JOIN 扩展字段 (list_command_cards 带出)
 	LastRunAt *time.Time `db:"last_run_at" json:"last_run_at,omitempty"`
 	RunCount  int        `db:"run_count" json:"run_count"`
-}
-
-// Deprecated: CommandCardVersion 无外部引用。
-type CommandCardVersion struct {
-	ID              int        `db:"id" json:"id"`
-	CardKey         string     `db:"card_key" json:"card_key"`
-	Title           string     `db:"title" json:"title"`
-	Description     string     `db:"description" json:"description"`
-	CommandTemplate string     `db:"command_template" json:"command_template"`
-	ArgsSchema      any        `db:"args_schema" json:"args_schema"`
-	RiskLevel       string     `db:"risk_level" json:"risk_level"`
-	Enabled         bool       `db:"enabled" json:"enabled"`
-	CreatedBy       string     `db:"created_by" json:"created_by"`
-	UpdatedBy       string     `db:"updated_by" json:"updated_by"`
-	SourceUpdatedAt *time.Time `db:"source_updated_at" json:"source_updated_at"`
-	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
 }
 
 // ========================================

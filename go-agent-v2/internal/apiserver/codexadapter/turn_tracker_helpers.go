@@ -2,6 +2,8 @@ package codexadapter
 
 import (
 	"fmt"
+	"maps"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -9,6 +11,496 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
+
+const (
+	DefaultTurnWatchdogTimeout        = 10 * time.Minute
+	DefaultTrackedTurnSummaryTTL      = 30 * time.Minute
+	TrackedTurnSummaryCacheMaxEntries = 512
+	DefaultStallThreshold             = 480 * time.Second
+	DefaultStallHeartbeat             = 300 * time.Second
+)
+
+// TrackedTurnSummaryCacheEntry caches the latest summary for one tracked turn.
+type TrackedTurnSummaryCacheEntry struct {
+	TurnID    string
+	Summary   string
+	UpdatedAt time.Time
+}
+
+// TurnTrackerState carries mutable turn-tracker state owned by the caller.
+type TurnTrackerState struct {
+	ActiveTurns         *map[string]*TrackedTurn
+	TurnWatchdogTimeout *time.Duration
+	TurnSummaryCache    *map[string]TrackedTurnSummaryCacheEntry
+	TurnSummaryTTL      *time.Duration
+	StallThreshold      *time.Duration
+	StallHeartbeat      *time.Duration
+}
+
+// EnsureTurnTrackerStateLocked initializes turn-tracker state and defaults.
+func EnsureTurnTrackerStateLocked(state TurnTrackerState) {
+	if state.ActiveTurns != nil && *state.ActiveTurns == nil {
+		*state.ActiveTurns = make(map[string]*TrackedTurn)
+	}
+	if state.TurnWatchdogTimeout != nil && *state.TurnWatchdogTimeout <= 0 {
+		*state.TurnWatchdogTimeout = DefaultTurnWatchdogTimeout
+	}
+	if state.TurnSummaryCache != nil && *state.TurnSummaryCache == nil {
+		*state.TurnSummaryCache = make(map[string]TrackedTurnSummaryCacheEntry)
+	}
+	if state.TurnSummaryTTL != nil && *state.TurnSummaryTTL <= 0 {
+		*state.TurnSummaryTTL = DefaultTrackedTurnSummaryTTL
+	}
+	if state.StallThreshold != nil && *state.StallThreshold <= 0 {
+		*state.StallThreshold = DefaultStallThreshold
+	}
+	if state.StallHeartbeat != nil && *state.StallHeartbeat <= 0 {
+		*state.StallHeartbeat = DefaultStallHeartbeat
+	}
+}
+
+// TrackedTurnSummaryFromPayload extracts last agent summary from event payload.
+func TrackedTurnSummaryFromPayload(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	if summary := ExtractTrackedString(payload, "lastAgentMessage", "last_agent_message"); summary != "" {
+		return summary
+	}
+	if turn, ok := payload["turn"].(map[string]any); ok {
+		if summary := ExtractTrackedString(turn, "lastAgentMessage", "last_agent_message"); summary != "" {
+			return summary
+		}
+	}
+	if msg, ok := payload["msg"].(map[string]any); ok {
+		if summary := ExtractTrackedString(msg, "lastAgentMessage", "last_agent_message"); summary != "" {
+			return summary
+		}
+	}
+	return ""
+}
+
+// TrackedTurnSummaryCacheKey returns summary cache key for thread + optional turn.
+func TrackedTurnSummaryCacheKey(threadID, turnID string) string {
+	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID)
+}
+
+// PruneTrackedTurnSummaryCacheLocked removes expired and overflow entries.
+func PruneTrackedTurnSummaryCacheLocked(cache map[string]TrackedTurnSummaryCacheEntry, ttl time.Duration, now time.Time) {
+	if len(cache) == 0 {
+		return
+	}
+	if ttl <= 0 {
+		ttl = DefaultTrackedTurnSummaryTTL
+	}
+
+	cutoff := now.Add(-ttl)
+	for key, entry := range cache {
+		if entry.UpdatedAt.Before(cutoff) {
+			delete(cache, key)
+		}
+	}
+
+	if len(cache) <= TrackedTurnSummaryCacheMaxEntries {
+		return
+	}
+
+	type summaryCacheKV struct {
+		key       string
+		updatedAt time.Time
+	}
+	entries := make([]summaryCacheKV, 0, len(cache))
+	for key, entry := range cache {
+		entries = append(entries, summaryCacheKV{key: key, updatedAt: entry.UpdatedAt})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].updatedAt.Before(entries[j].updatedAt)
+	})
+
+	trimCount := len(cache) - TrackedTurnSummaryCacheMaxEntries
+	for i := 0; i < trimCount && i < len(entries); i++ {
+		delete(cache, entries[i].key)
+	}
+}
+
+// RememberTrackedTurnSummary records the latest non-empty summary for thread/turn.
+func RememberTrackedTurnSummary(state TurnTrackerState, turnMu *sync.Mutex, threadID, turnID, summary string) {
+	id := strings.TrimSpace(threadID)
+	tid := strings.TrimSpace(turnID)
+	msg := strings.TrimSpace(summary)
+	if id == "" || msg == "" || turnMu == nil {
+		return
+	}
+
+	now := time.Now()
+
+	turnMu.Lock()
+	defer turnMu.Unlock()
+	EnsureTurnTrackerStateLocked(state)
+	if state.TurnSummaryCache == nil || *state.TurnSummaryCache == nil {
+		return
+	}
+
+	ttl := DefaultTrackedTurnSummaryTTL
+	if state.TurnSummaryTTL != nil {
+		ttl = *state.TurnSummaryTTL
+	}
+	cache := *state.TurnSummaryCache
+	PruneTrackedTurnSummaryCacheLocked(cache, ttl, now)
+	entry := TrackedTurnSummaryCacheEntry{
+		TurnID:    tid,
+		Summary:   msg,
+		UpdatedAt: now,
+	}
+	cache[TrackedTurnSummaryCacheKey(id, "")] = entry
+	if tid != "" {
+		cache[TrackedTurnSummaryCacheKey(id, tid)] = entry
+	}
+}
+
+// LookupTrackedTurnSummary finds a cached summary by thread + optional turn.
+func LookupTrackedTurnSummary(state TurnTrackerState, turnMu *sync.Mutex, threadID, turnID string) string {
+	id := strings.TrimSpace(threadID)
+	tid := strings.TrimSpace(turnID)
+	if id == "" || turnMu == nil {
+		return ""
+	}
+
+	now := time.Now()
+
+	turnMu.Lock()
+	defer turnMu.Unlock()
+	EnsureTurnTrackerStateLocked(state)
+	if state.TurnSummaryCache == nil || *state.TurnSummaryCache == nil {
+		return ""
+	}
+
+	ttl := DefaultTrackedTurnSummaryTTL
+	if state.TurnSummaryTTL != nil {
+		ttl = *state.TurnSummaryTTL
+	}
+	cache := *state.TurnSummaryCache
+	PruneTrackedTurnSummaryCacheLocked(cache, ttl, now)
+
+	if tid != "" {
+		if entry, ok := cache[TrackedTurnSummaryCacheKey(id, tid)]; ok {
+			return strings.TrimSpace(entry.Summary)
+		}
+	}
+	if entry, ok := cache[TrackedTurnSummaryCacheKey(id, "")]; ok {
+		entryTurnID := strings.TrimSpace(entry.TurnID)
+		if tid != "" && entryTurnID != "" && !strings.EqualFold(tid, entryTurnID) {
+			return ""
+		}
+		return strings.TrimSpace(entry.Summary)
+	}
+	return ""
+}
+
+// InjectTrackedTurnSummary writes summary into top-level and turn object payload.
+func InjectTrackedTurnSummary(payload map[string]any, summary string) {
+	if payload == nil {
+		return
+	}
+	msg := strings.TrimSpace(summary)
+	if msg == "" {
+		return
+	}
+
+	payload["lastAgentMessage"] = msg
+
+	turnPayload, _ := payload["turn"].(map[string]any)
+	if turnPayload == nil {
+		turnPayload = make(map[string]any)
+	}
+	turnPayload["lastAgentMessage"] = msg
+	payload["turn"] = turnPayload
+}
+
+// MergeTrackedTurnCompletionPayload merges completion payload into original event payload.
+func MergeTrackedTurnCompletionPayload(payload, completion map[string]any) {
+	if payload == nil || completion == nil {
+		return
+	}
+	for key, value := range completion {
+		if key != "turn" {
+			payload[key] = value
+			continue
+		}
+		completionTurn, ok := value.(map[string]any)
+		if !ok {
+			payload[key] = value
+			continue
+		}
+		currentTurn, ok := payload[key].(map[string]any)
+		if !ok || currentTurn == nil {
+			currentTurn = make(map[string]any, len(completionTurn))
+		}
+		maps.Copy(currentTurn, completionTurn)
+		payload[key] = currentTurn
+	}
+}
+
+// ThreadStatusTerminalFromPayload parses thread/status/changed payload terminal status.
+func ThreadStatusTerminalFromPayload(payload map[string]any) (status string, reason string, terminal bool) {
+	if payload == nil {
+		return "", "", false
+	}
+
+	statusType := ""
+	switch raw := payload["status"].(type) {
+	case string:
+		statusType = strings.ToLower(strings.TrimSpace(raw))
+	case map[string]any:
+		statusType = strings.ToLower(strings.TrimSpace(ExtractTrackedString(raw, "type")))
+	}
+
+	if statusType == "" {
+		return "", "", false
+	}
+
+	switch statusType {
+	case "idle":
+		return "completed", "thread_status_idle", true
+	case "systemerror", "system_error", "error":
+		return "failed", "thread_status_system_error", true
+	case "notloaded", "not_loaded":
+		return "failed", "thread_status_not_loaded", true
+	default:
+		return "", "", false
+	}
+}
+
+// TrackedTurnTerminalFromEvent maps incoming event to tracked turn terminal state.
+func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]any) (string, string, string, bool, bool) {
+	eventKey := strings.ToLower(strings.TrimSpace(eventType))
+	methodKey := strings.ToLower(strings.TrimSpace(method))
+
+	switch {
+	case eventKey == "turn_aborted",
+		methodKey == "turn/aborted":
+		reason := ExtractTrackedTurnReason(payload)
+		if reason == "" {
+			reason = "turn_aborted"
+		}
+		return ExtractTrackedTurnID(payload), "interrupted", reason, true, false
+	case methodKey == "turn/completed",
+		eventKey == "turn_complete",
+		eventKey == "turn/completed",
+		eventKey == "idle",
+		eventKey == "codex/event/task_complete",
+		methodKey == "codex/event/task_complete":
+		status := ExtractTrackedTurnStatus(payload)
+		if status == "" {
+			status = "completed"
+		}
+		reason := ExtractTrackedTurnReason(payload)
+		if reason == "" {
+			reason = "turn_complete"
+		}
+		return ExtractTrackedTurnID(payload), status, reason, true, false
+	case eventKey == "stream_error",
+		eventKey == "error",
+		methodKey == "error",
+		methodKey == "codex/event/stream_error":
+		retryable, known := ExtractTrackedRetryable(payload)
+		if known && retryable {
+			return "", "", "", false, false
+		}
+		// willRetry 缺失 (known=false) -> 不视为 terminal, codex 会自行处理。
+		// 只有明确 willRetry=false 时才终止 turn。
+		if !known {
+			return "", "", "", false, false
+		}
+		reason := ExtractTrackedTurnReason(payload)
+		if reason == "" {
+			reason = util.FirstNonEmpty(
+				ExtractTrackedString(payload, "phase"),
+				eventKey,
+				methodKey,
+				"stream_error",
+			)
+		}
+		return ExtractTrackedTurnID(payload), "failed", reason, true, true
+	case methodKey == "thread/status/changed",
+		eventKey == "thread/status/changed":
+		status, reason, ok := ThreadStatusTerminalFromPayload(payload)
+		if !ok {
+			return "", "", "", false, false
+		}
+		return ExtractTrackedTurnID(payload), status, reason, true, true
+	default:
+		return "", "", "", false, false
+	}
+}
+
+// ExtractTrackedRetryable reads retryability hint from event payload.
+func ExtractTrackedRetryable(payload map[string]any) (bool, bool) {
+	if payload == nil {
+		return false, false
+	}
+	for _, key := range []string{"willRetry", "will_retry", "recoverable"} {
+		value, exists := payload[key]
+		if !exists {
+			continue
+		}
+		switch typed := value.(type) {
+		case bool:
+			return typed, true
+		case string:
+			switch strings.ToLower(strings.TrimSpace(typed)) {
+			case "true", "1", "yes", "y":
+				return true, true
+			case "false", "0", "no", "n":
+				return false, true
+			}
+		}
+	}
+	return false, false
+}
+
+// ExtractTrackedTurnID reads turn id from payload.
+func ExtractTrackedTurnID(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	if turn, ok := payload["turn"].(map[string]any); ok {
+		if id := ExtractTrackedString(turn, "id", "turnId", "turn_id"); id != "" {
+			return id
+		}
+	}
+	return ExtractTrackedString(payload, "turnId", "turn_id", "id")
+}
+
+// ExtractTrackedTurnStatus reads turn status from payload.
+func ExtractTrackedTurnStatus(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	if turn, ok := payload["turn"].(map[string]any); ok {
+		if status := ExtractTrackedString(turn, "status", "state"); status != "" {
+			return status
+		}
+	}
+	return ExtractTrackedString(payload, "status", "state")
+}
+
+// ExtractTrackedTurnReason reads turn reason from payload.
+func ExtractTrackedTurnReason(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	if turn, ok := payload["turn"].(map[string]any); ok {
+		if reason := ExtractTrackedString(turn, "reason", "message"); reason != "" {
+			return reason
+		}
+	}
+	return ExtractTrackedString(payload, "reason", "message")
+}
+
+// ExtractTrackedString returns first non-empty trimmed string value by keys.
+func ExtractTrackedString(payload map[string]any, keys ...string) string {
+	if payload == nil {
+		return ""
+	}
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			continue
+		}
+		text = strings.TrimSpace(text)
+		if text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+// CaptureAndInjectTurnSummaryOptions carries dependencies for summary capture/injection.
+type CaptureAndInjectTurnSummaryOptions struct {
+	ThreadID  string
+	EventType string
+	Method    string
+	Payload   map[string]any
+
+	PeekTrackedTurnMeta           func(threadID string) (turnID string, startedAt time.Time, interruptRequested bool, ok bool)
+	TrackedTurnTerminalFromEvent  func(eventType, method string, payload map[string]any) (turnID, status, reason string, terminal bool, synthetic bool)
+	ExtractTrackedTurnID          func(payload map[string]any) string
+	TrackedTurnSummaryFromPayload func(payload map[string]any) string
+	RememberTrackedTurnSummary    func(threadID, turnID, summary string)
+	LookupTrackedTurnSummary      func(threadID, turnID string) string
+	InjectTrackedTurnSummary      func(payload map[string]any, summary string)
+}
+
+// CaptureAndInjectTurnSummary captures summary at terminal events and injects it into turn/completed.
+func CaptureAndInjectTurnSummary(opt CaptureAndInjectTurnSummaryOptions) {
+	if opt.Payload == nil {
+		return
+	}
+	id := strings.TrimSpace(opt.ThreadID)
+	if id == "" {
+		return
+	}
+
+	terminalFromEvent := opt.TrackedTurnTerminalFromEvent
+	if terminalFromEvent == nil {
+		terminalFromEvent = TrackedTurnTerminalFromEvent
+	}
+	extractTurnID := opt.ExtractTrackedTurnID
+	if extractTurnID == nil {
+		extractTurnID = ExtractTrackedTurnID
+	}
+	summaryFromPayload := opt.TrackedTurnSummaryFromPayload
+	if summaryFromPayload == nil {
+		summaryFromPayload = TrackedTurnSummaryFromPayload
+	}
+	rememberSummary := opt.RememberTrackedTurnSummary
+	if rememberSummary == nil {
+		rememberSummary = func(string, string, string) {}
+	}
+	lookupSummary := opt.LookupTrackedTurnSummary
+	if lookupSummary == nil {
+		lookupSummary = func(string, string) string { return "" }
+	}
+	injectSummary := opt.InjectTrackedTurnSummary
+	if injectSummary == nil {
+		injectSummary = InjectTrackedTurnSummary
+	}
+
+	turnID := extractTurnID(opt.Payload)
+	resolvedTurnID := turnID
+	if resolvedTurnID == "" && opt.PeekTrackedTurnMeta != nil {
+		if activeTurnID, _, _, ok := opt.PeekTrackedTurnMeta(id); ok {
+			resolvedTurnID = activeTurnID
+		}
+	}
+
+	summary := summaryFromPayload(opt.Payload)
+	if summary != "" {
+		_, _, _, terminal, _ := terminalFromEvent(opt.EventType, opt.Method, opt.Payload)
+		methodKey := strings.ToLower(strings.TrimSpace(opt.Method))
+		eventKey := strings.ToLower(strings.TrimSpace(opt.EventType))
+		if terminal || methodKey == "codex/event/task_complete" || eventKey == "codex/event/task_complete" {
+			rememberSummary(id, resolvedTurnID, summary)
+		}
+	}
+
+	if !strings.EqualFold(strings.TrimSpace(opt.Method), "turn/completed") {
+		return
+	}
+	if summary == "" {
+		summary = lookupSummary(id, resolvedTurnID)
+	}
+	if summary == "" {
+		return
+	}
+	injectSummary(opt.Payload, summary)
+	rememberSummary(id, resolvedTurnID, summary)
+}
 
 // ApprovalStallHeartbeatInterval computes heartbeat interval while waiting approvals.
 func ApprovalStallHeartbeatInterval(stallThreshold, defaultStallThreshold time.Duration) time.Duration {

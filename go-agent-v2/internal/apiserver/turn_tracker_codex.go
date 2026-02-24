@@ -18,7 +18,7 @@ func (s *Server) beginTrackedTurn(threadID, turnID string) string {
 		threadID,
 		turnID,
 		codexadapter.BeginTrackedTurnHooks{
-			EnsureTurnTrackerLocked: s.ensureTurnTrackerLocked,
+			EnsureTurnTrackerLocked: s.ensureTurnTrackerStateLocked,
 			CompleteTrackedTurnByID: s.completeTrackedTurnByID,
 			Notify:                  s.Notify,
 			CheckTurnStall:          s.checkTurnStall,

@@ -4,11 +4,10 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -137,23 +136,15 @@ func validateLSPUsagePromptHint(hint string) error {
 }
 
 func (s *Server) resolveLSPUsagePromptHint(ctx context.Context) string {
-	if s.prefManager == nil {
-		return defaultLSPUsagePromptHint
+	var getPref func(context.Context, string) (any, error)
+	if s.prefManager != nil {
+		getPref = s.prefManager.Get
 	}
-	value, err := s.prefManager.Get(ctx, prefKeyLSPUsagePromptHint)
-	if err != nil {
-		logger.Warn("lsp hint: load preference failed", logger.FieldError, err)
-		return defaultLSPUsagePromptHint
-	}
-	hint := strings.TrimSpace(asString(value))
-	if hint == "" {
-		return defaultLSPUsagePromptHint
-	}
-	if err := validateLSPUsagePromptHint(hint); err != nil {
-		logger.Warn("lsp hint: invalid preference fallback to default", logger.FieldError, err)
-		return defaultLSPUsagePromptHint
-	}
-	return hint
+	return codexadapter.ResolveLSPUsagePromptHint(ctx, codexadapter.ResolveLSPUsagePromptHintOptions{
+		DefaultHint: defaultLSPUsagePromptHint,
+		MaxHintLen:  maxLSPUsagePromptHintLen,
+		GetPref:     getPref,
+	})
 }
 
 func collectReferencedLSPToolNames(hint string) []string {
@@ -176,25 +167,12 @@ func collectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]st
 }
 
 func (s *Server) prependLSPAvailabilityWarning(hint string, dynamicTools []agentcore.DynamicTool) (string, []string) {
-	referenced := collectReferencedLSPToolNames(hint)
-	if len(referenced) == 0 {
-		return hint, nil
-	}
-	available := collectDynamicToolNames(dynamicTools)
-	missing := make([]string, 0, len(referenced))
-	for _, name := range referenced {
-		if _, ok := available[name]; ok {
-			continue
-		}
-		missing = append(missing, name)
-	}
-	if len(missing) == 0 {
-		return hint, nil
-	}
-	warning := "注意：当前会话未注入以下 LSP 工具（无可用 language server）：" +
-		strings.Join(missing, ", ") +
-		"。不要调用这些工具，请改用当前可用工具完成任务。"
-	return s.mergePromptText(warning, hint), missing
+	return codexadapter.PrependLSPAvailabilityWarning(codexadapter.PrependLSPAvailabilityWarningOptions{
+		Hint:                       hint,
+		DynamicToolNames:           collectDynamicToolNames(dynamicTools),
+		CollectReferencedToolNames: collectReferencedLSPToolNames,
+		MergePromptText:            s.mergePromptText,
+	})
 }
 
 func (s *Server) resolveStartInstructionsForLaunch(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
@@ -219,43 +197,11 @@ func (s *Server) buildSelectedSkillPrompt(selectedSkills []string) (string, int)
 	if s.skillSvc == nil {
 		return "", 0
 	}
-	ordered := make([]string, 0, len(selectedSkills))
-	seen := make(map[string]struct{}, len(selectedSkills))
-	appendName := func(raw string) {
-		name := strings.TrimSpace(raw)
-		if name == "" {
-			return
-		}
-		key := strings.ToLower(name)
-		if _, exists := seen[key]; exists {
-			return
-		}
-		seen[key] = struct{}{}
-		ordered = append(ordered, name)
-	}
-	for _, name := range selectedSkills {
-		appendName(name)
-	}
-	if len(ordered) == 0 {
-		return "", 0
-	}
-
-	texts := make([]string, 0, len(ordered))
-	for _, skillName := range ordered {
-		content, err := s.skillSvc.ReadSkillContent(skillName)
-		if err != nil {
-			logger.Warn("turn/start: selected skill unavailable, skip",
-				logger.FieldSkill, skillName,
-				logger.FieldError, err,
-			)
-			continue
-		}
-		texts = append(texts, s.skillInputText(skillName, content))
-	}
-	if len(texts) == 0 {
-		return "", 0
-	}
-	return strings.Join(texts, "\n"), len(texts)
+	return codexadapter.BuildSelectedSkillPrompt(codexadapter.BuildSelectedSkillPromptOptions{
+		SelectedSkills:   selectedSkills,
+		ReadSkillContent: s.skillSvc.ReadSkillContent,
+		SkillInputText:   s.skillInputText,
+	})
 }
 
 func (s *Server) buildTurnSkillPrompt(threadID, prompt string, input []UserInput, selectedSkills []string, manualSkillSelection bool) (string, int, int) {
@@ -271,31 +217,29 @@ func lowerMatchedTerms(text string, candidates []string) []string {
 	return commonadapter.LowerMatchedTerms(text, candidates)
 }
 
-type autoMatchedSkillMatch struct {
-	Name         string
-	MatchedBy    string
-	MatchedTerms []string
-}
+type autoMatchedSkillMatch = codexadapter.AutoMatchedSkillMatch
 
-type autoSkillMatchOptions struct {
-	IncludeConfiguredExplicit bool
-	IncludeConfiguredForce    bool
-}
+type autoSkillMatchOptions = codexadapter.AutoSkillMatchOptions
 
-func classifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
-	return commonadapter.ClassifyAutoSkillMatch(normalizedPrompt, skillName, forceWords, triggerWords)
-}
-
-func forceMatchedSkillInstruction(matchedTerms []string) string {
-	return commonadapter.ForceMatchedSkillInstruction(matchedTerms)
+func buildAutoMatchInputs(input []UserInput) []codexadapter.AutoMatchInput {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]codexadapter.AutoMatchInput, 0, len(input))
+	for _, item := range input {
+		out = append(out, codexadapter.AutoMatchInput{
+			Type: item.Type,
+			Name: item.Name,
+		})
+	}
+	return out
 }
 
 func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []UserInput, options autoSkillMatchOptions) []autoMatchedSkillMatch {
 	if s.skillSvc == nil {
 		return nil
 	}
-	normalizedPrompt := strings.ToLower(strings.TrimSpace(prompt))
-	if normalizedPrompt == "" {
+	if strings.TrimSpace(prompt) == "" {
 		return nil
 	}
 	allSkills, err := s.skillSvc.ListSkills()
@@ -309,43 +253,25 @@ func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []
 	if len(allSkills) == 0 {
 		return nil
 	}
-
-	inputSkillSet := collectInputSkillNames(input)
-	configuredSet := collectSkillNameSet(s.GetAgentSkills(agentID))
-
-	matches := make([]autoMatchedSkillMatch, 0, len(allSkills))
+	candidates := make([]codexadapter.SkillMatchCandidate, 0, len(allSkills))
 	for _, skill := range allSkills {
 		skillName := strings.TrimSpace(skill.Name)
 		if skillName == "" {
 			continue
 		}
-		skillNameLower := strings.ToLower(skillName)
-		if _, exists := inputSkillSet[skillNameLower]; exists {
-			continue
-		}
-		matchedBy, matchedTerms := classifyAutoSkillMatch(normalizedPrompt, skillName, skill.ForceWords, skill.TriggerWords)
-		if matchedBy == "" {
-			continue
-		}
-		if _, configured := configuredSet[skillNameLower]; configured {
-			includeConfigured := false
-			switch matchedBy {
-			case "explicit":
-				includeConfigured = options.IncludeConfiguredExplicit
-			case "force":
-				includeConfigured = options.IncludeConfiguredForce
-			}
-			if !includeConfigured {
-				continue
-			}
-		}
-		matches = append(matches, autoMatchedSkillMatch{
+		candidates = append(candidates, codexadapter.SkillMatchCandidate{
 			Name:         skillName,
-			MatchedBy:    matchedBy,
-			MatchedTerms: matchedTerms,
+			ForceWords:   append([]string(nil), skill.ForceWords...),
+			TriggerWords: append([]string(nil), skill.TriggerWords...),
 		})
 	}
-	return matches
+	return codexadapter.CollectAutoMatchedSkillMatches(
+		prompt,
+		buildAutoMatchInputs(input),
+		s.GetAgentSkills(agentID),
+		candidates,
+		codexadapter.AutoSkillMatchOptions(options),
+	)
 }
 
 func (s *Server) buildAutoMatchedSkillPrompt(agentID, prompt string, input []UserInput) (string, int) {
@@ -374,43 +300,23 @@ func (s *Server) buildForcedOrExplicitMatchedSkillPrompt(agentID, prompt string,
 }
 
 func (s *Server) renderAutoMatchedSkillPrompt(agentID string, matches []autoMatchedSkillMatch) (string, int) {
-	if len(matches) == 0 {
+	if s.skillSvc == nil || len(matches) == 0 {
 		return "", 0
 	}
-
-	texts := make([]string, 0, len(matches))
-	for _, match := range matches {
-		skillName := strings.TrimSpace(match.Name)
-		if skillName == "" {
-			continue
-		}
-		forceInstruction := ""
-		if match.MatchedBy == "force" {
-			forceInstruction = forceMatchedSkillInstruction(match.MatchedTerms)
-		}
-		var (
-			content string
-			readErr error
-		)
-		content, readErr = s.skillSvc.ReadSkillContent(skillName)
-		if readErr != nil {
+	return codexadapter.RenderAutoMatchedSkillPrompt(codexadapter.RenderAutoMatchedSkillPromptOptions{
+		Matches:          matches,
+		ReadSkillContent: s.skillSvc.ReadSkillContent,
+		MergePromptText:  s.mergePromptText,
+		SkillInputText:   s.skillInputText,
+		OnReadSkillError: func(skillName, matchedBy string, readErr error) {
 			logger.Warn("turn/start: auto-matched skill unavailable, skip",
 				logger.FieldAgentID, agentID, logger.FieldThreadID, agentID,
 				logger.FieldSkill, skillName,
-				"matched_by", match.MatchedBy,
+				"matched_by", matchedBy,
 				logger.FieldError, readErr,
 			)
-			continue
-		}
-		if forceInstruction != "" {
-			content = s.mergePromptText(forceInstruction, content)
-		}
-		texts = append(texts, s.skillInputText(skillName, content))
-	}
-	if len(texts) == 0 {
-		return "", 0
-	}
-	return strings.Join(texts, "\n"), len(texts)
+		},
+	})
 }
 
 // ========================================
@@ -423,36 +329,11 @@ type fuzzySearchParams struct {
 }
 
 func (s *Server) fuzzyFileSearchTyped(_ context.Context, p fuzzySearchParams) (any, error) {
-	query := strings.ToLower(p.Query)
-	results := make([]map[string]any, 0)
-
-	for _, root := range p.Roots {
-		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-			if info.IsDir() {
-				base := filepath.Base(path)
-				if strings.HasPrefix(base, ".") || base == "node_modules" || base == "vendor" || base == "__pycache__" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			rel, _ := filepath.Rel(root, path)
-			if s.fuzzyMatch(strings.ToLower(rel), query) {
-				results = append(results, map[string]any{
-					"root":     root,
-					"path":     rel,
-					"fileName": info.Name(),
-				})
-				if len(results) >= 100 {
-					return filepath.SkipAll
-				}
-			}
-			return nil
-		})
-	}
-
+	results := codexadapter.FuzzyFileSearch(codexadapter.FuzzyFileSearchOptions{
+		Query:      p.Query,
+		Roots:      p.Roots,
+		FuzzyMatch: s.fuzzyMatch,
+	})
 	return map[string]any{"files": results}, nil
 }
 

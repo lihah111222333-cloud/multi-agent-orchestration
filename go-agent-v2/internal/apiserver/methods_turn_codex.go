@@ -4,13 +4,11 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 var _ = (*Server).waitInterruptSettled
@@ -19,60 +17,65 @@ func resolveClientActiveTurnID(client agentcore.Client) string {
 	return codexadapter.ResolveClientActiveTurnID(client)
 }
 
-func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, error) {
-	logger.Info("turn/start: request received",
-		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-		logger.FieldCwd, strings.TrimSpace(p.Cwd),
-		"input_count", len(p.Input),
-		"selected_skills_count", len(p.SelectedSkills),
-	)
-	selectedSkills, err := normalizeSkillNames(p.SelectedSkills)
-	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.turnStart", "normalize selected skills")
-	}
-
-	prompt, images, files := s.extractInputs(p.Input)
-	skillPrompt, selectedSkillCount, autoMatchedSkillCount := s.buildTurnSkillPrompt(p.ThreadID, prompt, p.Input, selectedSkills, p.ManualSkillSelection)
+func (s *Server) prepareTurnStartSubmission(
+	threadID string,
+	input []UserInput,
+	selectedSkills []string,
+	manualSkillSelection bool,
+) (codexadapter.TurnStartEntryPrepareResult, error) {
+	prompt, images, files := s.extractInputs(input)
+	skillPrompt, selectedSkillCount, autoMatchedSkillCount := s.buildTurnSkillPrompt(threadID, prompt, input, selectedSkills, manualSkillSelection)
 	submitPrompt := s.mergePromptText(prompt, skillPrompt)
-	logger.Info("turn/start: input prepared",
-		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-		"text_len", len(prompt),
-		"images", len(images),
-		"files", len(files),
-		"selected_skills_requested", len(selectedSkills),
-		"selected_skills_injected", selectedSkillCount,
-		"manual_skill_selection", p.ManualSkillSelection,
-		"auto_matched_skills", autoMatchedSkillCount,
-	)
-	startResult, err := s.codexAdapter.StartTurnSubmissionAndTrack(ctx, codexadapter.StartTurnSubmissionOptions{
+	return codexadapter.TurnStartEntryPrepareResult{
+		Prompt:                prompt,
+		SubmitPrompt:          submitPrompt,
+		Images:                images,
+		Files:                 files,
+		SelectedSkillCount:    selectedSkillCount,
+		AutoMatchedSkillCount: autoMatchedSkillCount,
+	}, nil
+}
+
+func (s *Server) appendTurnStartUserTimeline(ctx context.Context, input []UserInput, opt codexadapter.TurnAppendUserTimelineOptions) {
+	if s.uiRuntime == nil {
+		return
+	}
+	attachments := buildUserTimelineAttachmentsFromInputs(input)
+	if len(attachments) == 0 {
+		attachments = buildUserTimelineAttachments(opt.Images, opt.Files)
+	}
+	showInjected := s.showInjectedPromptInChat(ctx)
+	appendInjectedHint := showInjected && !s.threadTimelineAlreadyShowsInjectedPrompt(opt.ThreadID)
+	injectedHint := ""
+	if appendInjectedHint {
+		injectedHint = s.resolveLSPUsagePromptHint(ctx)
+	}
+	timelineText := s.composeUserTimelineTextForTurn(opt.Prompt, opt.SubmitPrompt, injectedHint, showInjected)
+	s.uiRuntime.AppendUserMessage(opt.ThreadID, timelineText, attachments)
+}
+
+func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, error) {
+	startResult, err := s.codexAdapter.TurnStartEntry(ctx, codexadapter.TurnStartEntryOptions{
 		ThreadID:             p.ThreadID,
 		Cwd:                  p.Cwd,
-		SubmitPrompt:         submitPrompt,
-		Images:               images,
-		Files:                files,
+		InputCount:           len(p.Input),
+		SelectedSkills:       p.SelectedSkills,
+		ManualSkillSelection: p.ManualSkillSelection,
 		OutputSchema:         p.OutputSchema,
+		NormalizeSkillNames:  normalizeSkillNames,
+		PrepareSubmission: func(threadID string, selectedSkills []string, manualSkillSelection bool) (codexadapter.TurnStartEntryPrepareResult, error) {
+			return s.prepareTurnStartSubmission(threadID, p.Input, selectedSkills, manualSkillSelection)
+		},
 		EnsureThreadReady:    s.ensureThreadReadyForTurn,
 		HasActiveTrackedTurn: s.hasActiveTrackedTurn,
 		ResolveActiveTurnID:  resolveClientActiveTurnID,
 		BeginTrackedTurn:     s.beginTrackedTurn,
+		AppendUserTimeline: func(ctx context.Context, opt codexadapter.TurnAppendUserTimelineOptions) {
+			s.appendTurnStartUserTimeline(ctx, p.Input, opt)
+		},
 	})
 	if err != nil {
 		return nil, err
-	}
-
-	if s.uiRuntime != nil {
-		attachments := buildUserTimelineAttachmentsFromInputs(p.Input)
-		if len(attachments) == 0 {
-			attachments = buildUserTimelineAttachments(images, files)
-		}
-		showInjected := s.showInjectedPromptInChat(ctx)
-		appendInjectedHint := showInjected && !s.threadTimelineAlreadyShowsInjectedPrompt(p.ThreadID)
-		injectedHint := ""
-		if appendInjectedHint {
-			injectedHint = s.resolveLSPUsagePromptHint(ctx)
-		}
-		timelineText := s.composeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint, showInjected)
-		s.uiRuntime.AppendUserMessage(p.ThreadID, timelineText, attachments)
 	}
 
 	return turnStartResponse{
@@ -87,20 +90,32 @@ type turnSteerParams struct {
 	ManualSkillSelection bool        `json:"manualSkillSelection,omitempty"`
 }
 
-func (s *Server) turnSteerTyped(ctx context.Context, p turnSteerParams) (any, error) {
-	selectedSkills, err := normalizeSkillNames(p.SelectedSkills)
-	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.turnSteer", "normalize selected skills")
-	}
-	prompt, images, files := s.extractInputs(p.Input)
-	skillPrompt, _, _ := s.buildTurnSkillPrompt(p.ThreadID, prompt, p.Input, selectedSkills, p.ManualSkillSelection)
+func (s *Server) prepareTurnSteerSubmission(
+	threadID string,
+	input []UserInput,
+	selectedSkills []string,
+	manualSkillSelection bool,
+) (codexadapter.TurnSteerEntryPrepareResult, error) {
+	prompt, images, files := s.extractInputs(input)
+	skillPrompt, _, _ := s.buildTurnSkillPrompt(threadID, prompt, input, selectedSkills, manualSkillSelection)
 	submitPrompt := s.mergePromptText(prompt, skillPrompt)
-	return s.codexAdapter.TurnSteer(codexadapter.TurnSteerOptions{
-		ThreadID:     p.ThreadID,
+	return codexadapter.TurnSteerEntryPrepareResult{
 		SubmitPrompt: submitPrompt,
 		Images:       images,
 		Files:        files,
-		WithThread:   s.withThread,
+	}, nil
+}
+
+func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, error) {
+	return s.codexAdapter.TurnSteerEntry(codexadapter.TurnSteerEntryOptions{
+		ThreadID:             p.ThreadID,
+		SelectedSkills:       p.SelectedSkills,
+		ManualSkillSelection: p.ManualSkillSelection,
+		NormalizeSkillNames:  normalizeSkillNames,
+		PrepareSubmission: func(threadID string, selectedSkills []string, manualSkillSelection bool) (codexadapter.TurnSteerEntryPrepareResult, error) {
+			return s.prepareTurnSteerSubmission(threadID, p.Input, selectedSkills, manualSkillSelection)
+		},
+		WithThread: s.withThread,
 	})
 }
 

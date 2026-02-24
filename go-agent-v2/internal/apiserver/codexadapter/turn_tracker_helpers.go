@@ -420,6 +420,39 @@ func ExtractTrackedString(payload map[string]any, keys ...string) string {
 	return ""
 }
 
+// TrackedTurnPayloadDiagKV builds structured diagnostic key-value pairs from event payload.
+func TrackedTurnPayloadDiagKV(payload map[string]any) []any {
+	if payload == nil {
+		return []any{"payload_nil", true}
+	}
+
+	keys := make([]string, 0, len(payload))
+	for key := range payload {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	const maxKeySample = 12
+	keysTruncated := false
+	if len(keys) > maxKeySample {
+		keys = keys[:maxKeySample]
+		keysTruncated = true
+	}
+	_, hasTurnObj := payload["turn"].(map[string]any)
+
+	return []any{
+		"payload_key_count", len(payload),
+		"payload_keys_sample", strings.Join(keys, ","),
+		"payload_keys_truncated", keysTruncated,
+		"payload_has_turn_obj", hasTurnObj,
+		"payload_turn_id", ExtractTrackedTurnID(payload),
+		"payload_turn_status", ExtractTrackedTurnStatus(payload),
+		"payload_turn_reason", ExtractTrackedTurnReason(payload),
+		"payload_status_raw", ExtractTrackedString(payload, "status", "state"),
+		"payload_reason_raw", ExtractTrackedString(payload, "reason", "message"),
+	}
+}
+
 // CaptureAndInjectTurnSummaryOptions carries dependencies for summary capture/injection.
 type CaptureAndInjectTurnSummaryOptions struct {
 	ThreadID  string

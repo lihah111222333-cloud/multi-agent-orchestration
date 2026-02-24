@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -303,6 +305,150 @@ func (a *Adapter) StartTurnSubmissionAndTrack(ctx context.Context, opt StartTurn
 		"total_gap_ms", time.Since(submitStart).Milliseconds(),
 	)
 	return StartTurnSubmissionResult{Process: proc, TurnID: turnID}, nil
+}
+
+type TurnStartEntryPrepareResult struct {
+	Prompt                string
+	SubmitPrompt          string
+	Images                []string
+	Files                 []string
+	SelectedSkillCount    int
+	AutoMatchedSkillCount int
+}
+
+type TurnAppendUserTimelineOptions struct {
+	ThreadID     string
+	Prompt       string
+	SubmitPrompt string
+	Images       []string
+	Files        []string
+}
+
+type TurnStartEntryOptions struct {
+	ThreadID             string
+	Cwd                  string
+	InputCount           int
+	SelectedSkills       []string
+	ManualSkillSelection bool
+	OutputSchema         json.RawMessage
+
+	NormalizeSkillNames func([]string) ([]string, error)
+	PrepareSubmission   func(threadID string, selectedSkills []string, manualSkillSelection bool) (TurnStartEntryPrepareResult, error)
+
+	EnsureThreadReady    func(context.Context, string, string) (*runner.AgentProcess, error)
+	HasActiveTrackedTurn func(string) bool
+	ResolveActiveTurnID  func(agentcore.Client) string
+	BeginTrackedTurn     func(string, string) string
+
+	AppendUserTimeline func(context.Context, TurnAppendUserTimelineOptions)
+}
+
+type TurnStartEntryResult struct {
+	TurnID string
+}
+
+// TurnStartEntry handles turn/start orchestration from apiserver thin boundary.
+func (a *Adapter) TurnStartEntry(ctx context.Context, opt TurnStartEntryOptions) (TurnStartEntryResult, error) {
+	logger.Info("turn/start: request received",
+		logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+		logger.FieldCwd, strings.TrimSpace(opt.Cwd),
+		"input_count", opt.InputCount,
+		"selected_skills_count", len(opt.SelectedSkills),
+	)
+	selectedSkills := append([]string(nil), opt.SelectedSkills...)
+	if opt.NormalizeSkillNames != nil {
+		normalized, err := opt.NormalizeSkillNames(opt.SelectedSkills)
+		if err != nil {
+			return TurnStartEntryResult{}, apperrors.Wrap(err, "Server.turnStart", "normalize selected skills")
+		}
+		selectedSkills = normalized
+	}
+	if opt.PrepareSubmission == nil {
+		return TurnStartEntryResult{}, apperrors.New("Server.turnStart", "submission builder is not configured")
+	}
+	prepared, err := opt.PrepareSubmission(opt.ThreadID, selectedSkills, opt.ManualSkillSelection)
+	if err != nil {
+		return TurnStartEntryResult{}, err
+	}
+
+	logger.Info("turn/start: input prepared",
+		logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+		"text_len", len(prepared.Prompt),
+		"images", len(prepared.Images),
+		"files", len(prepared.Files),
+		"selected_skills_requested", len(selectedSkills),
+		"selected_skills_injected", prepared.SelectedSkillCount,
+		"manual_skill_selection", opt.ManualSkillSelection,
+		"auto_matched_skills", prepared.AutoMatchedSkillCount,
+	)
+
+	startResult, err := a.StartTurnSubmissionAndTrack(ctx, StartTurnSubmissionOptions{
+		ThreadID:             opt.ThreadID,
+		Cwd:                  opt.Cwd,
+		SubmitPrompt:         prepared.SubmitPrompt,
+		Images:               prepared.Images,
+		Files:                prepared.Files,
+		OutputSchema:         opt.OutputSchema,
+		EnsureThreadReady:    opt.EnsureThreadReady,
+		HasActiveTrackedTurn: opt.HasActiveTrackedTurn,
+		ResolveActiveTurnID:  opt.ResolveActiveTurnID,
+		BeginTrackedTurn:     opt.BeginTrackedTurn,
+	})
+	if err != nil {
+		return TurnStartEntryResult{}, err
+	}
+	if opt.AppendUserTimeline != nil {
+		opt.AppendUserTimeline(ctx, TurnAppendUserTimelineOptions{
+			ThreadID:     opt.ThreadID,
+			Prompt:       prepared.Prompt,
+			SubmitPrompt: prepared.SubmitPrompt,
+			Images:       prepared.Images,
+			Files:        prepared.Files,
+		})
+	}
+	return TurnStartEntryResult{TurnID: startResult.TurnID}, nil
+}
+
+type TurnSteerEntryPrepareResult struct {
+	SubmitPrompt string
+	Images       []string
+	Files        []string
+}
+
+type TurnSteerEntryOptions struct {
+	ThreadID             string
+	SelectedSkills       []string
+	ManualSkillSelection bool
+
+	NormalizeSkillNames func([]string) ([]string, error)
+	PrepareSubmission   func(threadID string, selectedSkills []string, manualSkillSelection bool) (TurnSteerEntryPrepareResult, error)
+	WithThread          func(string, func(*runner.AgentProcess) (any, error)) (any, error)
+}
+
+// TurnSteerEntry handles turn/steer orchestration from apiserver thin boundary.
+func (a *Adapter) TurnSteerEntry(opt TurnSteerEntryOptions) (map[string]any, error) {
+	selectedSkills := append([]string(nil), opt.SelectedSkills...)
+	if opt.NormalizeSkillNames != nil {
+		normalized, err := opt.NormalizeSkillNames(opt.SelectedSkills)
+		if err != nil {
+			return nil, apperrors.Wrap(err, "Server.turnSteer", "normalize selected skills")
+		}
+		selectedSkills = normalized
+	}
+	if opt.PrepareSubmission == nil {
+		return nil, apperrors.New("Server.turnSteer", "submission builder is not configured")
+	}
+	prepared, err := opt.PrepareSubmission(opt.ThreadID, selectedSkills, opt.ManualSkillSelection)
+	if err != nil {
+		return nil, err
+	}
+	return a.TurnSteer(TurnSteerOptions{
+		ThreadID:     opt.ThreadID,
+		SubmitPrompt: prepared.SubmitPrompt,
+		Images:       prepared.Images,
+		Files:        prepared.Files,
+		WithThread:   opt.WithThread,
+	})
 }
 
 // ResolveClientActiveTurnID extracts active turn ID if client supports it.
@@ -738,4 +884,175 @@ func isInterruptActiveState(state string) bool {
 	default:
 		return false
 	}
+}
+
+// ── Migrated from apiserver/methods_turn.go ──────────────────────────────────
+
+// BuildSelectedSkillPromptOptions carries dependencies for selected-skill prompt building.
+type BuildSelectedSkillPromptOptions struct {
+	SelectedSkills   []string
+	ReadSkillContent func(skillName string) (string, error)
+	SkillInputText   func(name, content string) string
+}
+
+// BuildSelectedSkillPrompt reads skill contents and joins them into a prompt string.
+func BuildSelectedSkillPrompt(opt BuildSelectedSkillPromptOptions) (string, int) {
+	if opt.ReadSkillContent == nil {
+		return "", 0
+	}
+	ordered := make([]string, 0, len(opt.SelectedSkills))
+	seen := make(map[string]struct{}, len(opt.SelectedSkills))
+	for _, raw := range opt.SelectedSkills {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		ordered = append(ordered, name)
+	}
+	if len(ordered) == 0 {
+		return "", 0
+	}
+
+	texts := make([]string, 0, len(ordered))
+	inputText := opt.SkillInputText
+	if inputText == nil {
+		inputText = func(name, content string) string { return content }
+	}
+	for _, skillName := range ordered {
+		content, err := opt.ReadSkillContent(skillName)
+		if err != nil {
+			logger.Warn("turn/start: selected skill unavailable, skip",
+				logger.FieldSkill, skillName,
+				logger.FieldError, err,
+			)
+			continue
+		}
+		texts = append(texts, inputText(skillName, content))
+	}
+	if len(texts) == 0 {
+		return "", 0
+	}
+	return strings.Join(texts, "\n"), len(texts)
+}
+
+// ResolveLSPUsagePromptHintOptions carries dependencies for LSP hint resolution.
+type ResolveLSPUsagePromptHintOptions struct {
+	DefaultHint string
+	MaxHintLen  int
+	GetPref     func(ctx context.Context, key string) (any, error) // nil → use default
+}
+
+// ResolveLSPUsagePromptHint resolves the user-configured LSP usage prompt hint.
+func ResolveLSPUsagePromptHint(ctx context.Context, opt ResolveLSPUsagePromptHintOptions) string {
+	defaultHint := opt.DefaultHint
+	if opt.GetPref == nil {
+		return defaultHint
+	}
+	value, err := opt.GetPref(ctx, "lsp_usage_prompt_hint")
+	if err != nil {
+		logger.Warn("lsp hint: load preference failed", logger.FieldError, err)
+		return defaultHint
+	}
+	hint := ""
+	if s, ok := value.(string); ok {
+		hint = strings.TrimSpace(s)
+	}
+	if hint == "" {
+		return defaultHint
+	}
+	if opt.MaxHintLen > 0 && len(hint) > opt.MaxHintLen {
+		logger.Warn("lsp hint: invalid preference fallback to default",
+			"hint_len", len(hint), "max_len", opt.MaxHintLen)
+		return defaultHint
+	}
+	return hint
+}
+
+// PrependLSPAvailabilityWarningOptions carries dependencies for LSP warning.
+type PrependLSPAvailabilityWarningOptions struct {
+	Hint                       string
+	DynamicToolNames           map[string]struct{}
+	CollectReferencedToolNames func(string) []string
+	MergePromptText            func(string, string) string
+}
+
+// PrependLSPAvailabilityWarning adds a warning when referenced LSP tools are unavailable.
+func PrependLSPAvailabilityWarning(opt PrependLSPAvailabilityWarningOptions) (string, []string) {
+	collectRefs := opt.CollectReferencedToolNames
+	if collectRefs == nil {
+		return opt.Hint, nil
+	}
+	referenced := collectRefs(opt.Hint)
+	if len(referenced) == 0 {
+		return opt.Hint, nil
+	}
+	missing := make([]string, 0, len(referenced))
+	for _, name := range referenced {
+		if _, ok := opt.DynamicToolNames[name]; ok {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	if len(missing) == 0 {
+		return opt.Hint, nil
+	}
+	warning := "注意：当前会话未注入以下 LSP 工具（无可用 language server）：" +
+		strings.Join(missing, ", ") +
+		"。不要调用这些工具，请改用当前可用工具完成任务。"
+	merge := opt.MergePromptText
+	if merge == nil {
+		return warning + "\n" + opt.Hint, missing
+	}
+	return merge(warning, opt.Hint), missing
+}
+
+// FuzzyFileSearchOptions carries dependencies for fuzzy file search.
+type FuzzyFileSearchOptions struct {
+	Query      string
+	Roots      []string
+	FuzzyMatch func(text, pattern string) bool
+}
+
+// FuzzyFileSearch walks directories and returns fuzzy-matched file paths.
+func FuzzyFileSearch(opt FuzzyFileSearchOptions) []map[string]any {
+	query := strings.ToLower(opt.Query)
+	results := make([]map[string]any, 0)
+	match := opt.FuzzyMatch
+	if match == nil {
+		return results
+	}
+
+	for _, root := range opt.Roots {
+		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				base := filepath.Base(path)
+				if strings.HasPrefix(base, ".") || base == "node_modules" || base == "vendor" || base == "__pycache__" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			rel, _ := filepath.Rel(root, path)
+			if match(strings.ToLower(rel), query) {
+				results = append(results, map[string]any{
+					"root":     root,
+					"path":     rel,
+					"fileName": info.Name(),
+				})
+				if len(results) >= 100 {
+					return filepath.SkipAll
+				}
+			}
+			return nil
+		})
+	}
+
+	return results
 }

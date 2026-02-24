@@ -273,3 +273,45 @@ func TestP4NoDirectCodexPackageImportOutsideAdapter(t *testing.T) {
 		t.Fatalf("unexpected internal/codex import outside codexadapter: %v", offenders)
 	}
 }
+
+func TestP4MethodsHelpersContainOnlySlashHandlers(t *testing.T) {
+	t.Helper()
+
+	data, err := os.ReadFile("methods_helpers.go")
+	if err != nil {
+		t.Fatalf("read methods_helpers.go: %v", err)
+	}
+	content := string(data)
+
+	forbidden := []string{
+		"func (s *Server) withThread(",
+		"func (s *Server) extractInputs(",
+		"func buildAttachmentName(",
+		"func buildAttachmentPreviewURL(",
+		"func buildUserTimelineAttachments(",
+		"func buildUserTimelineAttachmentsFromInputs(",
+		"func (s *Server) debugRuntime(",
+		"func (s *Server) debugForceGC(",
+	}
+	for _, needle := range forbidden {
+		if strings.Contains(content, needle) {
+			t.Fatalf("methods_helpers.go must not contain %q after P4 convergence", needle)
+		}
+	}
+
+	required := []string{
+		"func (s *Server) threadBgTerminalsClean(",
+		"func (s *Server) threadUndo(",
+		"func (s *Server) threadModelSet(",
+		"func (s *Server) threadPersonality(",
+		"func (s *Server) threadApprovals(",
+		"func (s *Server) threadMCPList(",
+		"func (s *Server) threadSkillsList(",
+		"func (s *Server) threadDebugMemory(",
+	}
+	for _, needle := range required {
+		if !strings.Contains(content, needle) {
+			t.Fatalf("methods_helpers.go missing required slash handler %q", needle)
+		}
+	}
+}

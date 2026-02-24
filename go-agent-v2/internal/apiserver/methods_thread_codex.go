@@ -212,14 +212,14 @@ func (s *Server) removeThreadArchivedState(ctx context.Context, threadID string)
 func (s *Server) archiveThreadArtifacts(ctx context.Context, threadID string) (threadArchiveManifest, error) {
 	return s.codexAdapter.ArchiveThreadArtifacts(ctx, codexadapter.ArchiveThreadArtifactsOptions{
 		ThreadID:                        threadID,
-		ResolveThreadArchiveRootDir:     resolveThreadArchiveRootDir,
-		ResolveThreadArchiveSnapshotDir: resolveThreadArchiveSnapshotDir,
+		ResolveThreadArchiveRootDir:     codexadapter.ResolveThreadArchiveRootDir,
+		ResolveThreadArchiveSnapshotDir: codexadapter.ResolveThreadArchiveSnapshotDir,
 		ResolveRolloutHistorySource:     s.resolveRolloutHistorySource,
 		NormalizeCodexThreadID:          normalizeCodexThreadID,
 		CollectThreadArtifactCandidates: collectThreadArtifactCandidates,
-		NextArchiveFilePath:             nextArchiveFilePath,
-		CopyFile:                        copyFile,
-		FileSHA256:                      fileSHA256,
+		NextArchiveFilePath:             codexadapter.NextArchiveFilePath,
+		CopyFile:                        codexadapter.CopyFile,
+		FileSHA256:                      codexadapter.FileSHA256,
 		WriteThreadArchiveManifest:      writeThreadArchiveManifest,
 		BindRolloutPath: func(bindCtx context.Context, agentID, codexThreadID, rolloutPath string) error {
 			if s.bindingStore == nil {
@@ -242,22 +242,22 @@ func pruneArchivedCodexSourceFiles(threadID string, files []threadArchiveFile, a
 		ThreadID:                  threadID,
 		Files:                     files,
 		ArchiveDir:                archiveDir,
-		ResolveCodexRootDir:       resolveCodexRootDir,
-		PathWithinRoot:            pathWithinRoot,
-		FileSHA256:                fileSHA256,
-		RemoveEmptyCodexParentDir: removeEmptyCodexParentDirs,
+		ResolveCodexRootDir:       codexadapter.ResolveCodexRootDir,
+		PathWithinRoot:            codexadapter.PathWithinRoot,
+		FileSHA256:                codexadapter.FileSHA256,
+		RemoveEmptyCodexParentDir: codexadapter.RemoveEmptyCodexParentDirs,
 	})
 }
 
 func restoreThreadArchiveSources(threadID string) ([]string, []string, error) {
 	return codexadapter.RestoreThreadArchiveSources(codexadapter.RestoreThreadArchiveSourcesOptions{
 		ThreadID:                            threadID,
-		ResolveThreadArchiveRoot:            resolveThreadArchiveRootDir,
-		SanitizeArchiveNameStrict:           sanitizeArchiveNameStrict,
-		ResolveCodexRootDir:                 resolveCodexRootDir,
-		PathWithinRoot:                      pathWithinRoot,
-		CopyFileOverwrite:                   copyFileOverwrite,
-		FileSHA256:                          fileSHA256,
+		ResolveThreadArchiveRoot:            codexadapter.ResolveThreadArchiveRootDir,
+		SanitizeArchiveNameStrict:           codexadapter.SanitizeArchiveNameStrict,
+		ResolveCodexRootDir:                 codexadapter.ResolveCodexRootDir,
+		PathWithinRoot:                      codexadapter.PathWithinRoot,
+		CopyFileOverwrite:                   codexadapter.CopyFileOverwrite,
+		FileSHA256:                          codexadapter.FileSHA256,
 		FindLatestThreadArchiveManifestPath: findLatestThreadArchiveManifestPath,
 		ReadThreadArchiveManifest:           readThreadArchiveManifest,
 	})
@@ -268,10 +268,10 @@ type threadArchiveRestoreNotice = codexadapter.ThreadArchiveRestoreNotice
 func inspectThreadArchiveForRestore(threadID string) (threadArchiveRestoreNotice, error) {
 	return codexadapter.InspectThreadArchiveForRestore(codexadapter.InspectThreadArchiveForRestoreOptions{
 		ThreadID:                            threadID,
-		ResolveThreadArchiveRoot:            resolveThreadArchiveRootDir,
-		SanitizeArchiveNameStrict:           sanitizeArchiveNameStrict,
-		PathWithinRoot:                      pathWithinRoot,
-		FileSHA256:                          fileSHA256,
+		ResolveThreadArchiveRoot:            codexadapter.ResolveThreadArchiveRootDir,
+		SanitizeArchiveNameStrict:           codexadapter.SanitizeArchiveNameStrict,
+		PathWithinRoot:                      codexadapter.PathWithinRoot,
+		FileSHA256:                          codexadapter.FileSHA256,
 		FindLatestThreadArchiveManifestPath: findLatestThreadArchiveManifestPath,
 		ReadThreadArchiveManifest:           readThreadArchiveManifest,
 	})

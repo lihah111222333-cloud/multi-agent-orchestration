@@ -1,9 +1,6 @@
 package apiserver
 
 import (
-	"sort"
-	"strings"
-
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 )
 
@@ -70,35 +67,7 @@ func mergeTrackedTurnCompletionPayload(payload, completion map[string]any) {
 }
 
 func trackedTurnPayloadDiagKV(payload map[string]any) []any {
-	if payload == nil {
-		return []any{"payload_nil", true}
-	}
-
-	keys := make([]string, 0, len(payload))
-	for key := range payload {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	const maxKeySample = 12
-	keysTruncated := false
-	if len(keys) > maxKeySample {
-		keys = keys[:maxKeySample]
-		keysTruncated = true
-	}
-	_, hasTurnObj := payload["turn"].(map[string]any)
-
-	return []any{
-		"payload_key_count", len(payload),
-		"payload_keys_sample", strings.Join(keys, ","),
-		"payload_keys_truncated", keysTruncated,
-		"payload_has_turn_obj", hasTurnObj,
-		"payload_turn_id", extractTrackedTurnID(payload),
-		"payload_turn_status", extractTrackedTurnStatus(payload),
-		"payload_turn_reason", extractTrackedTurnReason(payload),
-		"payload_status_raw", extractTrackedString(payload, "status", "state"),
-		"payload_reason_raw", extractTrackedString(payload, "reason", "message"),
-	}
+	return codexadapter.TrackedTurnPayloadDiagKV(payload)
 }
 
 // checkTurnStall is called periodically by the stall timer.

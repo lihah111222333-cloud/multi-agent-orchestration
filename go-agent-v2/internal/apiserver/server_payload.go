@@ -527,6 +527,7 @@ func (s *Server) AgentEventHandler(agentID string) agentcore.EventHandler {
 		}
 		payload["threadId"] = agentID
 		s.enrichFileChangePayload(agentID, event.Type, method, payload)
+		s.enrichReadCommandPayload(event.Type, payload)
 		s.captureTrackedTurnEventSummary(agentID, event.Type, method, payload)
 		if method == "error" {
 			willRetry, hasWillRetry := extractBoolFromPayload(payload, "willRetry", "will_retry", "recoverable")
@@ -747,4 +748,68 @@ func isTerminalEventType(eventType, method string) bool {
 	default:
 		return false
 	}
+}
+
+// enrichReadCommandPayload 检测 exec_command_begin 事件中的阅读类命令。
+//
+// 当 Agent 通过 Codex 内置 shell 执行 cat/grep/find 等命令时:
+//   - payload 追加 isReadCommand: true + lspHint 字段 (前端可展示警告)
+//   - 调用 IncrementToolCall("shell_read:<cmd>") 统计使用次数
+func (s *Server) enrichReadCommandPayload(eventType string, payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	if eventType != agentcore.EventExecCommandBegin {
+		return
+	}
+	cmd := extractCommandBaseName(payload)
+	if cmd == "" {
+		return
+	}
+	if !readCommands[cmd] {
+		return
+	}
+	payload["isReadCommand"] = true
+	payload["lspHint"] = lspPreferenceHint
+	s.IncrementToolCall("shell_read:" + cmd)
+	logger.Info("codex shell: read command detected",
+		logger.FieldCommand, cmd,
+	)
+}
+
+// extractCommandBaseName 从 payload 的 command 字段提取基础命令名。
+//
+// Codex exec_command_begin payload 中 command 可能是:
+//   - "cat main.go"         → "cat"
+//   - "/usr/bin/grep foo"   → "grep"
+//   - "grep -rn 'pattern'"  → "grep"
+func extractCommandBaseName(payload map[string]any) string {
+	raw := ""
+	switch v := payload["command"].(type) {
+	case string:
+		raw = v
+	default:
+		// 尝试 displayCommand / cmd 等别名
+		for _, key := range []string{"displayCommand", "command_display", "cmd"} {
+			if s, ok := payload[key].(string); ok && s != "" {
+				raw = s
+				break
+			}
+		}
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	// 取第一个 token 作为命令, 去掉路径前缀
+	fields := strings.Fields(raw)
+	if len(fields) == 0 {
+		return ""
+	}
+	// filepath.Base 处理 /usr/bin/grep → grep
+	base := fields[0]
+	if idx := strings.LastIndex(base, "/"); idx >= 0 {
+		base = base[idx+1:]
+	}
+	return base
 }

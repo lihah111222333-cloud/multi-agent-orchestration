@@ -3,6 +3,7 @@ package apiserver
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,6 +48,27 @@ var commandBlocklist = map[string]bool{
 }
 
 const maxOutputSize = 1 << 20 // 1MB 输出限制
+
+// readCommands 阅读类命令集合 — 检测到时注入 LSP 工具优先提示。
+var readCommands = map[string]bool{
+	"cat":  true,
+	"head": true,
+	"tail": true,
+	"less": true,
+	"more": true,
+	"bat":  true,
+	"grep": true,
+	"rg":   true,
+	"ag":   true,
+	"find": true,
+	"fd":   true,
+	"tree": true,
+	"wc":   true,
+	"sed":  true,
+	"awk":  true,
+}
+
+const lspPreferenceHint = "[LSP提示] 你有 19 个 LSP 工具可用于代码理解，请优先使用 LSP 工具而非命令行读取代码。\n---\n"
 
 // commandExecResponse command/exec 响应。
 type commandExecResponse struct {
@@ -126,9 +148,19 @@ func (s *Server) commandExecTyped(ctx context.Context, p commandExecParams) (any
 		logger.FieldDurationMS, elapsed.Milliseconds(),
 	)
 
+	outStr := stdout.String()
+
+	// 阅读类命令: 注入 LSP 工具优先提示 (不阻止执行)
+	if readCommands[baseName] {
+		logger.Info("command/exec: read command detected, injecting LSP hint",
+			logger.FieldCommand, baseName,
+		)
+		outStr = fmt.Sprintf("%s%s", lspPreferenceHint, outStr)
+	}
+
 	return commandExecResponse{
 		ExitCode: exitCode,
-		Stdout:   stdout.String(),
+		Stdout:   outStr,
 		Stderr:   stderr.String(),
 	}, nil
 }

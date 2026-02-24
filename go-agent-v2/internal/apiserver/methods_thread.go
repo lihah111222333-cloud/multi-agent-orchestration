@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/store"
@@ -50,36 +49,29 @@ type threadStartResponse struct {
 }
 
 func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any, error) {
-	if p.Cwd == "" {
-		p.Cwd = "."
-	}
-
-	id := fmt.Sprintf("thread-%d-%d", time.Now().UnixMilli(), s.threadSeq.Add(1))
-
-	// 构建全部动态工具注入 agent (LSP + 编排 + 资源)
 	dynamicTools := s.allDynamicToolSchemas()
-
-	// 统一工具使用提示词仅在会话创建时注入一次，避免每轮 turn 重复注入。
-	startInstructions := s.resolveStartInstructionsForLaunch(ctx, dynamicTools)
-	if err := s.mgr.Launch(ctx, id, id, "", p.Cwd, startInstructions, dynamicTools); err != nil {
-		return nil, apperrors.Wrap(err, "Server.threadStart", "launch thread")
+	result, err := s.codexAdapter.ThreadStart(ctx, codexadapter.ThreadStartOptions{
+		ThreadID:          fmt.Sprintf("thread-%d-%d", time.Now().UnixMilli(), s.threadSeq.Add(1)),
+		Cwd:               p.Cwd,
+		Model:             p.Model,
+		ModelProvider:     p.ModelProvider,
+		ApprovalPolicy:    p.ApprovalPolicy,
+		DynamicTools:      dynamicTools,
+		StartInstructions: s.resolveStartInstructionsForLaunch(ctx, dynamicTools),
+		RegisterBinding:   s.registerBinding,
+	})
+	if err != nil {
+		return nil, err
 	}
-	if proc := s.mgr.Get(id); proc != nil {
-		s.registerBinding(ctx, id, proc)
-	}
-	if s.uiRuntime != nil {
-		s.uiRuntime.ReplaceThreads(buildThreadSnapshots(s.mgr.List()))
-	}
-
 	return threadStartResponse{
 		Thread: threadInfo{
-			ID:     id,
-			Status: "running",
+			ID:     result.ThreadID,
+			Status: result.Status,
 		},
-		Model:          p.Model,
-		ModelProvider:  p.ModelProvider,
-		Cwd:            p.Cwd,
-		ApprovalPolicy: p.ApprovalPolicy,
+		Model:          result.Model,
+		ModelProvider:  result.ModelProvider,
+		Cwd:            result.Cwd,
+		ApprovalPolicy: result.ApprovalPolicy,
 	}, nil
 }
 
@@ -103,21 +95,20 @@ type threadForkResponse struct {
 }
 
 func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, error) {
-	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		resp, err := s.codexAdapter.ForkThread(proc, agentcore.ForkThreadRequest{
-			SourceThreadID: p.ThreadID,
-		})
-		if err != nil {
-			return nil, apperrors.Wrap(err, "Server.threadFork", "fork thread")
-		}
-		newID := resp.ThreadID
-		if newID == "" {
-			newID = fmt.Sprintf("thread-%d", time.Now().UnixMilli())
-		}
-		return threadForkResponse{
-			Thread: threadInfo{ID: newID, ForkedFrom: p.ThreadID},
-		}, nil
+	result, err := s.codexAdapter.ThreadFork(codexadapter.ThreadForkOptions{
+		ThreadID:     p.ThreadID,
+		WithThread:   s.withThread,
+		NowUnixMilli: time.Now().UnixMilli,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return threadForkResponse{
+		Thread: threadInfo{
+			ID:         result.ThreadID,
+			ForkedFrom: result.ForkedFrom,
+		},
+	}, nil
 }
 
 // threadNameSetParams thread/name/set 请求参数。
@@ -129,11 +120,7 @@ func (s *Server) threadCompact(ctx context.Context, params json.RawMessage) (any
 // threadRollbackParams thread/rollback 请求参数。
 
 // threadListItem thread/list 响应项。
-type threadListItem struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	State string `json:"state"`
-}
+type threadListItem = codexadapter.ThreadListItem
 
 // threadListResponse thread/list 响应。
 type threadListResponse struct {
@@ -298,32 +285,15 @@ func (s *Server) appendThreadHistoryFromStores(ctx context.Context, threads []th
 }
 
 func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error) {
-	agents := []runner.AgentInfo{}
-	if s.mgr != nil {
-		agents = s.mgr.List()
+	threads, err := s.codexAdapter.ThreadList(ctx, codexadapter.ThreadListOptions{
+		MethodName:           "thread/list",
+		LoadThreadArchiveMap: s.loadThreadArchiveMap,
+		LoadThreadAliases:    s.loadThreadAliases,
+		ApplyThreadAliases:   applyThreadAliases,
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	threads := make([]threadListItem, 0, len(agents)+32)
-	seen := make(map[string]struct{}, len(agents)+32)
-
-	for _, a := range agents {
-		if a.ID == "" {
-			continue
-		}
-		threads = append(threads, threadListItem{
-			ID:    a.ID,
-			Name:  a.Name,
-			State: string(a.State),
-		})
-		seen[a.ID] = struct{}{}
-	}
-
-	threads = s.appendThreadHistoryFromStores(ctx, threads, seen, "thread/list")
-	applyThreadAliases(threads, s.loadThreadAliases(ctx))
-	if s.uiRuntime != nil {
-		s.uiRuntime.ReplaceThreads(buildThreadSnapshotsFromListItems(threads))
-	}
-
 	return threadListResponse{Threads: threads}, nil
 }
 
@@ -333,89 +303,32 @@ type threadLoadedListResponse struct {
 }
 
 func (s *Server) threadLoadedList(ctx context.Context, _ json.RawMessage) (any, error) {
-	// 历史线程也视为可选会话：前端可直接选择，首次 turn/start 时自动补加载。
-	agents := []runner.AgentInfo{}
-	if s.mgr != nil {
-		agents = s.mgr.List()
+	threads, err := s.codexAdapter.ThreadLoadedList(ctx, codexadapter.ThreadListOptions{
+		MethodName:           "thread/loaded/list",
+		LoadThreadArchiveMap: s.loadThreadArchiveMap,
+		LoadThreadAliases:    s.loadThreadAliases,
+		ApplyThreadAliases:   applyThreadAliases,
+	})
+	if err != nil {
+		return nil, err
 	}
-	threads := make([]threadListItem, 0, len(agents)+32)
-	seen := make(map[string]struct{}, len(agents)+32)
-
-	for _, a := range agents {
-		if a.ID == "" {
-			continue
-		}
-		threads = append(threads, threadListItem{
-			ID:    a.ID,
-			Name:  a.Name,
-			State: string(a.State),
-		})
-		seen[a.ID] = struct{}{}
-	}
-
-	threads = s.appendThreadHistoryFromStores(ctx, threads, seen, "thread/loaded/list")
-	applyThreadAliases(threads, s.loadThreadAliases(ctx))
-
 	return threadLoadedListResponse{Threads: threads}, nil
 }
 
 func (s *Server) threadReadTyped(ctx context.Context, p threadIDParams) (any, error) {
-	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		threads, err := s.codexAdapter.ListThreads(proc)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"history": threads}, nil
+	return s.codexAdapter.ThreadRead(ctx, codexadapter.ThreadReadOptions{
+		ThreadID:   p.ThreadID,
+		WithThread: s.withThread,
 	})
 }
 
 func (s *Server) threadResolveTyped(ctx context.Context, p threadIDParams) (any, error) {
-	id := strings.TrimSpace(p.ThreadID)
-	if id == "" {
-		return nil, apperrors.New("Server.threadResolve", "threadId is required")
-	}
-
-	result := map[string]any{
-		"threadId": id,
-	}
-
-	var codexThreadID string
-	resolveSource := "history"
-	for _, info := range s.mgr.List() {
-		if strings.TrimSpace(info.ID) != id {
-			continue
-		}
-		if state := strings.TrimSpace(string(info.State)); state != "" {
-			result["state"] = state
-		}
-		if port := info.Port; port > 0 {
-			result["port"] = port
-		}
-		codexThreadID = strings.TrimSpace(info.ThreadID)
-		resolveSource = "running"
-		break
-	}
-
-	if codexThreadID == "" {
-		codexThreadID = strings.TrimSpace(s.resolvePrimaryCodexThreadID(ctx, id))
-	}
-	if codexThreadID != "" {
-		result["codexThreadId"] = codexThreadID
-	}
-	if isLikelyCodexThreadID(codexThreadID) {
-		result["uuid"] = codexThreadID
-	}
-	result["hasHistory"] = s.threadExistsInHistory(ctx, id)
-	logger.Info("thread/resolve: identity resolved",
-		logger.FieldAgentID, id, logger.FieldThreadID, id,
-		"source", resolveSource,
-		"state", result["state"],
-		logger.FieldPort, result["port"],
-		"codex_thread_id", codexThreadID,
-		"has_history", result["hasHistory"],
-	)
-
-	return result, nil
+	return s.codexAdapter.ThreadResolve(ctx, codexadapter.ThreadResolveOptions{
+		ThreadID:                    p.ThreadID,
+		ResolvePrimaryCodexThreadID: s.resolvePrimaryCodexThreadID,
+		IsLikelyCodexThreadID:       isLikelyCodexThreadID,
+		ThreadExistsInHistory:       s.threadExistsInHistory,
+	})
 }
 
 // threadMessagesParams thread/messages 请求参数。

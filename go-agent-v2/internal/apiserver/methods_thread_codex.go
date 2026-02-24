@@ -3,15 +3,10 @@ package apiserver
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
-	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
@@ -28,30 +23,22 @@ type threadResumeResponse struct {
 }
 
 func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (any, error) {
-	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		candidates := codexadapter.BuildResumeCandidates(p.ThreadID, s.resolveCodexThreadCandidates(ctx, p.ThreadID), normalizeCodexThreadID)
-		logger.Info("thread/resume: resolved candidates",
-			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-			"candidate_count", len(candidates),
-			"candidates", codexadapter.PreviewResumeCandidates(candidates, 4),
-			"cwd", strings.TrimSpace(p.Cwd),
-		)
-		resumedID, err := codexadapter.TryResumeCandidates(candidates, p.ThreadID, func(id string) error {
-			return s.codexAdapter.ResumeThread(proc, agentcore.ResumeThreadRequest{
-				ThreadID: id,
-				Path:     p.Path,
-				Cwd:      p.Cwd,
-			})
-		}, codexadapter.IsHistoricalResumeCandidateError)
-		if err != nil {
-			return nil, apperrors.Wrap(err, "Server.threadResume", "resume thread")
-		}
-		_ = resumedID // logged inside tryResumeCandidates
-		return threadResumeResponse{
-			Thread: threadInfo{ID: p.ThreadID, Status: "resumed"},
-			Model:  p.Model,
-		}, nil
+	result, err := s.codexAdapter.ThreadResume(ctx, codexadapter.ThreadResumeOptions{
+		ThreadID:                     p.ThreadID,
+		Path:                         p.Path,
+		Cwd:                          p.Cwd,
+		Model:                        p.Model,
+		WithThread:                   s.withThread,
+		ResolveCodexThreadCandidates: s.resolveCodexThreadCandidates,
+		NormalizeCodexThreadID:       normalizeCodexThreadID,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return threadResumeResponse{
+		Thread: threadInfo{ID: result.ThreadID, Status: result.Status},
+		Model:  result.Model,
+	}, nil
 }
 
 func (s *Server) threadArchiveTyped(ctx context.Context, p threadIDParams) (any, error) {
@@ -115,11 +102,10 @@ type threadRollbackParams struct {
 }
 
 func (s *Server) threadRollbackTyped(_ context.Context, p threadRollbackParams) (any, error) {
-	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		if err := s.codexAdapter.SendCommand(proc, "/undo", fmt.Sprintf("%d", p.TurnIndex)); err != nil {
-			return nil, apperrors.Wrap(err, "Server.threadRollback", "send undo command")
-		}
-		return map[string]any{}, nil
+	return s.codexAdapter.ThreadRollback(codexadapter.ThreadRollbackOptions{
+		ThreadID:   p.ThreadID,
+		TurnIndex:  p.TurnIndex,
+		WithThread: s.withThread,
 	})
 }
 

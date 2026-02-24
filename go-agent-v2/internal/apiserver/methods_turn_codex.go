@@ -9,7 +9,6 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
-	"github.com/multi-agent/go-agent-v2/internal/runner"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -89,18 +88,19 @@ type turnSteerParams struct {
 }
 
 func (s *Server) turnSteerTyped(ctx context.Context, p turnSteerParams) (any, error) {
-	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		selectedSkills, err := normalizeSkillNames(p.SelectedSkills)
-		if err != nil {
-			return nil, apperrors.Wrap(err, "Server.turnSteer", "normalize selected skills")
-		}
-		prompt, images, files := s.extractInputs(p.Input)
-		skillPrompt, _, _ := s.buildTurnSkillPrompt(p.ThreadID, prompt, p.Input, selectedSkills, p.ManualSkillSelection)
-		submitPrompt := s.mergePromptText(prompt, skillPrompt)
-		if err := s.codexAdapter.Submit(proc, submitPrompt, images, files, nil); err != nil {
-			return nil, err
-		}
-		return map[string]any{}, nil
+	selectedSkills, err := normalizeSkillNames(p.SelectedSkills)
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.turnSteer", "normalize selected skills")
+	}
+	prompt, images, files := s.extractInputs(p.Input)
+	skillPrompt, _, _ := s.buildTurnSkillPrompt(p.ThreadID, prompt, p.Input, selectedSkills, p.ManualSkillSelection)
+	submitPrompt := s.mergePromptText(prompt, skillPrompt)
+	return s.codexAdapter.TurnSteer(codexadapter.TurnSteerOptions{
+		ThreadID:     p.ThreadID,
+		SubmitPrompt: submitPrompt,
+		Images:       images,
+		Files:        files,
+		WithThread:   s.withThread,
 	})
 }
 
@@ -183,11 +183,9 @@ type reviewStartParams struct {
 }
 
 func (s *Server) reviewStartTyped(_ context.Context, p reviewStartParams) (any, error) {
-	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		if err := s.codexAdapter.SendCommand(proc, "/review", p.Delivery); err != nil {
-			return nil, apperrors.Wrap(err, "Server.reviewStart", "send review command")
-		}
-		return map[string]any{}, nil
+	return s.codexAdapter.ReviewStart(codexadapter.ReviewStartOptions{
+		ThreadID:   p.ThreadID,
+		Delivery:   p.Delivery,
+		WithThread: s.withThread,
 	})
-
 }

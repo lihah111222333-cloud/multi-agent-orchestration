@@ -202,7 +202,8 @@ func samePath(a, b string) bool {
 	return filepath.Clean(aa) == filepath.Clean(bb)
 }
 
-func normalizeAgentWorkDir(cwd string) string {
+// NormalizeAgentWorkDir resolves and cleans a working directory path.
+func NormalizeAgentWorkDir(cwd string) string {
 	trimmed := strings.TrimSpace(cwd)
 	if trimmed == "" {
 		return ""
@@ -221,7 +222,7 @@ func resolveCodeRunner(provider CodeRunProvider, runtime AgentRuntimeProvider, a
 	defaultRunner := provider.CodeRunner()
 	agentCwd := ""
 	if runtime != nil {
-		agentCwd = normalizeAgentWorkDir(runtime.GetAgentWorkDir(agentID))
+		agentCwd = NormalizeAgentWorkDir(runtime.GetAgentWorkDir(agentID))
 	}
 	if agentCwd == "" {
 		if defaultRunner == nil {

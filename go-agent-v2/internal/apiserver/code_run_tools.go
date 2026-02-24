@@ -4,34 +4,22 @@ package apiserver
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/executor"
 	"github.com/multi-agent/go-agent-v2/internal/store"
+	"github.com/multi-agent/go-agent-v2/internal/tools"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
-
-func normalizeAgentWorkDir(cwd string) string {
-	trimmed := strings.TrimSpace(cwd)
-	if trimmed == "" {
-		return ""
-	}
-	abs, err := filepath.Abs(trimmed)
-	if err != nil {
-		return filepath.Clean(trimmed)
-	}
-	return filepath.Clean(abs)
-}
 
 func (s *Server) setAgentWorkDir(agentID, cwd string) {
 	id := strings.TrimSpace(agentID)
 	if id == "" {
 		return
 	}
-	normalized := normalizeAgentWorkDir(cwd)
+	normalized := tools.NormalizeAgentWorkDir(cwd)
 	if normalized == "" {
 		return
 	}

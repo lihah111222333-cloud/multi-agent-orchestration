@@ -1,4 +1,4 @@
-package apiserver
+package dashrpc
 
 import (
 	"context"
@@ -7,8 +7,14 @@ import (
 	"time"
 )
 
-type uiDashboardGetParams struct {
-	Page string `json:"page"`
+type threadListItem struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+type threadListResponse struct {
+	Threads []threadListItem `json:"threads"`
 }
 
 func newDashboardPayload() map[string]any {
@@ -36,47 +42,44 @@ func copyListField(dst map[string]any, dstKey string, src any, srcKey string) {
 	dst[dstKey] = value
 }
 
-// callMethod 调用已注册的方法。
-func (s *Server) callMethod(ctx context.Context, method string, params json.RawMessage) (any, error) {
-	h, ok := s.methods[method]
-	if !ok {
+func callMethod(ctx context.Context, caller MethodCaller, method string, params json.RawMessage) (any, error) {
+	if caller == nil {
 		return nil, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return h(ctx, params)
+	return caller(ctx, method, params)
 }
 
-// callDash 调用已注册的 dashboard 方法。
-func (s *Server) callDash(ctx context.Context, method string) (any, error) {
-	return s.callMethod(ctx, "dashboard/"+method, json.RawMessage(`{}`))
+func callDash(ctx context.Context, caller MethodCaller, method string) (any, error) {
+	return callMethod(ctx, caller, "dashboard/"+method, json.RawMessage(`{}`))
 }
 
-// buildAgentFallbackFromThreads 从 thread/list 构造 agents 页面兜底数据。
-//
-// 场景: 重启后 dashboard/agentStatus 暂无记录时, 使用线程列表(含历史线程)保证前端 Agent 页不为空。
-func (s *Server) buildAgentFallbackFromThreads(ctx context.Context) []any {
-	out, err := s.callMethod(ctx, "thread/list", json.RawMessage(`{}`))
+func decodeThreadList(out any) (threadListResponse, bool) {
+	if out == nil {
+		return threadListResponse{}, false
+	}
+
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return threadListResponse{}, false
+	}
+	var resp threadListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return threadListResponse{}, false
+	}
+	return resp, true
+}
+
+func buildAgentFallbackFromThreads(ctx context.Context, caller MethodCaller) []any {
+	out, err := callMethod(ctx, caller, "thread/list", json.RawMessage(`{}`))
 	if err != nil || out == nil {
 		return nil
 	}
 
-	resp, ok := out.(threadListResponse)
-	if !ok {
-		if ptr, ok := out.(*threadListResponse); ok && ptr != nil {
-			resp = *ptr
-		} else {
-			raw, marshalErr := json.Marshal(out)
-			if marshalErr != nil {
-				return nil
-			}
-			if unmarshalErr := json.Unmarshal(raw, &resp); unmarshalErr != nil {
-				return nil
-			}
-		}
-	}
-	if len(resp.Threads) == 0 {
+	resp, ok := decodeThreadList(out)
+	if !ok || len(resp.Threads) == 0 {
 		return nil
 	}
 
@@ -106,36 +109,37 @@ func (s *Server) buildAgentFallbackFromThreads(ctx context.Context) []any {
 	return agents
 }
 
-func (s *Server) uiDashboardGet(ctx context.Context, p uiDashboardGetParams) (any, error) {
+// UIDashboardGet returns the stable payload for ui/dashboard/get.
+func UIDashboardGet(ctx context.Context, caller MethodCaller, p UIGetParams) (any, error) {
 	result := newDashboardPayload()
 
 	switch p.Page {
 	case "agents":
-		out, _ := s.callDash(ctx, "agentStatus")
+		out, _ := callDash(ctx, caller, "agentStatus")
 		copyListField(result, "agents", out, "agents")
 		if current, ok := result["agents"].([]any); !ok || len(current) == 0 {
-			if fallback := s.buildAgentFallbackFromThreads(ctx); len(fallback) > 0 {
+			if fallback := buildAgentFallbackFromThreads(ctx, caller); len(fallback) > 0 {
 				result["agents"] = fallback
 			}
 		}
 	case "dags":
-		out, _ := s.callDash(ctx, "dags")
+		out, _ := callDash(ctx, caller, "dags")
 		copyListField(result, "dags", out, "dags")
 	case "tasks":
-		acks, _ := s.callDash(ctx, "taskAcks")
-		traces, _ := s.callDash(ctx, "taskTraces")
+		acks, _ := callDash(ctx, caller, "taskAcks")
+		traces, _ := callDash(ctx, caller, "taskTraces")
 		copyListField(result, "taskAcks", acks, "acks")
 		copyListField(result, "taskTraces", traces, "traces")
 	case "skills":
-		out, _ := s.callDash(ctx, "skills")
+		out, _ := callDash(ctx, caller, "skills")
 		copyListField(result, "skills", out, "skills")
 	case "commands":
-		cards, _ := s.callDash(ctx, "commandCards")
-		prompts, _ := s.callDash(ctx, "prompts")
+		cards, _ := callDash(ctx, caller, "commandCards")
+		prompts, _ := callDash(ctx, caller, "prompts")
 		copyListField(result, "commandCards", cards, "cards")
 		copyListField(result, "prompts", prompts, "prompts")
 	case "memory":
-		out, _ := s.callDash(ctx, "sharedFiles")
+		out, _ := callDash(ctx, caller, "sharedFiles")
 		copyListField(result, "memory", out, "files")
 	default:
 		// keep stable empty shape

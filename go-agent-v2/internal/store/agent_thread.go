@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multi-agent/go-agent-v2/internal/discovery"
 )
 
 // AgentThread codex http-api 线程注册信息。
@@ -27,12 +28,16 @@ type AgentThread struct {
 // AgentThreadStore agent_threads 存储。
 type AgentThreadStore struct{ BaseStore }
 
+// Ensure AgentThreadStore satisfies discovery contract at compile time.
+var _ discovery.Discoverer = (*AgentThreadStore)(nil)
+
 // Deprecated: NewAgentThreadStore 无外部调用者，整个 AgentThreadStore 构造函数未被使用。
 func NewAgentThreadStore(pool *pgxpool.Pool) *AgentThreadStore {
 	return &AgentThreadStore{NewBaseStore(pool)}
 }
 
 const atCols = "thread_id, prompt, model, cwd, status, port, pid, created_at, updated_at, finished_at, last_event_type, error_message"
+const atRunningCols = "thread_id, port, pid, status"
 
 // Deprecated: Register 无外部调用者。
 func (s *AgentThreadStore) Register(ctx context.Context, t *AgentThread) error {
@@ -72,8 +77,18 @@ func (s *AgentThreadStore) findRunning(ctx context.Context, col string, val any)
 	return collectOne[AgentThread](rows)
 }
 
-// ListRunning 列出所有运行中的线程。
-func (s *AgentThreadStore) ListRunning(ctx context.Context) ([]AgentThread, error) {
+// ListRunning 列出所有运行中的 Agent 端点（路由用最小字段集）。
+func (s *AgentThreadStore) ListRunning(ctx context.Context) ([]discovery.RunningAgent, error) {
+	rows, err := s.pool.Query(ctx,
+		"SELECT "+atRunningCols+" FROM agent_threads WHERE status = 'running' ORDER BY created_at DESC")
+	if err != nil {
+		return nil, err
+	}
+	return collectRows[discovery.RunningAgent](rows)
+}
+
+// Deprecated: ListRunningThreads 保留完整 AgentThread 字段视图。
+func (s *AgentThreadStore) ListRunningThreads(ctx context.Context) ([]AgentThread, error) {
 	rows, err := s.pool.Query(ctx,
 		"SELECT "+atCols+" FROM agent_threads WHERE status = 'running' ORDER BY created_at DESC")
 	if err != nil {

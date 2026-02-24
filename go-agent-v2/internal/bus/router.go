@@ -20,22 +20,15 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/internal/discovery"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
-// AgentDiscoverer 服务发现接口 (由 store.AgentThreadStore 实现)。
-type AgentDiscoverer interface {
-	FindByPort(ctx context.Context, port int) (threadID string, pid int, err error)
-	ListRunning(ctx context.Context) ([]AgentEndpoint, error)
-}
+// AgentDiscoverer 服务发现接口（对齐 internal/discovery 契约）。
+type AgentDiscoverer = discovery.Discoverer
 
-// AgentEndpoint 发现的 Agent 端点。
-type AgentEndpoint struct {
-	ThreadID string `json:"thread_id"`
-	Port     int    `json:"port"`
-	PID      int    `json:"pid"`
-	Status   string `json:"status"`
-}
+// AgentEndpoint 发现的 Agent 端点（兼容旧名称）。
+type AgentEndpoint = discovery.RunningAgent
 
 // AgentRouter Agent 消息路由器 (基于 agent_threads 服务发现)。
 type AgentRouter struct {

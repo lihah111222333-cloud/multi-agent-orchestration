@@ -64,7 +64,7 @@ func defaultSkillsCacheDir() string {
 func (s *Server) registerDynamicTools() {
 	// LSP 工具
 	tools.RegisterLSPHandlers(s.dynTools, s.lspTools)
-	s.registerExtendedLSPDynamicTools()
+	registerExtendedLSPDynamicTools(s.lspTools, s.dynTools)
 
 	// 编排工具
 	s.dynTools["orchestration_list_agents"] = func(_ json.RawMessage) string { return s.orchestrationListAgents() }
@@ -117,8 +117,8 @@ func (s *Server) SetupLSP(rootDir string) {
 	})
 }
 
-// buildLSPDynamicTools 构建 LSP 动态工具列表 (注入 codex agent)。
-func (s *Server) buildLSPDynamicTools() []agentcore.DynamicTool {
+// lspDynamicToolSchemas 构建 LSP 动态工具列表 (注入 codex agent)。
+func (s *Server) lspDynamicToolSchemas() []agentcore.DynamicTool {
 	if s.lsp == nil {
 		logger.Info("lsp dynamic tools disabled: lsp manager is not initialized")
 		return nil
@@ -136,7 +136,7 @@ func (s *Server) buildLSPDynamicTools() []agentcore.DynamicTool {
 		return nil
 	}
 	builtTools := append([]agentcore.DynamicTool(nil), tools.LSPTools()...)
-	builtTools = append(builtTools, s.buildExtendedLSPDynamicTools()...)
+	builtTools = append(builtTools, extendedLSPDynamicToolSchemas()...)
 	return builtTools
 }
 

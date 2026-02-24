@@ -97,7 +97,7 @@ func (a *Adapter) EnsureThreadReadyForTurn(ctx context.Context, opt EnsureThread
 		"candidates", PreviewResumeCandidates(resumeCandidates, 4),
 	)
 
-	dynamicTools := []agentcore.DynamicTool{}
+	dynamicTools := make([]agentcore.DynamicTool, 0)
 	if opt.BuildAllDynamicTools != nil {
 		dynamicTools = opt.BuildAllDynamicTools()
 	}

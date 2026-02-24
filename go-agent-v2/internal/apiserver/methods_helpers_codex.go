@@ -117,7 +117,7 @@ func (s *Server) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd str
 		BindingStore:                      s.bindingStore,
 		ThreadExistsInHistory:             s.threadExistsInHistory,
 		ResolveCodexThreadCandidates:      s.resolveCodexThreadCandidates,
-		BuildAllDynamicTools:              s.buildAllDynamicTools,
+		BuildAllDynamicTools:              s.allDynamicToolSchemas,
 		ResolveStartInstructionsForLaunch: s.resolveStartInstructionsForLaunch,
 		SetAgentWorkDir:                   s.setAgentWorkDir,
 		RegisterBinding:                   s.registerBinding,

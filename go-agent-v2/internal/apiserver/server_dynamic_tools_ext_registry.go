@@ -91,11 +91,11 @@ func snapshotExtendedLSPDynamicToolProviders() []extendedLSPDynamicToolProvider 
 	return providers
 }
 
-func (s *Server) registerExtendedLSPDynamicTools() {
+func registerExtendedLSPDynamicTools(lspTools tools.LSPHandlerProvider, dynTools map[string]tools.LSPDynamicToolHandler) {
 	providers := snapshotExtendedLSPDynamicToolProviders()
 	contextProvider := lspExtProviderContext{
-		LSPHandlerProvider: s.lspTools,
-		dynTools:           s.dynTools,
+		LSPHandlerProvider: lspTools,
+		dynTools:           dynTools,
 	}
 	for _, provider := range providers {
 		if provider.register != nil {
@@ -104,7 +104,7 @@ func (s *Server) registerExtendedLSPDynamicTools() {
 	}
 }
 
-func (s *Server) buildExtendedLSPDynamicTools() []agentcore.DynamicTool {
+func extendedLSPDynamicToolSchemas() []agentcore.DynamicTool {
 	providers := snapshotExtendedLSPDynamicToolProviders()
 	if len(providers) == 0 {
 		return nil

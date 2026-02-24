@@ -1,0 +1,980 @@
+[
+  {
+    "name": "code_run",
+    "description": "Execute a code snippet (Go, JavaScript, TypeScript) or a project shell command. Go snippets can be auto-wrapped with main function and imports. Use mode='project_cmd' for shell commands (only high-risk commands require approval).",
+    "inputSchema": {
+      "properties": {
+        "auto_wrap": {
+          "description": "Auto-wrap Go code with package main and imports. Default: true for Go",
+          "type": "boolean"
+        },
+        "code": {
+          "description": "Code snippet to execute (for run mode)",
+          "type": "string"
+        },
+        "command": {
+          "description": "Shell command (for project_cmd mode)",
+          "type": "string"
+        },
+        "language": {
+          "description": "Language: go, javascript, typescript. Required for run mode.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "Execution mode. Default: run",
+          "enum": [
+            "run",
+            "project_cmd"
+          ],
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Timeout in seconds. Default: 30",
+          "type": "number"
+        },
+        "work_dir": {
+          "description": "Custom working directory (must be within project root)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "code_run_test",
+    "description": "Run a specific Go test function. Equivalent to: go test -v -run ^TestFunc$ [package]",
+    "inputSchema": {
+      "properties": {
+        "test_func": {
+          "description": "Test function name (e.g. TestMyFunction)",
+          "type": "string"
+        },
+        "test_pkg": {
+          "description": "Package path (e.g. ./internal/executor/). Default: ./...",
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Timeout in seconds. Default: 30",
+          "type": "number"
+        }
+      },
+      "required": [
+        "test_func"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "command_get",
+    "description": "Get a specific command card by its key, including the command template and argument schema.",
+    "inputSchema": {
+      "properties": {
+        "card_key": {
+          "description": "Command card key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "card_key"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "command_list",
+    "description": "List available command cards. Command cards define reusable operations with templates and argument schemas.",
+    "inputSchema": {
+      "properties": {
+        "keyword": {
+          "description": "Search keyword (optional)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_call_hierarchy",
+    "description": "Get call hierarchy for symbol at file_path:line:column. Direction: incoming|outgoing|both.",
+    "inputSchema": {
+      "properties": {
+        "column": {
+          "description": "0-indexed column number",
+          "type": "number"
+        },
+        "direction": {
+          "description": "Hierarchy direction (default: both)",
+          "enum": [
+            "incoming",
+            "outgoing",
+            "both"
+          ],
+          "type": "string"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "line": {
+          "description": "0-indexed line number",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file_path",
+        "line",
+        "column"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_code_action",
+    "description": "Get code actions/commands at a document range. Supports optional end_line/end_column and action kinds filter.",
+    "inputSchema": {
+      "properties": {
+        "column": {
+          "description": "0-indexed start column number",
+          "type": "number"
+        },
+        "end_column": {
+          "description": "0-indexed end column number (default: column)",
+          "type": "number"
+        },
+        "end_line": {
+          "description": "0-indexed end line number (default: line)",
+          "type": "number"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "line": {
+          "description": "0-indexed start line number",
+          "type": "number"
+        },
+        "only": {
+          "description": "Optional code action kinds filter",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "file_path",
+        "line",
+        "column"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_completion",
+    "description": "Get code completion suggestions at a position. Returns candidate items with labels and kinds. The document is auto-bootstrapped if not opened yet.",
+    "inputSchema": {
+      "properties": {
+        "column": {
+          "description": "0-indexed column number",
+          "type": "number"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "line": {
+          "description": "0-indexed line number",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file_path",
+        "line",
+        "column"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_definition",
+    "description": "Go to definition. Returns the location(s) where a symbol is defined. The document is auto-bootstrapped if not opened yet.",
+    "inputSchema": {
+      "properties": {
+        "column": {
+          "description": "0-indexed column number",
+          "type": "number"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "line": {
+          "description": "0-indexed line number",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file_path",
+        "line",
+        "column"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_diagnostics",
+    "description": "Get current diagnostics (errors, warnings) for a file. If file_path is provided and the file was not opened, it will be auto-synchronized first.",
+    "inputSchema": {
+      "properties": {
+        "file_path": {
+          "description": "Absolute or relative path to the file. Empty = all files.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_did_change",
+    "description": "Notify the language server that file content has changed. Use after editing a file to keep LSP in sync. Supports unopened files via automatic bootstrap and fail-closed sync.",
+    "inputSchema": {
+      "properties": {
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "new_content": {
+          "description": "Full new content of the file",
+          "type": "string"
+        },
+        "version": {
+          "description": "Document version (increment each change, default: 2)",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file_path",
+        "new_content"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_document_symbol",
+    "description": "Get file outline (all symbols: functions, types, methods, constants). Returns a hierarchical symbol tree. The document is auto-bootstrapped if not opened yet.",
+    "inputSchema": {
+      "properties": {
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_folding_range",
+    "description": "Get folding ranges for a file with boundary filtering.",
+    "inputSchema": {
+      "properties": {
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_format",
+    "description": "Get formatting text edits for a file. Returns TextEdit[] and does not apply edits automatically.",
+    "inputSchema": {
+      "properties": {
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "insert_spaces": {
+          "description": "Use spaces for indentation (default: true)",
+          "type": "boolean"
+        },
+        "tab_size": {
+          "description": "Tab size (default: 4)",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file_path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_hover",
+    "description": "Get type info and documentation for a symbol at a specific position in a file via LSP hover.",
+    "inputSchema": {
+      "properties": {
+        "column": {
+          "description": "0-indexed column number",
+          "type": "number"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "line": {
+          "description": "0-indexed line number",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file_path",
+        "line",
+        "column"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_implementation",
+    "description": "Find implementation locations for symbol at file_path:line:column.",
+    "inputSchema": {
+      "properties": {
+        "column": {
+          "description": "0-indexed column number",
+          "type": "number"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "line": {
+          "description": "0-indexed line number",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file_path",
+        "line",
+        "column"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_open_file",
+    "description": "Open a file for LSP analysis. Triggers didOpen and starts diagnostics. Call before hover/diagnostics for accurate results.",
+    "inputSchema": {
+      "properties": {
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_references",
+    "description": "Find all references to a symbol. Returns locations where the symbol is used. The document is auto-bootstrapped if not opened yet.",
+    "inputSchema": {
+      "properties": {
+        "column": {
+          "description": "0-indexed column number",
+          "type": "number"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "include_declaration": {
+          "description": "Include the declaration in results (default: true)",
+          "type": "boolean"
+        },
+        "line": {
+          "description": "0-indexed line number",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file_path",
+        "line",
+        "column"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_rename",
+    "description": "Rename a symbol across all files. Returns all edits needed. The document is auto-bootstrapped if not opened yet.",
+    "inputSchema": {
+      "properties": {
+        "column": {
+          "description": "0-indexed column number",
+          "type": "number"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "line": {
+          "description": "0-indexed line number",
+          "type": "number"
+        },
+        "new_name": {
+          "description": "New name for the symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_path",
+        "line",
+        "column",
+        "new_name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_semantic_tokens",
+    "description": "Get semantic tokens for a file. Decoded token output is limited to 200 items.",
+    "inputSchema": {
+      "properties": {
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_signature_help",
+    "description": "Get signature help at file_path:line:column.",
+    "inputSchema": {
+      "properties": {
+        "column": {
+          "description": "0-indexed column number",
+          "type": "number"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "line": {
+          "description": "0-indexed line number",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file_path",
+        "line",
+        "column"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_type_definition",
+    "description": "Find type definition locations for symbol at file_path:line:column.",
+    "inputSchema": {
+      "properties": {
+        "column": {
+          "description": "0-indexed column number",
+          "type": "number"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "line": {
+          "description": "0-indexed line number",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file_path",
+        "line",
+        "column"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_type_hierarchy",
+    "description": "Get type hierarchy for symbol at file_path:line:column. Direction: supertypes|subtypes|both.",
+    "inputSchema": {
+      "properties": {
+        "column": {
+          "description": "0-indexed column number",
+          "type": "number"
+        },
+        "direction": {
+          "description": "Hierarchy direction (default: both)",
+          "enum": [
+            "supertypes",
+            "subtypes",
+            "both"
+          ],
+          "type": "string"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "line": {
+          "description": "0-indexed line number",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file_path",
+        "line",
+        "column"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_workspace_symbol",
+    "description": "Search symbols in workspace by query. Requires exactly one selector: file_path+query or language+query.",
+    "inputSchema": {
+      "oneOf": [
+        {
+          "not": {
+            "required": [
+              "language"
+            ]
+          },
+          "required": [
+            "query",
+            "file_path"
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "file_path"
+            ]
+          },
+          "required": [
+            "query",
+            "language"
+          ]
+        }
+      ],
+      "properties": {
+        "file_path": {
+          "description": "Absolute or relative path used to infer language",
+          "type": "string"
+        },
+        "language": {
+          "description": "Language name or alias: go/rust/typescript/python/c",
+          "type": "string"
+        },
+        "query": {
+          "description": "Symbol query",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "orchestration_launch_agent",
+    "description": "Launch a new agent subprocess. The new agent will also have orchestration tools injected.",
+    "inputSchema": {
+      "properties": {
+        "cwd": {
+          "description": "Working directory (optional, defaults to '.')",
+          "type": "string"
+        },
+        "name": {
+          "description": "Display name for the new agent",
+          "type": "string"
+        },
+        "prompt": {
+          "description": "Initial prompt (optional)",
+          "type": "string"
+        },
+        "workspace_run_key": {
+          "description": "Optional workspace run key. If provided, agent cwd is resolved to that run's virtual workspace.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "orchestration_list_agents",
+    "description": "List all running agents with their ID, name, state, port and thread ID.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    }
+  },
+  {
+    "name": "orchestration_send_message",
+    "description": "Send a message to another running agent by its ID. The message will be submitted as a new turn prompt.",
+    "inputSchema": {
+      "properties": {
+        "agent_id": {
+          "description": "Target agent ID",
+          "type": "string"
+        },
+        "message": {
+          "description": "Message to send",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_id",
+        "message"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "orchestration_stop_agent",
+    "description": "Stop a running agent by its ID.",
+    "inputSchema": {
+      "properties": {
+        "agent_id": {
+          "description": "Agent ID to stop",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_id"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "prompt_get",
+    "description": "Get a specific prompt template by its key, including the prompt text and variables.",
+    "inputSchema": {
+      "properties": {
+        "prompt_key": {
+          "description": "Prompt template key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt_key"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "prompt_list",
+    "description": "List available prompt templates. Templates can be used to generate structured prompts for agents.",
+    "inputSchema": {
+      "properties": {
+        "keyword": {
+          "description": "Search keyword (optional)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "shared_file_read",
+    "description": "Read a shared file by path. Shared files are stored in the database and can be accessed by all agents.",
+    "inputSchema": {
+      "properties": {
+        "path": {
+          "description": "File path (e.g. 'config/settings.json')",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "shared_file_write",
+    "description": "Write content to a shared file. Creates or overwrites the file at the given path.",
+    "inputSchema": {
+      "properties": {
+        "content": {
+          "description": "File content to write",
+          "type": "string"
+        },
+        "path": {
+          "description": "File path (e.g. 'config/settings.json')",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "task_create_dag",
+    "description": "Create a task DAG with nodes. Each node can have dependencies, be assigned to an agent, and reference a command card.",
+    "inputSchema": {
+      "properties": {
+        "dag_key": {
+          "description": "Unique key for the DAG",
+          "type": "string"
+        },
+        "description": {
+          "description": "What this DAG does",
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "properties": {
+              "assigned_to": {
+                "description": "Agent ID to assign this node to",
+                "type": "string"
+              },
+              "command_ref": {
+                "description": "Command card key to use",
+                "type": "string"
+              },
+              "depends_on": {
+                "description": "Node keys this depends on",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "node_key": {
+                "description": "Unique key within DAG",
+                "type": "string"
+              },
+              "title": {
+                "description": "Node title",
+                "type": "string"
+              }
+            },
+            "required": [
+              "node_key",
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "DAG title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dag_key",
+        "title"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "task_get_dag",
+    "description": "Get a task DAG with all its nodes and their statuses.",
+    "inputSchema": {
+      "properties": {
+        "dag_key": {
+          "description": "DAG key to look up",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dag_key"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "task_update_node",
+    "description": "Update a task DAG node's status (pending/running/done/failed).",
+    "inputSchema": {
+      "properties": {
+        "dag_key": {
+          "description": "DAG key",
+          "type": "string"
+        },
+        "node_key": {
+          "description": "Node key to update",
+          "type": "string"
+        },
+        "result": {
+          "description": "Result summary (optional)",
+          "type": "string"
+        },
+        "status": {
+          "description": "New status: pending, running, done, failed",
+          "enum": [
+            "pending",
+            "running",
+            "done",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "dag_key",
+        "node_key",
+        "status"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "workspace_abort_run",
+    "description": "Abort a workspace run and mark it as aborted in PostgreSQL state.",
+    "inputSchema": {
+      "properties": {
+        "reason": {
+          "description": "Abort reason (optional).",
+          "type": "string"
+        },
+        "run_key": {
+          "description": "Workspace run key.",
+          "type": "string"
+        },
+        "updated_by": {
+          "description": "Operator id (optional).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_key"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "workspace_create_run",
+    "description": "Create a virtual workspace run. Filesystem workspace is used for edits; run status and file states are persisted in PostgreSQL.",
+    "inputSchema": {
+      "properties": {
+        "created_by": {
+          "description": "Creator identifier (optional).",
+          "type": "string"
+        },
+        "dag_key": {
+          "description": "Related DAG key (optional).",
+          "type": "string"
+        },
+        "files": {
+          "description": "Optional bootstrap files to copy from source root to workspace.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "metadata": {
+          "description": "Optional metadata for run record.",
+          "type": "object"
+        },
+        "run_key": {
+          "description": "Optional run key. Auto-generated if omitted.",
+          "type": "string"
+        },
+        "source_root": {
+          "description": "Absolute or relative source project root.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_root"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "workspace_get_run",
+    "description": "Get workspace run detail by run key.",
+    "inputSchema": {
+      "properties": {
+        "run_key": {
+          "description": "Workspace run key.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_key"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "workspace_list_runs",
+    "description": "List workspace runs with optional status/dag filters.",
+    "inputSchema": {
+      "properties": {
+        "dag_key": {
+          "description": "Optional DAG key filter.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Max number of runs to return.",
+          "type": "number"
+        },
+        "status": {
+          "description": "Optional run status filter.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "workspace_merge_run",
+    "description": "Merge changed files from virtual workspace back to source root with conflict detection. Also updates PostgreSQL run/file states.",
+    "inputSchema": {
+      "properties": {
+        "delete_removed": {
+          "description": "Delete source files removed in workspace when safe.",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "description": "Only simulate merge without writing source files.",
+          "type": "boolean"
+        },
+        "run_key": {
+          "description": "Workspace run key.",
+          "type": "string"
+        },
+        "updated_by": {
+          "description": "Operator id (optional).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_key"
+      ],
+      "type": "object"
+    }
+  }
+]

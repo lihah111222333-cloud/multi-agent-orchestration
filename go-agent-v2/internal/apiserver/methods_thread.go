@@ -57,7 +57,7 @@ func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any
 	id := fmt.Sprintf("thread-%d-%d", time.Now().UnixMilli(), s.threadSeq.Add(1))
 
 	// 构建全部动态工具注入 agent (LSP + 编排 + 资源)
-	dynamicTools := s.buildAllDynamicTools()
+	dynamicTools := s.allDynamicToolSchemas()
 
 	// 统一工具使用提示词仅在会话创建时注入一次，避免每轮 turn 重复注入。
 	startInstructions := s.resolveStartInstructionsForLaunch(ctx, dynamicTools)

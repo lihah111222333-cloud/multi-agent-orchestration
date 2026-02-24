@@ -114,21 +114,3 @@ func stubHandler(result any) Handler {
 		return result, nil
 	}
 }
-
-// ========================================
-// 动态工具 JSON 输出辅助 (原 tool_helpers.go)
-// ========================================
-
-// toolJSON 将任意值序列化为 JSON 字符串 (供 Dynamic Tool 使用)。
-func toolJSON(v any) string {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return `{"error":"internal: json marshal failed"}`
-	}
-	return string(data)
-}
-
-// toolError 将 error 序列化为 {"error":"..."} 格式 JSON 字符串。
-func toolError(err error) string {
-	return toolJSON(map[string]string{"error": err.Error()})
-}

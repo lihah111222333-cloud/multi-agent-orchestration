@@ -1,23 +1,21 @@
 package apiserver
 
 import (
-	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
-	"unicode/utf8"
 
+	"github.com/multi-agent/go-agent-v2/internal/tools"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 const (
-	defaultOrchestrationReportTTL      = 30 * time.Minute
-	maxOrchestrationReportSummaryRunes = 1200
+	defaultOrchestrationReportTTL      = tools.DefaultOrchestrationReportTTL
+	maxOrchestrationReportSummaryRunes = tools.MaxOrchestrationReportSummaryRunes
 )
 
-func (s *Server) submitAgentPrompt(agentID, prompt string, images, files []string) error {
+func (s *Server) SubmitPrompt(agentID, prompt string, images, files []string) error {
 	if s == nil {
 		return apperrors.New("Server.submitAgentPrompt", "server is nil")
 	}
@@ -30,7 +28,11 @@ func (s *Server) submitAgentPrompt(agentID, prompt string, images, files []strin
 	return s.mgr.Submit(agentID, prompt, images, files)
 }
 
-func (s *Server) rememberOrchestrationReportRequest(senderID, workerID string) {
+func (s *Server) submitAgentPrompt(agentID, prompt string, images, files []string) error {
+	return s.SubmitPrompt(agentID, prompt, images, files)
+}
+
+func (s *Server) RememberReportRequest(senderID, workerID string) {
 	requester := strings.TrimSpace(senderID)
 	target := strings.TrimSpace(workerID)
 	if requester == "" || target == "" || strings.EqualFold(requester, target) {
@@ -57,6 +59,10 @@ func (s *Server) rememberOrchestrationReportRequest(senderID, workerID string) {
 	)
 }
 
+func (s *Server) rememberOrchestrationReportRequest(senderID, workerID string) {
+	s.RememberReportRequest(senderID, workerID)
+}
+
 func (s *Server) maybeAutoReportOrchestrationCompletion(agentID, eventType, method string, payload map[string]any) {
 	workerID := strings.TrimSpace(agentID)
 	if workerID == "" {
@@ -78,9 +84,9 @@ func (s *Server) maybeAutoReportOrchestrationCompletion(agentID, eventType, meth
 		summary = extractTrackedString(payload, "uiText", "summary", "text", "message", "output")
 	}
 
-	report := buildOrchestrationCompletionReport(workerID, status, reason, summary)
+	report := tools.BuildOrchestrationCompletionReport(workerID, status, reason, summary)
 	for _, requesterID := range requesters {
-		if err := s.submitAgentPrompt(requesterID, report, nil, nil); err != nil {
+		if err := s.SubmitPrompt(requesterID, report, nil, nil); err != nil {
 			logger.Warn("orchestration: auto report delivery failed",
 				"from", workerID,
 				"to", requesterID,
@@ -154,64 +160,3 @@ func (s *Server) pruneOrchestrationReportRequestsLocked(now time.Time) {
 		}
 	}
 }
-
-func buildOrchestrationCompletionReport(workerID, status, reason, summary string) string {
-	worker := strings.TrimSpace(workerID)
-	if worker == "" {
-		worker = "unknown-agent"
-	}
-
-	st := strings.TrimSpace(status)
-	if st == "" {
-		st = "completed"
-	}
-
-	rs := strings.TrimSpace(reason)
-	sm := strings.TrimSpace(summary)
-	if sm != "" {
-		sm = truncateOrchestrationSummary(sm, maxOrchestrationReportSummaryRunes)
-	}
-
-	lines := []string{
-		fmt.Sprintf("[Auto report] Agent %s finished delegated work.", worker),
-		fmt.Sprintf("status: %s", st),
-	}
-	if sm != "" {
-		lines = append(lines, "summary: "+sm)
-	}
-	if rs != "" && !strings.EqualFold(rs, "turn_complete") {
-		lines = append(lines, "reason: "+rs)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func truncateOrchestrationSummary(value string, limit int) string {
-	text := strings.TrimSpace(value)
-	if text == "" || limit <= 0 {
-		return ""
-	}
-	if utf8.RuneCountInString(text) <= limit {
-		return text
-	}
-	if limit <= 3 {
-		return "..."
-	}
-	target := limit - 3
-	if target <= 0 {
-		return "..."
-	}
-
-	var builder strings.Builder
-	builder.Grow(len(text))
-	used := 0
-	for _, r := range text {
-		if used >= target {
-			break
-		}
-		builder.WriteRune(r)
-		used++
-	}
-	return builder.String() + "..."
-}
-
-var _ sync.Locker

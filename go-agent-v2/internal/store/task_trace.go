@@ -21,40 +21,6 @@ const taskTraceCols = `id, trace_id, span_id, parent_span_id, span_name, compone
 	status, input_payload, output_payload, error_text, metadata,
 	started_at, finished_at, duration_ms`
 
-// Deprecated: StartSpan 无外部调用者。
-func (s *TaskTraceStore) StartSpan(ctx context.Context, t *TaskTrace) (*TaskTrace, error) {
-	inJSON := mustMarshalJSON(t.Input)
-	metaJSON := mustMarshalJSON(t.Metadata)
-	rows, err := s.pool.Query(ctx,
-		`INSERT INTO task_traces (trace_id, span_id, parent_span_id, span_name, component,
-		   input_payload, status, metadata, started_at)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'running', $7::jsonb, NOW())
-		 RETURNING `+taskTraceCols,
-		t.TraceID, t.SpanID, t.ParentSpanID, t.SpanName, t.Component,
-		string(inJSON), string(metaJSON))
-	if err != nil {
-		return nil, err
-	}
-	return collectOne[TaskTrace](rows)
-}
-
-// Deprecated: FinishSpan 无外部调用者。
-func (s *TaskTraceStore) FinishSpan(ctx context.Context, traceID, spanID, status string, output any, errText string) (*TaskTrace, error) {
-	outJSON := mustMarshalJSON(output)
-	rows, err := s.pool.Query(ctx,
-		`UPDATE task_traces
-		 SET status=$1, output_payload=$2::jsonb, error_text=$3,
-		     duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))::INT * 1000,
-		     finished_at=NOW()
-		 WHERE trace_id=$4 AND span_id=$5
-		 RETURNING `+taskTraceCols,
-		status, string(outJSON), errText, traceID, spanID)
-	if err != nil {
-		return nil, err
-	}
-	return collectOne[TaskTrace](rows)
-}
-
 // Create 直接创建完整记录。
 func (s *TaskTraceStore) Create(ctx context.Context, t *TaskTrace) (*TaskTrace, error) {
 	inJSON := mustMarshalJSON(t.Input)
@@ -73,23 +39,11 @@ func (s *TaskTraceStore) Create(ctx context.Context, t *TaskTrace) (*TaskTrace, 
 	return collectOne[TaskTrace](rows)
 }
 
-// Deprecated: ListByTraceID 无外部调用者。
-func (s *TaskTraceStore) ListByTraceID(ctx context.Context, traceID string) ([]TaskTrace, error) {
-	rows, err := s.pool.Query(ctx,
-		"SELECT "+taskTraceCols+" FROM task_traces WHERE trace_id = $1 ORDER BY started_at", traceID)
-	if err != nil {
-		return nil, err
-	}
-	return collectRows[TaskTrace](rows)
-}
-
 // List 列表查询 (对应 Python list_task_traces)。
 func (s *TaskTraceStore) List(ctx context.Context, agentID, keyword string, since *time.Time, limit int) ([]TaskTrace, error) {
 	q := NewQueryBuilder().Eq("component", agentID)
 	if since != nil {
-		q.n++
-		q.where = append(q.where, "started_at >= $"+string(rune('0'+q.n)))
-		q.params = append(q.params, *since)
+		q.Gte("started_at", *since)
 	}
 	q.KeywordLike(keyword, "span_name", "status")
 	sql, params := q.Build("SELECT "+taskTraceCols+" FROM task_traces", "started_at DESC", limit)

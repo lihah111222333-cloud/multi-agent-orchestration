@@ -77,11 +77,3 @@ func (s *InteractionStore) Review(ctx context.Context, id int, status, reviewer,
 	}
 	return collectOne[Interaction](rows)
 }
-
-// defaultStr 空字符串返回默认值。
-func defaultStr(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
-}

@@ -37,6 +37,16 @@ func mustMarshalJSON(v any) []byte {
 	return data
 }
 
+// defaultStr 空字符串返回默认值。
+//
+// 14 个 store 共用: 给 status / priority / risk_level 等字段提供默认值。
+func defaultStr(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
 // BaseStore 所有 Store 的嵌入基底，持有连接池。
 //
 // 16 个 store 不再需要各自声明 struct{ pool *pgxpool.Pool } + NewXxxStore(pool)。
@@ -91,6 +101,17 @@ func (q *QueryBuilder) KeywordLike(keyword string, cols ...string) *QueryBuilder
 		q.params = append(q.params, kw)
 	}
 	q.where = append(q.where, "("+strings.Join(parts, " OR ")+")")
+	return q
+}
+
+// Gte 添加 >= 条件。nil 值跳过。
+func (q *QueryBuilder) Gte(col string, val any) *QueryBuilder {
+	if val == nil {
+		return q
+	}
+	q.n++
+	q.where = append(q.where, fmt.Sprintf("%s >= $%d", col, q.n))
+	q.params = append(q.params, val)
 	return q
 }
 

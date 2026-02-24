@@ -3,6 +3,7 @@ package apiserver
 
 import (
 	"encoding/json"
+	"go/ast"
 	"os"
 	"path/filepath"
 	"testing"
@@ -179,4 +180,79 @@ func TestNormalizeThreadArchiveMap(t *testing.T) {
 	if len(got) != 0 {
 		t.Errorf("zero: got %v", got)
 	}
+}
+
+func TestP4ThreadTurnRegisteredRoutesDelegateToCodexAdapter(t *testing.T) {
+	t.Helper()
+
+	checks := []string{
+		"threadStartTyped",
+		"threadResumeTyped",
+		"threadForkTyped",
+		"threadArchiveTyped",
+		"threadUnarchiveTyped",
+		"threadNameSetTyped",
+		"threadCompact",
+		"threadRollbackTyped",
+		"threadList",
+		"threadLoadedList",
+		"threadReadTyped",
+		"threadResolveTyped",
+		"threadMessagesTyped",
+		"threadBgTerminalsClean",
+		"turnStartTyped",
+		"turnSteerTyped",
+		"turnInterrupt",
+		"turnForceComplete",
+		"reviewStartTyped",
+		"threadUndo",
+		"threadModelSet",
+		"threadPersonality",
+		"threadApprovals",
+		"threadMCPList",
+		"threadSkillsList",
+		"threadDebugMemory",
+	}
+
+	files := parseAPIServerNonTestFiles(t)
+	for _, fn := range checks {
+		fd, fileName, ok := findFuncDecl(files, fn)
+		if !ok {
+			t.Fatalf("function %s not found", fn)
+		}
+		if funcDeclContainsCodexAdapterCall(fd) {
+			continue
+		}
+		if funcDeclContainsCallName(fd, "sendSlashCommand") || funcDeclContainsCallName(fd, "sendSlashCommandWithArgs") {
+			continue
+		}
+		t.Fatalf("%s in %s must delegate via codexadapter or thin slash helper", fn, fileName)
+	}
+}
+
+func funcDeclContainsCallName(fd *ast.FuncDecl, fnName string) bool {
+	if fd == nil || fd.Body == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(fd.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fun := call.Fun.(type) {
+		case *ast.Ident:
+			if fun.Name == fnName {
+				found = true
+				return false
+			}
+		case *ast.SelectorExpr:
+			if fun.Sel != nil && fun.Sel.Name == fnName {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }

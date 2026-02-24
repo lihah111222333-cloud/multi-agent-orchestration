@@ -66,7 +66,7 @@ func (h *ToolHandlers) Implementation(args json.RawMessage) string {
 
 	result, err := h.manager.Implementation(p.FilePath, p.Line, p.Column)
 	if err != nil {
-		return "error: " + err.Error()
+		return h.contextualToolError("lsp_implementation", p.FilePath, p.Line, p.Column, err)
 	}
 	result = limitLocationResults(result)
 	if len(result) == 0 {
@@ -96,7 +96,7 @@ func (h *ToolHandlers) TypeDefinition(args json.RawMessage) string {
 
 	result, err := h.manager.TypeDefinition(p.FilePath, p.Line, p.Column)
 	if err != nil {
-		return "error: " + err.Error()
+		return h.contextualToolError("lsp_type_definition", p.FilePath, p.Line, p.Column, err)
 	}
 	result = limitLocationResults(result)
 	if len(result) == 0 {

@@ -56,7 +56,7 @@ func (h *ToolHandlers) TypeHierarchy(args json.RawMessage) string {
 
 	result, err := h.manager.TypeHierarchy(p.FilePath, p.Line, p.Column, p.Direction)
 	if err != nil {
-		return "error: " + err.Error()
+		return h.contextualToolError("lsp_type_hierarchy", p.FilePath, p.Line, p.Column, err)
 	}
 	if len(result) == 0 {
 		return "no type hierarchy found"

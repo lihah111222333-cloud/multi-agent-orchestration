@@ -1,0 +1,47 @@
+# codexadapter
+internal/apiserver/codexadapter/adapter.go
+internal/apiserver/codexadapter/slash_command.go
+internal/apiserver/codexadapter/thread_archive.go
+internal/apiserver/codexadapter/thread_history.go
+internal/apiserver/codexadapter/thread_history_test.go
+internal/apiserver/codexadapter/thread_manage.go
+internal/apiserver/codexadapter/thread_messages.go
+internal/apiserver/codexadapter/thread_usecases.go
+internal/apiserver/codexadapter/turn_runtime.go
+internal/apiserver/codexadapter/turn_tracker.go
+internal/apiserver/codexadapter/turn_tracker_helpers.go
+
+# commonadapter
+internal/apiserver/commonadapter/common.go
+internal/apiserver/commonadapter/skills.go
+
+# internal/lsp
+internal/lsp/cache_model.go
+internal/lsp/cache_store.go
+internal/lsp/client.go
+internal/lsp/client_actions_tools.go
+internal/lsp/client_hierarchy_tools.go
+internal/lsp/client_semantic_tools.go
+internal/lsp/client_xref_tools.go
+internal/lsp/manager.go
+internal/lsp/manager_actions_tools.go
+internal/lsp/manager_bootstrap.go
+internal/lsp/manager_bootstrap_document.go
+internal/lsp/manager_bootstrap_document_test.go
+internal/lsp/manager_hierarchy_tools.go
+internal/lsp/manager_markdown_symbols.go
+internal/lsp/manager_semantic_tools.go
+internal/lsp/manager_xref_tools.go
+internal/lsp/protocol.go
+internal/lsp/protocol_ext_actions.go
+internal/lsp/protocol_ext_common.go
+internal/lsp/protocol_ext_hierarchy.go
+internal/lsp/protocol_ext_semantic.go
+internal/lsp/protocol_ext_xref.go
+internal/lsp/tool_handlers.go
+internal/lsp/tool_handlers_actions.go
+internal/lsp/tool_handlers_aux.go
+internal/lsp/tool_handlers_base.go
+internal/lsp/tool_handlers_hierarchy.go
+internal/lsp/tool_handlers_semantic.go
+internal/lsp/tool_handlers_xref.go

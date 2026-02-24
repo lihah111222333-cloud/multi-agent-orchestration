@@ -153,7 +153,7 @@ func NewAgentManager(appFactory, restFactory any) (*AgentManager, error) {
 	return m, nil
 }
 
-var clientIfaceType = reflect.TypeOf((*agentcore.Client)(nil)).Elem()
+var clientIfaceType = reflect.TypeFor[agentcore.Client]()
 
 func normalizeClientFactory(factory any, field string) (agentcore.ClientFactory, error) {
 	switch fn := factory.(type) {
@@ -233,7 +233,7 @@ const maxPortRetries = 20
 //
 // 每次探测: net.Listen → Close。最多尝试 maxPortRetries 个端口。
 func (m *AgentManager) findFreePort() (int, error) {
-	for i := 0; i < maxPortRetries; i++ {
+	for range maxPortRetries {
 		port := int(m.nextPort.Add(1) - 1)
 		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {

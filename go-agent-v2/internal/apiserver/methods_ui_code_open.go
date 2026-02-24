@@ -164,9 +164,7 @@ func (s *Server) gatherCodeDiagnostics(filePath string, startLine, endLine int) 
 		return []map[string]any{}
 	}
 	uri := codePathToURI(filePath)
-	s.diagMu.RLock()
-	diags := s.diagCache[uri]
-	s.diagMu.RUnlock()
+	diags := s.GetDiagnostics(uri)
 	if len(diags) == 0 {
 		return []map[string]any{}
 	}

@@ -16,21 +16,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-func (s *Server) skillsDirectory() string {
-	dir := strings.TrimSpace(s.skillsDir)
-	if dir == "" {
-		return defaultSkillsCacheDir()
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		logger.Warn("skills directory: ensure custom dir failed, fallback to app cache",
-			logger.FieldError, err,
-			logger.FieldPath, dir,
-		)
-		return defaultSkillsCacheDir()
-	}
-	return dir
-}
-
 func defaultSkillsCacheDir() string {
 	ensureLocalFallback := func(path string) string {
 		if err := os.MkdirAll(path, 0o755); err != nil {
@@ -77,15 +62,15 @@ func defaultSkillsCacheDir() string {
 // 新增工具只需一行: s.dynTools["tool_name"] = s.toolHandler
 func (s *Server) registerDynamicTools() {
 	// LSP 工具
-	s.dynTools["lsp_hover"] = s.lspHover
-	s.dynTools["lsp_open_file"] = s.lspOpenFile
-	s.dynTools["lsp_diagnostics"] = s.lspDiagnostics
-	s.dynTools["lsp_definition"] = s.lspDefinition
-	s.dynTools["lsp_references"] = s.lspReferences
-	s.dynTools["lsp_document_symbol"] = s.lspDocumentSymbol
-	s.dynTools["lsp_rename"] = s.lspRename
-	s.dynTools["lsp_completion"] = s.lspCompletion
-	s.dynTools["lsp_did_change"] = s.lspDidChange
+	s.dynTools["lsp_hover"] = s.lspTools.Hover
+	s.dynTools["lsp_open_file"] = s.lspTools.OpenFile
+	s.dynTools["lsp_diagnostics"] = s.lspTools.Diagnostics
+	s.dynTools["lsp_definition"] = s.lspTools.Definition
+	s.dynTools["lsp_references"] = s.lspTools.References
+	s.dynTools["lsp_document_symbol"] = s.lspTools.DocumentSymbol
+	s.dynTools["lsp_rename"] = s.lspTools.Rename
+	s.dynTools["lsp_completion"] = s.lspTools.Completion
+	s.dynTools["lsp_did_change"] = s.lspTools.DidChange
 	s.registerExtendedLSPDynamicTools()
 
 	// 编排工具
@@ -120,13 +105,7 @@ func (s *Server) SetupLSP(rootDir string) {
 		s.lsp.SetRootURI("file://" + rootDir)
 	}
 	s.lsp.SetDiagnosticHandler(func(uri string, diagnostics []lsp.Diagnostic) {
-		s.diagMu.Lock()
-		if len(diagnostics) == 0 {
-			delete(s.diagCache, uri)
-		} else {
-			s.diagCache[uri] = diagnostics
-		}
-		s.diagMu.Unlock()
+		s.SetDiagnostics(uri, diagnostics)
 
 		// 广播诊断通知给前端
 		items := make([]map[string]any, 0, len(diagnostics))
@@ -307,7 +286,7 @@ func (s *Server) handleDynamicToolCall(agentID string, event agentcore.Event) {
 		}
 	})
 
-	// 先查找 proc — 后续的所有错误路径都需要 proc.Client.RespondError 回传。
+	// 先查找 proc — 后续的所有错误路径都需要通过 codexAdapter 回传错误。
 	proc := s.mgr.Get(agentID)
 	if proc == nil {
 		logger.Error("app-server: dynamic_tool_call dropped — agent gone",
@@ -337,7 +316,7 @@ func (s *Server) handleDynamicToolCall(agentID string, event agentcore.Event) {
 			"raw", string(event.Data))
 		// 必须回复 error response，否则 codex turn 永挂。
 		if event.RequestID != nil {
-			if respErr := proc.Client.RespondError(*event.RequestID, -32602, "bad dynamic_tool_call data: "+err.Error()); respErr != nil {
+			if respErr := s.codexAdapter.RespondError(proc, *event.RequestID, -32602, "bad dynamic_tool_call data: "+err.Error()); respErr != nil {
 				logger.Warn("app-server: respond error failed", logger.FieldAgentID, agentID, logger.FieldError, respErr)
 			}
 		}
@@ -423,7 +402,7 @@ func (s *Server) handleDynamicToolCall(agentID string, event agentcore.Event) {
 	s.Notify("dynamic-tool/called", notifyPayload)
 
 	// 回传结果: 使用 event.RequestID 发送 JSON-RPC response (codex 发的是 server request)
-	if err := proc.Client.SendDynamicToolResult(call.CallID, result, event.RequestID); err != nil {
+	if err := s.codexAdapter.SendDynamicToolResult(proc, call.CallID, result, event.RequestID); err != nil {
 		logger.Warn("app-server: send tool result failed", logger.FieldAgentID, agentID, logger.FieldToolName, call.Tool, logger.FieldError, err)
 	}
 }
@@ -487,277 +466,4 @@ func buildToolNotifyPayload(
 	}
 	payload["resultPreview"] = result
 	return payload
-}
-
-// lspHover 调用 LSP hover。
-func (s *Server) lspHover(args json.RawMessage) string {
-	if s.lsp == nil {
-		return "error: lsp manager unavailable"
-	}
-	var p struct {
-		FilePath string `json:"file_path"`
-		Line     int    `json:"line"`
-		Column   int    `json:"column"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
-	}
-	result, err := s.lsp.Hover(p.FilePath, p.Line, p.Column)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if result == nil {
-		return "no hover info available"
-	}
-	return result.Contents.Value
-}
-
-// lspOpenFile 打开文件触发 LSP 分析。
-func (s *Server) lspOpenFile(args json.RawMessage) string {
-	if s.lsp == nil {
-		return "error: lsp manager unavailable"
-	}
-	var p struct {
-		FilePath string `json:"file_path"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	p.FilePath = strings.TrimSpace(p.FilePath)
-	if p.FilePath == "" {
-		return "error: file_path is required"
-	}
-	content, err := os.ReadFile(p.FilePath)
-	if err != nil {
-		return "error: reading file: " + err.Error()
-	}
-	if err := s.lsp.OpenFile(p.FilePath, string(content)); err != nil {
-		return "error: " + err.Error()
-	}
-	return fmt.Sprintf("opened %s (%d bytes)", p.FilePath, len(content))
-}
-
-// lspDiagnostics 返回文件诊断信息。
-func (s *Server) lspDiagnostics(args json.RawMessage) string {
-	var p struct {
-		FilePath string `json:"file_path"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: unmarshal diagnostics params: " + err.Error()
-	}
-	p.FilePath = strings.TrimSpace(p.FilePath)
-
-	if p.FilePath != "" && s.lsp != nil {
-		if err := s.lsp.BootstrapDocument(p.FilePath); err != nil {
-			return "error: " + err.Error()
-		}
-		// 诊断由 server→client 通知异步到达，短暂等待一次以提高首查命中率。
-		time.Sleep(120 * time.Millisecond)
-	}
-
-	s.diagMu.RLock()
-	defer s.diagMu.RUnlock()
-
-	if p.FilePath != "" {
-		uri := p.FilePath
-		if !strings.HasPrefix(uri, "file://") {
-			abs, _ := filepath.Abs(uri)
-			uri = "file://" + abs
-		}
-		diags, ok := s.diagCache[uri]
-		if !ok || len(diags) == 0 {
-			return "no diagnostics"
-		}
-		var sb strings.Builder
-		for _, d := range diags {
-			fmt.Fprintf(&sb, "%s:%d:%d %s\n", p.FilePath, d.Range.Start.Line+1, d.Range.Start.Character, d.Message)
-		}
-		return sb.String()
-	}
-
-	// 所有文件
-	if len(s.diagCache) == 0 {
-		return "no diagnostics"
-	}
-	var sb strings.Builder
-	for uri, diags := range s.diagCache {
-		for _, d := range diags {
-			fmt.Fprintf(&sb, "%s:%d:%d %s\n", uri, d.Range.Start.Line+1, d.Range.Start.Character, d.Message)
-		}
-	}
-	return sb.String()
-}
-
-// lspDefinition 跳转定义。
-func (s *Server) lspDefinition(args json.RawMessage) string {
-	if s.lsp == nil {
-		return "error: lsp manager unavailable"
-	}
-	var p struct {
-		FilePath string `json:"file_path"`
-		Line     int    `json:"line"`
-		Column   int    `json:"column"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
-	}
-	locs, err := s.lsp.Definition(p.FilePath, p.Line, p.Column)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if len(locs) == 0 {
-		return "no definition found"
-	}
-	data, _ := json.Marshal(locs)
-	return string(data)
-}
-
-// lspReferences 查找引用。
-func (s *Server) lspReferences(args json.RawMessage) string {
-	if s.lsp == nil {
-		return "error: lsp manager unavailable"
-	}
-	var p struct {
-		FilePath    string `json:"file_path"`
-		Line        int    `json:"line"`
-		Column      int    `json:"column"`
-		IncludeDecl *bool  `json:"include_declaration"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
-	}
-	includeDecl := true
-	if p.IncludeDecl != nil {
-		includeDecl = *p.IncludeDecl
-	}
-	locs, err := s.lsp.References(p.FilePath, p.Line, p.Column, includeDecl)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if len(locs) == 0 {
-		return "no references found"
-	}
-	data, _ := json.Marshal(locs)
-	return string(data)
-}
-
-// lspDocumentSymbol 文件大纲。
-func (s *Server) lspDocumentSymbol(args json.RawMessage) string {
-	if s.lsp == nil {
-		return "error: lsp manager unavailable"
-	}
-	var p struct {
-		FilePath string `json:"file_path"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
-	}
-	symbols, err := s.lsp.DocumentSymbol(p.FilePath)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if len(symbols) == 0 {
-		return "no symbols found"
-	}
-	data, _ := json.Marshal(symbols)
-	return string(data)
-}
-
-// lspRename 重命名符号。
-func (s *Server) lspRename(args json.RawMessage) string {
-	if s.lsp == nil {
-		return "error: lsp manager unavailable"
-	}
-	var p struct {
-		FilePath string `json:"file_path"`
-		Line     int    `json:"line"`
-		Column   int    `json:"column"`
-		NewName  string `json:"new_name"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
-	}
-	if strings.TrimSpace(p.NewName) == "" {
-		return "error: new_name is required"
-	}
-	edit, err := s.lsp.Rename(p.FilePath, p.Line, p.Column, p.NewName)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if edit == nil || (len(edit.Changes) == 0 && len(edit.DocumentChanges) == 0) {
-		return "no edits produced"
-	}
-	data, _ := json.Marshal(edit)
-	return string(data)
-}
-
-// lspCompletion 代码补全。
-func (s *Server) lspCompletion(args json.RawMessage) string {
-	if s.lsp == nil {
-		return "error: lsp manager unavailable"
-	}
-	var p struct {
-		FilePath string `json:"file_path"`
-		Line     int    `json:"line"`
-		Column   int    `json:"column"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
-	}
-	items, err := s.lsp.Completion(p.FilePath, p.Line, p.Column)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if len(items) == 0 {
-		return "no completions"
-	}
-	// 限制返回数量避免 token 爆炸
-	if len(items) > 50 {
-		items = items[:50]
-	}
-	data, _ := json.Marshal(items)
-	return string(data)
-}
-
-// lspDidChange 通知文件内容变更。
-func (s *Server) lspDidChange(args json.RawMessage) string {
-	if s.lsp == nil {
-		return "error: lsp manager unavailable"
-	}
-	var p struct {
-		FilePath   string `json:"file_path"`
-		NewContent string `json:"new_content"`
-		Version    int    `json:"version"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
-	}
-	if p.Version == 0 {
-		p.Version = 2
-	}
-	if err := s.lsp.ChangeFile(p.FilePath, p.Version, p.NewContent); err != nil {
-		return "error: " + err.Error()
-	}
-	return "ok: file content updated"
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -157,9 +158,7 @@ func (s *Server) broadcastNotification(method string, params any) {
 
 	s.mu.RLock()
 	snapshot := make(map[string]*connEntry, len(s.conns))
-	for id, entry := range s.conns {
-		snapshot[id] = entry
-	}
+	maps.Copy(snapshot, s.conns)
 	s.mu.RUnlock()
 	for id, entry := range snapshot {
 		s.enqueueConnMessage(id, entry, websocket.TextMessage, data, "notify_backpressure")

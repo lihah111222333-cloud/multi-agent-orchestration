@@ -1,0 +1,4 @@
+.agent/workflows/codex-isolation-handoffs/LATEST.md
+.agent/workflows/codex-isolation-handoffs/p0.checks.log
+.agent/workflows/codex-isolation-handoffs/p0.files.txt
+.agent/workflows/codex-isolation-handoffs/p0.md

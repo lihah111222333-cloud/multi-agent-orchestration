@@ -32,7 +32,7 @@ func isNilStore(store any) bool {
 		return true
 	}
 	v := reflect.ValueOf(store)
-	return v.Kind() == reflect.Ptr && v.IsNil()
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
 // dashList 通用 Dashboard 列表查询模板。
@@ -137,52 +137,52 @@ type dashBusLogParams struct {
 func (s *Server) registerDashboardMethods() {
 	// — 列表查询 (全部使用 dashList 模板) —
 
-	s.methods["dashboard/agentStatus"] = dashList[dashAgentStatusParams]("agents", s.agentStatusStore,
+	s.methods["dashboard/agentStatus"] = dashList("agents", s.agentStatusStore,
 		func(ctx context.Context, p dashAgentStatusParams) (any, error) {
 			return s.agentStatusStore.List(ctx, p.Status)
 		})
 
-	s.methods["dashboard/dags"] = dashList[dashDAGParams]("dags", s.dagStore,
+	s.methods["dashboard/dags"] = dashList("dags", s.dagStore,
 		func(ctx context.Context, p dashDAGParams) (any, error) {
 			return s.dagStore.ListDAGs(ctx, p.Keyword, p.Status, clampLimit(p.Limit, 100))
 		})
 
-	s.methods["dashboard/taskAcks"] = dashList[dashTaskAckParams]("acks", s.taskAckStore,
+	s.methods["dashboard/taskAcks"] = dashList("acks", s.taskAckStore,
 		func(ctx context.Context, p dashTaskAckParams) (any, error) {
 			return s.taskAckStore.List(ctx, p.Keyword, p.Status, p.Priority, p.AssignedTo, clampLimit(p.Limit, 100))
 		})
 
-	s.methods["dashboard/taskTraces"] = dashList[dashTaskTraceParams]("traces", s.taskTraceStore,
+	s.methods["dashboard/taskTraces"] = dashList("traces", s.taskTraceStore,
 		func(ctx context.Context, p dashTaskTraceParams) (any, error) {
 			return s.taskTraceStore.List(ctx, p.AgentID, p.Keyword, nil, clampLimit(p.Limit, 100))
 		})
 
-	s.methods["dashboard/commandCards"] = dashList[dashCommandCardParams]("cards", s.cmdStore,
+	s.methods["dashboard/commandCards"] = dashList("cards", s.cmdStore,
 		func(ctx context.Context, p dashCommandCardParams) (any, error) {
 			return s.cmdStore.List(ctx, p.Keyword, clampLimit(p.Limit, 100))
 		})
 
-	s.methods["dashboard/prompts"] = dashList[dashPromptParams]("prompts", s.promptStore,
+	s.methods["dashboard/prompts"] = dashList("prompts", s.promptStore,
 		func(ctx context.Context, p dashPromptParams) (any, error) {
 			return s.promptStore.List(ctx, p.AgentKey, p.Keyword, clampLimit(p.Limit, 100))
 		})
 
-	s.methods["dashboard/sharedFiles"] = dashList[dashSharedFileParams]("files", s.fileStore,
+	s.methods["dashboard/sharedFiles"] = dashList("files", s.fileStore,
 		func(ctx context.Context, p dashSharedFileParams) (any, error) {
 			return s.fileStore.List(ctx, p.Prefix, clampLimit(p.Limit, 500))
 		})
 
-	s.methods["dashboard/auditLogs"] = dashList[dashAuditLogParams]("logs", s.auditLogStore,
+	s.methods["dashboard/auditLogs"] = dashList("logs", s.auditLogStore,
 		func(ctx context.Context, p dashAuditLogParams) (any, error) {
 			return s.auditLogStore.List(ctx, p.EventType, p.Action, p.Actor, p.Keyword, clampLimit(p.Limit, 100))
 		})
 
-	s.methods["dashboard/aiLogs"] = dashList[dashAILogParams]("logs", s.aiLogStore,
+	s.methods["dashboard/aiLogs"] = dashList("logs", s.aiLogStore,
 		func(ctx context.Context, p dashAILogParams) (any, error) {
 			return s.aiLogStore.Query(ctx, p.Category, p.Keyword, clampLimit(p.Limit, 100))
 		})
 
-	s.methods["dashboard/busLogs"] = dashList[dashBusLogParams]("logs", s.busLogStore,
+	s.methods["dashboard/busLogs"] = dashList("logs", s.busLogStore,
 		func(ctx context.Context, p dashBusLogParams) (any, error) {
 			return s.busLogStore.List(ctx, p.Category, p.Severity, p.Keyword, clampLimit(p.Limit, 100))
 		})

@@ -4,16 +4,12 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
-	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -50,38 +46,20 @@ type turnStartResponse struct {
 	Turn turnInfo `json:"turn"`
 }
 
-// activeTurnIDReader 是具体实现扩展契约:
-// 当前仅 *codex.AppServerClient 保证实现 GetActiveTurnID()，
-// 不要求所有 agentcore.Client 都提供该方法。
-type activeTurnIDReader interface {
-	GetActiveTurnID() string
-}
+var (
+	_ = (*Server).buildConfiguredSkillPrompt
+	_ = (*Server).buildAutoMatchedSkillPrompt
+)
 
-func resolveClientActiveTurnID(client agentcore.Client) string {
-	if client == nil {
-		return ""
+func (s *Server) skillInputText(name, content string) string {
+	adapter := (*commonadapter.Adapter)(nil)
+	if s != nil {
+		adapter = s.commonAdapter
 	}
-	reader, ok := client.(activeTurnIDReader)
-	if !ok {
-		return ""
+	if adapter == nil {
+		adapter = commonadapter.New()
 	}
-	return strings.TrimSpace(reader.GetActiveTurnID())
-}
-
-func skillInputText(name, content string) string {
-	return fmt.Sprintf("[skill:%s] %s", strings.TrimSpace(name), content)
-}
-
-func fileContentInputText(name, content string) string {
-	trimmedContent := strings.TrimSpace(content)
-	if trimmedContent == "" {
-		return ""
-	}
-	trimmedName := strings.TrimSpace(name)
-	if trimmedName == "" {
-		return trimmedContent
-	}
-	return fmt.Sprintf("[file:%s]\n%s", trimmedName, trimmedContent)
+	return adapter.SkillInputText(name, content)
 }
 
 func collectInputSkillNames(inputs []UserInput) map[string]struct{} {
@@ -103,37 +81,25 @@ func collectInputSkillNames(inputs []UserInput) map[string]struct{} {
 }
 
 func collectSkillNameSet(raw []string) map[string]struct{} {
-	if len(raw) == 0 {
-		return nil
-	}
-	set := make(map[string]struct{}, len(raw))
-	for _, item := range raw {
-		name := strings.ToLower(strings.TrimSpace(item))
-		if name == "" {
-			continue
-		}
-		set[name] = struct{}{}
-	}
-	return set
+	return commonadapter.CollectSkillNameSet(raw)
 }
 
-func mergePromptText(prompt, extra string) string {
-	trimmedExtra := strings.TrimSpace(extra)
-	if trimmedExtra == "" {
-		return prompt
+func (s *Server) mergePromptText(prompt, extra string) string {
+	adapter := (*commonadapter.Adapter)(nil)
+	if s != nil {
+		adapter = s.commonAdapter
 	}
-	trimmedPrompt := strings.TrimSpace(prompt)
-	if trimmedPrompt == "" {
-		return extra
+	if adapter == nil {
+		adapter = commonadapter.New()
 	}
-	return prompt + "\n" + extra
+	return adapter.MergePromptText(prompt, extra)
 }
 
 // composeUserTimelineTextForTurn 组装 UI timeline 中展示的 user 文本。
 //
 // 默认仅展示用户原始输入；当调试开关开启时，展示提交给后端的文本并附带注入提示词，
 // 便于排查“自动注入”是否符合预期。
-func composeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint string, showInjected bool) string {
+func (s *Server) composeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint string, showInjected bool) string {
 	if !showInjected {
 		return prompt
 	}
@@ -144,7 +110,7 @@ func composeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint string, s
 	if strings.Contains(submitPrompt, hint) {
 		return submitPrompt
 	}
-	return mergePromptText(submitPrompt, hint)
+	return s.mergePromptText(submitPrompt, hint)
 }
 
 func (s *Server) threadTimelineAlreadyShowsInjectedPrompt(threadID string) bool {
@@ -190,38 +156,8 @@ func (s *Server) resolveLSPUsagePromptHint(ctx context.Context) string {
 	return hint
 }
 
-var inlineCodeTokenPattern = regexp.MustCompile("`([^`\\n]+)`")
-
 func collectReferencedLSPToolNames(hint string) []string {
-	trimmed := strings.TrimSpace(hint)
-	if trimmed == "" {
-		return nil
-	}
-	matches := inlineCodeTokenPattern.FindAllStringSubmatch(trimmed, -1)
-	if len(matches) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(matches))
-	names := make([]string, 0, len(matches))
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		name := strings.TrimSpace(match[1])
-		if !strings.HasPrefix(name, "lsp_") {
-			continue
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
-	}
-	if len(names) == 0 {
-		return nil
-	}
-	sort.Strings(names)
-	return names
+	return commonadapter.CollectReferencedLSPToolNames(hint)
 }
 
 func collectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]struct{} {
@@ -239,7 +175,7 @@ func collectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]st
 	return toolNames
 }
 
-func prependLSPAvailabilityWarning(hint string, dynamicTools []agentcore.DynamicTool) (string, []string) {
+func (s *Server) prependLSPAvailabilityWarning(hint string, dynamicTools []agentcore.DynamicTool) (string, []string) {
 	referenced := collectReferencedLSPToolNames(hint)
 	if len(referenced) == 0 {
 		return hint, nil
@@ -258,12 +194,12 @@ func prependLSPAvailabilityWarning(hint string, dynamicTools []agentcore.Dynamic
 	warning := "注意：当前会话未注入以下 LSP 工具（无可用 language server）：" +
 		strings.Join(missing, ", ") +
 		"。不要调用这些工具，请改用当前可用工具完成任务。"
-	return mergePromptText(warning, hint), missing
+	return s.mergePromptText(warning, hint), missing
 }
 
 func (s *Server) resolveStartInstructionsForLaunch(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
 	hint := s.resolveLSPUsagePromptHint(ctx)
-	instructions, missing := prependLSPAvailabilityWarning(hint, dynamicTools)
+	instructions, missing := s.prependLSPAvailabilityWarning(hint, dynamicTools)
 	if len(missing) == 0 {
 		return instructions
 	}
@@ -314,7 +250,7 @@ func (s *Server) buildSelectedSkillPrompt(selectedSkills []string) (string, int)
 			)
 			continue
 		}
-		texts = append(texts, skillInputText(skillName, content))
+		texts = append(texts, s.skillInputText(skillName, content))
 	}
 	if len(texts) == 0 {
 		return "", 0
@@ -328,34 +264,11 @@ func (s *Server) buildTurnSkillPrompt(threadID, prompt string, input []UserInput
 		return selectedSkillPrompt, selectedSkillCount, 0
 	}
 	autoSkillPrompt, autoSkillCount := s.buildForcedOrExplicitMatchedSkillPrompt(threadID, prompt, input)
-	return mergePromptText(selectedSkillPrompt, autoSkillPrompt), selectedSkillCount, autoSkillCount
+	return s.mergePromptText(selectedSkillPrompt, autoSkillPrompt), selectedSkillCount, autoSkillCount
 }
 
 func lowerMatchedTerms(text string, candidates []string) []string {
-	if text == "" || len(candidates) == 0 {
-		return nil
-	}
-	terms := make([]string, 0, len(candidates))
-	seen := make(map[string]struct{}, len(candidates))
-	for _, raw := range candidates {
-		candidate := strings.TrimSpace(raw)
-		if candidate == "" {
-			continue
-		}
-		lowerCandidate := strings.ToLower(candidate)
-		if _, ok := seen[lowerCandidate]; ok {
-			continue
-		}
-		if !strings.Contains(text, lowerCandidate) {
-			continue
-		}
-		seen[lowerCandidate] = struct{}{}
-		terms = append(terms, candidate)
-	}
-	if len(terms) == 0 {
-		return nil
-	}
-	return terms
+	return commonadapter.LowerMatchedTerms(text, candidates)
 }
 
 type autoMatchedSkillMatch struct {
@@ -369,75 +282,12 @@ type autoSkillMatchOptions struct {
 	IncludeConfiguredForce    bool
 }
 
-func explicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords []string) []string {
-	trimmedName := strings.TrimSpace(skillName)
-	candidates := make([]string, 0, 1+len(triggerWords))
-	if trimmedName != "" {
-		candidates = append(candidates, "@"+trimmedName)
-		candidates = append(candidates, "[skill:"+trimmedName+"]")
-	}
-	for _, raw := range triggerWords {
-		word := strings.TrimSpace(raw)
-		if word == "" {
-			continue
-		}
-		lowerWord := strings.ToLower(word)
-		if strings.HasPrefix(lowerWord, "@") || strings.HasPrefix(lowerWord, "[skill:") {
-			candidates = append(candidates, word)
-		}
-	}
-
-	terms := make([]string, 0, len(candidates))
-	seen := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		lowerCandidate := strings.ToLower(strings.TrimSpace(candidate))
-		if lowerCandidate == "" {
-			continue
-		}
-		if _, exists := seen[lowerCandidate]; exists {
-			continue
-		}
-		if !strings.Contains(normalizedPrompt, lowerCandidate) {
-			continue
-		}
-		seen[lowerCandidate] = struct{}{}
-		terms = append(terms, candidate)
-	}
-	if len(terms) == 0 {
-		return nil
-	}
-	return terms
-}
-
 func classifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
-	forceTerms := lowerMatchedTerms(normalizedPrompt, forceWords)
-	if len(forceTerms) > 0 {
-		return "force", forceTerms
-	}
-	explicitTerms := explicitSkillMentionTerms(normalizedPrompt, skillName, triggerWords)
-	if len(explicitTerms) > 0 {
-		return "explicit", explicitTerms
-	}
-	triggerTerms := lowerMatchedTerms(normalizedPrompt, triggerWords)
-	if len(triggerTerms) > 0 {
-		return "trigger", triggerTerms
-	}
-	return "", nil
+	return commonadapter.ClassifyAutoSkillMatch(normalizedPrompt, skillName, forceWords, triggerWords)
 }
 
 func forceMatchedSkillInstruction(matchedTerms []string) string {
-	terms := make([]string, 0, len(matchedTerms))
-	for _, raw := range matchedTerms {
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
-			continue
-		}
-		terms = append(terms, trimmed)
-	}
-	if len(terms) == 0 {
-		return "执行要求: 本轮必须遵循该技能。"
-	}
-	return fmt.Sprintf("强制触发词: %s\n执行要求: 本轮必须遵循该技能。", strings.Join(terms, ", "))
+	return commonadapter.ForceMatchedSkillInstruction(matchedTerms)
 }
 
 func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []UserInput, options autoSkillMatchOptions) []autoMatchedSkillMatch {
@@ -553,388 +403,14 @@ func (s *Server) renderAutoMatchedSkillPrompt(agentID string, matches []autoMatc
 			continue
 		}
 		if forceInstruction != "" {
-			content = mergePromptText(forceInstruction, content)
+			content = s.mergePromptText(forceInstruction, content)
 		}
-		texts = append(texts, skillInputText(skillName, content))
+		texts = append(texts, s.skillInputText(skillName, content))
 	}
 	if len(texts) == 0 {
 		return "", 0
 	}
 	return strings.Join(texts, "\n"), len(texts)
-}
-
-func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, error) {
-	logger.Info("turn/start: request received",
-		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-		logger.FieldCwd, strings.TrimSpace(p.Cwd),
-		"input_count", len(p.Input),
-		"selected_skills_count", len(p.SelectedSkills),
-	)
-	proc, err := s.ensureThreadReadyForTurn(ctx, p.ThreadID, p.Cwd)
-	if err != nil {
-		return nil, err
-	}
-	logger.Info("turn/start: thread dispatch resolved",
-		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-		logger.FieldPort, proc.Client.GetPort(),
-		"codex_thread_id", strings.TrimSpace(proc.Client.GetThreadID()),
-	)
-
-	selectedSkills, err := normalizeSkillNames(p.SelectedSkills)
-	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.turnStart", "normalize selected skills")
-	}
-
-	prompt, images, files := extractInputs(p.Input)
-	skillPrompt, selectedSkillCount, autoMatchedSkillCount := s.buildTurnSkillPrompt(p.ThreadID, prompt, p.Input, selectedSkills, p.ManualSkillSelection)
-	submitPrompt := mergePromptText(prompt, skillPrompt)
-	logger.Info("turn/start: input prepared",
-		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-		"text_len", len(prompt),
-		"images", len(images),
-		"files", len(files),
-		"selected_skills_requested", len(selectedSkills),
-		"selected_skills_injected", selectedSkillCount,
-		"manual_skill_selection", p.ManualSkillSelection,
-		"auto_matched_skills", autoMatchedSkillCount,
-	)
-	// DIAG: measure the gap between Submit and beginTrackedTurn
-	submitStart := time.Now()
-	logger.Warn("DIAG: turn/start: about to Submit (events may arrive before tracker setup)",
-		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-		logger.FieldPort, proc.Client.GetPort(),
-		"has_active_tracked_turn", s.hasActiveTrackedTurn(p.ThreadID),
-	)
-	if err := proc.Client.Submit(submitPrompt, images, files, p.OutputSchema); err != nil {
-		return nil, apperrors.Wrap(err, "Server.turnStart", "submit prompt")
-	}
-	submitElapsed := time.Since(submitStart)
-	logger.Warn("DIAG: turn/start: Submit returned",
-		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-		"submit_ms", submitElapsed.Milliseconds(),
-		"has_active_tracked_turn", s.hasActiveTrackedTurn(p.ThreadID),
-	)
-
-	if s.uiRuntime != nil {
-		attachments := buildUserTimelineAttachmentsFromInputs(p.Input)
-		if len(attachments) == 0 {
-			attachments = buildUserTimelineAttachments(images, files)
-		}
-		showInjected := s.showInjectedPromptInChat(ctx)
-		appendInjectedHint := showInjected && !s.threadTimelineAlreadyShowsInjectedPrompt(p.ThreadID)
-		injectedHint := ""
-		if appendInjectedHint {
-			injectedHint = s.resolveLSPUsagePromptHint(ctx)
-		}
-		timelineText := composeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint, showInjected)
-		s.uiRuntime.AppendUserMessage(p.ThreadID, timelineText, attachments)
-	}
-
-	resolvedTurnID := resolveClientActiveTurnID(proc.Client)
-	if resolvedTurnID == "" {
-		logger.Warn("turn/start: active turn id unavailable after submit; tracker will use synthetic id",
-			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-		)
-	}
-	logger.Warn("DIAG: turn/start: about to beginTrackedTurn",
-		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-		"resolved_turn_id", resolvedTurnID,
-		"gap_since_submit_ms", time.Since(submitStart).Milliseconds(),
-		"has_active_tracked_turn", s.hasActiveTrackedTurn(p.ThreadID),
-	)
-	turnID := s.beginTrackedTurn(p.ThreadID, resolvedTurnID)
-	logger.Warn("DIAG: turn/start: beginTrackedTurn completed",
-		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-		"turn_id", turnID,
-		"total_gap_ms", time.Since(submitStart).Milliseconds(),
-	)
-	return turnStartResponse{
-		Turn: turnInfo{ID: turnID, Status: "inProgress"},
-	}, nil
-}
-
-type turnSteerParams struct {
-	ThreadID             string      `json:"threadId"`
-	Input                []UserInput `json:"input"`
-	SelectedSkills       []string    `json:"selectedSkills,omitempty"`
-	ManualSkillSelection bool        `json:"manualSkillSelection,omitempty"`
-}
-
-func (s *Server) turnSteerTyped(ctx context.Context, p turnSteerParams) (any, error) {
-	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		selectedSkills, err := normalizeSkillNames(p.SelectedSkills)
-		if err != nil {
-			return nil, apperrors.Wrap(err, "Server.turnSteer", "normalize selected skills")
-		}
-		prompt, images, files := extractInputs(p.Input)
-		skillPrompt, _, _ := s.buildTurnSkillPrompt(p.ThreadID, prompt, p.Input, selectedSkills, p.ManualSkillSelection)
-		submitPrompt := mergePromptText(prompt, skillPrompt)
-		if err := proc.Client.Submit(submitPrompt, images, files, nil); err != nil {
-			return nil, err
-		}
-		return map[string]any{}, nil
-	})
-}
-
-func (s *Server) turnInterrupt(_ context.Context, params json.RawMessage) (any, error) {
-	start := time.Now()
-	var p threadIDParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, apperrors.Wrap(err, "Server.turnInterrupt", "unmarshal params")
-	}
-	beforeState := s.readThreadRuntimeState(p.ThreadID)
-	activeTrackedBefore := s.hasActiveTrackedTurn(p.ThreadID)
-	activeBefore := isInterruptActiveState(beforeState)
-	logger.Info("turn/interrupt: request",
-		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-		logger.FieldParamsLen, len(params),
-		"state_before", beforeState,
-		"active_before", activeBefore,
-		"active_tracked_before", activeTrackedBefore,
-	)
-	if cancelled := s.cancelCodeRuns(p.ThreadID); cancelled > 0 {
-		logger.Info("turn/interrupt: cancelled running code_run executions",
-			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-			"cancelled_runs", cancelled,
-		)
-	}
-	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		if err := proc.Client.SendCommand("/interrupt", ""); err != nil {
-			if isInterruptNoActiveTurnError(err) {
-				if activeBefore || activeTrackedBefore {
-					if completion, ok := s.completeTrackedTurn(p.ThreadID, "completed", "interrupt_no_active_turn"); ok {
-						s.Notify("turn/completed", completion)
-					} else {
-						s.Notify("turn/completed", map[string]any{
-							"threadId": p.ThreadID,
-							"status":   "completed",
-							"reason":   "interrupt_no_active_turn",
-						})
-					}
-				}
-				logger.Info("turn/interrupt: no active turn",
-					logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-					"state_before", beforeState,
-					logger.FieldDurationMS, time.Since(start).Milliseconds(),
-				)
-				return map[string]any{
-					"confirmed":     false,
-					"mode":          "no_active_turn",
-					"interruptSent": false,
-					"stateBefore":   beforeState,
-					"stateAfter":    beforeState,
-				}, nil
-			}
-			logger.Warn("turn/interrupt: send command failed",
-				logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-				logger.FieldError, err,
-				logger.FieldDurationMS, time.Since(start).Milliseconds(),
-			)
-			return nil, err
-		}
-		logger.Info("turn/interrupt: command sent",
-			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-			logger.FieldDurationMS, time.Since(start).Milliseconds(),
-		)
-		s.markTrackedTurnInterruptRequested(p.ThreadID)
-		confirmed, afterState, waitedMS, observedActive := s.waitInterruptOutcome(
-			p.ThreadID,
-			6*time.Second,
-			activeBefore || activeTrackedBefore,
-		)
-		mode := interruptSettleMode(confirmed, afterState)
-		if !observedActive {
-			confirmed = false
-			mode = "no_active_turn"
-		}
-		logger.Info("turn/interrupt: settle",
-			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-			"confirmed", confirmed,
-			"mode", mode,
-			"active_observed", observedActive,
-			"state_before", beforeState,
-			"state_after", afterState,
-			"waited_ms", waitedMS,
-			logger.FieldDurationMS, time.Since(start).Milliseconds(),
-		)
-		return map[string]any{
-			"confirmed":      confirmed,
-			"mode":           mode,
-			"interruptSent":  true,
-			"stateBefore":    beforeState,
-			"stateAfter":     afterState,
-			"waitedMs":       waitedMS,
-			"activeObserved": observedActive,
-		}, nil
-	})
-}
-
-// turnForceComplete 强制完成当前 turn (中断 + 清理跟踪状态)。
-func (s *Server) turnForceComplete(_ context.Context, params json.RawMessage) (any, error) {
-	var p threadIDParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, apperrors.Wrap(err, "Server.turnForceComplete", "unmarshal params")
-	}
-	logger.Info("turn/forceComplete: request",
-		logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-	)
-	if cancelled := s.cancelCodeRuns(p.ThreadID); cancelled > 0 {
-		logger.Info("turn/forceComplete: cancelled running code_run executions",
-			logger.FieldAgentID, p.ThreadID, logger.FieldThreadID, p.ThreadID,
-			"cancelled_runs", cancelled,
-		)
-	}
-	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		// 尝试发送中断; 忽略 "no active turn" 错误, 但记录其他错误。
-		if err := proc.Client.SendCommand("/interrupt", ""); err != nil {
-			if isInterruptNoActiveTurnError(err) {
-				logger.Info("turn/forceComplete: no active turn (best-effort)",
-					logger.FieldAgentID, p.ThreadID)
-			} else {
-				logger.Warn("turn/forceComplete: interrupt failed (best-effort)",
-					logger.FieldAgentID, p.ThreadID, logger.FieldError, err)
-			}
-		}
-
-		// 无论中断是否成功, 都强制清理 tracked turn 状态。
-		if completion, ok := s.completeTrackedTurn(p.ThreadID, "completed", "force_complete"); ok {
-			s.Notify("turn/completed", completion)
-		} else {
-			s.Notify("turn/completed", map[string]any{
-				"threadId": p.ThreadID,
-				"status":   "completed",
-				"reason":   "force_complete",
-			})
-		}
-
-		return map[string]any{
-			"confirmed":      true,
-			"forceCompleted": true,
-		}, nil
-	})
-}
-
-func normalizeInterruptState(raw string) string {
-	state := strings.ToLower(strings.TrimSpace(raw))
-	if state == "" {
-		return "idle"
-	}
-	switch state {
-	case "completed", "complete", "done", "success", "succeeded", "ready", "stopped", "ended", "closed":
-		return "idle"
-	case "failed", "fail":
-		return "error"
-	default:
-		return state
-	}
-}
-
-func isInterruptActiveState(state string) bool {
-	switch normalizeInterruptState(state) {
-	case "starting", "thinking", "responding", "running", "editing", "waiting", "syncing":
-		return true
-	default:
-		return false
-	}
-}
-
-func isInterruptNoActiveTurnError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "no active turn") ||
-		strings.Contains(message, "nothing to interrupt") ||
-		strings.Contains(message, "not interruptible")
-}
-
-func (s *Server) readThreadRuntimeState(threadID string) string {
-	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return "idle"
-	}
-	if s.uiRuntime == nil {
-		if s.hasActiveTrackedTurn(id) {
-			return "running"
-		}
-		return ""
-	}
-	snapshot := s.uiRuntime.Snapshot()
-	state := normalizeInterruptState(snapshot.Statuses[id])
-	if state == "idle" && s.hasActiveTrackedTurn(id) {
-		return "running"
-	}
-	return state
-}
-
-func (s *Server) waitInterruptSettled(threadID string, timeout time.Duration) (bool, string, int64) {
-	confirmed, afterState, waitedMS, _ := s.waitInterruptOutcome(threadID, timeout, true)
-	return confirmed, afterState, waitedMS
-}
-
-func (s *Server) waitInterruptOutcome(threadID string, timeout time.Duration, activeHint bool) (bool, string, int64, bool) {
-	start := time.Now()
-	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return false, "idle", 0, false
-	}
-	observedActive := activeHint
-	if terminalStatus, ok := s.waitTrackedTurnTerminal(id, timeout); ok {
-		afterState := normalizeInterruptState(terminalStatus)
-		confirmed := strings.EqualFold(terminalStatus, "interrupted")
-		return confirmed, afterState, time.Since(start).Milliseconds(), true
-	}
-	if s.uiRuntime == nil {
-		return false, "", time.Since(start).Milliseconds(), observedActive
-	}
-	deadline := start.Add(timeout)
-	lastState := s.readThreadRuntimeState(id)
-	if isInterruptActiveState(lastState) {
-		observedActive = true
-	}
-	for {
-		if !isInterruptActiveState(lastState) {
-			if !observedActive {
-				return false, lastState, time.Since(start).Milliseconds(), false
-			}
-			return true, lastState, time.Since(start).Milliseconds(), true
-		}
-		observedActive = true
-		if time.Now().After(deadline) {
-			return false, lastState, time.Since(start).Milliseconds(), true
-		}
-		time.Sleep(120 * time.Millisecond)
-		lastState = s.readThreadRuntimeState(id)
-	}
-}
-
-func interruptSettleMode(confirmed bool, afterState string) string {
-	if confirmed {
-		return "interrupt_confirmed"
-	}
-	switch normalizeInterruptState(afterState) {
-	case "error":
-		return "interrupt_terminal_failed"
-	case "idle":
-		return "interrupt_terminal_completed"
-	default:
-		return "interrupt_timeout"
-	}
-}
-
-// reviewStartParams review/start 请求参数。
-type reviewStartParams struct {
-	ThreadID string `json:"threadId"`
-	Delivery string `json:"delivery,omitempty"`
-}
-
-func (s *Server) reviewStartTyped(_ context.Context, p reviewStartParams) (any, error) {
-	return s.withThread(p.ThreadID, func(proc *runner.AgentProcess) (any, error) {
-		if err := proc.Client.SendCommand("/review", p.Delivery); err != nil {
-			return nil, apperrors.Wrap(err, "Server.reviewStart", "send review command")
-		}
-		return map[string]any{}, nil
-	})
 }
 
 // ========================================
@@ -963,7 +439,7 @@ func (s *Server) fuzzyFileSearchTyped(_ context.Context, p fuzzySearchParams) (a
 				return nil
 			}
 			rel, _ := filepath.Rel(root, path)
-			if fuzzyMatch(strings.ToLower(rel), query) {
+			if s.fuzzyMatch(strings.ToLower(rel), query) {
 				results = append(results, map[string]any{
 					"root":     root,
 					"path":     rel,
@@ -981,41 +457,21 @@ func (s *Server) fuzzyFileSearchTyped(_ context.Context, p fuzzySearchParams) (a
 }
 
 // fuzzyMatch 子序列模糊匹配。
-func fuzzyMatch(text, pattern string) bool {
-	pi := 0
-	for i := 0; i < len(text) && pi < len(pattern); i++ {
-		if text[i] == pattern[pi] {
-			pi++
-		}
+func (s *Server) fuzzyMatch(text, pattern string) bool {
+	adapter := (*commonadapter.Adapter)(nil)
+	if s != nil {
+		adapter = s.commonAdapter
 	}
-	return pi == len(pattern)
+	if adapter == nil {
+		adapter = commonadapter.New()
+	}
+	return adapter.FuzzyMatch(text, pattern)
 }
 
 func normalizeSkillName(raw string) (string, error) {
-	name := strings.TrimSpace(raw)
-	if name == "" {
-		return "", apperrors.New("normalizeSkillName", "skill name is required")
-	}
-	return name, nil
+	return commonadapter.NormalizeSkillName(raw)
 }
 
 func normalizeSkillNames(rawNames []string) ([]string, error) {
-	if len(rawNames) == 0 {
-		return []string{}, nil
-	}
-	names := make([]string, 0, len(rawNames))
-	seen := make(map[string]struct{}, len(rawNames))
-	for _, raw := range rawNames {
-		name, err := normalizeSkillName(raw)
-		if err != nil {
-			return nil, err
-		}
-		key := strings.ToLower(name)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		names = append(names, name)
-	}
-	return names, nil
+	return commonadapter.NormalizeSkillNames(rawNames)
 }

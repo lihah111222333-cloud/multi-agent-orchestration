@@ -502,7 +502,7 @@ func (s *Server) AgentEventHandler(agentID string) agentcore.EventHandler {
 		// 统一日志: 记录所有 codex 事件
 		threadID := ""
 		if proc := s.mgr.Get(agentID); proc != nil {
-			threadID = proc.Client.GetThreadID()
+			threadID = s.codexAdapter.GetThreadID(proc)
 		}
 		logger.Debug("codex event",
 			logger.FieldSource, "codex",
@@ -527,7 +527,7 @@ func (s *Server) AgentEventHandler(agentID string) agentcore.EventHandler {
 		}
 		payload["threadId"] = agentID
 		s.enrichFileChangePayload(agentID, event.Type, method, payload)
-		s.captureAndInjectTurnSummary(agentID, event.Type, method, payload)
+		s.captureTrackedTurnEventSummary(agentID, event.Type, method, payload)
 		if method == "error" {
 			willRetry, hasWillRetry := extractBoolFromPayload(payload, "willRetry", "will_retry", "recoverable")
 			if !hasWillRetry {
@@ -562,17 +562,7 @@ func (s *Server) AgentEventHandler(agentID string) agentcore.EventHandler {
 			s.uiRuntime.ApplyAgentEvent(agentID, normalized, payload)
 		}
 
-		s.touchTrackedTurnLastEvent(agentID)
-		// DIAG: log terminal events to detect race with beginTrackedTurn
-		if isTerminalEventType(event.Type, method) {
-			logger.Warn("DIAG: AgentEventHandler received terminal event",
-				logger.FieldAgentID, agentID,
-				logger.FieldEventType, event.Type,
-				logger.FieldMethod, method,
-				"has_active_tracked_turn", s.hasActiveTrackedTurn(agentID),
-			)
-		}
-		s.maybeFinalizeTrackedTurn(agentID, event.Type, method, payload)
+		s.finalizeTrackedTurnEvent(agentID, event.Type, method, payload)
 		s.maybeAutoReportOrchestrationCompletion(agentID, event.Type, method, payload)
 
 		// § 二 审批事件: 需要客户端回复 (双向请求)

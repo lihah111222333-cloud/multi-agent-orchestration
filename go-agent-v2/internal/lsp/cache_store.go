@@ -299,22 +299,6 @@ func (s *lspCacheStore) cleanupPersistentAsync(now time.Time) {
 	}
 }
 
-func (s *lspCacheStore) waitCleanupIdle(timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for {
-		s.mu.Lock()
-		running := s.cleanupRunning
-		s.mu.Unlock()
-		if !running {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-}
-
 func (s *lspCacheStore) ensurePersistentReady() bool {
 	if s == nil || !s.config.enabled {
 		return false

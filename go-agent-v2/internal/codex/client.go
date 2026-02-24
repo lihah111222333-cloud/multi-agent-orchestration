@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -176,11 +177,11 @@ func (c *Client) discoverPort(ctx context.Context, deadline time.Time, stdoutBuf
 		}
 
 		// 策略 2: 扫描 4001-4099 端口找到匹配的 health 响应
-		if port := c.scanForPort(ctx); port > 0 {
-			c.setPort(port)
-			return nil
+			if port := c.scanForPort(); port > 0 {
+				c.setPort(port)
+				return nil
+			}
 		}
-	}
 	return apperrors.New("Client.Spawn", "port discovery timeout (port 0 mode)")
 }
 
@@ -191,7 +192,7 @@ func (c *Client) setPort(port int) {
 }
 
 // scanForPort 扫描端口范围找到 codex http-api 实例。
-func (c *Client) scanForPort(ctx context.Context) int {
+func (c *Client) scanForPort() int {
 	pid := 0
 	if c.Cmd != nil && c.Cmd.Process != nil {
 		pid = c.Cmd.Process.Pid
@@ -226,7 +227,7 @@ func (c *Client) scanForPort(ctx context.Context) int {
 // parsePortFromOutput 从 stdout 输出解析端口号。
 func parsePortFromOutput(output string) int {
 	// 查找 "port XXXX" 或 ":XXXX" 模式
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -378,12 +379,7 @@ func (c *Client) doRequest(method, path string, okStatus ...int) error {
 
 // statusOK 检查状态码是否在允许列表中。
 func statusOK(code int, allowed []int) bool {
-	for _, ok := range allowed {
-		if code == ok {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, code)
 }
 
 // ========================================

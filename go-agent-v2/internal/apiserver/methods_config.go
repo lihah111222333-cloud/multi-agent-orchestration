@@ -5,52 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/internal/lsp"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
-
-func (s *Server) lspAvailabilitySummary() map[string]any {
-	servers := []map[string]any{}
-	summary := map[string]any{
-		"hasManager":           s.lsp != nil,
-		"hasAvailableServer":   false,
-		"availableServerCount": 0,
-		"servers":              servers,
-	}
-	if s.lsp == nil {
-		return summary
-	}
-
-	statuses := s.lsp.Statuses()
-	sort.SliceStable(statuses, func(i, j int) bool {
-		return statuses[i].Language < statuses[j].Language
-	})
-
-	serverRows := make([]map[string]any, 0, len(statuses))
-	availableCount := 0
-	for _, st := range statuses {
-		if st.Available {
-			availableCount++
-		}
-		serverRows = append(serverRows, map[string]any{
-			"language":  st.Language,
-			"command":   st.Command,
-			"available": st.Available,
-			"running":   st.Running,
-		})
-	}
-
-	summary["servers"] = serverRows
-	summary["availableServerCount"] = availableCount
-	summary["hasAvailableServer"] = availableCount > 0
-	return summary
-}
 
 func (s *Server) modelList(_ context.Context, _ json.RawMessage) (any, error) {
 	models := []map[string]string{
@@ -205,7 +165,7 @@ func (s *Server) configLSPPromptHintRead(ctx context.Context, _ json.RawMessage)
 		"overrideHint":    overrideHint,
 		"usingDefault":    usingDefault,
 		"prefKey":         prefKeyLSPUsagePromptHint,
-		"lspAvailability": s.lspAvailabilitySummary(),
+		"lspAvailability": s.lspTools.AvailabilitySummary(),
 	}, nil
 }
 
@@ -262,50 +222,6 @@ func (s *Server) mcpServerReload(_ context.Context, _ json.RawMessage) (any, err
 
 type lspDiagnosticsQueryParams struct {
 	FilePath string `json:"file_path"`
-}
-
-func (s *Server) lspDiagnosticsQueryTyped(_ context.Context, p lspDiagnosticsQueryParams) (any, error) {
-	if s.lsp == nil {
-		return map[string]any{}, nil
-	}
-
-	formatDiagnostics := func(diags []lsp.Diagnostic) []map[string]any {
-		out := make([]map[string]any, 0, len(diags))
-		for _, d := range diags {
-			out = append(out, map[string]any{
-				"message":  d.Message,
-				"severity": d.Severity.String(),
-				"line":     d.Range.Start.Line,
-				"column":   d.Range.Start.Character,
-			})
-		}
-		return out
-	}
-
-	s.diagMu.RLock()
-	defer s.diagMu.RUnlock()
-
-	result := map[string]any{}
-	if strings.TrimSpace(p.FilePath) != "" {
-		uri := p.FilePath
-		if !strings.HasPrefix(uri, "file://") {
-			if abs, err := filepath.Abs(uri); err == nil {
-				uri = "file://" + abs
-			}
-		}
-		if diags, ok := s.diagCache[uri]; ok && len(diags) > 0 {
-			result[uri] = formatDiagnostics(diags)
-		}
-		return result, nil
-	}
-
-	for uri, diags := range s.diagCache {
-		if len(diags) == 0 {
-			continue
-		}
-		result[uri] = formatDiagnostics(diags)
-	}
-	return result, nil
 }
 
 // collaborationModeList 列出协作模式 (experimental)。

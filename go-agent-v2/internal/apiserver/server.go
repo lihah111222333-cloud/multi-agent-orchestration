@@ -26,6 +26,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/config"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
@@ -69,12 +71,17 @@ type Server struct {
 	// ========================================
 	mgr        *runner.AgentManager
 	lsp        *lsp.Manager
+	lspTools   *lsp.ToolHandlers
 	cfg        *config.Config
 	codeRunner *executor.CodeRunner // 代码块执行引擎
-	methods    map[string]Handler
-	dynTools   map[string]func(json.RawMessage) string // 动态工具注册表
+	// adapter 层: codex 专属能力与通用能力的聚合入口。
+	codexAdapter  *codexadapter.Adapter
+	commonAdapter *commonadapter.Adapter
+	methods       map[string]Handler
+	dynTools      map[string]func(json.RawMessage) string // 动态工具注册表
 	// submitAgentMessage 统一消息下发入口，便于测试替换。
-	submitAgentMessage func(agentID, prompt string, images, files []string) error
+	submitAgentMessage       func(agentID, prompt string, images, files []string) error
+	lspDiagnosticsQueryTyped func(ctx context.Context, p lspDiagnosticsQueryParams) (any, error)
 
 	// 资源 Store (编排工具依赖)
 	dagStore          *store.TaskDAGStore
@@ -215,6 +222,12 @@ func New(deps Deps) *Server {
 	if s.mgr != nil {
 		s.submitAgentMessage = s.mgr.Submit
 	}
+	s.codexAdapter = codexadapter.New(s)
+	s.commonAdapter = commonadapter.New()
+	s.lspTools = lsp.NewToolHandlers(s.lsp, s)
+	s.lspDiagnosticsQueryTyped = func(_ context.Context, p lspDiagnosticsQueryParams) (any, error) {
+		return s.lspTools.DiagnosticsQuery(p.FilePath), nil
+	}
 	if deps.DB != nil {
 		s.prefManager = uistate.NewPreferenceManager(store.NewUIPreferenceStore(deps.DB))
 		s.dagStore = store.NewTaskDAGStore(deps.DB)
@@ -289,6 +302,66 @@ func New(deps Deps) *Server {
 	return s
 }
 
+// SetDiagnostics updates diagnostics cache for a URI.
+func (s *Server) SetDiagnostics(uri string, diagnostics []lsp.Diagnostic) {
+	if s == nil {
+		return
+	}
+	normalized := strings.TrimSpace(uri)
+	if normalized == "" {
+		return
+	}
+	copied := cloneDiagnostics(diagnostics)
+
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	if len(copied) == 0 {
+		delete(s.diagCache, normalized)
+		return
+	}
+	s.diagCache[normalized] = copied
+}
+
+// GetDiagnostics returns a copy of diagnostics for a URI.
+func (s *Server) GetDiagnostics(uri string) []lsp.Diagnostic {
+	if s == nil {
+		return nil
+	}
+	normalized := strings.TrimSpace(uri)
+	if normalized == "" {
+		return nil
+	}
+
+	s.diagMu.RLock()
+	diags := cloneDiagnostics(s.diagCache[normalized])
+	s.diagMu.RUnlock()
+	return diags
+}
+
+// GetAllDiagnostics returns a deep copy of diagnostics cache.
+func (s *Server) GetAllDiagnostics() map[string][]lsp.Diagnostic {
+	if s == nil {
+		return map[string][]lsp.Diagnostic{}
+	}
+
+	s.diagMu.RLock()
+	defer s.diagMu.RUnlock()
+	out := make(map[string][]lsp.Diagnostic, len(s.diagCache))
+	for uri, diags := range s.diagCache {
+		out[uri] = cloneDiagnostics(diags)
+	}
+	return out
+}
+
+func cloneDiagnostics(in []lsp.Diagnostic) []lsp.Diagnostic {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]lsp.Diagnostic, len(in))
+	copy(out, in)
+	return out
+}
+
 // ListenAndServe 启动 WebSocket 服务器。
 //
 // addr 格式: "ws://127.0.0.1:4500" 或 "127.0.0.1:4500"。
@@ -342,4 +415,44 @@ func (s *Server) cleanupRuntimeResources() {
 		clear(s.agentWorkDirs)
 		s.agentWorkDirMu.Unlock()
 	})
+}
+
+// Manager 提供给 codexadapter 的运行时管理器访问入口。
+func (s *Server) Manager() *runner.AgentManager {
+	if s == nil {
+		return nil
+	}
+	return s.mgr
+}
+
+// Store 提供给 codexadapter 的通用状态存储访问入口。
+func (s *Server) Store() *uistate.PreferenceManager {
+	if s == nil {
+		return nil
+	}
+	return s.prefManager
+}
+
+// BindingStore 提供给 codexadapter 的线程绑定存储访问入口。
+func (s *Server) BindingStore() *store.AgentCodexBindingStore {
+	if s == nil {
+		return nil
+	}
+	return s.bindingStore
+}
+
+// AgentStatusStore 提供给 codexadapter 的 agent 状态存储访问入口。
+func (s *Server) AgentStatusStore() *store.AgentStatusStore {
+	if s == nil {
+		return nil
+	}
+	return s.agentStatusStore
+}
+
+// UIRuntime 提供给 codexadapter 的 UI 运行时访问入口。
+func (s *Server) UIRuntime() *uistate.RuntimeManager {
+	if s == nil {
+		return nil
+	}
+	return s.uiRuntime
 }

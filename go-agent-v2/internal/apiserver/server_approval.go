@@ -8,7 +8,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
-	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 func extractBoolFromPayload(payload map[string]any, keys ...string) (bool, bool) {
@@ -64,28 +63,9 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 	}
 	defer s.approvalInFlight.Delete(inflightKey)
 
-	// 心跳: 防止 stall 检测在等待审批期间误杀
-	heartbeatDone := make(chan struct{})
-	defer close(heartbeatDone)
-	hbInterval := s.stallThreshold / 6
-	if hbInterval <= 0 {
-		hbInterval = defaultStallThreshold / 6
-	}
-	if hbInterval < 10*time.Second {
-		hbInterval = 10 * time.Second
-	}
-	util.SafeGo(func() {
-		ticker := time.NewTicker(hbInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				s.touchTrackedTurnLastEvent(agentID)
-			case <-heartbeatDone:
-				return
-			}
-		}
-	})
+	// 心跳委派到 turn tracker: 防止 stall 检测在等待审批期间误杀。
+	stopHeartbeat := s.startApprovalStallHeartbeat(agentID)
+	defer stopHeartbeat()
 
 	approved := false
 
@@ -181,7 +161,7 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 	if approved {
 		decision = "yes"
 	}
-	if err := proc.Client.Submit(decision, nil, nil, nil); err != nil {
+	if err := s.codexAdapter.Submit(proc, decision, nil, nil, nil); err != nil {
 		logger.Warn("app-server: relay approval to codex failed", logger.FieldAgentID, agentID, logger.FieldError, err)
 	}
 }

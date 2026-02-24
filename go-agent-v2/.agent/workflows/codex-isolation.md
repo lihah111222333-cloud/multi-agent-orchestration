@@ -272,7 +272,7 @@ internal/apiserver/methods.go
 2. `codexadapter` 仅依赖接口，不反向依赖 `apiserver` 具体结构。
 3. `commonadapter` 承载非 codex 通用能力（输入、prompt、skills、fuzzy）。
 4. apiserver 原入口函数可保留，但实现必须是薄委派。
-5. 白名单入口 `server_payload.go`、`server_approval.go` 仅允许参数转换、日志与错误包装，不得新增 codex 业务分支与状态管理。
+5. `server_payload.go`、`server_approval.go` 仅允许参数转换、日志与错误包装，不得新增 codex 业务分支与状态管理；若需触达 codex 能力，必须经 `codexadapter`。
 
 ### P3 验证
 
@@ -280,16 +280,16 @@ internal/apiserver/methods.go
 go test ./internal/apiserver/... ./internal/apiserver/codexadapter/... ./internal/apiserver/commonadapter/... -count=1
 # 稳定校验：不依赖管道退出语义，显式枚举违规文件
 bad=0
-for f in $(rg -l --glob '*.go' "Client\\.Submit|Client\\.SendCommand|Client\\.GetThreadID|Client\\.ResumeThread" internal/apiserver); do
+for f in $(rg -l --glob '*.go' "Client\\.Submit|Client\\.SendCommand|Client\\.GetThreadID|Client\\.ResumeThread|Client\\.ForkThread|Client\\.ListThreads|Client\\.RespondError|Client\\.SendDynamicToolResult" internal/apiserver); do
   case "$f" in
-    internal/apiserver/codexadapter/*|internal/apiserver/server_approval.go|internal/apiserver/server_payload.go) ;;
+    internal/apiserver/codexadapter/*) ;;
     *) echo "unexpected proc.Client usage: $f"; bad=1 ;;
   esac
 done
 test "$bad" -eq 0
 ```
 
-通过标准：线程/回合/codex 归档链路中的 `proc.Client.*` 直接调用仅出现在 `codexadapter`（或明确允许的极少委派包装）；系统事件链路 `server_approval.go`、`server_payload.go` 为临时豁免并在 `p3.md` 记录原因。
+通过标准：线程/回合/codex 归档链路中的 `proc.Client.*` 直接调用仅出现在 `codexadapter`，不再保留豁免入口。
 
 ---
 
@@ -313,9 +313,15 @@ go vet ./...
 - Common: 通用输入与技能匹配入口
 4. 更新 `LATEST.md` 为 `current_phase: P4`、`status: done`、`next_phase: complete`。
 
+---
+
 ## 后续（独立工作流）
 
-后续只做“多 CLI 适配层”即可，不再做大规模职责搬移。
+动态工具统一仅在以下文档维护：
+
+- `.agent/workflows/tool-consolidation.md`
+
+本工作流后续仅聚焦“多 CLI 接入实现”，不再做大规模职责搬移。
 
 ### 其他 codex 散点（本工作流不处理，记录备忘）
 

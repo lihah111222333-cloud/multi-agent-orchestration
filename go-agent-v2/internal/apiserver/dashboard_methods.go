@@ -18,11 +18,6 @@ func dashCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 10*time.Second)
 }
 
-// toolCtx 资源工具通用 5 秒超时上下文。
-func toolCtx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 5*time.Second)
-}
-
 // isNilStore 安全检测 store 是否为 nil (处理 typed nil 指针)。
 //
 // Go 中 `(*SomeStore)(nil)` 作为 `any` 参数传入时 `store == nil` 返回 false,

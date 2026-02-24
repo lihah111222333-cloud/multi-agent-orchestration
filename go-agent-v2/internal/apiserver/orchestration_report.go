@@ -11,8 +11,7 @@ import (
 )
 
 const (
-	defaultOrchestrationReportTTL      = tools.DefaultOrchestrationReportTTL
-	maxOrchestrationReportSummaryRunes = tools.MaxOrchestrationReportSummaryRunes
+	defaultOrchestrationReportTTL = tools.DefaultOrchestrationReportTTL
 )
 
 func (s *Server) SubmitPrompt(agentID, prompt string, images, files []string) error {
@@ -26,10 +25,6 @@ func (s *Server) SubmitPrompt(agentID, prompt string, images, files []string) er
 		return apperrors.New("Server.submitAgentPrompt", "agent manager not initialized")
 	}
 	return s.mgr.Submit(agentID, prompt, images, files)
-}
-
-func (s *Server) submitAgentPrompt(agentID, prompt string, images, files []string) error {
-	return s.SubmitPrompt(agentID, prompt, images, files)
 }
 
 func (s *Server) RememberReportRequest(senderID, workerID string) {
@@ -57,10 +52,6 @@ func (s *Server) RememberReportRequest(senderID, workerID string) {
 		"requester", requester,
 		"waiter_count", len(waiters),
 	)
-}
-
-func (s *Server) rememberOrchestrationReportRequest(senderID, workerID string) {
-	s.RememberReportRequest(senderID, workerID)
 }
 
 func (s *Server) maybeAutoReportOrchestrationCompletion(agentID, eventType, method string, payload map[string]any) {

@@ -151,7 +151,7 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 		m.applyThreadStatusChangedLocked(threadID, payload)
 	}
 
-	m.applyUITypeDepthsLocked(threadID, rt, normalized.UIType, eventType, method, fields.text)
+	m.applyUITypeDepthsLocked(threadID, rt, normalized.UIType, eventType, method, fields.text, payload)
 }
 
 // applyErrorOverlayLocked handles the 3-way error overlay branch:
@@ -220,7 +220,7 @@ func applyCollabDepth(rt *threadRuntime, eventType string) {
 
 // applyUITypeDepthsLocked updates turn/command/edit/approval/tool-call depth
 // counters based on the UIType. Must be called with m.mu held.
-func (m *RuntimeManager) applyUITypeDepthsLocked(threadID string, rt *threadRuntime, uiType UIType, eventType, method, text string) {
+func (m *RuntimeManager) applyUITypeDepthsLocked(threadID string, rt *threadRuntime, uiType UIType, eventType, method, text string, payload map[string]any) {
 	switch uiType {
 	case UITypeTurnStarted:
 		m.clearTurnLifecycleLocked(threadID)
@@ -271,16 +271,40 @@ func (m *RuntimeManager) applyUITypeDepthsLocked(threadID string, rt *threadRunt
 	case UITypeToolCall:
 		if eventType == "mcp_tool_call_begin" {
 			rt.toolCallDepth += 1
-			toolName := ""
-			if text != "" {
-				toolName = text
-			}
+			toolName := resolveActivityToolName(text, payload)
 			m.incrActivityStatLocked(threadID, "toolCall", toolName)
 		}
 		if eventType == "mcp_tool_call_end" {
 			rt.toolCallDepth = max(0, rt.toolCallDepth-1)
 		}
 	}
+}
+
+func resolveActivityToolName(text string, payload map[string]any) string {
+	if trimmed := strings.TrimSpace(text); trimmed != "" {
+		return trimmed
+	}
+	if payload == nil {
+		return ""
+	}
+	if topLevel := strings.TrimSpace(extractFirstString(payload, "tool", "tool_name", "name")); topLevel != "" {
+		return topLevel
+	}
+	return strings.TrimSpace(extractNestedFirstString(
+		payload,
+		[]string{"item", "tool"},
+		[]string{"item", "tool_name"},
+		[]string{"item", "name"},
+		[]string{"msg", "tool"},
+		[]string{"msg", "tool_name"},
+		[]string{"msg", "name"},
+		[]string{"data", "tool"},
+		[]string{"data", "tool_name"},
+		[]string{"data", "name"},
+		[]string{"payload", "tool"},
+		[]string{"payload", "tool_name"},
+		[]string{"payload", "name"},
+	))
 }
 
 func (m *RuntimeManager) clearTurnLifecycleLocked(threadID string) {

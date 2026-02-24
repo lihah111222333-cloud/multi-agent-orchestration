@@ -173,32 +173,21 @@ func (s *Server) resolveThreadForSlashCommand(ctx context.Context, threadID stri
 }
 
 func (s *Server) sendSlashCommand(ctx context.Context, params json.RawMessage, command string) (any, error) {
-	var p threadIDParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, apperrors.Wrap(err, "Server.sendSlashCommand", "unmarshal params")
-	}
-	return codexadapter.SendSlashCommand(ctx, codexadapter.SendSlashCommandOptions{
-		ThreadID:               p.ThreadID,
+	return s.codexAdapter.SendSlashCommandFromParams(ctx, codexadapter.SendSlashCommandFromParamsOptions{
+		Params:                 params,
 		Command:                command,
-		ParamsLen:              len(params),
 		ReadThreadRuntimeState: s.readThreadRuntimeState,
 		HasActiveTrackedTurn:   s.hasActiveTrackedTurn,
 		ResolveThread:          s.resolveThreadForSlashCommand,
-		SendCommand:            s.codexAdapter.SendCommand,
-		GetThreadID:            s.codexAdapter.GetThreadID,
 	})
 }
 
 // sendSlashCommandWithArgs 带参数的斜杠命令。
 func (s *Server) sendSlashCommandWithArgs(params json.RawMessage, command string, argsField string) (any, error) {
-	threadID, args, err := codexadapter.ParseSlashCommandWithArgsParams(params, argsField)
-	if err != nil {
-		return nil, err
-	}
-	return s.withThread(threadID, func(proc *runner.AgentProcess) (any, error) {
-		if err := s.codexAdapter.SendCommand(proc, command, args); err != nil {
-			return nil, err
-		}
-		return map[string]any{}, nil
+	return s.codexAdapter.SendSlashCommandWithArgs(codexadapter.SendSlashCommandWithArgsOptions{
+		Params:     params,
+		Command:    command,
+		ArgsField:  argsField,
+		WithThread: s.withThread,
 	})
 }

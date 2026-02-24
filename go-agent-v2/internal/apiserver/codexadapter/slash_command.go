@@ -133,6 +133,89 @@ func SendSlashCommand(ctx context.Context, opt SendSlashCommandOptions) (map[str
 	return map[string]any{}, nil
 }
 
+// SendSlashCommandFromParamsOptions carries params + dependencies for slash command execution.
+type SendSlashCommandFromParamsOptions struct {
+	Params  json.RawMessage
+	Command string
+
+	ReadThreadRuntimeState func(string) string
+	HasActiveTrackedTurn   func(string) bool
+	ResolveThread          func(context.Context, string) (*runner.AgentProcess, error)
+}
+
+// SendSlashCommandFromParams parses threadId and dispatches slash command.
+func (a *Adapter) SendSlashCommandFromParams(ctx context.Context, opt SendSlashCommandFromParamsOptions) (map[string]any, error) {
+	var raw struct {
+		ThreadID string `json:"threadId"`
+	}
+	if err := json.Unmarshal(opt.Params, &raw); err != nil {
+		return nil, apperrors.Wrap(err, "Server.sendSlashCommand", "unmarshal params")
+	}
+	return SendSlashCommand(ctx, SendSlashCommandOptions{
+		ThreadID:               raw.ThreadID,
+		Command:                opt.Command,
+		ParamsLen:              len(opt.Params),
+		ReadThreadRuntimeState: opt.ReadThreadRuntimeState,
+		HasActiveTrackedTurn:   opt.HasActiveTrackedTurn,
+		ResolveThread:          opt.ResolveThread,
+		SendCommand:            a.SendCommand,
+		GetThreadID:            a.GetThreadID,
+	})
+}
+
+// SendSlashCommandWithArgsOptions carries args-command execution dependencies.
+type SendSlashCommandWithArgsOptions struct {
+	Params   json.RawMessage
+	Command  string
+	ArgsField string
+	WithThread func(string, func(*runner.AgentProcess) (any, error)) (any, error)
+}
+
+// SendSlashCommandWithArgs parses args and executes slash command.
+func (a *Adapter) SendSlashCommandWithArgs(opt SendSlashCommandWithArgsOptions) (map[string]any, error) {
+	threadID, args, err := ParseSlashCommandWithArgsParams(opt.Params, opt.ArgsField)
+	if err != nil {
+		return nil, err
+	}
+	if opt.WithThread == nil {
+		return nil, apperrors.New("Server.sendSlashCommandWithArgs", "thread resolver is not configured")
+	}
+	out, err := opt.WithThread(threadID, func(proc *runner.AgentProcess) (any, error) {
+		if sendErr := a.SendCommand(proc, opt.Command, args); sendErr != nil {
+			return nil, sendErr
+		}
+		return map[string]any{}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	result, ok := out.(map[string]any)
+	if !ok {
+		return nil, apperrors.New("Server.sendSlashCommandWithArgs", "invalid slash command result type")
+	}
+	return result, nil
+}
+
+// ThreadSkillsListOptions carries skill-list dependencies.
+type ThreadSkillsListOptions struct {
+	ListSkills func() ([]string, error)
+}
+
+// ThreadSkillsList normalizes thread/skills/list payload.
+func (a *Adapter) ThreadSkillsList(opt ThreadSkillsListOptions) (map[string]any, error) {
+	if opt.ListSkills == nil {
+		return map[string]any{"skills": []string{}}, nil
+	}
+	skills, err := opt.ListSkills()
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.threadSkillsList", "list skills")
+	}
+	if skills == nil {
+		skills = []string{}
+	}
+	return map[string]any{"skills": skills}, nil
+}
+
 // ParseSlashCommandWithArgsParams parses threadId and args from raw params.
 func ParseSlashCommandWithArgsParams(params json.RawMessage, argsField string) (threadID string, args string, err error) {
 	var raw map[string]json.RawMessage

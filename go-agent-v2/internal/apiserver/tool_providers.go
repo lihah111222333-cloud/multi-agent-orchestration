@@ -213,7 +213,7 @@ func incrementToolCall(s *Server, name string) int64 {
 	if s == nil {
 		return 0
 	}
-	return s.toolCallState.increment(name)
+	return incrementToolCallState(s, name)
 }
 
 func allSchemas(s *Server) []agentcore.DynamicTool {
@@ -227,5 +227,5 @@ func nextThreadSeq(s *Server) int64 {
 	if s == nil {
 		return 0
 	}
-	return s.turnTrackingState.nextThreadSeq()
+	return nextThreadSeqState(s)
 }

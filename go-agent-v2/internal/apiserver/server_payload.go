@@ -28,7 +28,7 @@ func SetNotifyHook(s *Server, h func(method string, params any)) {
 	if s == nil {
 		return
 	}
-	s.notifyHookState.setHook(h)
+	setNotifyHookState(s, h)
 }
 
 // Notify 向所有连接广播 JSON-RPC 通知 (WebSocket + SSE)。
@@ -82,7 +82,7 @@ func throttledUIStateChanged(s *Server, payload map[string]any) {
 	key := "_global"
 	now := time.Now()
 	interval := time.Duration(uiStateThrottleMs) * time.Millisecond
-	pending, emitNow := s.uiThrottleState.stageUIStateChanged(
+	pending, emitNow := stageUIStateChangedState(s,
 		key,
 		payload,
 		now,
@@ -100,7 +100,7 @@ func flushUIStateChanged(s *Server, key string) {
 	if s == nil {
 		return
 	}
-	pending, ok := s.uiThrottleState.flushUIStateChanged(key, time.Now())
+	pending, ok := flushUIStateChangedState(s, key, time.Now())
 	if !ok {
 		return
 	}
@@ -412,7 +412,7 @@ func rememberFileChanges(s *Server, threadID string, files []string) {
 	if len(files) == 0 {
 		return
 	}
-	s.turnTrackingState.rememberFileChanges(threadID, files)
+	rememberFileChangesState(s, threadID, files)
 }
 
 func consumeRememberedFileChanges(s *Server, threadID string) []string {
@@ -422,7 +422,7 @@ func consumeRememberedFileChanges(s *Server, threadID string) []string {
 	if threadID == "" {
 		return nil
 	}
-	return s.turnTrackingState.consumeFileChanges(threadID)
+	return consumeFileChangesState(s, threadID)
 }
 
 func enrichFileChangePayload(s *Server, threadID, eventType, method string, payload map[string]any) {
@@ -692,10 +692,10 @@ func handleSSE(s *Server, w http.ResponseWriter, r *http.Request) {
 
 	ch := make(chan []byte, 64)
 
-	s.sseState.addClient(ch)
+	addSSEClientState(s, ch)
 
 	defer func() {
-		s.sseState.removeClient(ch)
+		removeSSEClientState(s, ch)
 	}()
 
 	logger.Info("sse: client connected", logger.FieldRemote, r.RemoteAddr)

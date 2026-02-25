@@ -39,7 +39,7 @@ func rememberReportRequest(s *Server, senderID, workerID string) {
 
 	now := time.Now()
 
-	waiterCount := s.turnTrackingState.rememberReportRequester(target, requester, now)
+	waiterCount := rememberReportRequesterState(s, target, requester, now)
 	if waiterCount == 0 {
 		return
 	}
@@ -97,7 +97,7 @@ func takeOrchestrationReportRequesters(s *Server, workerID string) []string {
 		return nil
 	}
 
-	requesters := s.turnTrackingState.takeReportRequesters(target, time.Now())
+	requesters := takeReportRequestersState(s, target, time.Now())
 	if len(requesters) == 0 {
 		return nil
 	}

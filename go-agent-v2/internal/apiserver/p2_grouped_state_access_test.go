@@ -13,7 +13,8 @@ import (
 func TestP2GroupedStateFieldAccessBoundaries(t *testing.T) {
 	t.Helper()
 
-	trackedStateFields := map[string]struct{}{
+	// Legacy raw state fields that should only be touched by grouped-state accessors.
+	trackedRawStateFields := map[string]struct{}{
 		"mu":                          {},
 		"conns":                       {},
 		"nextID":                      {},
@@ -46,10 +47,32 @@ func TestP2GroupedStateFieldAccessBoundaries(t *testing.T) {
 		"threadAliasMu":               {},
 	}
 
-	allowedOutsideStateGroups := map[string]map[string]struct{}{
+	// Grouped state holders on Server. Keep usage bounded to explicit boundary files.
+	trackedStateGroupFields := map[string]struct{}{
+		"connManagerState":      {},
+		"diagnosticsCacheState": {},
+		"codeRunState":          {},
+		"turnTrackingState":     {},
+		"uiThrottleState":       {},
+		"toolCallState":         {},
+		"sseState":              {},
+		"notifyHookState":       {},
+		"runtimeGuardState":     {},
+		"threadAliasState":      {},
+	}
+
+	allowedRawFieldOutsideStateGroups := map[string]map[string]struct{}{
 		"diagMu":    allowFileSet("server_diagnostics.go"),
 		"diagCache": allowFileSet("server_diagnostics.go"),
 	}
+
+	allowedStateGroupSelectorFiles := allowFileSet(
+		"server.go",
+		"server_state_groups.go",
+		"server_conn.go",
+		"server_context_accessors.go",
+		"server_diagnostics.go",
+	)
 
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(".")
@@ -83,13 +106,23 @@ func TestP2GroupedStateFieldAccessBoundaries(t *testing.T) {
 			}
 
 			field := sel.Sel.Name
-			if _, tracked := trackedStateFields[field]; !tracked {
+
+			if _, trackedGroup := trackedStateGroupFields[field]; trackedGroup {
+				if _, pass := allowedStateGroupSelectorFiles[name]; pass {
+					return true
+				}
+				pos := fset.Position(sel.Pos())
+				violations = append(violations, pos.String()+": s."+field)
+				return true
+			}
+
+			if _, trackedRaw := trackedRawStateFields[field]; !trackedRaw {
 				return true
 			}
 			if name == "server_state_groups.go" {
 				return true
 			}
-			if allowed, ok := allowedOutsideStateGroups[field]; ok {
+			if allowed, ok := allowedRawFieldOutsideStateGroups[field]; ok {
 				if _, pass := allowed[name]; pass {
 					return true
 				}

@@ -291,7 +291,7 @@ func persistThreadAlias(s *Server, ctx context.Context, threadID, alias string) 
 		return nil
 	}
 	var persistErr error
-	s.threadAliasState.withLock(func() {
+	withThreadAliasLock(s, func() {
 		persistErr = persistThreadAliasPreference(ctx, s.prefManager, threadID, alias)
 	})
 	return persistErr

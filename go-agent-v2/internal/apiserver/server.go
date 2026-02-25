@@ -285,12 +285,19 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	return nil
 }
 
-func (s *Server) cleanupRuntimeResources() {
+func cleanupRuntimeResources(s *Server) {
+	if s == nil {
+		return
+	}
 	s.runtimeGuardState.doCleanup(func() {
-		s.cancelAllCodeRuns()
+		cancelAllCodeRuns(s)
 		if s.codeRunner != nil {
 			s.codeRunner.Cleanup()
 		}
 		s.codeRunState.clearAllAgentWorkDirs()
 	})
+}
+
+func (s *Server) cleanupRuntimeResources() {
+	cleanupRuntimeResources(s)
 }

@@ -60,12 +60,12 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	}
 	// 去重: 同一 agentID+method 正在处理中 → 跳过重复调用
 	inflightKey := agentID + ":" + method
-	if !s.runtimeGuardState.tryBeginApproval(inflightKey) {
+	if !tryBeginApprovalState(s, inflightKey) {
 		logger.Debug("app-server: approval dedup — skipping duplicate in-flight request",
 			logger.FieldAgentID, agentID, logger.FieldMethod, method)
 		return
 	}
-	defer s.runtimeGuardState.endApproval(inflightKey)
+	defer endApprovalState(s, inflightKey)
 
 	// 心跳委派到 turn tracker: 防止 stall 检测在等待审批期间误杀。
 	stopHeartbeat := s.codexAdapter.StartApprovalStallHeartbeat(agentID)
@@ -85,7 +85,7 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	} else {
 		// 降级: Wails 模式 — 通过 broadcastNotification + pending channel
 		// 仅在有 notifyHook (Wails 前端) 时才等待, 否则直接跳过 (approved=false → deny)
-		hasHook := s.notifyHookState.hasHook()
+		hasHook := hasNotifyHookState(s)
 
 		if hasHook {
 			logger.Info("app-server: approval via Wails mode (no WS client)",

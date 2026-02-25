@@ -1,9 +1,6 @@
 package lsp
 
-import (
-	"encoding/json"
-	"strings"
-)
+import "encoding/json"
 
 // SemanticTokens gets document semantic tokens.
 func (h *ToolHandlers) SemanticTokens(args json.RawMessage) string {
@@ -11,25 +8,24 @@ func (h *ToolHandlers) SemanticTokens(args json.RawMessage) string {
 		return "error: lsp manager unavailable"
 	}
 
-	var p struct {
-		FilePath string `json:"file_path"`
+	params, err := decodeArgs[lspFilePathParam](args)
+	if err != nil {
+		return toolError(err)
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
+	filePath, err := requireFilePath(params.FilePath)
+	if err != nil {
+		return toolError(err)
 	}
 
-	result, err := h.manager.SemanticTokens(p.FilePath)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if result == nil || (len(result.Data) == 0 && len(result.Decoded) == 0) {
-		return "no semantic tokens found"
-	}
-	data, _ := json.Marshal(result)
-	return string(data)
+	return runAndMarshal(
+		func() (*SemanticTokensResult, error) {
+			return h.manager.SemanticTokens(filePath)
+		},
+		"no semantic tokens found",
+		func(result *SemanticTokensResult) bool {
+			return result == nil || (len(result.Data) == 0 && len(result.Decoded) == 0)
+		},
+	)
 }
 
 // FoldingRange gets document folding ranges.
@@ -38,23 +34,20 @@ func (h *ToolHandlers) FoldingRange(args json.RawMessage) string {
 		return "error: lsp manager unavailable"
 	}
 
-	var p struct {
-		FilePath string `json:"file_path"`
+	params, err := decodeArgs[lspFilePathParam](args)
+	if err != nil {
+		return toolError(err)
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
+	filePath, err := requireFilePath(params.FilePath)
+	if err != nil {
+		return toolError(err)
 	}
 
-	result, err := h.manager.FoldingRange(p.FilePath)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if len(result) == 0 {
-		return "no folding range found"
-	}
-	data, _ := json.Marshal(result)
-	return string(data)
+	return runAndMarshal(
+		func() ([]FoldingRange, error) {
+			return h.manager.FoldingRange(filePath)
+		},
+		"no folding range found",
+		func(result []FoldingRange) bool { return len(result) == 0 },
+	)
 }

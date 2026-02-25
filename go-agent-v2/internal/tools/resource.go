@@ -19,14 +19,53 @@ func ResourceTools(provider ResourceProvider) []Tool {
 		return nil
 	}
 
-	tools := []Tool{
+	return buildResourceTools(provider, resourceToolSpecs())
+}
+
+type resourceToolSpec struct {
+	schema        agentcore.DynamicTool
+	handler       func(provider ResourceProvider, args json.RawMessage) string
+	workspaceOnly bool
+}
+
+func buildResourceTools(provider ResourceProvider, specs []resourceToolSpec) []Tool {
+	hasWorkspace := provider.WorkspaceManager() != nil
+	tools := make([]Tool, 0, len(specs))
+	for _, spec := range specs {
+		if spec.workspaceOnly && !hasWorkspace {
+			continue
+		}
+		spec := spec
+		tools = append(tools, Tool{
+			Schema: spec.schema,
+			Handler: func(_ ToolCallContext, args json.RawMessage) string {
+				return spec.handler(provider, args)
+			},
+		})
+	}
+
+	return tools
+}
+
+func resourceObjectSchema(properties map[string]any, required ...string) map[string]any {
+	schema := map[string]any{
+		"type":       "object",
+		"properties": properties,
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return schema
+}
+
+func resourceToolSpecs() []resourceToolSpec {
+	return []resourceToolSpec{
 		{
-			Schema: agentcore.DynamicTool{
+			schema: agentcore.DynamicTool{
 				Name:        "task_create_dag",
 				Description: "Create a task DAG with nodes. Each node can have dependencies, be assigned to an agent, and reference a command card.",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
+				InputSchema: resourceObjectSchema(
+					map[string]any{
 						"dag_key":     map[string]any{"type": "string", "description": "Unique key for the DAG"},
 						"title":       map[string]any{"type": "string", "description": "DAG title"},
 						"description": map[string]any{"type": "string", "description": "What this DAG does"},
@@ -45,224 +84,216 @@ func ResourceTools(provider ResourceProvider) []Tool {
 							},
 						},
 					},
-					"required": []string{"dag_key", "title"},
-				},
+					"dag_key",
+					"title",
+				),
 			},
-			Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourceTaskCreateDAG(provider, args) },
+			handler: resourceTaskCreateDAG,
 		},
 		{
-			Schema: agentcore.DynamicTool{
+			schema: agentcore.DynamicTool{
 				Name:        "task_get_dag",
 				Description: "Get a task DAG with all its nodes and their statuses.",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
+				InputSchema: resourceObjectSchema(
+					map[string]any{
 						"dag_key": map[string]any{"type": "string", "description": "DAG key to look up"},
 					},
-					"required": []string{"dag_key"},
-				},
+					"dag_key",
+				),
 			},
-			Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourceTaskGetDAG(provider, args) },
+			handler: resourceTaskGetDAG,
 		},
 		{
-			Schema: agentcore.DynamicTool{
+			schema: agentcore.DynamicTool{
 				Name:        "task_update_node",
 				Description: "Update a task DAG node's status (pending/running/done/failed).",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
+				InputSchema: resourceObjectSchema(
+					map[string]any{
 						"dag_key":  map[string]any{"type": "string", "description": "DAG key"},
 						"node_key": map[string]any{"type": "string", "description": "Node key to update"},
 						"status":   map[string]any{"type": "string", "description": "New status: pending, running, done, failed", "enum": []string{"pending", "running", "done", "failed"}},
 						"result":   map[string]any{"type": "string", "description": "Result summary (optional)"},
 					},
-					"required": []string{"dag_key", "node_key", "status"},
-				},
+					"dag_key",
+					"node_key",
+					"status",
+				),
 			},
-			Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourceTaskUpdateNode(provider, args) },
+			handler: resourceTaskUpdateNode,
 		},
 		{
-			Schema: agentcore.DynamicTool{
+			schema: agentcore.DynamicTool{
 				Name:        "command_list",
 				Description: "List available command cards. Command cards define reusable operations with templates and argument schemas.",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
+				InputSchema: resourceObjectSchema(
+					map[string]any{
 						"keyword": map[string]any{"type": "string", "description": "Search keyword (optional)"},
 					},
-				},
+				),
 			},
-			Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourceCommandList(provider, args) },
+			handler: resourceCommandList,
 		},
 		{
-			Schema: agentcore.DynamicTool{
+			schema: agentcore.DynamicTool{
 				Name:        "command_get",
 				Description: "Get a specific command card by its key, including the command template and argument schema.",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
+				InputSchema: resourceObjectSchema(
+					map[string]any{
 						"card_key": map[string]any{"type": "string", "description": "Command card key"},
 					},
-					"required": []string{"card_key"},
-				},
+					"card_key",
+				),
 			},
-			Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourceCommandGet(provider, args) },
+			handler: resourceCommandGet,
 		},
 		{
-			Schema: agentcore.DynamicTool{
+			schema: agentcore.DynamicTool{
 				Name:        "prompt_list",
 				Description: "List available prompt templates. Templates can be used to generate structured prompts for agents.",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
+				InputSchema: resourceObjectSchema(
+					map[string]any{
 						"keyword": map[string]any{"type": "string", "description": "Search keyword (optional)"},
 					},
-				},
+				),
 			},
-			Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourcePromptList(provider, args) },
+			handler: resourcePromptList,
 		},
 		{
-			Schema: agentcore.DynamicTool{
+			schema: agentcore.DynamicTool{
 				Name:        "prompt_get",
 				Description: "Get a specific prompt template by its key, including the prompt text and variables.",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
+				InputSchema: resourceObjectSchema(
+					map[string]any{
 						"prompt_key": map[string]any{"type": "string", "description": "Prompt template key"},
 					},
-					"required": []string{"prompt_key"},
-				},
+					"prompt_key",
+				),
 			},
-			Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourcePromptGet(provider, args) },
+			handler: resourcePromptGet,
 		},
 		{
-			Schema: agentcore.DynamicTool{
+			schema: agentcore.DynamicTool{
 				Name:        "shared_file_read",
 				Description: "Read a shared file by path. Shared files are stored in the database and can be accessed by all agents.",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
+				InputSchema: resourceObjectSchema(
+					map[string]any{
 						"path": map[string]any{"type": "string", "description": "File path (e.g. 'config/settings.json')"},
 					},
-					"required": []string{"path"},
-				},
+					"path",
+				),
 			},
-			Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourceSharedFileRead(provider, args) },
+			handler: resourceSharedFileRead,
 		},
 		{
-			Schema: agentcore.DynamicTool{
+			schema: agentcore.DynamicTool{
 				Name:        "shared_file_write",
 				Description: "Write content to a shared file. Creates or overwrites the file at the given path.",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
+				InputSchema: resourceObjectSchema(
+					map[string]any{
 						"path":    map[string]any{"type": "string", "description": "File path (e.g. 'config/settings.json')"},
 						"content": map[string]any{"type": "string", "description": "File content to write"},
 					},
-					"required": []string{"path", "content"},
-				},
+					"path",
+					"content",
+				),
 			},
-			Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourceSharedFileWrite(provider, args) },
+			handler: resourceSharedFileWrite,
+		},
+		{
+			schema: agentcore.DynamicTool{
+				Name:        "workspace_create_run",
+				Description: "Create a virtual workspace run. Filesystem workspace is used for edits; run status and file states are persisted in PostgreSQL.",
+				InputSchema: resourceObjectSchema(
+					map[string]any{
+						"run_key":     map[string]any{"type": "string", "description": "Optional run key. Auto-generated if omitted."},
+						"dag_key":     map[string]any{"type": "string", "description": "Related DAG key (optional)."},
+						"source_root": map[string]any{"type": "string", "description": "Absolute or relative source project root."},
+						"created_by":  map[string]any{"type": "string", "description": "Creator identifier (optional)."},
+						"files": map[string]any{
+							"type":        "array",
+							"description": "Optional bootstrap files to copy from source root to workspace.",
+							"items":       map[string]any{"type": "string"},
+						},
+						"metadata": map[string]any{"type": "object", "description": "Optional metadata for run record."},
+					},
+					"source_root",
+				),
+			},
+			handler:       resourceWorkspaceCreateRun,
+			workspaceOnly: true,
+		},
+		{
+			schema: agentcore.DynamicTool{
+				Name:        "workspace_get_run",
+				Description: "Get workspace run detail by run key.",
+				InputSchema: resourceObjectSchema(
+					map[string]any{
+						"run_key": map[string]any{"type": "string", "description": "Workspace run key."},
+					},
+					"run_key",
+				),
+			},
+			handler:       resourceWorkspaceGetRun,
+			workspaceOnly: true,
+		},
+		{
+			schema: agentcore.DynamicTool{
+				Name:        "workspace_list_runs",
+				Description: "List workspace runs with optional status/dag filters.",
+				InputSchema: resourceObjectSchema(
+					map[string]any{
+						"status":  map[string]any{"type": "string", "description": "Optional run status filter."},
+						"dag_key": map[string]any{"type": "string", "description": "Optional DAG key filter."},
+						"limit":   map[string]any{"type": "number", "description": "Max number of runs to return."},
+					},
+				),
+			},
+			handler:       resourceWorkspaceListRuns,
+			workspaceOnly: true,
+		},
+		{
+			schema: agentcore.DynamicTool{
+				Name:        "workspace_merge_run",
+				Description: "Merge changed files from virtual workspace back to source root with conflict detection. Also updates PostgreSQL run/file states.",
+				InputSchema: resourceObjectSchema(
+					map[string]any{
+						"run_key":        map[string]any{"type": "string", "description": "Workspace run key."},
+						"updated_by":     map[string]any{"type": "string", "description": "Operator id (optional)."},
+						"dry_run":        map[string]any{"type": "boolean", "description": "Only simulate merge without writing source files."},
+						"delete_removed": map[string]any{"type": "boolean", "description": "Delete source files removed in workspace when safe."},
+					},
+					"run_key",
+				),
+			},
+			handler:       resourceWorkspaceMergeRun,
+			workspaceOnly: true,
+		},
+		{
+			schema: agentcore.DynamicTool{
+				Name:        "workspace_abort_run",
+				Description: "Abort a workspace run and mark it as aborted in PostgreSQL state.",
+				InputSchema: resourceObjectSchema(
+					map[string]any{
+						"run_key":    map[string]any{"type": "string", "description": "Workspace run key."},
+						"updated_by": map[string]any{"type": "string", "description": "Operator id (optional)."},
+						"reason":     map[string]any{"type": "string", "description": "Abort reason (optional)."},
+					},
+					"run_key",
+				),
+			},
+			handler:       resourceWorkspaceAbortRun,
+			workspaceOnly: true,
 		},
 	}
-
-	if provider.WorkspaceManager() != nil {
-		tools = append(tools,
-			Tool{
-				Schema: agentcore.DynamicTool{
-					Name:        "workspace_create_run",
-					Description: "Create a virtual workspace run. Filesystem workspace is used for edits; run status and file states are persisted in PostgreSQL.",
-					InputSchema: map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"run_key":     map[string]any{"type": "string", "description": "Optional run key. Auto-generated if omitted."},
-							"dag_key":     map[string]any{"type": "string", "description": "Related DAG key (optional)."},
-							"source_root": map[string]any{"type": "string", "description": "Absolute or relative source project root."},
-							"created_by":  map[string]any{"type": "string", "description": "Creator identifier (optional)."},
-							"files": map[string]any{
-								"type":        "array",
-								"description": "Optional bootstrap files to copy from source root to workspace.",
-								"items":       map[string]any{"type": "string"},
-							},
-							"metadata": map[string]any{"type": "object", "description": "Optional metadata for run record."},
-						},
-						"required": []string{"source_root"},
-					},
-				},
-				Handler: func(_ ToolCallContext, args json.RawMessage) string {
-					return resourceWorkspaceCreateRun(provider, args)
-				},
-			},
-			Tool{
-				Schema: agentcore.DynamicTool{
-					Name:        "workspace_get_run",
-					Description: "Get workspace run detail by run key.",
-					InputSchema: map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"run_key": map[string]any{"type": "string", "description": "Workspace run key."},
-						},
-						"required": []string{"run_key"},
-					},
-				},
-				Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourceWorkspaceGetRun(provider, args) },
-			},
-			Tool{
-				Schema: agentcore.DynamicTool{
-					Name:        "workspace_list_runs",
-					Description: "List workspace runs with optional status/dag filters.",
-					InputSchema: map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"status":  map[string]any{"type": "string", "description": "Optional run status filter."},
-							"dag_key": map[string]any{"type": "string", "description": "Optional DAG key filter."},
-							"limit":   map[string]any{"type": "number", "description": "Max number of runs to return."},
-						},
-					},
-				},
-				Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourceWorkspaceListRuns(provider, args) },
-			},
-			Tool{
-				Schema: agentcore.DynamicTool{
-					Name:        "workspace_merge_run",
-					Description: "Merge changed files from virtual workspace back to source root with conflict detection. Also updates PostgreSQL run/file states.",
-					InputSchema: map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"run_key":        map[string]any{"type": "string", "description": "Workspace run key."},
-							"updated_by":     map[string]any{"type": "string", "description": "Operator id (optional)."},
-							"dry_run":        map[string]any{"type": "boolean", "description": "Only simulate merge without writing source files."},
-							"delete_removed": map[string]any{"type": "boolean", "description": "Delete source files removed in workspace when safe."},
-						},
-						"required": []string{"run_key"},
-					},
-				},
-				Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourceWorkspaceMergeRun(provider, args) },
-			},
-			Tool{
-				Schema: agentcore.DynamicTool{
-					Name:        "workspace_abort_run",
-					Description: "Abort a workspace run and mark it as aborted in PostgreSQL state.",
-					InputSchema: map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"run_key":    map[string]any{"type": "string", "description": "Workspace run key."},
-							"updated_by": map[string]any{"type": "string", "description": "Operator id (optional)."},
-							"reason":     map[string]any{"type": "string", "description": "Abort reason (optional)."},
-						},
-						"required": []string{"run_key"},
-					},
-				},
-				Handler: func(_ ToolCallContext, args json.RawMessage) string { return resourceWorkspaceAbortRun(provider, args) },
-			},
-		)
-	}
-
-	return tools
 }
 
 func resourceToolCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 5*time.Second)
+}
+
+func resourceJSON(v any) string {
+	data, _ := json.Marshal(v)
+	return string(data)
 }
 
 func resourceTaskCreateDAG(provider ResourceProvider, args json.RawMessage) string {
@@ -313,13 +344,12 @@ func resourceTaskCreateDAG(provider ResourceProvider, args json.RawMessage) stri
 	}
 
 	logger.Info("resource: DAG created", logger.FieldDAG, p.DagKey, "nodes", nodesCreated)
-	data, _ := json.Marshal(map[string]any{
+	return resourceJSON(map[string]any{
 		"dag_key":       dag.DagKey,
 		"title":         dag.Title,
 		"nodes_created": nodesCreated,
 		"status":        dag.Status,
 	})
-	return string(data)
 }
 
 func resourceTaskGetDAG(provider ResourceProvider, args json.RawMessage) string {
@@ -340,11 +370,10 @@ func resourceTaskGetDAG(provider ResourceProvider, args json.RawMessage) string 
 		return ToolError(pkgerr.Newf("ResourceTool.GetDAG", "dag %s not found", p.DagKey))
 	}
 
-	data, _ := json.Marshal(map[string]any{
+	return resourceJSON(map[string]any{
 		"dag":   dag,
 		"nodes": nodes,
 	})
-	return string(data)
 }
 
 func resourceTaskUpdateNode(provider ResourceProvider, args json.RawMessage) string {
@@ -374,8 +403,7 @@ func resourceTaskUpdateNode(provider ResourceProvider, args json.RawMessage) str
 	}
 
 	logger.Info("resource: node updated", logger.FieldDAG, p.DagKey, logger.FieldNode, p.NodeKey, logger.FieldStatus, p.Status)
-	data, _ := json.Marshal(node)
-	return string(data)
+	return resourceJSON(node)
 }
 
 func resourceCommandList(provider ResourceProvider, args json.RawMessage) string {
@@ -392,8 +420,7 @@ func resourceCommandList(provider ResourceProvider, args json.RawMessage) string
 	if err != nil {
 		return ToolError(pkgerr.Wrap(err, "ResourceTool.CommandList", "list commands"))
 	}
-	data, _ := json.Marshal(cards)
-	return string(data)
+	return resourceJSON(cards)
 }
 
 func resourceCommandGet(provider ResourceProvider, args json.RawMessage) string {
@@ -413,8 +440,7 @@ func resourceCommandGet(provider ResourceProvider, args json.RawMessage) string 
 	if card == nil {
 		return ToolError(pkgerr.Newf("ResourceTool.CommandGet", "command %s not found", p.CardKey))
 	}
-	data, _ := json.Marshal(card)
-	return string(data)
+	return resourceJSON(card)
 }
 
 func resourcePromptList(provider ResourceProvider, args json.RawMessage) string {
@@ -431,8 +457,7 @@ func resourcePromptList(provider ResourceProvider, args json.RawMessage) string 
 	if err != nil {
 		return ToolError(pkgerr.Wrap(err, "ResourceTool.PromptList", "list prompts"))
 	}
-	data, _ := json.Marshal(prompts)
-	return string(data)
+	return resourceJSON(prompts)
 }
 
 func resourcePromptGet(provider ResourceProvider, args json.RawMessage) string {
@@ -452,8 +477,7 @@ func resourcePromptGet(provider ResourceProvider, args json.RawMessage) string {
 	if prompt == nil {
 		return ToolError(pkgerr.Newf("ResourceTool.PromptGet", "prompt %s not found", p.PromptKey))
 	}
-	data, _ := json.Marshal(prompt)
-	return string(data)
+	return resourceJSON(prompt)
 }
 
 func resourceSharedFileRead(provider ResourceProvider, args json.RawMessage) string {
@@ -473,8 +497,7 @@ func resourceSharedFileRead(provider ResourceProvider, args json.RawMessage) str
 	if file == nil {
 		return ToolError(pkgerr.Newf("ResourceTool.FileRead", "file %s not found", p.Path))
 	}
-	data, _ := json.Marshal(file)
-	return string(data)
+	return resourceJSON(file)
 }
 
 func resourceSharedFileWrite(provider ResourceProvider, args json.RawMessage) string {
@@ -497,8 +520,7 @@ func resourceSharedFileWrite(provider ResourceProvider, args json.RawMessage) st
 	}
 
 	logger.Info("resource: file written", logger.FieldPath, p.Path, logger.FieldLen, len(p.Content))
-	data, _ := json.Marshal(file)
-	return string(data)
+	return resourceJSON(file)
 }
 
 func resourceWorkspaceCreateRun(provider ResourceProvider, args json.RawMessage) string {
@@ -533,8 +555,7 @@ func resourceWorkspaceCreateRun(provider ResourceProvider, args json.RawMessage)
 		"runKey": run.RunKey,
 		"run":    run,
 	})
-	data, _ := json.Marshal(run)
-	return string(data)
+	return resourceJSON(run)
 }
 
 func resourceWorkspaceGetRun(provider ResourceProvider, args json.RawMessage) string {
@@ -556,8 +577,7 @@ func resourceWorkspaceGetRun(provider ResourceProvider, args json.RawMessage) st
 	if run == nil {
 		return ToolError(pkgerr.Newf("ResourceTool.WorkspaceGet", "workspace run %s not found", p.RunKey))
 	}
-	data, _ := json.Marshal(run)
-	return string(data)
+	return resourceJSON(run)
 }
 
 func resourceWorkspaceListRuns(provider ResourceProvider, args json.RawMessage) string {
@@ -581,8 +601,7 @@ func resourceWorkspaceListRuns(provider ResourceProvider, args json.RawMessage) 
 	if err != nil {
 		return ToolError(err)
 	}
-	data, _ := json.Marshal(runs)
-	return string(data)
+	return resourceJSON(runs)
 }
 
 func resourceWorkspaceMergeRun(provider ResourceProvider, args json.RawMessage) string {
@@ -613,8 +632,7 @@ func resourceWorkspaceMergeRun(provider ResourceProvider, args json.RawMessage) 
 		"runKey": p.RunKey,
 		"result": result,
 	})
-	data, _ := json.Marshal(result)
-	return string(data)
+	return resourceJSON(result)
 }
 
 func resourceWorkspaceAbortRun(provider ResourceProvider, args json.RawMessage) string {
@@ -640,6 +658,5 @@ func resourceWorkspaceAbortRun(provider ResourceProvider, args json.RawMessage) 
 		"run":    run,
 		"reason": p.Reason,
 	})
-	data, _ := json.Marshal(run)
-	return string(data)
+	return resourceJSON(run)
 }

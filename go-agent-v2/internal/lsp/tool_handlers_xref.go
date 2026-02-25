@@ -5,45 +5,47 @@ import (
 	"strings"
 )
 
+type lspWorkspaceSymbolParam struct {
+	FilePath string `json:"file_path"`
+	Language string `json:"language"`
+	Query    string `json:"query"`
+}
+
 // WorkspaceSymbol searches workspace symbols.
 func (h *ToolHandlers) WorkspaceSymbol(args json.RawMessage) string {
 	if h.managerUnavailable() {
 		return "error: lsp manager unavailable"
 	}
-
-	var p struct {
-		FilePath string `json:"file_path"`
-		Language string `json:"language"`
-		Query    string `json:"query"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
+	params, err := decodeArgs[lspWorkspaceSymbolParam](args)
+	if err != nil {
+		return toolError(err)
 	}
 
-	p.Query = strings.TrimSpace(p.Query)
-	p.FilePath = strings.TrimSpace(p.FilePath)
-	p.Language = strings.TrimSpace(p.Language)
+	params.Query = strings.TrimSpace(params.Query)
+	params.FilePath = strings.TrimSpace(params.FilePath)
+	params.Language = strings.TrimSpace(params.Language)
 
-	if p.Query == "" {
+	if params.Query == "" {
 		return "error: query is required"
 	}
-	if p.FilePath == "" && p.Language == "" {
+	if params.FilePath == "" && params.Language == "" {
 		return "error: exactly one of file_path or language is required"
 	}
-	if p.FilePath != "" && p.Language != "" {
+	if params.FilePath != "" && params.Language != "" {
 		return "error: file_path and language are mutually exclusive"
 	}
 
-	result, err := h.manager.WorkspaceSymbol(p.FilePath, p.Language, p.Query)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	result = limitWorkspaceSymbolResults(result)
-	if len(result) == 0 {
-		return "no symbols found"
-	}
-	data, _ := json.Marshal(result)
-	return string(data)
+	return runAndMarshal(
+		func() ([]WorkspaceSymbolResult, error) {
+			result, err := h.manager.WorkspaceSymbol(params.FilePath, params.Language, params.Query)
+			if err != nil {
+				return nil, err
+			}
+			return limitWorkspaceSymbolResults(result), nil
+		},
+		"no symbols found",
+		func(result []WorkspaceSymbolResult) bool { return len(result) == 0 },
+	)
 }
 
 // Implementation finds symbol implementation locations.
@@ -51,29 +53,28 @@ func (h *ToolHandlers) Implementation(args json.RawMessage) string {
 	if h.managerUnavailable() {
 		return "error: lsp manager unavailable"
 	}
-
-	var p struct {
-		FilePath string `json:"file_path"`
-		Line     int    `json:"line"`
-		Column   int    `json:"column"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
-	}
-
-	result, err := h.manager.Implementation(p.FilePath, p.Line, p.Column)
+	params, err := decodeArgs[lspFilePositionParam](args)
 	if err != nil {
-		return h.contextualToolError("lsp_implementation", p.FilePath, p.Line, p.Column, err)
+		return toolError(err)
 	}
-	result = limitLocationResults(result)
-	if len(result) == 0 {
-		return "no implementation found"
+	filePath, err := requireFilePath(params.FilePath)
+	if err != nil {
+		return toolError(err)
 	}
-	data, _ := json.Marshal(result)
-	return string(data)
+	return runAndMarshalWithError(
+		func() ([]LocationResult, error) {
+			result, err := h.manager.Implementation(filePath, params.Line, params.Column)
+			if err != nil {
+				return nil, err
+			}
+			return limitLocationResults(result), nil
+		},
+		func(err error) string {
+			return h.contextualToolError("lsp_implementation", filePath, params.Line, params.Column, err)
+		},
+		"no implementation found",
+		func(result []LocationResult) bool { return len(result) == 0 },
+	)
 }
 
 // TypeDefinition finds symbol type definition locations.
@@ -81,29 +82,28 @@ func (h *ToolHandlers) TypeDefinition(args json.RawMessage) string {
 	if h.managerUnavailable() {
 		return "error: lsp manager unavailable"
 	}
-
-	var p struct {
-		FilePath string `json:"file_path"`
-		Line     int    `json:"line"`
-		Column   int    `json:"column"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
-	}
-
-	result, err := h.manager.TypeDefinition(p.FilePath, p.Line, p.Column)
+	params, err := decodeArgs[lspFilePositionParam](args)
 	if err != nil {
-		return h.contextualToolError("lsp_type_definition", p.FilePath, p.Line, p.Column, err)
+		return toolError(err)
 	}
-	result = limitLocationResults(result)
-	if len(result) == 0 {
-		return "no type definition found"
+	filePath, err := requireFilePath(params.FilePath)
+	if err != nil {
+		return toolError(err)
 	}
-	data, _ := json.Marshal(result)
-	return string(data)
+	return runAndMarshalWithError(
+		func() ([]LocationResult, error) {
+			result, err := h.manager.TypeDefinition(filePath, params.Line, params.Column)
+			if err != nil {
+				return nil, err
+			}
+			return limitLocationResults(result), nil
+		},
+		func(err error) string {
+			return h.contextualToolError("lsp_type_definition", filePath, params.Line, params.Column, err)
+		},
+		"no type definition found",
+		func(result []LocationResult) bool { return len(result) == 0 },
+	)
 }
 
 func limitWorkspaceSymbolResults(in []WorkspaceSymbolResult) []WorkspaceSymbolResult {

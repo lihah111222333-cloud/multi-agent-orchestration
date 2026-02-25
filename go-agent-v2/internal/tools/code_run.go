@@ -13,6 +13,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/executor"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // CodeRunTools builds code_run and code_run_test tool definitions.
@@ -89,7 +90,7 @@ func handleCodeRun(callCtx ToolCallContext, provider CodeRunProvider, runtime Ag
 		p.Mode = executor.ModeRun
 	}
 
-	resolvedCallID := resolveCodeRunCallID(callCtx.CallID, callCtx.RequestID)
+	resolvedCallID := util.ResolveCodeRunCallID(callCtx.CallID, callCtx.RequestID)
 
 	if p.Mode == executor.ModeProjectCmd {
 		isDangerous := executor.DetectDangerous(p.Command) != ""
@@ -248,17 +249,6 @@ func resolveCodeRunner(provider CodeRunProvider, runtime AgentRuntimeProvider, a
 		return nil, nil, err
 	}
 	return runner, runner.Cleanup, nil
-}
-
-func resolveCodeRunCallID(callID string, requestID *int64) string {
-	trimmed := strings.TrimSpace(callID)
-	if trimmed != "" {
-		return trimmed
-	}
-	if requestID != nil {
-		return fmt.Sprintf("req-%d", *requestID)
-	}
-	return ""
 }
 
 func writeCodeRunAudit(provider CodeRunProvider, agentID, language, mode, result string, exitCode int, durationMS int64, code, command, output string) {

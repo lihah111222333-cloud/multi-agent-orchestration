@@ -46,146 +46,121 @@ type LSPExtRegistryProvider struct {
 	Build    func() []agentcore.DynamicTool
 }
 
+type lspBaseToolSpec struct {
+	schema  agentcore.DynamicTool
+	handler func(LSPHandlerProvider) LSPDynamicToolHandler
+}
+
+func baseLSPToolSpecs() []lspBaseToolSpec {
+	return []lspBaseToolSpec{
+		lspBaseSpec(
+			"lsp_hover",
+			"Get type info and documentation for a symbol at a specific position in a file via LSP hover.",
+			lspFileLineColumnSchema("", "", "", nil, lspRequired("file_path", "line", "column"), nil),
+			func(provider LSPHandlerProvider) LSPDynamicToolHandler { return provider.Hover },
+		),
+		lspBaseSpec(
+			"lsp_open_file",
+			"Open a file for LSP analysis. Triggers didOpen and starts diagnostics. Call before hover/diagnostics for accurate results.",
+			lspFilePathSchema("", true, nil, nil),
+			func(provider LSPHandlerProvider) LSPDynamicToolHandler { return provider.OpenFile },
+		),
+		lspBaseSpec(
+			"lsp_diagnostics",
+			"Get current diagnostics (errors, warnings) for a file. If file_path is provided and the file was not opened, it will be auto-synchronized first.",
+			lspFilePathSchema("Absolute or relative path to the file. Empty = all files.", false, nil, nil),
+			func(provider LSPHandlerProvider) LSPDynamicToolHandler { return provider.Diagnostics },
+		),
+		lspBaseSpec(
+			"lsp_definition",
+			"Go to definition. Returns the location(s) where a symbol is defined. The document is auto-bootstrapped if not opened yet.",
+			lspFileLineColumnSchema("", "", "", nil, lspRequired("file_path", "line", "column"), nil),
+			func(provider LSPHandlerProvider) LSPDynamicToolHandler { return provider.Definition },
+		),
+		lspBaseSpec(
+			"lsp_references",
+			"Find all references to a symbol. Returns locations where the symbol is used. The document is auto-bootstrapped if not opened yet.",
+			lspFileLineColumnSchema(
+				"",
+				"",
+				"",
+				map[string]any{"include_declaration": lspBooleanProperty("Include the declaration in results (default: true)")},
+				lspRequired("file_path", "line", "column"),
+				nil,
+			),
+			func(provider LSPHandlerProvider) LSPDynamicToolHandler { return provider.References },
+		),
+		lspBaseSpec(
+			"lsp_document_symbol",
+			"Get file outline (all symbols: functions, types, methods, constants). Returns a hierarchical symbol tree. The document is auto-bootstrapped if not opened yet.",
+			lspFilePathSchema("", true, nil, nil),
+			func(provider LSPHandlerProvider) LSPDynamicToolHandler { return provider.DocumentSymbol },
+		),
+		lspBaseSpec(
+			"lsp_rename",
+			"Rename a symbol across all files. Returns all edits needed. The document is auto-bootstrapped if not opened yet.",
+			lspFileLineColumnSchema(
+				"",
+				"",
+				"",
+				map[string]any{"new_name": lspStringProperty("New name for the symbol")},
+				lspRequired("file_path", "line", "column", "new_name"),
+				nil,
+			),
+			func(provider LSPHandlerProvider) LSPDynamicToolHandler { return provider.Rename },
+		),
+		lspBaseSpec(
+			"lsp_completion",
+			"Get code completion suggestions at a position. Returns candidate items with labels and kinds. The document is auto-bootstrapped if not opened yet.",
+			lspFileLineColumnSchema("", "", "", nil, lspRequired("file_path", "line", "column"), nil),
+			func(provider LSPHandlerProvider) LSPDynamicToolHandler { return provider.Completion },
+		),
+		lspBaseSpec(
+			"lsp_did_change",
+			"Notify the language server that file content has changed. Use after editing a file to keep LSP in sync. By default this does not write to disk; set persist_to_disk=true to atomically persist before syncing LSP.",
+			lspSchema(
+				map[string]any{
+					"file_path":       lspStringProperty(defaultFilePathDescription),
+					"new_content":     lspStringProperty("Full new content of the file"),
+					"version":         lspNumberProperty("Document version (increment each change, default: 2)"),
+					"persist_to_disk": lspBooleanProperty("When true, atomically write new_content to file_path before notifying LSP (default: false)"),
+				},
+				lspRequired("file_path", "new_content"),
+				nil,
+			),
+			func(provider LSPHandlerProvider) LSPDynamicToolHandler { return provider.DidChange },
+		),
+	}
+}
+
 // RegisterLSPHandlers wires base LSP handlers into dynTools map.
 func RegisterLSPHandlers(dst map[string]LSPDynamicToolHandler, provider LSPHandlerProvider) {
 	if dst == nil || provider == nil {
 		return
 	}
-	dst["lsp_hover"] = provider.Hover
-	dst["lsp_open_file"] = provider.OpenFile
-	dst["lsp_diagnostics"] = provider.Diagnostics
-	dst["lsp_definition"] = provider.Definition
-	dst["lsp_references"] = provider.References
-	dst["lsp_document_symbol"] = provider.DocumentSymbol
-	dst["lsp_rename"] = provider.Rename
-	dst["lsp_completion"] = provider.Completion
-	dst["lsp_did_change"] = provider.DidChange
+	for _, spec := range baseLSPToolSpecs() {
+		if spec.handler == nil {
+			continue
+		}
+		handler := spec.handler(provider)
+		if handler == nil {
+			continue
+		}
+		dst[spec.schema.Name] = handler
+	}
 }
 
 // LSPTools returns base LSP dynamic tool schemas.
 func LSPTools() []agentcore.DynamicTool {
-	return []agentcore.DynamicTool{
-		{
-			Name:        "lsp_hover",
-			Description: "Get type info and documentation for a symbol at a specific position in a file via LSP hover.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"file_path": map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
-					"line":      map[string]any{"type": "number", "description": "0-indexed line number"},
-					"column":    map[string]any{"type": "number", "description": "0-indexed column number"},
-				},
-				"required": []string{"file_path", "line", "column"},
-			},
-		},
-		{
-			Name:        "lsp_open_file",
-			Description: "Open a file for LSP analysis. Triggers didOpen and starts diagnostics. Call before hover/diagnostics for accurate results.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"file_path": map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
-				},
-				"required": []string{"file_path"},
-			},
-		},
-		{
-			Name:        "lsp_diagnostics",
-			Description: "Get current diagnostics (errors, warnings) for a file. If file_path is provided and the file was not opened, it will be auto-synchronized first.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"file_path": map[string]any{"type": "string", "description": "Absolute or relative path to the file. Empty = all files."},
-				},
-			},
-		},
-		{
-			Name:        "lsp_definition",
-			Description: "Go to definition. Returns the location(s) where a symbol is defined. The document is auto-bootstrapped if not opened yet.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"file_path": map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
-					"line":      map[string]any{"type": "number", "description": "0-indexed line number"},
-					"column":    map[string]any{"type": "number", "description": "0-indexed column number"},
-				},
-				"required": []string{"file_path", "line", "column"},
-			},
-		},
-		{
-			Name:        "lsp_references",
-			Description: "Find all references to a symbol. Returns locations where the symbol is used. The document is auto-bootstrapped if not opened yet.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"file_path":           map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
-					"line":                map[string]any{"type": "number", "description": "0-indexed line number"},
-					"column":              map[string]any{"type": "number", "description": "0-indexed column number"},
-					"include_declaration": map[string]any{"type": "boolean", "description": "Include the declaration in results (default: true)"},
-				},
-				"required": []string{"file_path", "line", "column"},
-			},
-		},
-		{
-			Name:        "lsp_document_symbol",
-			Description: "Get file outline (all symbols: functions, types, methods, constants). Returns a hierarchical symbol tree. The document is auto-bootstrapped if not opened yet.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"file_path": map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
-				},
-				"required": []string{"file_path"},
-			},
-		},
-		{
-			Name:        "lsp_rename",
-			Description: "Rename a symbol across all files. Returns all edits needed. The document is auto-bootstrapped if not opened yet.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"file_path": map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
-					"line":      map[string]any{"type": "number", "description": "0-indexed line number"},
-					"column":    map[string]any{"type": "number", "description": "0-indexed column number"},
-					"new_name":  map[string]any{"type": "string", "description": "New name for the symbol"},
-				},
-				"required": []string{"file_path", "line", "column", "new_name"},
-			},
-		},
-		{
-			Name:        "lsp_completion",
-			Description: "Get code completion suggestions at a position. Returns candidate items with labels and kinds. The document is auto-bootstrapped if not opened yet.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"file_path": map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
-					"line":      map[string]any{"type": "number", "description": "0-indexed line number"},
-					"column":    map[string]any{"type": "number", "description": "0-indexed column number"},
-				},
-				"required": []string{"file_path", "line", "column"},
-			},
-		},
-		{
-			Name:        "lsp_did_change",
-			Description: "Notify the language server that file content has changed. Use after editing a file to keep LSP in sync. Supports unopened files via automatic bootstrap and fail-closed sync.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"file_path":   map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
-					"new_content": map[string]any{"type": "string", "description": "Full new content of the file"},
-					"version":     map[string]any{"type": "number", "description": "Document version (increment each change, default: 2)"},
-				},
-				"required": []string{"file_path", "new_content"},
-			},
-		},
+	specs := baseLSPToolSpecs()
+	out := make([]agentcore.DynamicTool, 0, len(specs))
+	for _, spec := range specs {
+		out = append(out, spec.schema)
 	}
+	return out
 }
 
 // LSPExtTools returns all ext LSP tool providers.
 func LSPExtTools() []LSPExtRegistryProvider {
-	return []LSPExtRegistryProvider{
-		LSPExtActions(),
-		LSPExtHierarchy(),
-		LSPExtSemantic(),
-		LSPExtXRef(),
-	}
+	return []LSPExtRegistryProvider{LSPExtActions(), LSPExtHierarchy(), LSPExtSemantic(), LSPExtXRef()}
 }

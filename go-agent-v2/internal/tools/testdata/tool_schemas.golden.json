@@ -239,7 +239,7 @@
   },
   {
     "name": "lsp_did_change",
-    "description": "Notify the language server that file content has changed. Use after editing a file to keep LSP in sync. Supports unopened files via automatic bootstrap and fail-closed sync.",
+    "description": "Notify the language server that file content has changed. Use after editing a file to keep LSP in sync. By default this does not write to disk; set persist_to_disk=true to atomically persist before syncing LSP.",
     "inputSchema": {
       "properties": {
         "file_path": {
@@ -249,6 +249,10 @@
         "new_content": {
           "description": "Full new content of the file",
           "type": "string"
+        },
+        "persist_to_disk": {
+          "description": "When true, atomically write new_content to file_path before notifying LSP (default: false)",
+          "type": "boolean"
         },
         "version": {
           "description": "Document version (increment each change, default: 2)",

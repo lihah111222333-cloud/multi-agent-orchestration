@@ -1,58 +1,69 @@
 package lsp
 
-import (
-	"encoding/json"
-	"strings"
-)
+import "encoding/json"
+
+type lspCodeActionParam struct {
+	FilePath  string   `json:"file_path"`
+	Line      *int     `json:"line"`
+	Column    *int     `json:"column"`
+	EndLine   *int     `json:"end_line"`
+	EndColumn *int     `json:"end_column"`
+	Only      []string `json:"only"`
+}
+
+type lspSignatureHelpParam struct {
+	FilePath string `json:"file_path"`
+	Line     *int   `json:"line"`
+	Column   *int   `json:"column"`
+}
+
+type lspFormatParam struct {
+	FilePath     string `json:"file_path"`
+	TabSize      *int   `json:"tab_size"`
+	InsertSpaces *bool  `json:"insert_spaces"`
+}
 
 // CodeAction gets code actions at a range.
 func (h *ToolHandlers) CodeAction(args json.RawMessage) string {
 	if h.managerUnavailable() {
 		return "error: lsp manager unavailable"
 	}
-
-	var p struct {
-		FilePath  string   `json:"file_path"`
-		Line      *int     `json:"line"`
-		Column    *int     `json:"column"`
-		EndLine   *int     `json:"end_line"`
-		EndColumn *int     `json:"end_column"`
-		Only      []string `json:"only"`
+	params, err := decodeArgs[lspCodeActionParam](args)
+	if err != nil {
+		return toolError(err)
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
+	filePath, err := requireFilePath(params.FilePath)
+	if err != nil {
+		return toolError(err)
 	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
+	line, err := requireIntParam("line", params.Line)
+	if err != nil {
+		return toolError(err)
 	}
-	if p.Line == nil {
-		return "error: line is required"
+	column, err := requireIntParam("column", params.Column)
+	if err != nil {
+		return toolError(err)
 	}
-	if p.Column == nil {
-		return "error: column is required"
-	}
-	if *p.Line < 0 || *p.Column < 0 {
-		return "error: line and column must be >= 0"
+	if err := requireNonNegativePosition(line, column); err != nil {
+		return toolError(err)
 	}
 
 	endLine := -1
-	if p.EndLine != nil {
-		endLine = *p.EndLine
+	if params.EndLine != nil {
+		endLine = *params.EndLine
 	}
 	endColumn := -1
-	if p.EndColumn != nil {
-		endColumn = *p.EndColumn
+	if params.EndColumn != nil {
+		endColumn = *params.EndColumn
 	}
 
-	result, err := h.manager.CodeAction(p.FilePath, *p.Line, *p.Column, endLine, endColumn, p.Only)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if len(result) == 0 {
-		return "no code action found"
-	}
-	data, _ := json.Marshal(result)
-	return string(data)
+	return runAndMarshal(
+		func() ([]CodeActionResult, error) {
+			return h.manager.CodeAction(filePath, line, column, endLine, endColumn, params.Only)
+		},
+		"no code action found",
+		func(result []CodeActionResult) bool { return len(result) == 0 },
+	)
 }
 
 // SignatureHelp gets signature help at a position.
@@ -60,37 +71,33 @@ func (h *ToolHandlers) SignatureHelp(args json.RawMessage) string {
 	if h.managerUnavailable() {
 		return "error: lsp manager unavailable"
 	}
-
-	var p struct {
-		FilePath string `json:"file_path"`
-		Line     *int   `json:"line"`
-		Column   *int   `json:"column"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
-	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
-	}
-	if p.Line == nil {
-		return "error: line is required"
-	}
-	if p.Column == nil {
-		return "error: column is required"
-	}
-	if *p.Line < 0 || *p.Column < 0 {
-		return "error: line and column must be >= 0"
-	}
-
-	result, err := h.manager.SignatureHelp(p.FilePath, *p.Line, *p.Column)
+	params, err := decodeArgs[lspSignatureHelpParam](args)
 	if err != nil {
-		return "error: " + err.Error()
+		return toolError(err)
 	}
-	if result == nil || len(result.Signatures) == 0 {
-		return "no signature help found"
+	filePath, err := requireFilePath(params.FilePath)
+	if err != nil {
+		return toolError(err)
 	}
-	data, _ := json.Marshal(result)
-	return string(data)
+	line, err := requireIntParam("line", params.Line)
+	if err != nil {
+		return toolError(err)
+	}
+	column, err := requireIntParam("column", params.Column)
+	if err != nil {
+		return toolError(err)
+	}
+	if err := requireNonNegativePosition(line, column); err != nil {
+		return toolError(err)
+	}
+
+	return runAndMarshal(
+		func() (*SignatureHelpResult, error) {
+			return h.manager.SignatureHelp(filePath, line, column)
+		},
+		"no signature help found",
+		func(result *SignatureHelpResult) bool { return result == nil || len(result.Signatures) == 0 },
+	)
 }
 
 // Format returns formatting edits.
@@ -98,35 +105,25 @@ func (h *ToolHandlers) Format(args json.RawMessage) string {
 	if h.managerUnavailable() {
 		return "error: lsp manager unavailable"
 	}
-
-	var p struct {
-		FilePath     string `json:"file_path"`
-		TabSize      *int   `json:"tab_size"`
-		InsertSpaces *bool  `json:"insert_spaces"`
+	params, err := decodeArgs[lspFormatParam](args)
+	if err != nil {
+		return toolError(err)
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "error: " + err.Error()
+	filePath, err := requireFilePath(params.FilePath)
+	if err != nil {
+		return toolError(err)
 	}
-	if strings.TrimSpace(p.FilePath) == "" {
-		return "error: file_path is required"
-	}
-
 	tabSize := 4
-	if p.TabSize != nil {
-		tabSize = *p.TabSize
+	if params.TabSize != nil {
+		tabSize = *params.TabSize
 	}
 	insertSpaces := true
-	if p.InsertSpaces != nil {
-		insertSpaces = *p.InsertSpaces
+	if params.InsertSpaces != nil {
+		insertSpaces = *params.InsertSpaces
 	}
-
-	result, err := h.manager.Format(p.FilePath, tabSize, insertSpaces)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if len(result) == 0 {
-		return "no formatting edits"
-	}
-	data, _ := json.Marshal(result)
-	return string(data)
+	return runAndMarshal(
+		func() ([]TextEdit, error) { return h.manager.Format(filePath, tabSize, insertSpaces) },
+		"no formatting edits",
+		func(result []TextEdit) bool { return len(result) == 0 },
+	)
 }

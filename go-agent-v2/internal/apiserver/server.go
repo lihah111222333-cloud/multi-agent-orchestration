@@ -20,7 +20,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -57,19 +56,15 @@ const (
 // Server JSON-RPC WebSocket 服务器。
 type Server struct {
 	// ========================================
-	// 锁职责说明
+	// 状态分组说明
 	// ========================================
-	// 以下锁保护各自独立的数据, 不存在嵌套获取关系。
-	// mu:           conns map (WebSocket 连接管理)
-	// pendingMu:    pending map (Server→Client 请求跟踪)
-	// diagMu:       diagCache (LSP 诊断缓存)
-	// toolCallMu:   toolCallCount (工具调用计数)
-	// codeRunMu:    activeCodeRuns (code_run 执行上下文取消函数)
-	// agentWorkDirMu: agentWorkDirs (agent 默认工作目录)
-	// fileChangeMu: fileChangeByThread (文件变更跟踪)
-	// sseMu:        sseClients (SSE 推送)
-	// notifyHookMu: notifyHook (桌面端通知钩子)
-	// turnMu:       activeTurns (turn 生命周期跟踪)
+	// Server 保留核心依赖与入口, 可变共享状态按职责分组嵌入:
+	// connManagerState:      WebSocket 连接 + Server->Client pending 请求
+	// diagnosticsCacheState: LSP diagnostics 缓存
+	// codeRunState:          code_run 取消句柄 + agent workdir
+	// turnTrackingState:     thread 序号 + 文件变更 + 自动回报跟踪
+	// uiThrottleState:       ui/state/changed 节流
+	// storeBundle:           资源/仪表盘/绑定存储依赖
 	// ========================================
 	mgr        *runner.AgentManager
 	lsp        *lsp.Manager
@@ -85,78 +80,25 @@ type Server struct {
 	submitAgentMessage       func(agentID, prompt string, images, files []string) error
 	lspDiagnosticsQueryTyped func(ctx context.Context, p lspDiagnosticsQueryParams) (any, error)
 
-	// 资源 Store (编排工具依赖)
-	dagStore          *store.TaskDAGStore
-	cmdStore          *store.CommandCardStore
-	promptStore       *store.PromptTemplateStore
-	fileStore         *store.SharedFileStore
-	workspaceRunStore *store.WorkspaceRunStore
-	sysLogStore       *store.SystemLogStore
+	storeBundle
 
-	// Dashboard Store (JSON-RPC dashboard/* 方法)
-	agentStatusStore *store.AgentStatusStore
-	auditLogStore    *store.AuditLogStore
-	aiLogStore       *store.AILogStore
-	busLogStore      *store.BusLogStore
-	taskAckStore     *store.TaskAckStore
-	taskTraceStore   *store.TaskTraceStore
-	skillSvc         *service.SkillService
-	skillsMgr        *skillsruntime.Manager
-	skillsDir        string
-	workspaceMgr     *service.WorkspaceManager
-	prefManager      *uistate.PreferenceManager
-	uiRuntime        *uistate.RuntimeManager
-	threadAliasMu    sync.Mutex
+	skillSvc      *service.SkillService
+	skillsMgr     *skillsruntime.Manager
+	skillsDir     string
+	workspaceMgr  *service.WorkspaceManager
+	prefManager   *uistate.PreferenceManager
+	uiRuntime     *uistate.RuntimeManager
+	threadAliasMu sync.Mutex
 
-	// Agent ↔ Codex Thread 1:1 共生绑定 (根基约束, 不允许绕过)。
-	bindingStore *store.AgentCodexBindingStore
-
-	// 连接管理 (支持多 IDE 同时连接)
-	mu     sync.RWMutex
-	conns  map[string]*connEntry // connID → entry
-	nextID atomic.Int64
-
-	// § 二 Server → Client 请求: 服务端发起请求, 等待客户端响应
-	pendingMu sync.Mutex
-	pending   map[int64]chan *Response // requestID → response channel
-	nextReqID atomic.Int64
-
-	threadSeq atomic.Int64 // thread/start 唯一序号
-
-	// LSP 诊断缓存 (uri → diagnostics)
-	diagMu    sync.RWMutex
-	diagCache map[string][]lsp.Diagnostic
+	connManagerState
+	diagnosticsCacheState
 
 	// 动态工具调用计数 (可观测性)
 	toolCallMu    sync.Mutex
-	toolCallCount map[string]int64 // toolName → count
+	toolCallCount map[string]int64 // toolName -> count
 
-	// code_run 执行上下文管理 (agentID -> runKey -> cancel)。
-	codeRunMu      sync.Mutex
-	activeCodeRuns map[string]map[string]context.CancelFunc
-	codeRunSeq     atomic.Int64
-
-	// agent 默认工作目录缓存 (agentID -> abs cwd)。
-	agentWorkDirMu sync.RWMutex
-	agentWorkDirs  map[string]string
-
-	// 文件变更跟踪 (threadId → 当前变更文件列表)
-	fileChangeMu       sync.Mutex
-	fileChangeByThread map[string][]string
-
-	// turn 生命周期跟踪 (threadId → active turn)
-	turnMu              sync.Mutex
-	activeTurns         map[string]*codexadapter.TrackedTurn
-	turnWatchdogTimeout time.Duration
-	turnSummaryCache    map[string]codexadapter.TrackedTurnSummaryCacheEntry
-	turnSummaryTTL      time.Duration
-	stallThreshold      time.Duration // 无事件多久(秒)触发 stall 自动中断
-	stallHeartbeat      time.Duration // dynamic tool call / 审批等待时的保活心跳间隔
-
-	// 委托消息自动回报跟踪 (workerAgentID -> requesterAgentID -> createdAt)
-	orchestrationReportMu       sync.Mutex
-	orchestrationPendingReports map[string]map[string]time.Time
-	orchestrationReportTTL      time.Duration
+	codeRunState
+	turnTrackingState
 
 	// SSE 客户端 (debug 模式浏览器事件推送)
 	sseMu      sync.RWMutex
@@ -166,9 +108,7 @@ type Server struct {
 	notifyHookMu sync.RWMutex
 	notifyHook   func(method string, params any)
 
-	// ui/state/changed 节流 (key = threadId or agent_id)
-	uiThrottleMu      sync.Mutex
-	uiThrottleEntries map[string]*uiStateThrottleEntry
+	uiThrottleState
 
 	// 审批去重: 防止同一 agentID+method 并发双重处理
 	approvalInFlight sync.Map // key: "agentID:method"
@@ -189,30 +129,34 @@ type Deps struct {
 // New 创建服务器。
 func New(deps Deps) *Server {
 	s := &Server{
-		mgr:                         deps.Manager,
-		lsp:                         deps.LSP,
-		cfg:                         deps.Config,
-		methods:                     make(map[string]Handler),
-		dynTools:                    make(map[string]tooladapter.RuntimeToolHandler),
-		conns:                       make(map[string]*connEntry),
-		pending:                     make(map[int64]chan *Response),
-		diagCache:                   make(map[string][]lsp.Diagnostic),
-		toolCallCount:               make(map[string]int64),
-		activeCodeRuns:              make(map[string]map[string]context.CancelFunc),
-		agentWorkDirs:               make(map[string]string),
-		fileChangeByThread:          make(map[string][]string),
-		activeTurns:                 make(map[string]*codexadapter.TrackedTurn),
-		turnWatchdogTimeout:         defaultTurnWatchdogTimeout,
-		stallThreshold:              defaultStallThreshold,
-		stallHeartbeat:              defaultStallHeartbeat,
-		turnSummaryCache:            make(map[string]codexadapter.TrackedTurnSummaryCacheEntry),
-		turnSummaryTTL:              defaultTrackedTurnSummaryTTL,
-		orchestrationPendingReports: make(map[string]map[string]time.Time),
-		orchestrationReportTTL:      defaultOrchestrationReportTTL,
-		sseClients:                  make(map[chan []byte]struct{}),
-		prefManager:                 uistate.NewPreferenceManager(nil),
-		uiRuntime:                   uistate.NewRuntimeManager(),
-		uiThrottleEntries:           make(map[string]*uiStateThrottleEntry),
+		mgr:           deps.Manager,
+		lsp:           deps.LSP,
+		cfg:           deps.Config,
+		methods:       make(map[string]Handler),
+		dynTools:      make(map[string]tooladapter.RuntimeToolHandler),
+		toolCallCount: make(map[string]int64),
+		connManagerState: connManagerState{
+			conns:   make(map[string]*connEntry),
+			pending: make(map[int64]chan *Response),
+		},
+		diagnosticsCacheState: diagnosticsCacheState{
+			diagCache: make(map[string][]lsp.Diagnostic),
+		},
+		codeRunState: codeRunState{
+			activeCodeRuns: make(map[string]map[string]context.CancelFunc),
+			agentWorkDirs:  make(map[string]string),
+		},
+		turnTrackingState: turnTrackingState{
+			fileChangeByThread:          make(map[string][]string),
+			orchestrationPendingReports: make(map[string]map[string]time.Time),
+			orchestrationReportTTL:      defaultOrchestrationReportTTL,
+		},
+		sseClients:  make(map[chan []byte]struct{}),
+		prefManager: uistate.NewPreferenceManager(nil),
+		uiRuntime:   uistate.NewRuntimeManager(),
+		uiThrottleState: uiThrottleState{
+			uiThrottleEntries: make(map[string]*uiStateThrottleEntry),
+		},
 		upgrader: websocket.Upgrader{
 			CheckOrigin: checkLocalOrigin,
 		},
@@ -220,18 +164,7 @@ func New(deps Deps) *Server {
 	if s.mgr != nil {
 		s.submitAgentMessage = s.mgr.Submit
 	}
-	s.codexAdapter = codexadapter.New(codexadapter.Deps{
-		Context: s,
-		Tracker: codexadapter.TurnTrackerState{
-			Mu:                  &s.turnMu,
-			ActiveTurns:         &s.activeTurns,
-			TurnWatchdogTimeout: &s.turnWatchdogTimeout,
-			TurnSummaryCache:    &s.turnSummaryCache,
-			TurnSummaryTTL:      &s.turnSummaryTTL,
-			StallThreshold:      &s.stallThreshold,
-			StallHeartbeat:      &s.stallHeartbeat,
-		},
-	})
+	s.codexAdapter = codexadapter.New(s)
 	s.commonAdapter = commonadapter.New()
 	s.lspTools = lsp.NewToolHandlers(s.lsp, s)
 	s.lspDiagnosticsQueryTyped = func(_ context.Context, p lspDiagnosticsQueryParams) (any, error) {
@@ -292,10 +225,10 @@ func New(deps Deps) *Server {
 	// 从 Config 加载 stall 参数
 	if deps.Config != nil {
 		if deps.Config.StallThresholdSec > 0 {
-			s.stallThreshold = time.Duration(deps.Config.StallThresholdSec) * time.Second
+			s.codexAdapter.SetStallThreshold(time.Duration(deps.Config.StallThresholdSec) * time.Second)
 		}
 		if deps.Config.StallHeartbeatSec > 0 {
-			s.stallHeartbeat = time.Duration(deps.Config.StallHeartbeatSec) * time.Second
+			s.codexAdapter.SetStallHeartbeat(time.Duration(deps.Config.StallHeartbeatSec) * time.Second)
 		}
 	}
 

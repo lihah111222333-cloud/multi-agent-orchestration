@@ -6,12 +6,9 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
-	"regexp"
 
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
-
-var codexThreadIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 const (
 	// DB-only: 无内置默认提示词，未配置 settings.lspUsagePromptHint 时不注入。

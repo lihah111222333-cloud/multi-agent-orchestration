@@ -4,28 +4,18 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
-	"strings"
+
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 )
 
+// isLikelyCodexThreadID delegates to codexadapter (single canonical impl).
 func isLikelyCodexThreadID(raw string) bool {
-	id := strings.TrimSpace(raw)
-	if id == "" {
-		return false
-	}
-	id = strings.TrimPrefix(strings.ToLower(id), "urn:uuid:")
-	return codexThreadIDPattern.MatchString(id)
+	return codexadapter.IsLikelyCodexThreadID(raw)
 }
 
+// normalizeCodexThreadID delegates to codexadapter (single canonical impl).
 func normalizeCodexThreadID(raw string) string {
-	id := strings.TrimSpace(raw)
-	if id == "" {
-		return ""
-	}
-	id = strings.TrimPrefix(strings.ToLower(id), "urn:uuid:")
-	if !codexThreadIDPattern.MatchString(id) {
-		return ""
-	}
-	return id
+	return codexadapter.NormalizeCodexThreadID(raw)
 }
 
 func appendUniqueThreadID(dst []string, seen map[string]struct{}, candidate string) []string {

@@ -59,8 +59,10 @@ func TestDashboardContractsStable(t *testing.T) {
 
 		t.Run("dagKey required", func(t *testing.T) {
 			s := &Server{
-				methods:  make(map[string]Handler),
-				dagStore: &store.TaskDAGStore{},
+				methods: make(map[string]Handler),
+				storeBundle: storeBundle{
+					dagStore: &store.TaskDAGStore{},
+				},
 			}
 			s.registerDashboardMethods()
 
@@ -74,8 +76,10 @@ func TestDashboardContractsStable(t *testing.T) {
 
 		t.Run("unmarshal params", func(t *testing.T) {
 			s := &Server{
-				methods:  make(map[string]Handler),
-				dagStore: &store.TaskDAGStore{},
+				methods: make(map[string]Handler),
+				storeBundle: storeBundle{
+					dagStore: &store.TaskDAGStore{},
+				},
 			}
 			s.registerDashboardMethods()
 

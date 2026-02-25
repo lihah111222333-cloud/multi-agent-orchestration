@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -46,12 +47,16 @@ func (s *Server) uiPreferencesSet(ctx context.Context, p uiPrefSetParams) (any, 
 	switch p.Key {
 	case "stallThresholdSec":
 		if sec := asPositiveInt(p.Value, 30); sec > 0 {
-			s.stallThreshold = time.Duration(sec) * time.Second
+			if s.codexAdapter != nil {
+				s.codexAdapter.SetStallThreshold(time.Duration(sec) * time.Second)
+			}
 			logger.Info("stall threshold updated via ui/preferences/set", "seconds", sec)
 		}
 	case "stallHeartbeatSec":
 		if sec := asPositiveInt(p.Value, 10); sec > 0 {
-			s.stallHeartbeat = time.Duration(sec) * time.Second
+			if s.codexAdapter != nil {
+				s.codexAdapter.SetStallHeartbeat(time.Duration(sec) * time.Second)
+			}
 			logger.Info("stall heartbeat updated via ui/preferences/set", "seconds", sec)
 		}
 	case prefKeyShowInjectedPromptInChat:
@@ -317,46 +322,9 @@ func loadThreadAliasesFromPrefs(prefs map[string]any) map[string]string {
 	return normalizeThreadAliases(prefs[prefThreadAliases])
 }
 
+// normalizeThreadAliases delegates to codexadapter.NormalizeThreadAliases (single canonical impl).
 func normalizeThreadAliases(value any) map[string]string {
-	aliases := map[string]string{}
-	addAlias := func(threadID string, alias any) {
-		id := strings.TrimSpace(threadID)
-		if id == "" {
-			return
-		}
-		name := strings.TrimSpace(asString(alias))
-		if name == "" || name == id {
-			return
-		}
-		aliases[id] = name
-	}
-
-	switch typed := value.(type) {
-	case map[string]string:
-		for threadID, alias := range typed {
-			addAlias(threadID, alias)
-		}
-	case map[string]any:
-		for threadID, alias := range typed {
-			addAlias(threadID, alias)
-		}
-	case string:
-		decoded := map[string]any{}
-		if err := json.Unmarshal([]byte(strings.TrimSpace(typed)), &decoded); err == nil {
-			for threadID, alias := range decoded {
-				addAlias(threadID, alias)
-			}
-		}
-	case json.RawMessage:
-		decoded := map[string]any{}
-		if err := json.Unmarshal(typed, &decoded); err == nil {
-			for threadID, alias := range decoded {
-				addAlias(threadID, alias)
-			}
-		}
-	}
-
-	return aliases
+	return codexadapter.NormalizeThreadAliases(value)
 }
 
 func applyThreadAliases(threads []contracts.ThreadListItem, aliases map[string]string) {

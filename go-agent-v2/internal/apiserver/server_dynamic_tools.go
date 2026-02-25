@@ -13,7 +13,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
 	"github.com/multi-agent/go-agent-v2/internal/tooladapter"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
-	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 func defaultSkillsCacheDir() string {
@@ -157,29 +156,9 @@ func (s *Server) SetupLSP(rootDir string) {
 
 // handleDynamicToolCall 处理 codex 发回的动态工具调用 — 调 LSP 并回传结果。
 func (s *Server) handleDynamicToolCall(agentID string, event agentcore.Event) {
-	// 心跳: 防止 stall 检测在等待 tool 执行期间误杀
-	// 使用 stallThreshold/6 而非 stallHeartbeat，确保在 stall 阈值内多次 touch。
-	heartbeatDone := make(chan struct{})
-	defer close(heartbeatDone)
-	hbInterval := s.stallThreshold / 6
-	if hbInterval <= 0 {
-		hbInterval = defaultStallThreshold / 6
-	}
-	if hbInterval < 10*time.Second {
-		hbInterval = 10 * time.Second
-	}
-	util.SafeGo(func() {
-		ticker := time.NewTicker(hbInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				s.codexAdapter.TouchTrackedTurnLastEvent(agentID)
-			case <-heartbeatDone:
-				return
-			}
-		}
-	})
+	// 心跳: 防止 stall 检测在等待 tool 执行期间误杀。
+	stopHeartbeat := s.codexAdapter.StartDynamicToolStallHeartbeat(agentID)
+	defer stopHeartbeat()
 
 	// 先查找 proc — 后续的所有错误路径都需要通过 codexAdapter 回传错误。
 	proc := s.mgr.Get(agentID)

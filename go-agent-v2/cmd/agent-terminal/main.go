@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver"
 	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/config"
@@ -369,7 +370,10 @@ func setupDatabase(ctx context.Context, cfg *config.Config) *pgxpool.Pool {
 
 // setupAppServer 创建 apiserver + runner manager 并启动监听。
 func setupAppServer(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, addr string) (*apiserver.Server, *runner.AgentManager) {
-	mgr, err := runner.NewAgentManager(codex.NewAppServerClient, codex.NewClient)
+	mgr, err := runner.NewAgentManager(
+		func(port int, id string) agentcore.Client { return codex.NewAppServerClient(port, id) },
+		func(port int, id string) agentcore.Client { return codex.NewClient(port, id) },
+	)
 	if err != nil {
 		logger.Fatal("runner manager init failed", logger.FieldError, err)
 	}

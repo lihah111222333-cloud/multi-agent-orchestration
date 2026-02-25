@@ -47,10 +47,6 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	// 优雅关闭: 给活跃连接 5 秒完成处理
 	util.SafeGo(func() {
 		<-runCtx.Done()
-		if ctx.Err() == nil {
-			return
-		}
-		logger.Info("app-server: shutdown trigger", "ctx_err", ctx.Err())
 		logger.Info("app-server: shutting down")
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
@@ -80,4 +76,3 @@ func (s *Server) cleanupRuntimeResources() {
 		clearAllAgentWorkDirsState(s)
 	})
 }
-

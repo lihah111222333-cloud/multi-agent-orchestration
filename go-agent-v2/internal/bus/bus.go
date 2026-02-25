@@ -222,6 +222,7 @@ type MessageBus struct {
 	mu          sync.RWMutex
 	subscribers map[string]*Subscriber // key = subscriber ID
 	seq         atomic.Int64           // 全局序列号 (原子操作, 无需持锁)
+	dropped     atomic.Int64           // 累计丢弃消息数 (通道满时递增)
 	onPublish   func(Message)          // 可选: 每条消息的全局回调 (用于桥接 SSE/日志)
 }
 
@@ -271,6 +272,7 @@ func (b *MessageBus) Publish(msg Message) {
 		case sub.Ch <- msg:
 		default:
 			// 通道满, 丢弃 (避免阻塞发布者)
+			b.dropped.Add(1)
 			logger.Warn("bus: subscriber channel full, message dropped",
 				logger.FieldSubscriber, sub.ID,
 				logger.FieldTopic, msg.Topic,
@@ -319,6 +321,13 @@ func (b *MessageBus) SubscriberCount() int {
 // Seq 返回当前序列号 (原子读, 无锁)。
 func (b *MessageBus) Seq() int64 {
 	return b.seq.Load()
+}
+
+// Dropped 返回累计丢弃消息数 (原子读, 无锁)。
+//
+// 可用于健康检查或 metrics 上报: 若 Dropped() 持续增长, 说明订阅者消费速度不足。
+func (b *MessageBus) Dropped() int64 {
+	return b.dropped.Load()
 }
 
 // ========================================

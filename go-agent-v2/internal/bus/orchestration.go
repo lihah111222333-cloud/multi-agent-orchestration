@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 // RunState 单个编排任务运行的状态。
@@ -146,7 +148,14 @@ func (o *OrchestrationState) publishEvent(event, runID, source string, extra map
 	for k, v := range extra {
 		payload[k] = v
 	}
-	data, _ := json.Marshal(payload)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		logger.Warn("orchestration: event marshal failed",
+			"event", event,
+			logger.FieldError, err,
+		)
+		return
+	}
 
 	o.bus.Publish(Message{
 		Topic:   TopicOrchestration + "." + event,

@@ -28,7 +28,10 @@ func main() {
 	logger.Init(cfg.LogLevel)
 
 	// Runner (Agent 进程管理)
-	mgr, err := runner.NewAgentManager(codex.NewAppServerClient, codex.NewClient)
+	mgr, err := runner.NewAgentManager(
+		func(port int, id string) agentcore.Client { return codex.NewAppServerClient(port, id) },
+		func(port int, id string) agentcore.Client { return codex.NewClient(port, id) },
+	)
 	if err != nil {
 		logger.Fatal("runner manager init failed", logger.FieldError, err)
 	}

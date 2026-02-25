@@ -59,6 +59,14 @@ type BaseStore struct{ pool *pgxpool.Pool }
 // NewBaseStore 创建 BaseStore。
 func NewBaseStore(pool *pgxpool.Pool) BaseStore { return BaseStore{pool: pool} }
 
+// sanitizeCol 消毒 SQL 列名，防止注入。
+//
+// QueryBuilder 的 Eq/Gte/KeywordLike 使用此函数，与 DeleteByKey/SetEnabledByKey 中
+// 的 pgx.Identifier{}.Sanitize() 保持一致。
+func sanitizeCol(col string) string {
+	return pgx.Identifier{col}.Sanitize()
+}
+
 // ========================================
 // QueryBuilder — 动态 WHERE 子句构造
 // ========================================
@@ -82,7 +90,7 @@ func (q *QueryBuilder) Eq(col, val string) *QueryBuilder {
 		return q
 	}
 	q.n++
-	q.where = append(q.where, fmt.Sprintf("%s = $%d", col, q.n))
+	q.where = append(q.where, fmt.Sprintf("%s = $%d", sanitizeCol(col), q.n))
 	q.params = append(q.params, val)
 	return q
 }
@@ -97,7 +105,7 @@ func (q *QueryBuilder) KeywordLike(keyword string, cols ...string) *QueryBuilder
 	parts := make([]string, 0, len(cols))
 	for _, c := range cols {
 		q.n++
-		parts = append(parts, fmt.Sprintf("LOWER(%s) LIKE $%d ESCAPE E'\\\\'", c, q.n))
+		parts = append(parts, fmt.Sprintf("LOWER(%s) LIKE $%d ESCAPE E'\\\\'", sanitizeCol(c), q.n))
 		q.params = append(q.params, kw)
 	}
 	q.where = append(q.where, "("+strings.Join(parts, " OR ")+")")
@@ -110,7 +118,7 @@ func (q *QueryBuilder) Gte(col string, val any) *QueryBuilder {
 		return q
 	}
 	q.n++
-	q.where = append(q.where, fmt.Sprintf("%s >= $%d", col, q.n))
+	q.where = append(q.where, fmt.Sprintf("%s >= $%d", sanitizeCol(col), q.n))
 	q.params = append(q.params, val)
 	return q
 }

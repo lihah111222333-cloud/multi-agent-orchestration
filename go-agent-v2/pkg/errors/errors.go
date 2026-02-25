@@ -45,7 +45,6 @@ var (
 // 对应 wjboot-v2 EngineError，但更通用。
 type AppError struct {
 	Op      string // 操作名，如 "Store.CreateInteraction"
-	Code    string // 错误码，如 "DB_ERROR"、"VALIDATION"
 	Message string // 人类可读消息
 	Err     error  // 原始错误
 }

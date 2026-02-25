@@ -14,7 +14,7 @@ const (
 	defaultOrchestrationReportTTL = tools.DefaultOrchestrationReportTTL
 )
 
-func (s *Server) SubmitPrompt(agentID, prompt string, images, files []string) error {
+func submitPrompt(s *Server, agentID, prompt string, images, files []string) error {
 	if s == nil {
 		return apperrors.New("Server.submitAgentPrompt", "server is nil")
 	}
@@ -27,7 +27,10 @@ func (s *Server) SubmitPrompt(agentID, prompt string, images, files []string) er
 	return s.mgr.Submit(agentID, prompt, images, files)
 }
 
-func (s *Server) RememberReportRequest(senderID, workerID string) {
+func rememberReportRequest(s *Server, senderID, workerID string) {
+	if s == nil {
+		return
+	}
 	requester := strings.TrimSpace(senderID)
 	target := strings.TrimSpace(workerID)
 	if requester == "" || target == "" || strings.EqualFold(requester, target) {
@@ -36,25 +39,18 @@ func (s *Server) RememberReportRequest(senderID, workerID string) {
 
 	now := time.Now()
 
-	s.orchestrationReportMu.Lock()
-	defer s.orchestrationReportMu.Unlock()
-	s.ensureOrchestrationReportStateLocked()
-	s.pruneOrchestrationReportRequestsLocked(now)
-
-	waiters := s.orchestrationPendingReports[target]
-	if waiters == nil {
-		waiters = make(map[string]time.Time)
-		s.orchestrationPendingReports[target] = waiters
+	waiterCount := s.turnTrackingState.rememberReportRequester(target, requester, now)
+	if waiterCount == 0 {
+		return
 	}
-	waiters[requester] = now
 	logger.Info("orchestration: report waiter registered",
 		"worker", target,
 		"requester", requester,
-		"waiter_count", len(waiters),
+		"waiter_count", waiterCount,
 	)
 }
 
-func (s *Server) maybeAutoReportOrchestrationCompletion(agentID, eventType, method string, payload map[string]any) {
+func maybeAutoReportOrchestrationCompletion(s *Server, agentID, eventType, method string, payload map[string]any) {
 	workerID := strings.TrimSpace(agentID)
 	if workerID == "" {
 		return
@@ -68,7 +64,7 @@ func (s *Server) maybeAutoReportOrchestrationCompletion(agentID, eventType, meth
 		return
 	}
 
-	requesters := s.takeOrchestrationReportRequesters(workerID)
+	requesters := takeOrchestrationReportRequesters(s, workerID)
 	if len(requesters) == 0 {
 		return
 	}
@@ -80,7 +76,7 @@ func (s *Server) maybeAutoReportOrchestrationCompletion(agentID, eventType, meth
 
 	report := tools.BuildOrchestrationCompletionReport(workerID, status, reason, summary)
 	for _, requesterID := range requesters {
-		if err := s.SubmitPrompt(requesterID, report, nil, nil); err != nil {
+		if err := submitPrompt(s, requesterID, report, nil, nil); err != nil {
 			logger.Warn("orchestration: auto report delivery failed",
 				"from", workerID,
 				"to", requesterID,
@@ -92,31 +88,18 @@ func (s *Server) maybeAutoReportOrchestrationCompletion(agentID, eventType, meth
 	}
 }
 
-func (s *Server) takeOrchestrationReportRequesters(workerID string) []string {
+func takeOrchestrationReportRequesters(s *Server, workerID string) []string {
+	if s == nil {
+		return nil
+	}
 	target := strings.TrimSpace(workerID)
 	if target == "" {
 		return nil
 	}
 
-	now := time.Now()
-
-	s.orchestrationReportMu.Lock()
-	defer s.orchestrationReportMu.Unlock()
-	s.ensureOrchestrationReportStateLocked()
-	s.pruneOrchestrationReportRequestsLocked(now)
-
-	waiters := s.orchestrationPendingReports[target]
-	if len(waiters) == 0 {
+	requesters := s.turnTrackingState.takeReportRequesters(target, time.Now())
+	if len(requesters) == 0 {
 		return nil
-	}
-	delete(s.orchestrationPendingReports, target)
-
-	requesters := make([]string, 0, len(waiters))
-	for requesterID := range waiters {
-		id := strings.TrimSpace(requesterID)
-		if id != "" {
-			requesters = append(requesters, id)
-		}
 	}
 	sort.Strings(requesters)
 	logger.Info("orchestration: report waiters drained",
@@ -124,33 +107,4 @@ func (s *Server) takeOrchestrationReportRequesters(workerID string) []string {
 		"requester_count", len(requesters),
 	)
 	return requesters
-}
-
-func (s *Server) ensureOrchestrationReportStateLocked() {
-	if s.orchestrationPendingReports == nil {
-		s.orchestrationPendingReports = make(map[string]map[string]time.Time)
-	}
-	if s.orchestrationReportTTL <= 0 {
-		s.orchestrationReportTTL = defaultOrchestrationReportTTL
-	}
-}
-
-func (s *Server) pruneOrchestrationReportRequestsLocked(now time.Time) {
-	ttl := s.orchestrationReportTTL
-	if ttl <= 0 {
-		ttl = defaultOrchestrationReportTTL
-		s.orchestrationReportTTL = ttl
-	}
-	cutoff := now.Add(-ttl)
-
-	for workerID, waiters := range s.orchestrationPendingReports {
-		for requesterID, createdAt := range waiters {
-			if createdAt.Before(cutoff) {
-				delete(waiters, requesterID)
-			}
-		}
-		if len(waiters) == 0 {
-			delete(s.orchestrationPendingReports, workerID)
-		}
-	}
 }

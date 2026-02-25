@@ -77,7 +77,7 @@ type commandExecResponse struct {
 	Stderr   string `json:"stderr"`
 }
 
-func (s *Server) commandExecTyped(ctx context.Context, p commandExecParams) (any, error) {
+func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any, error) {
 	if len(p.Argv) == 0 {
 		return nil, apperrors.New("Server.commandExec", "argv is required")
 	}

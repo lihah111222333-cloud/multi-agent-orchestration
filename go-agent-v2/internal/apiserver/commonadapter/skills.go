@@ -12,11 +12,6 @@ import (
 var inlineCodeTokenPattern = regexp.MustCompile("`([^`\\n]+)`")
 
 // CollectSkillNameSet normalizes a string list into lowercase unique set.
-func (a *Adapter) CollectSkillNameSet(raw []string) map[string]struct{} {
-	return CollectSkillNameSet(raw)
-}
-
-// CollectSkillNameSet normalizes a string list into lowercase unique set.
 func CollectSkillNameSet(raw []string) map[string]struct{} {
 	if len(raw) == 0 {
 		return nil
@@ -30,11 +25,6 @@ func CollectSkillNameSet(raw []string) map[string]struct{} {
 		set[name] = struct{}{}
 	}
 	return set
-}
-
-// LowerMatchedTerms filters trigger terms that are included in prompt text.
-func (a *Adapter) LowerMatchedTerms(text string, candidates []string) []string {
-	return LowerMatchedTerms(text, candidates)
 }
 
 // LowerMatchedTerms filters trigger terms that are included in prompt text.
@@ -63,11 +53,6 @@ func LowerMatchedTerms(text string, candidates []string) []string {
 		return nil
 	}
 	return terms
-}
-
-// ExplicitSkillMentionTerms extracts explicit @skill and [skill:*] mentions.
-func (a *Adapter) ExplicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords []string) []string {
-	return ExplicitSkillMentionTerms(normalizedPrompt, skillName, triggerWords)
 }
 
 // ExplicitSkillMentionTerms extracts explicit @skill and [skill:*] mentions.
@@ -112,11 +97,6 @@ func ExplicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords 
 }
 
 // ClassifyAutoSkillMatch classifies prompt/skill match source and matched terms.
-func (a *Adapter) ClassifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
-	return ClassifyAutoSkillMatch(normalizedPrompt, skillName, forceWords, triggerWords)
-}
-
-// ClassifyAutoSkillMatch classifies prompt/skill match source and matched terms.
 func ClassifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
 	forceTerms := LowerMatchedTerms(normalizedPrompt, forceWords)
 	if len(forceTerms) > 0 {
@@ -131,11 +111,6 @@ func ClassifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, trig
 		return "trigger", triggerTerms
 	}
 	return "", nil
-}
-
-// ForceMatchedSkillInstruction builds instruction prefix for force-matched skills.
-func (a *Adapter) ForceMatchedSkillInstruction(matchedTerms []string) string {
-	return ForceMatchedSkillInstruction(matchedTerms)
 }
 
 // ForceMatchedSkillInstruction builds instruction prefix for force-matched skills.
@@ -155,18 +130,8 @@ func ForceMatchedSkillInstruction(matchedTerms []string) string {
 }
 
 // NormalizeSkillName validates skill name.
-func (a *Adapter) NormalizeSkillName(raw string) (string, error) {
-	return NormalizeSkillName(raw)
-}
-
-// NormalizeSkillName validates skill name.
 func NormalizeSkillName(raw string) (string, error) {
 	return skillutil.NormalizeName(raw)
-}
-
-// NormalizeSkillNames deduplicates and validates skill name list.
-func (a *Adapter) NormalizeSkillNames(rawNames []string) ([]string, error) {
-	return NormalizeSkillNames(rawNames)
 }
 
 // NormalizeSkillNames deduplicates and validates skill name list.
@@ -189,11 +154,6 @@ func NormalizeSkillNames(rawNames []string) ([]string, error) {
 		names = append(names, name)
 	}
 	return names, nil
-}
-
-// CollectReferencedLSPToolNames extracts referenced lsp_* tool names from markdown inline code.
-func (a *Adapter) CollectReferencedLSPToolNames(hint string) []string {
-	return CollectReferencedLSPToolNames(hint)
 }
 
 // CollectReferencedLSPToolNames extracts referenced lsp_* tool names from markdown inline code.

@@ -4,8 +4,6 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -114,8 +112,11 @@ func checkLocalOrigin(r *http.Request) bool {
 //
 // 用于 Wails UI 等 Go 进程内客户端直接调用后端功能。
 // 复用 dispatchRequest 统一分发逻辑 (DRY)。
-func (s *Server) InvokeMethod(ctx context.Context, method string, params json.RawMessage) (any, error) {
-	resp := s.dispatchRequest(ctx, 1, method, params)
+func InvokeMethod(s *Server, ctx context.Context, method string, params json.RawMessage) (any, error) {
+	if s == nil {
+		return nil, pkgerr.New("Server.InvokeMethod", "server is nil")
+	}
+	resp := dispatchRequest(s, ctx, 1, method, params)
 	if resp == nil {
 		return nil, nil
 	}
@@ -125,10 +126,11 @@ func (s *Server) InvokeMethod(ctx context.Context, method string, params json.Ra
 	return resp.Result, nil
 }
 
-func (s *Server) broadcastNotification(method string, params any) {
-	s.notifyHookMu.RLock()
-	hook := s.notifyHook
-	s.notifyHookMu.RUnlock()
+func broadcastNotification(s *Server, method string, params any) {
+	if s == nil {
+		return
+	}
+	hook := s.notifyHookState.hook()
 	if hook != nil {
 		hook(method, params)
 	}
@@ -141,11 +143,10 @@ func (s *Server) broadcastNotification(method string, params any) {
 	}
 
 	// SSE 广播 — 将事件推给浏览器调试客户端
-	s.sseMu.RLock()
-	sseCount := len(s.sseClients)
-	if sseCount > 0 {
-		logger.Debug("sse: broadcasting", logger.FieldMethod, method, "clients", sseCount, logger.FieldDataLen, len(data))
-		for ch := range s.sseClients {
+	clients := s.sseState.snapshotClients()
+	if len(clients) > 0 {
+		logger.Debug("sse: broadcasting", logger.FieldMethod, method, "clients", len(clients), logger.FieldDataLen, len(data))
+		for _, ch := range clients {
 			select {
 			case ch <- data:
 			default:
@@ -154,18 +155,17 @@ func (s *Server) broadcastNotification(method string, params any) {
 			}
 		}
 	}
-	s.sseMu.RUnlock()
 
-	s.mu.RLock()
-	snapshot := make(map[string]*connEntry, len(s.conns))
-	maps.Copy(snapshot, s.conns)
-	s.mu.RUnlock()
+	snapshot := s.connManagerState.connsSnapshot()
 	for id, entry := range snapshot {
-		s.enqueueConnMessage(id, entry, websocket.TextMessage, data, "notify_backpressure")
+		enqueueConnMessage(s, id, entry, websocket.TextMessage, data, "notify_backpressure")
 	}
 }
 
-func (s *Server) enqueueConnMessage(connID string, entry *connEntry, msgType int, data []byte, reason string) bool {
+func enqueueConnMessage(s *Server, connID string, entry *connEntry, msgType int, data []byte, reason string) bool {
+	if s == nil {
+		return false
+	}
 	if entry == nil {
 		return false
 	}
@@ -178,21 +178,19 @@ func (s *Server) enqueueConnMessage(connID string, entry *connEntry, msgType int
 		"outbox_depth", entry.outboxDepth(),
 		"outbox_cap", connOutboxSize,
 	)
-	s.disconnectConn(connID)
+	disconnectConn(s, connID)
 	return false
 }
 
-func (s *Server) disconnectConn(connID string) {
+func disconnectConn(s *Server, connID string) {
+	if s == nil {
+		return
+	}
 	id := strings.TrimSpace(connID)
 	if id == "" {
 		return
 	}
-	s.mu.Lock()
-	entry, ok := s.conns[id]
-	if ok {
-		delete(s.conns, id)
-	}
-	s.mu.Unlock()
+	entry, ok := s.connManagerState.removeConn(id)
 	if ok && entry != nil {
 		entry.closeNow()
 	}
@@ -202,8 +200,12 @@ func (s *Server) disconnectConn(connID string) {
 //
 // 用于 approval 流程: requestApproval → client 审批 → 返回结果。
 // 超时 5 分钟 (用户审批需要时间)。
-func (s *Server) SendRequest(connID, method string, params any) (*Response, error) {
-	reqID := s.nextReqID.Add(1)
+func sendRequest(s *Server, connID, method string, params any) (*Response, error) {
+	if s == nil {
+		return nil, pkgerr.New("Server.SendRequest", "server is nil")
+	}
+	reqID, ch, cleanupPending := s.connManagerState.allocPendingRequest()
+	defer cleanupPending()
 
 	req := Request{
 		JSONRPC: jsonrpcVersion,
@@ -223,27 +225,13 @@ func (s *Server) SendRequest(connID, method string, params any) (*Response, erro
 		return nil, pkgerr.Wrap(err, "Server.SendRequest", "marshal request")
 	}
 
-	// 创建 response channel
-	ch := make(chan *Response, 1)
-	s.pendingMu.Lock()
-	s.pending[reqID] = ch
-	s.pendingMu.Unlock()
-
-	defer func() {
-		s.pendingMu.Lock()
-		delete(s.pending, reqID)
-		s.pendingMu.Unlock()
-	}()
-
 	// 发送到指定连接
-	s.mu.RLock()
-	entry, ok := s.conns[connID]
-	s.mu.RUnlock()
+	entry, ok := s.connManagerState.getConn(connID)
 	if !ok {
 		return nil, pkgerr.Newf("Server.SendRequest", "connection %s not found", connID)
 	}
 
-	if !s.enqueueConnMessage(connID, entry, websocket.TextMessage, data, "server_request_backpressure") {
+	if !enqueueConnMessage(s, connID, entry, websocket.TextMessage, data, "server_request_backpressure") {
 		return nil, pkgerr.Newf("Server.SendRequest", "connection %s overloaded; retry later", connID)
 	}
 
@@ -263,19 +251,15 @@ func (s *Server) SendRequest(connID, method string, params any) (*Response, erro
 // SendRequestToAll 向所有连接广播 Server→Client 请求, 返回第一个响应。
 //
 // 适用于只有一个 IDE 连接的场景。
-func (s *Server) SendRequestToAll(method string, params any) (*Response, error) {
-	s.mu.RLock()
-	var firstConn string
-	for id := range s.conns {
-		firstConn = id
-		break
+func sendRequestToAll(s *Server, method string, params any) (*Response, error) {
+	if s == nil {
+		return nil, pkgerr.New("Server.SendRequestToAll", "server is nil")
 	}
-	s.mu.RUnlock()
-
+	firstConn := s.connManagerState.firstConnID()
 	if firstConn == "" {
 		return nil, pkgerr.New("Server.SendRequestToAll", "no connected clients")
 	}
-	return s.SendRequest(firstConn, method, params)
+	return sendRequest(s, firstConn, method, params)
 }
 
 // ResolvePendingRequest 由 Wails 前端调用, 将审批结果注入 pending channel。
@@ -288,13 +272,8 @@ func (s *Server) SendRequestToAll(method string, params any) (*Response, error) 
 //   - result: 审批结果 (如 {"approved": true})
 //
 // 返回 true 表示找到对应 pending 请求并已投递。
-func (s *Server) ResolvePendingRequest(reqID int64, result map[string]any) bool {
-	s.pendingMu.Lock()
-	ch, ok := s.pending[reqID]
-	s.pendingMu.Unlock()
-	if !ok {
-		logger.Warn("app-server: ResolvePendingRequest — no pending request",
-			logger.FieldID, reqID)
+func ResolvePendingRequest(s *Server, reqID int64, result map[string]any) bool {
+	if s == nil {
 		return false
 	}
 	resp := &Response{
@@ -302,16 +281,20 @@ func (s *Server) ResolvePendingRequest(reqID int64, result map[string]any) bool 
 		ID:      reqID,
 		Result:  result,
 	}
-	select {
-	case ch <- resp:
-		logger.Info("app-server: ResolvePendingRequest — delivered",
-			logger.FieldID, reqID)
-		return true
-	default:
-		logger.Warn("app-server: ResolvePendingRequest — channel full",
+	found, delivered := s.connManagerState.deliverPendingResponse(reqID, resp)
+	if !found {
+		logger.Warn("app-server: ResolvePendingRequest — no pending request",
 			logger.FieldID, reqID)
 		return false
 	}
+	if delivered {
+		logger.Info("app-server: ResolvePendingRequest — delivered",
+			logger.FieldID, reqID)
+		return true
+	}
+	logger.Warn("app-server: ResolvePendingRequest — channel full",
+		logger.FieldID, reqID)
+	return false
 }
 
 // AllocPendingRequest 分配一个新的 pending 请求 ID 和等待 channel。
@@ -323,25 +306,20 @@ func (s *Server) ResolvePendingRequest(reqID int64, result map[string]any) bool 
 //   - reqID: 分配的请求 ID
 //   - ch: 等待响应的 channel
 //   - cleanup: 清理函数 (defer 调用)
-func (s *Server) AllocPendingRequest() (reqID int64, ch <-chan *Response, cleanup func()) {
-	id := s.nextReqID.Add(1)
-	respCh := make(chan *Response, 1)
-	s.pendingMu.Lock()
-	s.pending[id] = respCh
-	s.pendingMu.Unlock()
-	cleanupFn := func() {
-		s.pendingMu.Lock()
-		delete(s.pending, id)
-		s.pendingMu.Unlock()
+func allocPendingRequest(s *Server) (reqID int64, ch <-chan *Response, cleanup func()) {
+	if s == nil {
+		return 0, nil, func() {}
 	}
-	return id, respCh, cleanupFn
+	return s.connManagerState.allocPendingRequest()
 }
 
-func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
+func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
+	if s == nil {
+		http.Error(w, "server not ready", http.StatusServiceUnavailable)
+		return
+	}
 	// 连接数限制
-	s.mu.RLock()
-	numConns := len(s.conns)
-	s.mu.RUnlock()
+	numConns := s.connManagerState.connectionCount()
 	if numConns >= maxConnections {
 		http.Error(w, "too many connections", http.StatusServiceUnavailable)
 		logger.Warn("app-server: connection rejected (max reached)", logger.FieldMax, maxConnections)
@@ -357,29 +335,25 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	// 消息大小限制
 	ws.SetReadLimit(maxMessageSize)
 
-	connID := fmt.Sprintf("conn-%d", s.nextID.Add(1))
+	connID := s.connManagerState.allocConnID()
 	entry := newConnEntry(ws)
-	s.mu.Lock()
-	s.conns[connID] = entry
-	s.mu.Unlock()
+	s.connManagerState.addConn(connID, entry)
 	util.SafeGo(func() {
 		if err := entry.writeLoop(); err != nil {
 			logger.Warn("app-server: write loop failed", logger.FieldConn, connID, logger.FieldError, err)
-			s.disconnectConn(connID)
+			disconnectConn(s, connID)
 		}
 	})
 
 	logger.Info("app-server: client connected", logger.FieldConn, connID, logger.FieldRemote, r.RemoteAddr)
 
 	defer func() {
-		s.mu.Lock()
-		delete(s.conns, connID)
-		s.mu.Unlock()
+		s.connManagerState.removeConn(connID)
 		entry.closeNow()
 		logger.Info("app-server: client disconnected", logger.FieldConn, connID)
 	}()
 
-	s.readLoop(r.Context(), entry, connID)
+	readLoop(s, r.Context(), entry, connID)
 }
 
 // rpcEnvelope 统一信封: 一次 Unmarshal 路由所有消息类型。
@@ -452,12 +426,15 @@ func rawIDtoAny(raw json.RawMessage) any {
 //  1. Client→Server 请求 (有 method + id): 路由到 dispatchRequest
 //  2. Client→Server 通知 (有 method, 无 id): 路由到 dispatchRequest
 //  3. Client 对 Server 请求的响应 (有 id, 无 method): 直接匹配 pending map
-func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) {
+func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
+	if s == nil {
+		return
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("app-server: readLoop panicked, disconnecting",
 				logger.FieldConn, connID, logger.FieldError, r)
-			s.disconnectConn(connID)
+			disconnectConn(s, connID)
 		}
 	}()
 	for {
@@ -472,38 +449,41 @@ func (s *Server) readLoop(ctx context.Context, entry *connEntry, connID string) 
 		// 单次 Unmarshal: 路由 + 延迟解析
 		var env rpcEnvelope
 		if err := json.Unmarshal(message, &env); err != nil {
-			_ = s.sendResponseViaOutbox(connID, entry, newError(nil, CodeParseError, "parse error: "+err.Error()), "parse_error_response")
+			_ = sendResponseViaOutbox(s, connID, entry, newError(nil, CodeParseError, "parse error: "+err.Error()), "parse_error_response")
 			continue
 		}
 
 		// 快速路径: 客户端响应 (有 id + 无 method + 有 result/error)
 		// 直接从 raw bytes 解析 int64 ID → pending map 查找, 零 alloc
-		if s.handleClientResponse(env) {
+		if handleClientResponse(s, env) {
 			continue
 		}
 		if env.Method != "" && len(env.ID) > 0 && string(env.ID) != "null" && entry.outboxDepth() >= connBacklogCut {
 			overloaded := newErrorData(rawIDtoAny(env.ID), CodeOverloaded, "Server overloaded; retry later.", map[string]any{
 				"retry_after_ms": 500,
 			})
-			if !s.sendResponseViaOutbox(connID, entry, overloaded, "request_overloaded") {
+			if !sendResponseViaOutbox(s, connID, entry, overloaded, "request_overloaded") {
 				return
 			}
 			continue
 		}
 
 		// 正常请求/通知: 复用已解析的字段
-		resp := s.handleParsedMessage(ctx, env)
+		resp := handleParsedMessage(s, ctx, env)
 		if resp == nil {
 			continue
 		}
 
-		if !s.sendResponseViaOutbox(connID, entry, resp, "request_response") {
+		if !sendResponseViaOutbox(s, connID, entry, resp, "request_response") {
 			return
 		}
 	}
 }
 
-func (s *Server) sendResponseViaOutbox(connID string, entry *connEntry, resp *Response, reason string) bool {
+func sendResponseViaOutbox(s *Server, connID string, entry *connEntry, resp *Response, reason string) bool {
+	if s == nil {
+		return false
+	}
 	if resp == nil {
 		return true
 	}
@@ -512,10 +492,13 @@ func (s *Server) sendResponseViaOutbox(connID string, entry *connEntry, resp *Re
 		logger.Error("app-server: marshal response failed", logger.FieldConn, connID, logger.FieldError, err)
 		return false
 	}
-	return s.enqueueConnMessage(connID, entry, websocket.TextMessage, data, reason)
+	return enqueueConnMessage(s, connID, entry, websocket.TextMessage, data, reason)
 }
 
-func (s *Server) handleClientResponse(env rpcEnvelope) bool {
+func handleClientResponse(s *Server, env rpcEnvelope) bool {
+	if s == nil {
+		return false
+	}
 	if len(env.ID) == 0 || string(env.ID) == "null" || env.Method != "" {
 		return false
 	}
@@ -524,12 +507,6 @@ func (s *Server) handleClientResponse(env rpcEnvelope) bool {
 	}
 	reqID, ok := parseIntID(env.ID)
 	if !ok {
-		return false
-	}
-	s.pendingMu.Lock()
-	ch, found := s.pending[reqID]
-	s.pendingMu.Unlock()
-	if !found {
 		return false
 	}
 	resp := &Response{
@@ -550,20 +527,20 @@ func (s *Server) handleClientResponse(env rpcEnvelope) bool {
 		}
 		resp.Error = &rpcErr
 	}
-	select {
-	case ch <- resp:
-	default:
-	}
-	return true
+	found, _ := s.connManagerState.deliverPendingResponse(reqID, resp)
+	return found
 }
 
 // handleParsedMessage 复用已解析的 rpcEnvelope 分发请求 (避免二次 Unmarshal)。
-func (s *Server) handleParsedMessage(ctx context.Context, env rpcEnvelope) *Response {
-	return s.dispatchRequest(ctx, rawIDtoAny(env.ID), env.Method, env.Params)
+func handleParsedMessage(s *Server, ctx context.Context, env rpcEnvelope) *Response {
+	return dispatchRequest(s, ctx, rawIDtoAny(env.ID), env.Method, env.Params)
 }
 
 // dispatchRequest 统一的方法分发逻辑。
-func (s *Server) dispatchRequest(ctx context.Context, id any, method string, params json.RawMessage) *Response {
+func dispatchRequest(s *Server, ctx context.Context, id any, method string, params json.RawMessage) *Response {
+	if s == nil {
+		return newError(id, CodeInternalError, "server is nil")
+	}
 	if method == "" {
 		return newError(id, CodeInvalidRequest, "method is required")
 	}

@@ -6,7 +6,7 @@ import (
 	goruntime "runtime"
 )
 
-func (s *Server) debugRuntime(_ context.Context, _ json.RawMessage) (any, error) {
+func debugRuntime(s *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	var mem goruntime.MemStats
 	goruntime.ReadMemStats(&mem)
 
@@ -37,7 +37,7 @@ func (s *Server) debugRuntime(_ context.Context, _ json.RawMessage) (any, error)
 	return result, nil
 }
 
-func (s *Server) debugForceGC(_ context.Context, _ json.RawMessage) (any, error) {
+func debugForceGC(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	var before goruntime.MemStats
 	goruntime.ReadMemStats(&before)
 

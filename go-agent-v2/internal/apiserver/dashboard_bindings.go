@@ -116,7 +116,7 @@ func (p dashboardProvider) GetDAGDetail(ctx context.Context, dagKey string) (any
 	return dag, nodes, true, err
 }
 
-func (s *Server) dashboardMethodCaller() dashrpc.MethodCaller {
+func dashboardMethodCaller(s *Server) dashrpc.MethodCaller {
 	return func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		if s == nil {
 			return nil, nil
@@ -132,7 +132,7 @@ func (s *Server) dashboardMethodCaller() dashrpc.MethodCaller {
 	}
 }
 
-func (s *Server) registerDashboardMethods() {
+func registerDashboardMethods(s *Server) {
 	if s == nil {
 		return
 	}
@@ -141,9 +141,9 @@ func (s *Server) registerDashboardMethods() {
 	}
 	dashrpc.Register(func(name string, h dashrpc.MethodHandler) {
 		s.methods[name] = Handler(h)
-	}, dashboardProvider{s: s}, s.dashboardMethodCaller())
+	}, dashboardProvider{s: s}, dashboardMethodCaller(s))
 }
 
-func (s *Server) uiDashboardGet(ctx context.Context, p uiDashboardGetParams) (any, error) {
-	return dashrpc.UIDashboardGet(ctx, s.dashboardMethodCaller(), dashrpc.UIGetParams{Page: p.Page})
+func uiDashboardGet(s *Server, ctx context.Context, p uiDashboardGetParams) (any, error) {
+	return dashrpc.UIDashboardGet(ctx, dashboardMethodCaller(s), dashrpc.UIGetParams{Page: p.Page})
 }

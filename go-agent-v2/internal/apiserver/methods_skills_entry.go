@@ -3,8 +3,9 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
-	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	skillsruntime "github.com/multi-agent/go-agent-v2/internal/skills"
 )
@@ -33,9 +34,12 @@ func newSkillsManager(s *Server) *skillsruntime.Manager {
 		input []skillsruntime.UserInput,
 		options skillsruntime.AutoSkillMatchOptions,
 	) []skillsruntime.AutoMatchedSkillMatch {
-		legacyInput := make([]UserInput, 0, len(input))
+		if s == nil || s.codexAdapter == nil {
+			return nil
+		}
+		turnInput := make([]codexadapter.TurnInput, 0, len(input))
 		for _, item := range input {
-			legacyInput = append(legacyInput, UserInput{
+			turnInput = append(turnInput, codexadapter.TurnInput{
 				Type:    item.Type,
 				Text:    item.Text,
 				URL:     item.URL,
@@ -44,7 +48,7 @@ func newSkillsManager(s *Server) *skillsruntime.Manager {
 				Content: item.Content,
 			})
 		}
-		matches := s.collectAutoMatchedSkillMatches(threadID, prompt, legacyInput, contracts.AutoSkillMatchOptions{
+		matches := s.codexAdapter.CollectAutoMatchedSkillMatchesForThread(threadID, prompt, turnInput, codexadapter.AutoSkillMatchOptions{
 			IncludeConfiguredExplicit: options.IncludeConfiguredExplicit,
 			IncludeConfiguredForce:    options.IncludeConfiguredForce,
 		})
@@ -61,58 +65,82 @@ func newSkillsManager(s *Server) *skillsruntime.Manager {
 	return skillsruntime.NewManager(provider, collector)
 }
 
-func (s *Server) skillsManagerDelegate() *skillsruntime.Manager {
+func skillsManagerDelegate(s *Server) *skillsruntime.Manager {
 	if s != nil && s.skillsMgr != nil {
 		return s.skillsMgr
 	}
 	return newSkillsManager(s)
 }
 
-func (s *Server) skillsList(ctx context.Context, _ json.RawMessage) (any, error) {
-	return s.skillsManagerDelegate().SkillsList(ctx)
+func skillsList(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
+	return skillsManagerDelegate(s).SkillsList(ctx)
 }
 
-func (s *Server) appList(ctx context.Context, _ json.RawMessage) (any, error) {
-	return s.skillsManagerDelegate().AppList(ctx)
+func appList(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
+	return skillsManagerDelegate(s).AppList(ctx)
 }
 
-func (s *Server) skillsLocalReadTyped(ctx context.Context, p skillsLocalReadParams) (any, error) {
-	return s.skillsManagerDelegate().SkillsLocalRead(ctx, skillsruntime.SkillsLocalReadParams(p))
+func skillsLocalReadTyped(s *Server, ctx context.Context, p skillsLocalReadParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsLocalRead(ctx, skillsruntime.SkillsLocalReadParams(p))
 }
 
-func (s *Server) skillsLocalImportDirTyped(ctx context.Context, p skillsLocalImportDirParams) (any, error) {
-	return s.skillsManagerDelegate().SkillsLocalImportDir(ctx, skillsruntime.SkillsLocalImportDirParams(p))
+func skillsLocalImportDirTyped(s *Server, ctx context.Context, p skillsLocalImportDirParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsLocalImportDir(ctx, skillsruntime.SkillsLocalImportDirParams(p))
 }
 
-func (s *Server) skillsLocalDeleteTyped(ctx context.Context, p skillsLocalDeleteParams) (any, error) {
-	return s.skillsManagerDelegate().SkillsLocalDelete(ctx, skillsruntime.SkillsLocalDeleteParams(p))
+func skillsLocalDeleteTyped(s *Server, ctx context.Context, p skillsLocalDeleteParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsLocalDelete(ctx, skillsruntime.SkillsLocalDeleteParams(p))
 }
 
-func (s *Server) skillsMatchPreviewTyped(ctx context.Context, p skillsMatchPreviewParams) (any, error) {
-	return s.skillsManagerDelegate().SkillsMatchPreview(ctx, skillsruntime.SkillsMatchPreviewParams(p))
+func skillsMatchPreviewTyped(s *Server, ctx context.Context, p skillsMatchPreviewParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsMatchPreview(ctx, skillsruntime.SkillsMatchPreviewParams(p))
 }
 
-func (s *Server) skillsConfigReadTyped(ctx context.Context, p skillsConfigReadParams) (any, error) {
-	return s.skillsManagerDelegate().SkillsConfigRead(ctx, skillsruntime.SkillsConfigReadParams(p))
+func skillsConfigReadTyped(s *Server, ctx context.Context, p skillsConfigReadParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsConfigRead(ctx, skillsruntime.SkillsConfigReadParams(p))
 }
 
-func (s *Server) skillsConfigWriteTyped(ctx context.Context, p skillsConfigWriteParams) (any, error) {
-	return s.skillsManagerDelegate().SkillsConfigWrite(ctx, skillsruntime.SkillsConfigWriteParams(p))
+func skillsConfigWriteTyped(s *Server, ctx context.Context, p skillsConfigWriteParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsConfigWrite(ctx, skillsruntime.SkillsConfigWriteParams(p))
 }
 
-func (s *Server) skillsSummaryWriteTyped(ctx context.Context, p skillsSummaryWriteParams) (any, error) {
-	return s.skillsManagerDelegate().SkillsSummaryWrite(ctx, skillsruntime.SkillsSummaryWriteParams(p))
+func skillsSummaryWriteTyped(s *Server, ctx context.Context, p skillsSummaryWriteParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsSummaryWrite(ctx, skillsruntime.SkillsSummaryWriteParams(p))
 }
 
-func (s *Server) skillsRemoteReadTyped(ctx context.Context, p skillsRemoteReadParams) (any, error) {
-	return s.skillsManagerDelegate().SkillsRemoteRead(ctx, skillsruntime.SkillsRemoteReadParams(p))
+func skillsRemoteReadTyped(s *Server, ctx context.Context, p skillsRemoteReadParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsRemoteRead(ctx, skillsruntime.SkillsRemoteReadParams(p))
 }
 
-func (s *Server) skillsRemoteWriteTyped(ctx context.Context, p skillsRemoteWriteParams) (any, error) {
-	return s.skillsManagerDelegate().SkillsRemoteWrite(ctx, skillsruntime.SkillsRemoteWriteParams(p))
+func skillsRemoteWriteTyped(s *Server, ctx context.Context, p skillsRemoteWriteParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsRemoteWrite(ctx, skillsruntime.SkillsRemoteWriteParams(p))
 }
 
-// GetAgentSkills 返回指定 agent 配置的技能列表。
-func (s *Server) GetAgentSkills(agentID string) []string {
-	return s.skillsManagerDelegate().GetAgentSkills(agentID)
+// getAgentSkills 返回指定 agent 配置的技能列表。
+func getAgentSkills(s *Server, agentID string) []string {
+	return skillsManagerDelegate(s).GetAgentSkills(agentID)
+}
+
+// listSkillMatchCandidates returns normalized candidates for adapter auto-match.
+func listSkillMatchCandidates(s *Server) ([]codexadapter.SkillMatchCandidate, error) {
+	if s == nil || s.skillSvc == nil {
+		return nil, nil
+	}
+	allSkills, err := s.skillSvc.ListSkills()
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]codexadapter.SkillMatchCandidate, 0, len(allSkills))
+	for _, skill := range allSkills {
+		skillName := strings.TrimSpace(skill.Name)
+		if skillName == "" {
+			continue
+		}
+		candidates = append(candidates, codexadapter.SkillMatchCandidate{
+			Name:         skillName,
+			ForceWords:   append([]string(nil), skill.ForceWords...),
+			TriggerWords: append([]string(nil), skill.TriggerWords...),
+		})
+	}
+	return candidates, nil
 }

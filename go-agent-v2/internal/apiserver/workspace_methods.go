@@ -26,7 +26,7 @@ func asMap(value any) map[string]any {
 	return out
 }
 
-func (s *Server) workspaceRunCreate(ctx context.Context, params json.RawMessage) (any, error) {
+func workspaceRunCreate(s *Server, ctx context.Context, params json.RawMessage) (any, error) {
 	if s.workspaceMgr == nil {
 		if s.uiRuntime != nil {
 			s.uiRuntime.SetWorkspaceUnavailable("workspace manager not initialized")
@@ -61,14 +61,14 @@ func (s *Server) workspaceRunCreate(ctx context.Context, params json.RawMessage)
 	if s.uiRuntime != nil {
 		s.uiRuntime.UpsertWorkspaceRun(asMap(run))
 	}
-	s.Notify("workspace/run/created", map[string]any{
+	notify(s, "workspace/run/created", map[string]any{
 		"runKey": run.RunKey,
 		"run":    run,
 	})
 	return map[string]any{"run": run}, nil
 }
 
-func (s *Server) workspaceRunGet(ctx context.Context, params json.RawMessage) (any, error) {
+func workspaceRunGet(s *Server, ctx context.Context, params json.RawMessage) (any, error) {
 	if s.workspaceMgr == nil {
 		if s.uiRuntime != nil {
 			s.uiRuntime.SetWorkspaceUnavailable("workspace manager not initialized")
@@ -94,7 +94,7 @@ func (s *Server) workspaceRunGet(ctx context.Context, params json.RawMessage) (a
 	return map[string]any{"run": run}, nil
 }
 
-func (s *Server) workspaceRunList(ctx context.Context, params json.RawMessage) (any, error) {
+func workspaceRunList(s *Server, ctx context.Context, params json.RawMessage) (any, error) {
 	if s.workspaceMgr == nil {
 		if s.uiRuntime != nil {
 			s.uiRuntime.SetWorkspaceUnavailable("workspace manager not initialized")
@@ -126,7 +126,7 @@ func (s *Server) workspaceRunList(ctx context.Context, params json.RawMessage) (
 	return map[string]any{"runs": runs}, nil
 }
 
-func (s *Server) workspaceRunMerge(ctx context.Context, params json.RawMessage) (any, error) {
+func workspaceRunMerge(s *Server, ctx context.Context, params json.RawMessage) (any, error) {
 	if s.workspaceMgr == nil {
 		if s.uiRuntime != nil {
 			s.uiRuntime.SetWorkspaceUnavailable("workspace manager not initialized")
@@ -157,14 +157,14 @@ func (s *Server) workspaceRunMerge(ctx context.Context, params json.RawMessage) 
 	if s.uiRuntime != nil {
 		s.uiRuntime.ApplyWorkspaceMergeResult(p.RunKey, asMap(result))
 	}
-	s.Notify("workspace/run/merged", map[string]any{
+	notify(s, "workspace/run/merged", map[string]any{
 		"runKey": p.RunKey,
 		"result": result,
 	})
 	return map[string]any{"result": result}, nil
 }
 
-func (s *Server) workspaceRunAbort(ctx context.Context, params json.RawMessage) (any, error) {
+func workspaceRunAbort(s *Server, ctx context.Context, params json.RawMessage) (any, error) {
 	if s.workspaceMgr == nil {
 		if s.uiRuntime != nil {
 			s.uiRuntime.SetWorkspaceUnavailable("workspace manager not initialized")
@@ -189,7 +189,7 @@ func (s *Server) workspaceRunAbort(ctx context.Context, params json.RawMessage) 
 	if s.uiRuntime != nil {
 		s.uiRuntime.UpsertWorkspaceRun(asMap(run))
 	}
-	s.Notify("workspace/run/aborted", map[string]any{
+	notify(s, "workspace/run/aborted", map[string]any{
 		"runKey": p.RunKey,
 		"run":    run,
 		"reason": p.Reason,

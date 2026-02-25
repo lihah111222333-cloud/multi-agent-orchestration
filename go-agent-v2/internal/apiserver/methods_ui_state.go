@@ -25,7 +25,10 @@ type uiPrefGetParams struct {
 	Key string `json:"key"`
 }
 
-func (s *Server) uiPreferencesGet(ctx context.Context, p uiPrefGetParams) (any, error) {
+func uiPreferencesGet(s *Server, ctx context.Context, p uiPrefGetParams) (any, error) {
+	if s == nil || s.prefManager == nil {
+		return nil, nil
+	}
 	return s.prefManager.Get(ctx, p.Key)
 }
 
@@ -34,7 +37,10 @@ type uiPrefSetParams struct {
 	Value any    `json:"value"`
 }
 
-func (s *Server) uiPreferencesSet(ctx context.Context, p uiPrefSetParams) (any, error) {
+func uiPreferencesSet(s *Server, ctx context.Context, p uiPrefSetParams) (any, error) {
+	if s == nil || s.prefManager == nil {
+		return nil, nil
+	}
 	if err := s.prefManager.Set(ctx, p.Key, p.Value); err != nil {
 		return nil, err
 	}
@@ -69,11 +75,17 @@ func (s *Server) uiPreferencesSet(ctx context.Context, p uiPrefSetParams) (any, 
 	return map[string]any{"ok": true}, nil
 }
 
-func (s *Server) uiPreferencesGetAll(ctx context.Context, _ json.RawMessage) (any, error) {
+func uiPreferencesGetAll(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
+	if s == nil || s.prefManager == nil {
+		return map[string]any{}, nil
+	}
 	return s.prefManager.GetAll(ctx)
 }
 
-func (s *Server) uiStateGet(ctx context.Context, _ json.RawMessage) (any, error) {
+func uiStateGet(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
+	if s == nil {
+		return map[string]any{}, nil
+	}
 	if s.uiRuntime == nil {
 		return map[string]any{}, nil
 	}
@@ -254,7 +266,7 @@ func asBool(value any, fallback bool) bool {
 	return fallback
 }
 
-func (s *Server) showInjectedPromptInChat(ctx context.Context) bool {
+func showInjectedPromptInChat(s *Server, ctx context.Context) bool {
 	if s.prefManager == nil {
 		return false
 	}
@@ -266,18 +278,23 @@ func (s *Server) showInjectedPromptInChat(ctx context.Context) bool {
 	return asBool(value, false)
 }
 
-func (s *Server) applyInjectedPromptVisibilityPreference(ctx context.Context) {
+func applyInjectedPromptVisibilityPreference(s *Server, ctx context.Context) {
 	if s.uiRuntime == nil {
 		return
 	}
-	show := s.showInjectedPromptInChat(ctx)
+	show := showInjectedPromptInChat(s, ctx)
 	s.uiRuntime.SetSanitizeInjectedUserMessage(!show)
 }
 
-func (s *Server) persistThreadAlias(ctx context.Context, threadID, alias string) error {
-	s.threadAliasMu.Lock()
-	defer s.threadAliasMu.Unlock()
-	return persistThreadAliasPreference(ctx, s.prefManager, threadID, alias)
+func persistThreadAlias(s *Server, ctx context.Context, threadID, alias string) error {
+	if s == nil {
+		return nil
+	}
+	var persistErr error
+	s.threadAliasState.withLock(func() {
+		persistErr = persistThreadAliasPreference(ctx, s.prefManager, threadID, alias)
+	})
+	return persistErr
 }
 
 func persistThreadAliasPreference(ctx context.Context, manager *uistate.PreferenceManager, threadID, alias string) error {
@@ -303,7 +320,7 @@ func persistThreadAliasPreference(ctx context.Context, manager *uistate.Preferen
 	return manager.Set(ctx, prefThreadAliases, aliases)
 }
 
-func (s *Server) loadThreadAliases(ctx context.Context) map[string]string {
+func loadThreadAliases(s *Server, ctx context.Context) map[string]string {
 	if s.prefManager == nil {
 		return map[string]string{}
 	}

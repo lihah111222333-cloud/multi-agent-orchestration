@@ -2,7 +2,6 @@ package contracts
 
 import (
 	"encoding/json"
-	"time"
 )
 
 // AutoMatchInput carries user input metadata used for skill auto-match.
@@ -90,27 +89,4 @@ type ThreadListItem struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	State string `json:"state"`
-}
-
-// TrackedTurn is the cross-package turn lifecycle tracking state.
-type TrackedTurn struct {
-	ID                   string
-	ThreadID             string
-	StartedAt            time.Time
-	LastEventAt          time.Time
-	InterruptRequested   bool
-	InterruptRequestedAt time.Time
-	StallHintLogged      bool
-	StallGraceStarted    bool
-	StallAutoInterrupted bool
-	Done                 chan string
-	Timer                *time.Timer
-	StallTimer           *time.Timer
-}
-
-// TrackedTurnSummaryCacheEntry caches the latest summary for one tracked turn.
-type TrackedTurnSummaryCacheEntry struct {
-	TurnID    string
-	Summary   string
-	UpdatedAt time.Time
 }

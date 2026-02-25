@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
+	"github.com/multi-agent/go-agent-v2/internal/skillutil"
 )
 
 // 兼容历史测试：运行时代码已迁移到 Server.commonAdapter 边界。
@@ -35,4 +36,16 @@ func composeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint string, s
 
 func fuzzyMatch(text, pattern string) bool {
 	return commonadapter.FuzzyMatch(text, pattern)
+}
+
+func collectInputSkillNames(inputs []UserInput) map[string]struct{} {
+	return skillutil.CollectInputSkillNames(
+		inputs,
+		func(input UserInput) string { return input.Type },
+		func(input UserInput) string { return input.Name },
+	)
+}
+
+func collectSkillNameSet(raw []string) map[string]struct{} {
+	return commonadapter.CollectSkillNameSet(raw)
 }

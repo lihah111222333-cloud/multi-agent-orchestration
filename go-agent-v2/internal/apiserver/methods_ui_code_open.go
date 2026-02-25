@@ -159,12 +159,12 @@ func codePathToURI(path string) string {
 	return (&url.URL{Scheme: "file", Path: normalized}).String()
 }
 
-func (s *Server) gatherCodeDiagnostics(filePath string, startLine, endLine int) []map[string]any {
+func gatherCodeDiagnostics(s *Server, filePath string, startLine, endLine int) []map[string]any {
 	if s == nil {
 		return []map[string]any{}
 	}
 	uri := codePathToURI(filePath)
-	diags := s.GetDiagnostics(uri)
+	diags := getDiagnostics(s, uri)
 	if len(diags) == 0 {
 		return []map[string]any{}
 	}
@@ -349,7 +349,7 @@ func isMarkdownFilePath(path string) bool {
 	return strings.EqualFold(ext, "md") || strings.EqualFold(ext, "markdown")
 }
 
-func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, error) {
+func uiCodeOpenTyped(s *Server, _ context.Context, p uiCodeOpenParams) (any, error) {
 	logger.Info("ui/code/open: begin",
 		"file_path", strings.TrimSpace(p.FilePath),
 		"line", p.Line,
@@ -511,7 +511,7 @@ func (s *Server) uiCodeOpenTyped(_ context.Context, p uiCodeOpenParams) (any, er
 		_ = s.lsp.OpenFile(resolvedPath, string(content))
 		lspOpened = true
 	}
-	diagnostics := s.gatherCodeDiagnostics(resolvedPath, startLine, endLine)
+	diagnostics := gatherCodeDiagnostics(s, resolvedPath, startLine, endLine)
 
 	result := map[string]any{
 		"ok":          true,

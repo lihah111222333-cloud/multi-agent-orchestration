@@ -1,64 +1,65 @@
 package apiserver
 
 import (
-	"strings"
-
-	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
-	"github.com/multi-agent/go-agent-v2/pkg/util"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 
-// 兼容历史测试：运行时代码已迁移为 Server.extractInputs。
-func extractInputs(inputs []UserInput) (prompt string, images, files []string) {
-	texts := make([]string, 0, len(inputs))
-	images = make([]string, 0)
-	files = make([]string, 0)
-
-	isRemoteImageURL := func(value string) bool {
-		return strings.HasPrefix(value, "http://") ||
-			strings.HasPrefix(value, "https://") ||
-			strings.HasPrefix(value, "data:image/")
+func toCodexTurnInputsForTest(inputs []UserInput) []codexadapter.TurnInput {
+	if len(inputs) == 0 {
+		return nil
 	}
-
+	out := make([]codexadapter.TurnInput, 0, len(inputs))
 	for _, inp := range inputs {
-		switch strings.ToLower(strings.TrimSpace(inp.Type)) {
-		case "text":
-			text := util.StripLeadingSystemNoise(inp.Text)
-			if strings.TrimSpace(text) != "" {
-				texts = append(texts, text)
-			}
-		case "image":
-			if value := strings.TrimSpace(inp.URL); value != "" {
-				images = append(images, value)
-				continue
-			}
-			if value := strings.TrimSpace(inp.Path); value != "" {
-				images = append(images, value)
-			}
-		case "localimage":
-			if value := strings.TrimSpace(inp.URL); isRemoteImageURL(value) {
-				images = append(images, value)
-				continue
-			}
-			if value := strings.TrimSpace(inp.Path); value != "" {
-				images = append(images, value)
-			}
-		case "filecontent":
-			if value := strings.TrimSpace(inp.Path); value != "" {
-				files = append(files, value)
-				continue
-			}
-			if inline := commonadapter.FileContentInputText(inp.Name, inp.Content); inline != "" {
-				texts = append(texts, inline)
-			}
-		case "mention", "file":
-			if value := strings.TrimSpace(inp.Path); value != "" {
-				files = append(files, value)
-			}
-		case "skill":
-			continue
-		}
+		out = append(out, codexadapter.TurnInput{
+			Type:    inp.Type,
+			Text:    inp.Text,
+			URL:     inp.URL,
+			Path:    inp.Path,
+			Name:    inp.Name,
+			Content: inp.Content,
+		})
 	}
+	return out
+}
 
-	prompt = strings.Join(texts, "\n")
-	return
+// 兼容历史测试：运行时代码已迁移到 codexadapter。
+func extractInputs(inputs []UserInput) (prompt string, images, files []string) {
+	return codexadapter.ExtractTurnInputs(toCodexTurnInputsForTest(inputs))
+}
+
+func buildAttachmentName(path string) string {
+	return codexadapter.BuildAttachmentName(path)
+}
+
+func buildAttachmentPreviewURL(path string) string {
+	return codexadapter.BuildAttachmentPreviewURL(path)
+}
+
+func buildUserTimelineAttachments(images, files []string) []uistate.TimelineAttachment {
+	return codexadapter.BuildUserTimelineAttachments(images, files)
+}
+
+func buildUserTimelineAttachmentsFromInputs(inputs []UserInput) []uistate.TimelineAttachment {
+	return codexadapter.BuildUserTimelineAttachmentsFromInputs(toCodexTurnInputsForTest(inputs))
+}
+
+func isLikelyCodexThreadID(raw string) bool {
+	return codexadapter.IsLikelyCodexThreadID(raw)
+}
+
+func normalizeCodexThreadID(raw string) string {
+	return codexadapter.NormalizeCodexThreadID(raw)
+}
+
+func appendUniqueThreadID(dst []string, seen map[string]struct{}, candidate string) []string {
+	id := normalizeCodexThreadID(candidate)
+	if id == "" {
+		return dst
+	}
+	if _, ok := seen[id]; ok {
+		return dst
+	}
+	seen[id] = struct{}{}
+	return append(dst, id)
 }

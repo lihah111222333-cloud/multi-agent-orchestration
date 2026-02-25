@@ -25,7 +25,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
-	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/config"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
@@ -75,11 +74,10 @@ type Server struct {
 	lspTools   tools.LSPProvider
 	cfg        *config.Config
 	codeRunner *executor.CodeRunner // 代码块执行引擎
-	// adapter 层: codex 专属能力与通用能力的聚合入口。
-	codexAdapter  *codexadapter.Adapter
-	commonAdapter *commonadapter.Adapter
-	methods       map[string]Handler
-	dynTools      map[string]tooladapter.RuntimeToolHandler // 动态工具注册表
+	// adapter 层: codex 专属能力聚合入口。
+	codexAdapter *codexadapter.Adapter
+	methods      map[string]Handler
+	dynTools     map[string]tooladapter.RuntimeToolHandler // 动态工具注册表
 	// submitAgentMessage 统一消息下发入口，便于测试替换。
 	submitAgentMessage       func(agentID, prompt string, images, files []string) error
 	lspDiagnosticsQueryTyped func(ctx context.Context, p lspDiagnosticsQueryParams) (any, error)
@@ -164,9 +162,8 @@ func New(deps Deps) *Server {
 	if s.mgr != nil {
 		s.submitAgentMessage = s.mgr.Submit
 	}
-	s.codexAdapter = codexadapter.New(s)
-	s.commonAdapter = commonadapter.New()
-	s.lspTools = lsp.NewToolHandlers(s.lsp, s)
+	s.codexAdapter = newCodexAdapter(s)
+	s.lspTools = lsp.NewToolHandlers(s.lsp, diagnosticsAccessor(s))
 	s.lspDiagnosticsQueryTyped = func(_ context.Context, p lspDiagnosticsQueryParams) (any, error) {
 		return s.lspTools.DiagnosticsQuery(p.FilePath), nil
 	}
@@ -240,69 +237,9 @@ func New(deps Deps) *Server {
 		s.codeRunner = cr
 	}
 
-	s.applyInjectedPromptVisibilityPreference(context.Background())
-	s.registerDynamicTools()
+	applyInjectedPromptVisibilityPreference(s, context.Background())
+	registerDynamicTools(s)
 	return s
-}
-
-// SetDiagnostics updates diagnostics cache for a URI.
-func (s *Server) SetDiagnostics(uri string, diagnostics []lsp.Diagnostic) {
-	if s == nil {
-		return
-	}
-	normalized := strings.TrimSpace(uri)
-	if normalized == "" {
-		return
-	}
-	copied := cloneDiagnostics(diagnostics)
-
-	s.diagMu.Lock()
-	defer s.diagMu.Unlock()
-	if len(copied) == 0 {
-		delete(s.diagCache, normalized)
-		return
-	}
-	s.diagCache[normalized] = copied
-}
-
-// GetDiagnostics returns a copy of diagnostics for a URI.
-func (s *Server) GetDiagnostics(uri string) []lsp.Diagnostic {
-	if s == nil {
-		return nil
-	}
-	normalized := strings.TrimSpace(uri)
-	if normalized == "" {
-		return nil
-	}
-
-	s.diagMu.RLock()
-	diags := cloneDiagnostics(s.diagCache[normalized])
-	s.diagMu.RUnlock()
-	return diags
-}
-
-// GetAllDiagnostics returns a deep copy of diagnostics cache.
-func (s *Server) GetAllDiagnostics() map[string][]lsp.Diagnostic {
-	if s == nil {
-		return map[string][]lsp.Diagnostic{}
-	}
-
-	s.diagMu.RLock()
-	defer s.diagMu.RUnlock()
-	out := make(map[string][]lsp.Diagnostic, len(s.diagCache))
-	for uri, diags := range s.diagCache {
-		out[uri] = cloneDiagnostics(diags)
-	}
-	return out
-}
-
-func cloneDiagnostics(in []lsp.Diagnostic) []lsp.Diagnostic {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]lsp.Diagnostic, len(in))
-	copy(out, in)
-	return out
 }
 
 // ListenAndServe 启动 WebSocket 服务器。
@@ -316,9 +253,9 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	host = strings.TrimPrefix(host, "wss://")
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleUpgrade)    // WebSocket
-	mux.HandleFunc("/rpc", s.handleHTTPRPC) // HTTP JSON-RPC (调试模式)
-	mux.HandleFunc("/events", s.handleSSE)  // SSE 事件流 (调试模式)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { handleUpgrade(s, w, r) })    // WebSocket
+	mux.HandleFunc("/rpc", func(w http.ResponseWriter, r *http.Request) { handleHTTPRPC(s, w, r) }) // HTTP JSON-RPC (调试模式)
+	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) { handleSSE(s, w, r) })  // SSE 事件流 (调试模式)
 
 	srv := &http.Server{
 		Addr:              host,
@@ -349,109 +286,11 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 }
 
 func (s *Server) cleanupRuntimeResources() {
-	s.cleanupOnce.Do(func() {
+	s.runtimeGuardState.doCleanup(func() {
 		s.cancelAllCodeRuns()
 		if s.codeRunner != nil {
 			s.codeRunner.Cleanup()
 		}
-		s.agentWorkDirMu.Lock()
-		clear(s.agentWorkDirs)
-		s.agentWorkDirMu.Unlock()
+		s.codeRunState.clearAllAgentWorkDirs()
 	})
-}
-
-// Manager 提供给 codexadapter 的运行时管理器访问入口。
-func (s *Server) Manager() *runner.AgentManager {
-	if s == nil {
-		return nil
-	}
-	return s.mgr
-}
-
-// Store 提供给 codexadapter 的通用状态存储访问入口。
-func (s *Server) Store() *uistate.PreferenceManager {
-	if s == nil {
-		return nil
-	}
-	return s.prefManager
-}
-
-// BindingStore 提供给 codexadapter 的线程绑定存储访问入口。
-func (s *Server) BindingStore() *store.AgentCodexBindingStore {
-	if s == nil {
-		return nil
-	}
-	return s.bindingStore
-}
-
-// AgentStatusStore 提供给 codexadapter 的 agent 状态存储访问入口。
-func (s *Server) AgentStatusStore() *store.AgentStatusStore {
-	if s == nil {
-		return nil
-	}
-	return s.agentStatusStore
-}
-
-// UIRuntime 提供给 codexadapter 的 UI 运行时访问入口。
-func (s *Server) UIRuntime() *uistate.RuntimeManager {
-	if s == nil {
-		return nil
-	}
-	return s.uiRuntime
-}
-
-// ReadSkillContent provides codexadapter skill content access via ServerContext.
-func (s *Server) ReadSkillContent(skillName string) (string, error) {
-	if s == nil || s.skillSvc == nil {
-		return "", pkgerr.New("Server.skillService", "skill service is not initialized")
-	}
-	return s.skillSvc.ReadSkillContent(skillName)
-}
-
-// ========================================
-// 资源类 Store 访问入口 (merged from resource_tools.go)
-// ========================================
-
-func (s *Server) DAGStore() *store.TaskDAGStore {
-	return s.dagStore
-}
-
-func (s *Server) CommandCardStore() *store.CommandCardStore {
-	return s.cmdStore
-}
-
-func (s *Server) PromptTemplateStore() *store.PromptTemplateStore {
-	return s.promptStore
-}
-
-func (s *Server) SharedFileStore() *store.SharedFileStore {
-	return s.fileStore
-}
-
-func (s *Server) WorkspaceManager() *service.WorkspaceManager {
-	return s.workspaceMgr
-}
-
-func (s *Server) NotifyEvent(method string, params any) {
-	s.Notify(method, params)
-}
-
-// ListSkillNames provides codexadapter skill list access via ServerContext.
-func (s *Server) ListSkillNames() ([]string, error) {
-	if s == nil || s.skillSvc == nil {
-		return []string{}, nil
-	}
-	list, err := s.skillSvc.ListSkills()
-	if err != nil {
-		return nil, err
-	}
-	skills := make([]string, 0, len(list))
-	for _, item := range list {
-		name := strings.TrimSpace(item.Name)
-		if name == "" {
-			continue
-		}
-		skills = append(skills, name)
-	}
-	return skills, nil
 }

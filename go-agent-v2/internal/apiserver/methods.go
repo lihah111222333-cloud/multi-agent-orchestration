@@ -18,12 +18,24 @@ const (
 	maxLSPUsagePromptHintLen        = 16000
 )
 
+func bindRaw(s *Server, fn func(*Server, context.Context, json.RawMessage) (any, error)) Handler {
+	return func(ctx context.Context, params json.RawMessage) (any, error) {
+		return fn(s, ctx, params)
+	}
+}
+
+func bindTyped[P any](s *Server, fn func(*Server, context.Context, P) (any, error)) Handler {
+	return typedHandler(func(ctx context.Context, p P) (any, error) {
+		return fn(s, ctx, p)
+	})
+}
+
 // registerMethods 注册所有 JSON-RPC 方法 (完整对标 APP-SERVER-PROTOCOL.md)。
 func (s *Server) registerMethods() {
 	noop := noopHandler()
 
 	// § 1. 初始化
-	s.methods["initialize"] = s.initialize
+	s.methods["initialize"] = bindRaw(s, initialize)
 	s.methods["initialized"] = noop
 
 	// § 2. 线程生命周期 (12 methods)
@@ -50,51 +62,51 @@ func (s *Server) registerMethods() {
 	s.methods["review/start"] = typedHandler(s.reviewStartTyped)
 
 	// § 4. 文件搜索 (4 methods)
-	s.methods["fuzzyFileSearch"] = typedHandler(s.fuzzyFileSearchTyped)
+	s.methods["fuzzyFileSearch"] = bindTyped(s, fuzzyFileSearchTyped)
 	s.methods["fuzzyFileSearch/sessionStart"] = noop
 	s.methods["fuzzyFileSearch/sessionUpdate"] = noop
 	s.methods["fuzzyFileSearch/sessionStop"] = noop
 
 	// § 5. Skills / Apps (5 methods)
-	s.methods["skills/list"] = s.skillsList
-	s.methods["skills/local/read"] = typedHandler(s.skillsLocalReadTyped)
-	s.methods["skills/local/importDir"] = typedHandler(s.skillsLocalImportDirTyped)
-	s.methods["skills/local/delete"] = typedHandler(s.skillsLocalDeleteTyped)
-	s.methods["skills/remote/read"] = typedHandler(s.skillsRemoteReadTyped)
-	s.methods["skills/remote/write"] = typedHandler(s.skillsRemoteWriteTyped)
-	s.methods["skills/config/read"] = typedHandler(s.skillsConfigReadTyped)
-	s.methods["skills/config/write"] = typedHandler(s.skillsConfigWriteTyped)
-	s.methods["skills/summary/write"] = typedHandler(s.skillsSummaryWriteTyped)
-	s.methods["skills/match/preview"] = typedHandler(s.skillsMatchPreviewTyped)
-	s.methods["app/list"] = s.appList
+	s.methods["skills/list"] = bindRaw(s, skillsList)
+	s.methods["skills/local/read"] = bindTyped(s, skillsLocalReadTyped)
+	s.methods["skills/local/importDir"] = bindTyped(s, skillsLocalImportDirTyped)
+	s.methods["skills/local/delete"] = bindTyped(s, skillsLocalDeleteTyped)
+	s.methods["skills/remote/read"] = bindTyped(s, skillsRemoteReadTyped)
+	s.methods["skills/remote/write"] = bindTyped(s, skillsRemoteWriteTyped)
+	s.methods["skills/config/read"] = bindTyped(s, skillsConfigReadTyped)
+	s.methods["skills/config/write"] = bindTyped(s, skillsConfigWriteTyped)
+	s.methods["skills/summary/write"] = bindTyped(s, skillsSummaryWriteTyped)
+	s.methods["skills/match/preview"] = bindTyped(s, skillsMatchPreviewTyped)
+	s.methods["app/list"] = bindRaw(s, appList)
 
 	// § 6. 模型 / 配置 (7 methods)
-	s.methods["model/list"] = s.modelList
-	s.methods["collaborationMode/list"] = s.collaborationModeList
-	s.methods["experimentalFeature/list"] = s.experimentalFeatureList
-	s.methods["config/read"] = s.configRead
-	s.methods["config/value/write"] = typedHandler(s.configValueWriteTyped)
-	s.methods["config/batchWrite"] = typedHandler(s.configBatchWriteTyped)
-	s.methods["config/lspPromptHint/read"] = s.configLSPPromptHintRead
-	s.methods["config/lspPromptHint/write"] = typedHandler(s.configLSPPromptHintWriteTyped)
-	s.methods["configRequirements/read"] = s.configRequirementsRead
+	s.methods["model/list"] = bindRaw(s, modelList)
+	s.methods["collaborationMode/list"] = bindRaw(s, collaborationModeList)
+	s.methods["experimentalFeature/list"] = bindRaw(s, experimentalFeatureList)
+	s.methods["config/read"] = bindRaw(s, configRead)
+	s.methods["config/value/write"] = bindTyped(s, configValueWriteTyped)
+	s.methods["config/batchWrite"] = bindTyped(s, configBatchWriteTyped)
+	s.methods["config/lspPromptHint/read"] = bindRaw(s, configLSPPromptHintRead)
+	s.methods["config/lspPromptHint/write"] = bindTyped(s, configLSPPromptHintWriteTyped)
+	s.methods["configRequirements/read"] = bindRaw(s, configRequirementsRead)
 
 	// § 7. 账号 (5 methods)
-	s.methods["account/login/start"] = typedHandler(s.accountLoginStartTyped)
-	s.methods["account/login/cancel"] = s.accountLoginCancel
-	s.methods["account/logout"] = s.accountLogout
-	s.methods["account/read"] = s.accountRead
-	s.methods["account/rateLimits/read"] = s.accountRateLimitsRead
+	s.methods["account/login/start"] = bindTyped(s, accountLoginStartTyped)
+	s.methods["account/login/cancel"] = bindRaw(s, accountLoginCancel)
+	s.methods["account/logout"] = bindRaw(s, accountLogout)
+	s.methods["account/read"] = bindRaw(s, accountRead)
+	s.methods["account/rateLimits/read"] = bindRaw(s, accountRateLimitsRead)
 
 	// § 8. MCP (3 methods)
 	s.methods["mcpServer/oauth/login"] = noop
-	s.methods["config/mcpServer/reload"] = s.mcpServerReload
-	s.methods["mcpServerStatus/list"] = s.mcpServerStatusList
+	s.methods["config/mcpServer/reload"] = bindRaw(s, mcpServerReload)
+	s.methods["mcpServerStatus/list"] = bindRaw(s, mcpServerStatusList)
 	s.methods["lsp_diagnostics_query"] = typedHandler(s.lspDiagnosticsQueryTyped)
 
 	// § 9. 命令执行 / 其他 (2 methods)
-	s.methods["command/exec"] = typedHandler(s.commandExecTyped)
-	s.methods["approval/respond"] = typedHandler(s.approvalRespondTyped)
+	s.methods["command/exec"] = bindTyped(s, commandExecTyped)
+	s.methods["approval/respond"] = bindTyped(s, approvalRespondTyped)
 	s.methods["feedback/upload"] = noop
 
 	// § 10. 斜杠命令 (SOCKS 独有, JSON-RPC 化)
@@ -107,34 +119,34 @@ func (s *Server) registerMethods() {
 	s.methods["thread/debugMemory"] = s.threadDebugMemory
 
 	// § 11. 系统日志查询 (2 methods)
-	s.methods["log/list"] = typedHandler(s.logListTyped)
-	s.methods["log/filters"] = s.logFilters
+	s.methods["log/list"] = bindTyped(s, logListTyped)
+	s.methods["log/filters"] = bindRaw(s, logFilters)
 
 	// § 12. Dashboard 数据查询 (12 methods, 替代 Wails Dashboard 绑定)
-	s.registerDashboardMethods()
+	registerDashboardMethods(s)
 
 	// § 13. Workspace Run (双通道编排: 虚拟目录 + PG 状态)
-	s.methods["workspace/run/create"] = s.workspaceRunCreate
-	s.methods["workspace/run/get"] = s.workspaceRunGet
-	s.methods["workspace/run/list"] = s.workspaceRunList
-	s.methods["workspace/run/merge"] = s.workspaceRunMerge
-	s.methods["workspace/run/abort"] = s.workspaceRunAbort
+	s.methods["workspace/run/create"] = bindRaw(s, workspaceRunCreate)
+	s.methods["workspace/run/get"] = bindRaw(s, workspaceRunGet)
+	s.methods["workspace/run/list"] = bindRaw(s, workspaceRunList)
+	s.methods["workspace/run/merge"] = bindRaw(s, workspaceRunMerge)
+	s.methods["workspace/run/abort"] = bindRaw(s, workspaceRunAbort)
 
 	// § 14. UI State (UI 偏好持久化)
-	s.methods["ui/preferences/get"] = typedHandler(s.uiPreferencesGet)
-	s.methods["ui/preferences/set"] = typedHandler(s.uiPreferencesSet)
-	s.methods["ui/preferences/getAll"] = s.uiPreferencesGetAll
-	s.methods["ui/projects/get"] = s.uiProjectsGet
-	s.methods["ui/projects/add"] = typedHandler(s.uiProjectsAdd)
-	s.methods["ui/projects/remove"] = typedHandler(s.uiProjectsRemove)
-	s.methods["ui/projects/setActive"] = typedHandler(s.uiProjectsSetActive)
-	s.methods["ui/code/open"] = typedHandler(s.uiCodeOpenTyped)
-	s.methods["ui/dashboard/get"] = typedHandler(s.uiDashboardGet)
-	s.methods["ui/state/get"] = s.uiStateGet
+	s.methods["ui/preferences/get"] = bindTyped(s, uiPreferencesGet)
+	s.methods["ui/preferences/set"] = bindTyped(s, uiPreferencesSet)
+	s.methods["ui/preferences/getAll"] = bindRaw(s, uiPreferencesGetAll)
+	s.methods["ui/projects/get"] = bindRaw(s, uiProjectsGet)
+	s.methods["ui/projects/add"] = bindTyped(s, uiProjectsAdd)
+	s.methods["ui/projects/remove"] = bindTyped(s, uiProjectsRemove)
+	s.methods["ui/projects/setActive"] = bindTyped(s, uiProjectsSetActive)
+	s.methods["ui/code/open"] = bindTyped(s, uiCodeOpenTyped)
+	s.methods["ui/dashboard/get"] = bindTyped(s, uiDashboardGet)
+	s.methods["ui/state/get"] = bindRaw(s, uiStateGet)
 
 	// § 15. Debug (运行时诊断)
-	s.methods["debug/runtime"] = s.debugRuntime
-	s.methods["debug/gc"] = s.debugForceGC
+	s.methods["debug/runtime"] = bindRaw(s, debugRuntime)
+	s.methods["debug/gc"] = bindRaw(s, debugForceGC)
 
 	// § 16. 前端兼容 Stub (返回空数据, 防止前端 "unregistered method" 报错)
 	//
@@ -175,7 +187,7 @@ type initializeParams struct {
 	Capabilities    any    `json:"capabilities,omitempty"`
 }
 
-func (s *Server) initialize(_ context.Context, params json.RawMessage) (any, error) {
+func initialize(_ *Server, _ context.Context, params json.RawMessage) (any, error) {
 	var p initializeParams
 	if params != nil {
 		if err := json.Unmarshal(params, &p); err != nil {

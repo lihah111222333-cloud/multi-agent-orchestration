@@ -2,7 +2,6 @@
 package apiserver
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -56,63 +55,23 @@ func defaultSkillsCacheDir() string {
 	return cacheDir
 }
 
-func (s *Server) toolAdapterProviders() tooladapter.Providers {
+func toolAdapterProviders(s *Server) tooladapter.Providers {
 	return tooladapter.Providers{
 		LSP:            s.lspTools,
-		CodeRun:        s,
-		Approvals:      s,
-		Resource:       s,
-		Orchestration:  s,
-		AgentRuntime:   s,
-		Schema:         s,
-		Lookup:         s,
-		Counter:        s,
-		CodeRunTracker: s,
+		CodeRun:        codeRunProvider{s: s},
+		Approvals:      approvalProvider{s: s},
+		Resource:       resourceProvider{s: s},
+		Orchestration:  orchestrationProvider{s: s},
+		AgentRuntime:   agentRuntimeProvider{s: s},
+		Schema:         schemaProvider{s: s},
+		Lookup:         runtimeLookupProvider{s: s},
+		Counter:        toolCallCounterProvider{s: s},
+		CodeRunTracker: codeRunTrackerProvider{s: s},
 	}
-}
-
-func (s *Server) RegisterRuntimeTool(name string, handler tooladapter.RuntimeToolHandler) {
-	if s == nil || strings.TrimSpace(name) == "" || handler == nil {
-		return
-	}
-	if s.dynTools == nil {
-		s.dynTools = make(map[string]tooladapter.RuntimeToolHandler)
-	}
-	tooladapter.SetRuntimeTool(s.dynTools, name, handler)
-}
-
-func (s *Server) LookupRuntimeTool(name string) (tooladapter.RuntimeToolHandler, bool) {
-	if s == nil || s.dynTools == nil {
-		return nil, false
-	}
-	return tooladapter.GetRuntimeTool(s.dynTools, name)
-}
-
-func (s *Server) IncrementToolCall(name string) int64 {
-	if s == nil {
-		return 0
-	}
-	toolName := strings.TrimSpace(name)
-	if toolName == "" {
-		return 0
-	}
-	s.toolCallMu.Lock()
-	s.toolCallCount[toolName]++
-	count := s.toolCallCount[toolName]
-	s.toolCallMu.Unlock()
-	return count
-}
-
-func (s *Server) RegisterCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string {
-	return s.registerCodeRunCancel(agentID, callID, cancel)
-}
-
-func (s *Server) UnregisterCodeRunCancel(agentID, runKey string) {
-	s.unregisterCodeRunCancel(agentID, runKey)
 }
 
 // registerDynamicTools 注册所有动态工具处理函数。
-func (s *Server) registerDynamicTools() {
+func registerDynamicTools(s *Server) {
 	if s == nil {
 		return
 	}
@@ -123,11 +82,14 @@ func (s *Server) registerDynamicTools() {
 			delete(s.dynTools, name)
 		}
 	}
-	tooladapter.Register(s, s.toolAdapterProviders())
+	tooladapter.Register(runtimeRegistryProvider{s: s}, toolAdapterProviders(s))
 }
 
 // SetupLSP 初始化 LSP 事件转发: 诊断缓存 + 广播。
-func (s *Server) SetupLSP(rootDir string) {
+func SetupLSP(s *Server, rootDir string) {
+	if s == nil {
+		return
+	}
 	if s.lsp == nil {
 		return
 	}
@@ -135,7 +97,7 @@ func (s *Server) SetupLSP(rootDir string) {
 		s.lsp.SetRootURI("file://" + rootDir)
 	}
 	s.lsp.SetDiagnosticHandler(func(uri string, diagnostics []lsp.Diagnostic) {
-		s.SetDiagnostics(uri, diagnostics)
+		setDiagnostics(s, uri, diagnostics)
 
 		// 广播诊断通知给前端
 		items := make([]map[string]any, 0, len(diagnostics))
@@ -147,7 +109,7 @@ func (s *Server) SetupLSP(rootDir string) {
 				"column":   d.Range.Start.Character,
 			})
 		}
-		s.Notify("lsp/diagnostics/published", map[string]any{
+		notify(s, "lsp/diagnostics/published", map[string]any{
 			"uri":         uri,
 			"diagnostics": items,
 		})
@@ -155,7 +117,10 @@ func (s *Server) SetupLSP(rootDir string) {
 }
 
 // handleDynamicToolCall 处理 codex 发回的动态工具调用 — 调 LSP 并回传结果。
-func (s *Server) handleDynamicToolCall(agentID string, event agentcore.Event) {
+func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
+	if s == nil {
+		return
+	}
 	// 心跳: 防止 stall 检测在等待 tool 执行期间误杀。
 	stopHeartbeat := s.codexAdapter.StartDynamicToolStallHeartbeat(agentID)
 	defer stopHeartbeat()
@@ -210,7 +175,7 @@ func (s *Server) handleDynamicToolCall(agentID string, event agentcore.Event) {
 		RequestID:  event.RequestID,
 		Arguments:  call.Arguments,
 		TotalCalls: &totalCalls,
-	}, s.toolAdapterProviders())
+	}, toolAdapterProviders(s))
 	if dispatchErr != nil {
 		result = dispatchErr.Error()
 	}
@@ -244,7 +209,7 @@ func (s *Server) handleDynamicToolCall(agentID string, event agentcore.Event) {
 
 	// 广播到前端 — 让 UI 可以显示 LSP 调用
 	notifyPayload := buildToolNotifyPayload(threadID, agentID, call, argMap, filePath, success, totalCalls, elapsed, result)
-	s.Notify("dynamic-tool/called", notifyPayload)
+	notify(s, "dynamic-tool/called", notifyPayload)
 
 	// 回传结果: 使用 event.RequestID 发送 JSON-RPC response (codex 发的是 server request)
 	if err := s.codexAdapter.SendDynamicToolResult(proc, call.CallID, result, event.RequestID); err != nil {
@@ -301,24 +266,4 @@ func buildToolNotifyPayload(
 	}
 	payload["resultPreview"] = result
 	return payload
-}
-
-// ========================================
-// 编排类工具 (merged from orchestration_tools.go)
-// ========================================
-
-// allDynamicToolSchemas 构建全部动态工具列表。
-func (s *Server) allDynamicToolSchemas() []agentcore.DynamicTool {
-	if s == nil {
-		return nil
-	}
-	return tooladapter.AllSchemas(s.toolAdapterProviders())
-}
-
-func (s *Server) AllSchemas() []agentcore.DynamicTool {
-	return s.allDynamicToolSchemas()
-}
-
-func (s *Server) NextThreadSeq() int64 {
-	return s.threadSeq.Add(1)
 }

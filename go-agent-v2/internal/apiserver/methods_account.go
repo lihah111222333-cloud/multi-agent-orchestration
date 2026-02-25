@@ -16,7 +16,7 @@ type accountLoginStartParams struct {
 	APIKey   string `json:"apiKey,omitempty"`
 }
 
-func (s *Server) accountLoginStartTyped(_ context.Context, p accountLoginStartParams) (any, error) {
+func accountLoginStartTyped(_ *Server, _ context.Context, p accountLoginStartParams) (any, error) {
 	if p.APIKey != "" {
 		if err := os.Setenv("OPENAI_API_KEY", p.APIKey); err != nil {
 			logger.Warn("account/login: setenv failed", logger.FieldError, err)
@@ -27,18 +27,18 @@ func (s *Server) accountLoginStartTyped(_ context.Context, p accountLoginStartPa
 	return map[string]any{"loginUrl": "https://platform.openai.com/api-keys"}, nil
 }
 
-func (s *Server) accountLoginCancel(_ context.Context, _ json.RawMessage) (any, error) {
+func accountLoginCancel(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	return map[string]any{}, nil
 }
 
-func (s *Server) accountLogout(_ context.Context, _ json.RawMessage) (any, error) {
+func accountLogout(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	if err := os.Unsetenv("OPENAI_API_KEY"); err != nil {
 		logger.Warn("account/logout: unsetenv failed", logger.FieldError, err)
 	}
 	return map[string]any{}, nil
 }
 
-func (s *Server) accountRead(_ context.Context, _ json.RawMessage) (any, error) {
+func accountRead(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	key := os.Getenv("OPENAI_API_KEY")
 	masked := ""
 	if len(key) > 8 {
@@ -53,6 +53,6 @@ func (s *Server) accountRead(_ context.Context, _ json.RawMessage) (any, error) 
 }
 
 // accountRateLimitsRead 读取速率限制。
-func (s *Server) accountRateLimitsRead(_ context.Context, _ json.RawMessage) (any, error) {
+func accountRateLimitsRead(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	return map[string]any{"rateLimits": map[string]any{}}, nil
 }

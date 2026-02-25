@@ -12,7 +12,7 @@ import (
 func TestDashboardContractsStable(t *testing.T) {
 	t.Run("dashboard list methods keep stable empty shape", func(t *testing.T) {
 		s := &Server{methods: make(map[string]Handler)}
-		s.registerDashboardMethods()
+		registerDashboardMethods(s)
 
 		cases := []struct {
 			method string
@@ -47,7 +47,7 @@ func TestDashboardContractsStable(t *testing.T) {
 	t.Run("dashboard dag detail keeps stable error semantics", func(t *testing.T) {
 		t.Run("store missing", func(t *testing.T) {
 			s := &Server{methods: make(map[string]Handler)}
-			s.registerDashboardMethods()
+			registerDashboardMethods(s)
 
 			h := s.methods["dashboard/dagDetail"]
 			got, err := h(context.Background(), json.RawMessage(`{}`))
@@ -64,7 +64,7 @@ func TestDashboardContractsStable(t *testing.T) {
 					dagStore: &store.TaskDAGStore{},
 				},
 			}
-			s.registerDashboardMethods()
+			registerDashboardMethods(s)
 
 			h := s.methods["dashboard/dagDetail"]
 			got, err := h(context.Background(), json.RawMessage(`{}`))
@@ -81,7 +81,7 @@ func TestDashboardContractsStable(t *testing.T) {
 					dagStore: &store.TaskDAGStore{},
 				},
 			}
-			s.registerDashboardMethods()
+			registerDashboardMethods(s)
 
 			h := s.methods["dashboard/dagDetail"]
 			got, err := h(context.Background(), json.RawMessage(`{`))
@@ -94,9 +94,9 @@ func TestDashboardContractsStable(t *testing.T) {
 
 	t.Run("ui dashboard keeps stable empty payload shape", func(t *testing.T) {
 		s := &Server{methods: make(map[string]Handler)}
-		s.registerDashboardMethods()
+		registerDashboardMethods(s)
 
-		out, err := s.uiDashboardGet(context.Background(), uiDashboardGetParams{Page: "unknown"})
+		out, err := uiDashboardGet(s, context.Background(), uiDashboardGetParams{Page: "unknown"})
 		if err != nil {
 			t.Fatalf("uiDashboardGet returned error: %v", err)
 		}

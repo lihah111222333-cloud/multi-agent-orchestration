@@ -24,17 +24,25 @@ type uiStateThrottleEntry struct {
 // SetNotifyHook 设置 Notify 事件钩子。
 //
 // 用于桌面端桥接: apiserver 事件 -> Wails runtime event。
-func (s *Server) SetNotifyHook(h func(method string, params any)) {
-	s.notifyHookMu.Lock()
-	s.notifyHook = h
-	s.notifyHookMu.Unlock()
+func SetNotifyHook(s *Server, h func(method string, params any)) {
+	if s == nil {
+		return
+	}
+	s.notifyHookState.setHook(h)
 }
 
 // Notify 向所有连接广播 JSON-RPC 通知 (WebSocket + SSE)。
-func (s *Server) Notify(method string, params any) {
-	s.syncUIRuntimeFromNotify(method, params)
+func Notify(s *Server, method string, params any) {
+	if s == nil {
+		return
+	}
+	notify(s, method, params)
+}
+
+func notify(s *Server, method string, params any) {
+	syncUIRuntimeFromNotify(s, method, params)
 	payload := util.ToMapAny(params)
-	s.broadcastNotification(method, payload)
+	broadcastNotification(s, method, payload)
 
 	if shouldEmitUIStateChanged(method, payload) {
 		statePayload := map[string]any{"source": method}
@@ -44,7 +52,7 @@ func (s *Server) Notify(method string, params any) {
 		if aid, _ := payload["agent_id"].(string); aid != "" {
 			statePayload["agent_id"] = aid
 		}
-		s.throttledUIStateChanged(statePayload)
+		throttledUIStateChanged(s, statePayload)
 	}
 }
 
@@ -67,71 +75,42 @@ func shouldEmitUIStateChanged(method string, payload map[string]any) bool {
 //
 // 使用全局统一节流 (不再 per-thread): 多 agent 并行时也只发一条,
 // 前端只需要一个信号触发 syncRuntimeState 拉取最新快照。
-func (s *Server) throttledUIStateChanged(payload map[string]any) {
-	key := "_global"
-
-	now := time.Now()
-	interval := time.Duration(uiStateThrottleMs) * time.Millisecond
-
-	s.uiThrottleMu.Lock()
-	if s.uiThrottleEntries == nil {
-		s.uiThrottleEntries = make(map[string]*uiStateThrottleEntry)
-	}
-	entry, ok := s.uiThrottleEntries[key]
-	if !ok {
-		entry = &uiStateThrottleEntry{}
-		s.uiThrottleEntries[key] = entry
-	}
-
-	// 保存最新 payload (合并/覆盖)
-	entry.pending = payload
-
-	// 节流窗口内: 只安排 trailing timer
-	if now.Sub(entry.lastEmit) < interval {
-		if entry.timer == nil {
-			entry.timer = time.AfterFunc(interval, func() {
-				s.flushUIStateChanged(key)
-			})
-		}
-		s.uiThrottleMu.Unlock()
+func throttledUIStateChanged(s *Server, payload map[string]any) {
+	if s == nil {
 		return
 	}
-
-	// 节流窗口外: 立即发送
-	entry.lastEmit = now
-	pending := entry.pending
-	entry.pending = nil
-	// 取消 trailing timer (刚发了, 不需要了)
-	if entry.timer != nil {
-		entry.timer.Stop()
-		entry.timer = nil
+	key := "_global"
+	now := time.Now()
+	interval := time.Duration(uiStateThrottleMs) * time.Millisecond
+	pending, emitNow := s.uiThrottleState.stageUIStateChanged(
+		key,
+		payload,
+		now,
+		interval,
+		func() { flushUIStateChanged(s, key) },
+	)
+	if !emitNow {
+		return
 	}
-	s.uiThrottleMu.Unlock()
-
-	s.broadcastNotification("ui/state/changed", pending)
+	broadcastNotification(s, "ui/state/changed", pending)
 }
 
 // flushUIStateChanged trailing timer 回调: 发送最后一个 pending payload。
-func (s *Server) flushUIStateChanged(key string) {
-	s.uiThrottleMu.Lock()
-	entry, ok := s.uiThrottleEntries[key]
-	if !ok || entry.pending == nil {
-		if ok {
-			entry.timer = nil
-		}
-		s.uiThrottleMu.Unlock()
+func flushUIStateChanged(s *Server, key string) {
+	if s == nil {
 		return
 	}
-	entry.lastEmit = time.Now()
-	pending := entry.pending
-	entry.pending = nil
-	entry.timer = nil
-	s.uiThrottleMu.Unlock()
-
-	s.broadcastNotification("ui/state/changed", pending)
+	pending, ok := s.uiThrottleState.flushUIStateChanged(key, time.Now())
+	if !ok {
+		return
+	}
+	broadcastNotification(s, "ui/state/changed", pending)
 }
 
-func (s *Server) syncUIRuntimeFromNotify(method string, params any) {
+func syncUIRuntimeFromNotify(s *Server, method string, params any) {
+	if s == nil {
+		return
+	}
 	if s.uiRuntime == nil {
 		return
 	}
@@ -422,7 +401,10 @@ func toolResultSuccess(result string) bool {
 	return true
 }
 
-func (s *Server) rememberFileChanges(threadID string, files []string) {
+func rememberFileChanges(s *Server, threadID string, files []string) {
+	if s == nil {
+		return
+	}
 	if threadID == "" {
 		return
 	}
@@ -430,23 +412,20 @@ func (s *Server) rememberFileChanges(threadID string, files []string) {
 	if len(files) == 0 {
 		return
 	}
-	s.fileChangeMu.Lock()
-	defer s.fileChangeMu.Unlock()
-	s.fileChangeByThread[threadID] = files
+	s.turnTrackingState.rememberFileChanges(threadID, files)
 }
 
-func (s *Server) consumeRememberedFileChanges(threadID string) []string {
+func consumeRememberedFileChanges(s *Server, threadID string) []string {
+	if s == nil {
+		return nil
+	}
 	if threadID == "" {
 		return nil
 	}
-	s.fileChangeMu.Lock()
-	defer s.fileChangeMu.Unlock()
-	files := s.fileChangeByThread[threadID]
-	delete(s.fileChangeByThread, threadID)
-	return append([]string(nil), files...)
+	return s.turnTrackingState.consumeFileChanges(threadID)
 }
 
-func (s *Server) enrichFileChangePayload(threadID, eventType, method string, payload map[string]any) {
+func enrichFileChangePayload(s *Server, threadID, eventType, method string, payload map[string]any) {
 	if payload == nil {
 		return
 	}
@@ -477,11 +456,11 @@ func (s *Server) enrichFileChangePayload(threadID, eventType, method string, pay
 			payload["files"] = files
 			payload["file"] = files[0]
 			payload["type"] = "fileChange"
-			s.rememberFileChanges(threadID, files)
+			rememberFileChanges(s, threadID, files)
 		}
 	case "item/completed":
 		if len(files) == 0 {
-			files = s.consumeRememberedFileChanges(threadID)
+			files = consumeRememberedFileChanges(s, threadID)
 		}
 		if len(files) > 0 {
 			payload["files"] = files
@@ -495,7 +474,7 @@ func (s *Server) enrichFileChangePayload(threadID, eventType, method string, pay
 //
 // 普通事件: 广播为通知 (无需客户端回复)。
 // 审批事件: 发送 Server→Client 请求, 等待客户端回复, 回传 codex (§ 二)。
-func (s *Server) AgentEventHandler(agentID string) agentcore.EventHandler {
+func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 	return func(event agentcore.Event) {
 		method := mapEventToMethod(event.Type)
 
@@ -526,8 +505,8 @@ func (s *Server) AgentEventHandler(agentID string) agentcore.EventHandler {
 			payload["codexThreadId"] = rawTID
 		}
 		payload["threadId"] = agentID
-		s.enrichFileChangePayload(agentID, event.Type, method, payload)
-		s.enrichReadCommandPayload(event.Type, payload)
+		enrichFileChangePayload(s, agentID, event.Type, method, payload)
+		enrichReadCommandPayload(s, event.Type, payload)
 		s.codexAdapter.CaptureAndInjectTurnSummary(agentID, event.Type, method, payload)
 		if method == "error" {
 			willRetry, hasWillRetry := extractBoolFromPayload(payload, "willRetry", "will_retry", "recoverable")
@@ -564,23 +543,23 @@ func (s *Server) AgentEventHandler(agentID string) agentcore.EventHandler {
 		}
 
 		s.codexAdapter.FinalizeTrackedTurnEvent(agentID, event.Type, method, payload)
-		s.maybeAutoReportOrchestrationCompletion(agentID, event.Type, method, payload)
+		maybeAutoReportOrchestrationCompletion(s, agentID, event.Type, method, payload)
 
 		// § 二 审批事件: 需要客户端回复 (双向请求)
 		switch event.Type {
 		case "exec_approval_request":
-			util.SafeGo(func() { s.handleApprovalRequest(agentID, "item/commandExecution/requestApproval", payload, event) })
+			util.SafeGo(func() { handleApprovalRequest(s, agentID, "item/commandExecution/requestApproval", payload, event) })
 			return
 		case "file_change_approval_request":
-			util.SafeGo(func() { s.handleApprovalRequest(agentID, "item/fileChange/requestApproval", payload, event) })
+			util.SafeGo(func() { handleApprovalRequest(s, agentID, "item/fileChange/requestApproval", payload, event) })
 			return
 		case agentcore.EventDynamicToolCall:
-			util.SafeGo(func() { s.handleDynamicToolCall(agentID, event) })
+			util.SafeGo(func() { handleDynamicToolCall(s, agentID, event) })
 			return
 		}
 
 		// 普通事件: 广播通知
-		s.Notify(method, payload)
+		notify(s, method, payload)
 	}
 }
 
@@ -591,7 +570,11 @@ func (s *Server) AgentEventHandler(agentID string) agentcore.EventHandler {
 // handleHTTPRPC 处理 HTTP POST /rpc 请求 (调试模式用)。
 //
 // 接收标准 JSON-RPC 2.0 请求, 调用 InvokeMethod, 返回 JSON-RPC 响应。
-func (s *Server) handleHTTPRPC(w http.ResponseWriter, r *http.Request) {
+func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
+	if s == nil {
+		http.Error(w, "server not ready", http.StatusServiceUnavailable)
+		return
+	}
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -624,7 +607,7 @@ func (s *Server) handleHTTPRPC(w http.ResponseWriter, r *http.Request) {
 		params = json.RawMessage("{}")
 	}
 
-	result, err := s.InvokeMethod(r.Context(), req.Method, params)
+	result, err := InvokeMethod(s, r.Context(), req.Method, params)
 	if err != nil {
 		writeJSONRPCError(w, req.ID, -32603, err.Error())
 		return
@@ -691,7 +674,11 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 // handleSSE 处理 SSE 事件流 (debug 模式浏览器实时接收 agent 事件)。
-func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+func handleSSE(s *Server, w http.ResponseWriter, r *http.Request) {
+	if s == nil {
+		http.Error(w, "server not ready", http.StatusServiceUnavailable)
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "SSE not supported", http.StatusInternalServerError)
@@ -705,14 +692,10 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	ch := make(chan []byte, 64)
 
-	s.sseMu.Lock()
-	s.sseClients[ch] = struct{}{}
-	s.sseMu.Unlock()
+	s.sseState.addClient(ch)
 
 	defer func() {
-		s.sseMu.Lock()
-		delete(s.sseClients, ch)
-		s.sseMu.Unlock()
+		s.sseState.removeClient(ch)
 	}()
 
 	logger.Info("sse: client connected", logger.FieldRemote, r.RemoteAddr)
@@ -734,7 +717,10 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 // 当 Agent 通过 Codex 内置 shell 执行 cat/grep/find 等命令时:
 //   - payload 追加 isReadCommand: true + lspHint 字段 (前端可展示警告)
 //   - 调用 IncrementToolCall("shell_read:<cmd>") 统计使用次数
-func (s *Server) enrichReadCommandPayload(eventType string, payload map[string]any) {
+func enrichReadCommandPayload(s *Server, eventType string, payload map[string]any) {
+	if s == nil {
+		return
+	}
 	if payload == nil {
 		return
 	}
@@ -750,7 +736,7 @@ func (s *Server) enrichReadCommandPayload(eventType string, payload map[string]a
 	}
 	payload["isReadCommand"] = true
 	payload["lspHint"] = lspPreferenceHint
-	s.IncrementToolCall("shell_read:" + cmd)
+	incrementToolCall(s, "shell_read:"+cmd)
 	logger.Info("codex shell: read command detected",
 		logger.FieldCommand, cmd,
 	)

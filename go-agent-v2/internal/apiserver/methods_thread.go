@@ -38,7 +38,7 @@ type threadStartResponse struct {
 func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any, error) {
 	result, err := s.codexAdapter.ThreadStartFromParams(
 		ctx,
-		fmt.Sprintf("thread-%d-%d", time.Now().UnixMilli(), s.threadSeq.Add(1)),
+		fmt.Sprintf("thread-%d-%d", time.Now().UnixMilli(), nextThreadSeq(s)),
 		p.Cwd,
 		p.Model,
 		p.ModelProvider,
@@ -94,7 +94,7 @@ func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, er
 // threadNameSetParams thread/name/set 请求参数。
 
 func (s *Server) threadCompact(ctx context.Context, params json.RawMessage) (any, error) {
-	return s.sendSlashCommand(ctx, params, "/compact")
+	return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/compact")
 }
 
 // threadRollbackParams thread/rollback 请求参数。

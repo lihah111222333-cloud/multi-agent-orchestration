@@ -12,7 +12,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-func (s *Server) modelList(_ context.Context, _ json.RawMessage) (any, error) {
+func modelList(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	models := []map[string]string{
 		{"id": "o4-mini", "name": "O4 Mini"},
 		{"id": "o3", "name": "O3"},
@@ -22,7 +22,7 @@ func (s *Server) modelList(_ context.Context, _ json.RawMessage) (any, error) {
 	return map[string]any{"models": models}, nil
 }
 
-func (s *Server) configRead(_ context.Context, _ json.RawMessage) (any, error) {
+func configRead(s *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	model := "o4-mini"
 	if s.cfg != nil && s.cfg.LLMModel != "" {
 		model = s.cfg.LLMModel
@@ -109,7 +109,7 @@ type configValueWriteParams struct {
 	Value string `json:"value"`
 }
 
-func (s *Server) configValueWriteTyped(_ context.Context, p configValueWriteParams) (any, error) {
+func configValueWriteTyped(_ *Server, _ context.Context, p configValueWriteParams) (any, error) {
 	if !isAllowedEnvKey(p.Key) {
 		return nil, apperrors.Newf("Server.configValueWrite", "key %q not in allowlist", p.Key)
 	}
@@ -129,7 +129,7 @@ type configBatchWriteEntry struct {
 	Value string `json:"value"`
 }
 
-func (s *Server) configBatchWriteTyped(_ context.Context, p configBatchWriteParams) (any, error) {
+func configBatchWriteTyped(_ *Server, _ context.Context, p configBatchWriteParams) (any, error) {
 	var rejected []string
 	for _, e := range p.Entries {
 		if !isAllowedEnvKey(e.Key) {
@@ -147,7 +147,7 @@ func (s *Server) configBatchWriteTyped(_ context.Context, p configBatchWritePara
 	return result, nil
 }
 
-func (s *Server) configLSPPromptHintRead(ctx context.Context, _ json.RawMessage) (any, error) {
+func configLSPPromptHintRead(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
 	overrideHint := ""
 	usingDefault := true
 	if s.prefManager != nil {
@@ -160,7 +160,7 @@ func (s *Server) configLSPPromptHintRead(ctx context.Context, _ json.RawMessage)
 		}
 	}
 	return map[string]any{
-		"hint":            s.resolveLSPUsagePromptHint(ctx),
+		"hint":            resolveLSPUsagePromptHint(s, ctx),
 		"defaultHint":     defaultLSPUsagePromptHint,
 		"overrideHint":    overrideHint,
 		"usingDefault":    usingDefault,
@@ -173,7 +173,21 @@ type configLSPPromptHintWriteParams struct {
 	Hint string `json:"hint"`
 }
 
-func (s *Server) configLSPPromptHintWriteTyped(ctx context.Context, p configLSPPromptHintWriteParams) (any, error) {
+func validateLSPUsagePromptHint(hint string) error {
+	if len(hint) > maxLSPUsagePromptHintLen {
+		return apperrors.Newf("Server.configLSPPromptHintWrite", "hint length exceeds %d", maxLSPUsagePromptHintLen)
+	}
+	return nil
+}
+
+func resolveLSPUsagePromptHint(s *Server, ctx context.Context) string {
+	if s != nil && s.codexAdapter != nil {
+		return s.codexAdapter.ResolveLSPUsagePromptHint(ctx, defaultLSPUsagePromptHint, maxLSPUsagePromptHintLen)
+	}
+	return defaultLSPUsagePromptHint
+}
+
+func configLSPPromptHintWriteTyped(s *Server, ctx context.Context, p configLSPPromptHintWriteParams) (any, error) {
 	if s.prefManager == nil {
 		return nil, apperrors.New("Server.configLSPPromptHintWrite", "preference manager not initialized")
 	}
@@ -186,14 +200,14 @@ func (s *Server) configLSPPromptHintWriteTyped(ctx context.Context, p configLSPP
 	}
 	return map[string]any{
 		"ok":           true,
-		"hint":         s.resolveLSPUsagePromptHint(ctx),
+		"hint":         resolveLSPUsagePromptHint(s, ctx),
 		"defaultHint":  defaultLSPUsagePromptHint,
 		"overrideHint": normalized,
 		"usingDefault": normalized == "",
 	}, nil
 }
 
-func (s *Server) mcpServerStatusList(_ context.Context, _ json.RawMessage) (any, error) {
+func mcpServerStatusList(s *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	if s.lsp == nil {
 		return map[string]any{"servers": []map[string]any{}}, nil
 	}
@@ -211,7 +225,7 @@ func (s *Server) mcpServerStatusList(_ context.Context, _ json.RawMessage) (any,
 }
 
 // mcpServerReload 重载所有 MCP/LSP 语言服务器 (JSON-RPC: config/mcpServer/reload)。
-func (s *Server) mcpServerReload(_ context.Context, _ json.RawMessage) (any, error) {
+func mcpServerReload(s *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	if s.lsp == nil {
 		return map[string]any{"reloaded": false}, nil
 	}
@@ -225,7 +239,7 @@ type lspDiagnosticsQueryParams struct {
 }
 
 // collaborationModeList 列出协作模式 (experimental)。
-func (s *Server) collaborationModeList(_ context.Context, _ json.RawMessage) (any, error) {
+func collaborationModeList(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	return map[string]any{"modes": []map[string]string{
 		{"id": "default", "name": "Default"},
 		{"id": "pair", "name": "Pair Programming"},
@@ -233,7 +247,7 @@ func (s *Server) collaborationModeList(_ context.Context, _ json.RawMessage) (an
 }
 
 // experimentalFeatureList 列出实验性功能。
-func (s *Server) experimentalFeatureList(_ context.Context, _ json.RawMessage) (any, error) {
+func experimentalFeatureList(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	return map[string]any{"features": map[string]bool{
 		"backgroundTerminals": true,
 		"collaborationMode":   true,
@@ -242,7 +256,7 @@ func (s *Server) experimentalFeatureList(_ context.Context, _ json.RawMessage) (
 }
 
 // configRequirementsRead 读取配置需求。
-func (s *Server) configRequirementsRead(_ context.Context, _ json.RawMessage) (any, error) {
+func configRequirementsRead(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	routerModel := strings.TrimSpace(os.Getenv("DYN_TOOL_ROUTER_MODEL"))
 	routerBaseURL := strings.TrimSpace(os.Getenv("DYN_TOOL_ROUTER_BASE_URL"))
 	routerConfigured := routerModel == "" || routerBaseURL != ""
@@ -285,7 +299,7 @@ type logListParams struct {
 }
 
 // logListTyped 查询系统日志 (JSON-RPC: log/list)。
-func (s *Server) logListTyped(ctx context.Context, p logListParams) (any, error) {
+func logListTyped(s *Server, ctx context.Context, p logListParams) (any, error) {
 	if s.sysLogStore == nil {
 		return nil, apperrors.New("Server.logList", "log store not initialized")
 	}
@@ -307,7 +321,7 @@ func (s *Server) logListTyped(ctx context.Context, p logListParams) (any, error)
 }
 
 // logFilters 返回日志筛选器可选值 (JSON-RPC: log/filters)。
-func (s *Server) logFilters(ctx context.Context, _ json.RawMessage) (any, error) {
+func logFilters(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
 	if s.sysLogStore == nil {
 		return nil, apperrors.New("Server.logFilters", "log store not initialized")
 	}

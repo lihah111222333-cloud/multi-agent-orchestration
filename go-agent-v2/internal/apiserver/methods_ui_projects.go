@@ -84,7 +84,7 @@ func parseProjectsList(value any) []string {
 	return projects
 }
 
-func (s *Server) readProjectsState(ctx context.Context) ([]string, string, error) {
+func readProjectsState(s *Server, ctx context.Context) ([]string, string, error) {
 	if s.prefManager == nil {
 		return []string{}, ".", nil
 	}
@@ -104,7 +104,7 @@ func (s *Server) readProjectsState(ctx context.Context) ([]string, string, error
 	return projects, active, nil
 }
 
-func (s *Server) writeProjectsState(ctx context.Context, projects []string, active string) error {
+func writeProjectsState(s *Server, ctx context.Context, projects []string, active string) error {
 	if s.prefManager == nil {
 		return nil
 	}
@@ -127,8 +127,8 @@ func (s *Server) writeProjectsState(ctx context.Context, projects []string, acti
 	return nil
 }
 
-func (s *Server) uiProjectsGet(ctx context.Context, _ json.RawMessage) (any, error) {
-	projects, active, err := s.readProjectsState(ctx)
+func uiProjectsGet(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
+	projects, active, err := readProjectsState(s, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -138,8 +138,8 @@ func (s *Server) uiProjectsGet(ctx context.Context, _ json.RawMessage) (any, err
 	}, nil
 }
 
-func (s *Server) uiProjectsAdd(ctx context.Context, p uiProjectsAddParams) (any, error) {
-	projects, _, err := s.readProjectsState(ctx)
+func uiProjectsAdd(s *Server, ctx context.Context, p uiProjectsAddParams) (any, error) {
+	projects, _, err := readProjectsState(s, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +153,7 @@ func (s *Server) uiProjectsAdd(ctx context.Context, p uiProjectsAddParams) (any,
 	if !containsProject(projects, next) {
 		projects = append(projects, next)
 	}
-	if err := s.writeProjectsState(ctx, projects, next); err != nil {
+	if err := writeProjectsState(s, ctx, projects, next); err != nil {
 		return nil, err
 	}
 	return map[string]any{
@@ -162,8 +162,8 @@ func (s *Server) uiProjectsAdd(ctx context.Context, p uiProjectsAddParams) (any,
 	}, nil
 }
 
-func (s *Server) uiProjectsRemove(ctx context.Context, p uiProjectsRemoveParams) (any, error) {
-	projects, active, err := s.readProjectsState(ctx)
+func uiProjectsRemove(s *Server, ctx context.Context, p uiProjectsRemoveParams) (any, error) {
+	projects, active, err := readProjectsState(s, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +178,7 @@ func (s *Server) uiProjectsRemove(ctx context.Context, p uiProjectsRemoveParams)
 	if active == target {
 		active = "."
 	}
-	if err := s.writeProjectsState(ctx, next, active); err != nil {
+	if err := writeProjectsState(s, ctx, next, active); err != nil {
 		return nil, err
 	}
 	return map[string]any{
@@ -187,8 +187,8 @@ func (s *Server) uiProjectsRemove(ctx context.Context, p uiProjectsRemoveParams)
 	}, nil
 }
 
-func (s *Server) uiProjectsSetActive(ctx context.Context, p uiProjectsSetActiveParams) (any, error) {
-	projects, _, err := s.readProjectsState(ctx)
+func uiProjectsSetActive(s *Server, ctx context.Context, p uiProjectsSetActiveParams) (any, error) {
+	projects, _, err := readProjectsState(s, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,7 @@ func (s *Server) uiProjectsSetActive(ctx context.Context, p uiProjectsSetActiveP
 	if next == "" || (next != "." && !containsProject(projects, next)) {
 		next = "."
 	}
-	if err := s.writeProjectsState(ctx, projects, next); err != nil {
+	if err := writeProjectsState(s, ctx, projects, next); err != nil {
 		return nil, err
 	}
 	return map[string]any{

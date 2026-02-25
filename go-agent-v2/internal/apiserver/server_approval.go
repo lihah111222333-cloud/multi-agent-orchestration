@@ -54,15 +54,18 @@ func extractFirstString(payload map[string]any, keys ...string) string {
 //  1. AllocPendingRequest 分配 pending ID
 //  2. broadcastNotification 推送审批请求 (→ notifyHook → Wails Event → 前端)
 //  3. 等待前端 CallAPI("approval/respond") → ResolvePendingRequest 写入 channel
-func (s *Server) handleApprovalRequest(agentID, method string, payload map[string]any, event agentcore.Event) {
+func handleApprovalRequest(s *Server, agentID, method string, payload map[string]any, event agentcore.Event) {
+	if s == nil {
+		return
+	}
 	// 去重: 同一 agentID+method 正在处理中 → 跳过重复调用
 	inflightKey := agentID + ":" + method
-	if _, loaded := s.approvalInFlight.LoadOrStore(inflightKey, struct{}{}); loaded {
+	if !s.runtimeGuardState.tryBeginApproval(inflightKey) {
 		logger.Debug("app-server: approval dedup — skipping duplicate in-flight request",
 			logger.FieldAgentID, agentID, logger.FieldMethod, method)
 		return
 	}
-	defer s.approvalInFlight.Delete(inflightKey)
+	defer s.runtimeGuardState.endApproval(inflightKey)
 
 	// 心跳委派到 turn tracker: 防止 stall 检测在等待审批期间误杀。
 	stopHeartbeat := s.codexAdapter.StartApprovalStallHeartbeat(agentID)
@@ -71,7 +74,7 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 	approved := false
 
 	// 尝试 WebSocket 通道 (IDE 客户端)
-	resp, wsErr := s.SendRequestToAll(method, payload)
+	resp, wsErr := sendRequestToAll(s, method, payload)
 	if wsErr == nil && resp != nil && resp.Result != nil {
 		// WebSocket 客户端已回复
 		if m, ok := resp.Result.(map[string]any); ok {
@@ -82,15 +85,13 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 	} else {
 		// 降级: Wails 模式 — 通过 broadcastNotification + pending channel
 		// 仅在有 notifyHook (Wails 前端) 时才等待, 否则直接跳过 (approved=false → deny)
-		s.notifyHookMu.RLock()
-		hasHook := s.notifyHook != nil
-		s.notifyHookMu.RUnlock()
+		hasHook := s.notifyHookState.hasHook()
 
 		if hasHook {
 			logger.Info("app-server: approval via Wails mode (no WS client)",
 				logger.FieldAgentID, agentID, logger.FieldMethod, method)
 
-			reqID, ch, cleanup := s.AllocPendingRequest()
+			reqID, ch, cleanup := allocPendingRequest(s)
 			defer cleanup()
 
 			// 注入 requestId, 前端据此回复
@@ -104,14 +105,14 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 				threadID := strings.TrimSpace(agentID)
 				normalized := uistate.NormalizeEventFromPayload(method, method, payload)
 				s.uiRuntime.ApplyAgentEvent(threadID, normalized, payload)
-				s.throttledUIStateChanged(map[string]any{
+				throttledUIStateChanged(s, map[string]any{
 					"source":   method,
 					"threadId": threadID,
 				})
 			}
 
 			// 推送审批请求到前端 (→ notifyHook → Wails Event)
-			s.broadcastNotification(method, payload)
+			broadcastNotification(s, method, payload)
 
 			// 等待前端回复 (5 分钟超时)
 			timer := time.NewTimer(5 * time.Minute)
@@ -176,7 +177,13 @@ type approvalRespondParams struct {
 	Approved  bool  `json:"approved"`
 }
 
-func (s *Server) approvalRespondTyped(_ context.Context, p approvalRespondParams) (any, error) {
+func approvalRespondTyped(s *Server, _ context.Context, p approvalRespondParams) (any, error) {
+	if s == nil {
+		return map[string]any{
+			"ok":     false,
+			"status": "server_not_ready",
+		}, nil
+	}
 	if p.RequestID <= 0 {
 		return map[string]any{
 			"ok":     false,
@@ -184,7 +191,7 @@ func (s *Server) approvalRespondTyped(_ context.Context, p approvalRespondParams
 		}, nil
 	}
 
-	if !s.ResolvePendingRequest(p.RequestID, map[string]any{"approved": p.Approved}) {
+	if !ResolvePendingRequest(s, p.RequestID, map[string]any{"approved": p.Approved}) {
 		return map[string]any{
 			"ok":     false,
 			"status": "not_pending",

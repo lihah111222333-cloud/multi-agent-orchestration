@@ -5,34 +5,6 @@ import (
 	"strings"
 )
 
-// Adapter 承载 apiserver 的非 codex 通用逻辑。
-type Adapter struct{}
-
-// New 创建通用适配器。
-func New() *Adapter {
-	return &Adapter{}
-}
-
-// SkillInputText 构建 skill 注入文本。
-func (a *Adapter) SkillInputText(name, content string) string {
-	return SkillInputText(name, content)
-}
-
-// FileContentInputText 构建文件内容注入文本。
-func (a *Adapter) FileContentInputText(name, content string) string {
-	return FileContentInputText(name, content)
-}
-
-// MergePromptText 合并主 prompt 与追加提示。
-func (a *Adapter) MergePromptText(prompt, extra string) string {
-	return MergePromptText(prompt, extra)
-}
-
-// FuzzyMatch 子序列模糊匹配。
-func (a *Adapter) FuzzyMatch(text, pattern string) bool {
-	return FuzzyMatch(text, pattern)
-}
-
 // SkillInputText 构建 skill 注入文本。
 func SkillInputText(name, content string) string {
 	return fmt.Sprintf("[skill:%s] %s", strings.TrimSpace(name), content)

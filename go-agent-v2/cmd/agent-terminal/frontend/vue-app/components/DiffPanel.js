@@ -121,6 +121,35 @@ export const DiffPanel = {
       return stripped || raw;
     }
 
+    function splitDisplayFilePath(file) {
+      const fullPath = (displayFilePath(file) || '').toString().trim();
+      if (!fullPath) {
+        return { prefix: '', suffix: '' };
+      }
+      const normalized = fullPath.replace(/\\/g, '/');
+      const segments = normalized.split('/').filter(Boolean);
+      if (segments.length <= 1) {
+        return { prefix: '', suffix: normalized };
+      }
+      // 强制保留“后半段”完整显示，前半段交给省略策略。
+      const keepTailSegments = Math.max(2, Math.ceil(segments.length / 2));
+      const splitIndex = Math.max(0, segments.length - keepTailSegments);
+      const prefix = segments.slice(0, splitIndex).join('/');
+      const suffix = segments.slice(splitIndex).join('/');
+      return {
+        prefix: prefix ? `${prefix}/` : '',
+        suffix,
+      };
+    }
+
+    function displayFilePathPrefix(file) {
+      return splitDisplayFilePath(file).prefix;
+    }
+
+    function displayFilePathSuffix(file) {
+      return splitDisplayFilePath(file).suffix;
+    }
+
     function isCopiedFile(file) {
       const path = displayFilePath(file);
       return Boolean(path) && path === copiedPath.value;
@@ -355,6 +384,8 @@ export const DiffPanel = {
       headerIconPath,
       headerIconTooltip,
       displayFilePath,
+      displayFilePathPrefix,
+      displayFilePathSuffix,
       isCopiedFile,
       copyFilePath,
       mediaThumbSrc,
@@ -437,7 +468,13 @@ export const DiffPanel = {
           <div class="diff-file-header">
             <div class="diff-file-title">
               <span class="diff-file-caret">▾</span>
-              <span class="diff-file-name" :title="displayFilePath(file)">{{ displayFilePath(file) }}</span>
+              <span class="diff-file-name" :title="displayFilePath(file)">
+                <span
+                  v-if="displayFilePathPrefix(file)"
+                  class="diff-file-name-prefix"
+                >{{ displayFilePathPrefix(file) }}</span>
+                <span class="diff-file-name-suffix">{{ displayFilePathSuffix(file) }}</span>
+              </span>
               <button
                 class="diff-file-copy-btn"
                 type="button"

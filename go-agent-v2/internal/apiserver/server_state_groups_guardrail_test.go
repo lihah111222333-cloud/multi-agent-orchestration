@@ -15,6 +15,11 @@ func TestServerStateGroupsAreEmbedded(t *testing.T) {
 		reflect.TypeOf(codeRunState{}),
 		reflect.TypeOf(turnTrackingState{}),
 		reflect.TypeOf(uiThrottleState{}),
+		reflect.TypeOf(toolCallState{}),
+		reflect.TypeOf(sseState{}),
+		reflect.TypeOf(notifyHookState{}),
+		reflect.TypeOf(runtimeGuardState{}),
+		reflect.TypeOf(threadAliasState{}),
 		reflect.TypeOf(storeBundle{}),
 	}
 	for _, groupType := range required {
@@ -47,6 +52,11 @@ func TestServerLegacyStateFieldsNotAtTopLevel(t *testing.T) {
 		"threadSeq", "fileChangeMu", "fileChangeByThread",
 		"orchestrationReportMu", "orchestrationPendingReports", "orchestrationReportTTL",
 		"uiThrottleMu", "uiThrottleEntries",
+		"toolCallMu", "toolCallCount",
+		"sseMu", "sseClients",
+		"notifyHookMu", "notifyHook",
+		"approvalInFlight", "cleanupOnce",
+		"threadAliasMu",
 		"dagStore", "cmdStore", "promptStore", "fileStore", "workspaceRunStore", "sysLogStore",
 		"agentStatusStore", "auditLogStore", "aiLogStore", "busLogStore", "taskAckStore", "taskTraceStore",
 		"bindingStore",
@@ -76,6 +86,21 @@ func TestServerStateGroupShapes(t *testing.T) {
 	})
 	mustHaveFields(t, reflect.TypeOf(uiThrottleState{}), []string{
 		"uiThrottleMu", "uiThrottleEntries",
+	})
+	mustHaveFields(t, reflect.TypeOf(toolCallState{}), []string{
+		"toolCallMu", "toolCallCount",
+	})
+	mustHaveFields(t, reflect.TypeOf(sseState{}), []string{
+		"sseMu", "sseClients",
+	})
+	mustHaveFields(t, reflect.TypeOf(notifyHookState{}), []string{
+		"notifyHookMu", "notifyHook",
+	})
+	mustHaveFields(t, reflect.TypeOf(runtimeGuardState{}), []string{
+		"approvalInFlight", "cleanupOnce",
+	})
+	mustHaveFields(t, reflect.TypeOf(threadAliasState{}), []string{
+		"threadAliasMu",
 	})
 	mustHaveFields(t, reflect.TypeOf(storeBundle{}), []string{
 		"dagStore", "cmdStore", "promptStore", "fileStore", "workspaceRunStore", "sysLogStore",

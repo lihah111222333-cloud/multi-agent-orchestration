@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -65,6 +64,11 @@ type Server struct {
 	// turnTrackingState:     thread 序号 + 文件变更 + 自动回报跟踪
 	// uiThrottleState:       ui/state/changed 节流
 	// storeBundle:           资源/仪表盘/绑定存储依赖
+	// toolCallState:         动态工具调用计数
+	// sseState:              SSE 客户端集合
+	// notifyHookState:       通知钩子
+	// runtimeGuardState:     审批去重 + 一次性清理
+	// threadAliasState:      thread alias 串行化锁
 	// ========================================
 	mgr        *runner.AgentManager
 	lsp        *lsp.Manager
@@ -82,37 +86,29 @@ type Server struct {
 
 	storeBundle
 
-	skillSvc      *service.SkillService
-	skillsMgr     *skillsruntime.Manager
-	skillsDir     string
-	workspaceMgr  *service.WorkspaceManager
-	prefManager   *uistate.PreferenceManager
-	uiRuntime     *uistate.RuntimeManager
-	threadAliasMu sync.Mutex
+	skillSvc     *service.SkillService
+	skillsMgr    *skillsruntime.Manager
+	skillsDir    string
+	workspaceMgr *service.WorkspaceManager
+	prefManager  *uistate.PreferenceManager
+	uiRuntime    *uistate.RuntimeManager
+	threadAliasState
 
 	connManagerState
 	diagnosticsCacheState
 
-	// 动态工具调用计数 (可观测性)
-	toolCallMu    sync.Mutex
-	toolCallCount map[string]int64 // toolName -> count
+	toolCallState
 
 	codeRunState
 	turnTrackingState
 
-	// SSE 客户端 (debug 模式浏览器事件推送)
-	sseMu      sync.RWMutex
-	sseClients map[chan []byte]struct{}
+	sseState
 
-	// 通知钩子 (给桌面端桥接使用)
-	notifyHookMu sync.RWMutex
-	notifyHook   func(method string, params any)
+	notifyHookState
 
 	uiThrottleState
 
-	// 审批去重: 防止同一 agentID+method 并发双重处理
-	approvalInFlight sync.Map // key: "agentID:method"
-	cleanupOnce      sync.Once
+	runtimeGuardState
 
 	upgrader websocket.Upgrader
 }
@@ -129,12 +125,11 @@ type Deps struct {
 // New 创建服务器。
 func New(deps Deps) *Server {
 	s := &Server{
-		mgr:           deps.Manager,
-		lsp:           deps.LSP,
-		cfg:           deps.Config,
-		methods:       make(map[string]Handler),
-		dynTools:      make(map[string]tooladapter.RuntimeToolHandler),
-		toolCallCount: make(map[string]int64),
+		mgr:      deps.Manager,
+		lsp:      deps.LSP,
+		cfg:      deps.Config,
+		methods:  make(map[string]Handler),
+		dynTools: make(map[string]tooladapter.RuntimeToolHandler),
 		connManagerState: connManagerState{
 			conns:   make(map[string]*connEntry),
 			pending: make(map[int64]chan *Response),
@@ -151,7 +146,12 @@ func New(deps Deps) *Server {
 			orchestrationPendingReports: make(map[string]map[string]time.Time),
 			orchestrationReportTTL:      defaultOrchestrationReportTTL,
 		},
-		sseClients:  make(map[chan []byte]struct{}),
+		toolCallState: toolCallState{
+			toolCallCount: make(map[string]int64),
+		},
+		sseState: sseState{
+			sseClients: make(map[chan []byte]struct{}),
+		},
 		prefManager: uistate.NewPreferenceManager(nil),
 		uiRuntime:   uistate.NewRuntimeManager(),
 		uiThrottleState: uiThrottleState{

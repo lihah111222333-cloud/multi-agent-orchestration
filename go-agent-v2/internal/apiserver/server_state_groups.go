@@ -57,6 +57,35 @@ type uiThrottleState struct {
 	uiThrottleEntries map[string]*uiStateThrottleEntry // key: threadID or agentID
 }
 
+// toolCallState 聚合动态工具调用计数(可观测性)。
+type toolCallState struct {
+	toolCallMu    sync.Mutex
+	toolCallCount map[string]int64 // toolName -> count
+}
+
+// sseState 聚合 SSE 推送客户端集合。
+type sseState struct {
+	sseMu      sync.RWMutex
+	sseClients map[chan []byte]struct{}
+}
+
+// notifyHookState 聚合桌面端通知钩子状态。
+type notifyHookState struct {
+	notifyHookMu sync.RWMutex
+	notifyHook   func(method string, params any)
+}
+
+// runtimeGuardState 聚合运行时清理与审批去重状态。
+type runtimeGuardState struct {
+	approvalInFlight sync.Map // key: "agentID:method"
+	cleanupOnce      sync.Once
+}
+
+// threadAliasState 聚合 thread alias 写入串行化锁。
+type threadAliasState struct {
+	threadAliasMu sync.Mutex
+}
+
 // storeBundle 聚合 apiserver 资源/仪表盘相关存储依赖。
 type storeBundle struct {
 	// 资源 Store (编排工具依赖)

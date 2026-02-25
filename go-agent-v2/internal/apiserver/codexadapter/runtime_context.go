@@ -6,7 +6,7 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
-	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
+	appErrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -35,6 +35,14 @@ type skillNamesLister interface {
 	ListSkillNames() ([]string, error)
 }
 
+type skillMatchCandidatesLister interface {
+	ListSkillMatchCandidates() ([]SkillMatchCandidate, error)
+}
+
+type agentSkillsGetter interface {
+	GetAgentSkills(agentID string) []string
+}
+
 type turnStartSubmissionProvider interface {
 	PrepareTurnStartSubmission(threadID string, input []TurnInput, selectedSkills []string, manualSkillSelection bool) (TurnStartEntryPrepareResult, error)
 }
@@ -48,9 +56,6 @@ type turnSteerSubmissionProvider interface {
 }
 
 func (a *Adapter) allDynamicToolSchemas() []agentcore.DynamicTool {
-	if a == nil || a.ctx == nil {
-		return nil
-	}
 	provider, ok := any(a.ctx).(allSchemasProvider)
 	if !ok {
 		return nil
@@ -60,20 +65,14 @@ func (a *Adapter) allDynamicToolSchemas() []agentcore.DynamicTool {
 
 func (a *Adapter) resolveStartInstructionsForLaunch(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
 	hint := a.ResolveLSPUsagePromptHint(ctx, defaultLSPUsagePromptHint, maxLSPUsagePromptHintLen)
-	instructions, missing := a.PrependLSPAvailabilityWarning(hint, dynamicTools, commonadapter.MergePromptText)
-	if len(missing) == 0 {
-		return instructions
+	startInstructions, warnings := a.PrependLSPAvailabilityWarning(hint, dynamicTools, commonadapter.MergePromptText)
+	if len(warnings) > 0 {
+		logger.Warn("codexadapter: start instructions warnings: " + strings.Join(warnings, "; "))
 	}
-	logger.Warn("lsp hint references unavailable tools during launch",
-		"missing_lsp_tools", strings.Join(missing, ","),
-	)
-	return instructions
+	return startInstructions
 }
 
-func (a *Adapter) setAgentWorkDir(agentID, cwd string) {
-	if a == nil || a.ctx == nil {
-		return
-	}
+func (a *Adapter) setAgentWorkDir(agentID string, cwd string) {
 	setter, ok := any(a.ctx).(agentWorkDirSetter)
 	if !ok {
 		return
@@ -82,9 +81,6 @@ func (a *Adapter) setAgentWorkDir(agentID, cwd string) {
 }
 
 func (a *Adapter) cancelCodeRuns(agentID string) int {
-	if a == nil || a.ctx == nil {
-		return 0
-	}
 	canceler, ok := any(a.ctx).(codeRunCanceler)
 	if !ok {
 		return 0
@@ -93,63 +89,36 @@ func (a *Adapter) cancelCodeRuns(agentID string) int {
 }
 
 func (a *Adapter) readSkillContent(skillName string) (string, error) {
-	if a == nil || a.ctx == nil {
-		return "", apperrors.New("codexadapter.readSkillContent", "server context is not available")
+	if strings.TrimSpace(skillName) == "" {
+		return "", appErrors.New("codexadapter.readSkillContent", "skill name is required")
 	}
 	reader, ok := any(a.ctx).(skillContentReader)
 	if !ok {
-		return "", apperrors.New("codexadapter.readSkillContent", "skill content reader is not available")
+		return "", appErrors.New("codexadapter.readSkillContent", "server context does not support reading skill content")
 	}
 	return reader.ReadSkillContent(skillName)
 }
 
 func (a *Adapter) listSkillNames() ([]string, error) {
-	if a == nil || a.ctx == nil {
-		return []string{}, nil
-	}
 	lister, ok := any(a.ctx).(skillNamesLister)
 	if !ok {
-		return []string{}, nil
+		return nil, appErrors.New("codexadapter.listSkillNames", "server context does not support listing skill names")
 	}
-	names, err := lister.ListSkillNames()
-	if err != nil {
-		return nil, err
-	}
-	if names == nil {
-		return []string{}, nil
-	}
-	return names, nil
+	return lister.ListSkillNames()
 }
 
-func (a *Adapter) prepareTurnStartSubmission(threadID string, input []TurnInput, selectedSkills []string, manualSkillSelection bool) (TurnStartEntryPrepareResult, error) {
-	if a == nil || a.ctx == nil {
-		return TurnStartEntryPrepareResult{}, apperrors.New("codexadapter.prepareTurnStartSubmission", "server context is not available")
-	}
-	provider, ok := any(a.ctx).(turnStartSubmissionProvider)
+func (a *Adapter) listSkillMatchCandidates() ([]SkillMatchCandidate, error) {
+	lister, ok := any(a.ctx).(skillMatchCandidatesLister)
 	if !ok {
-		return TurnStartEntryPrepareResult{}, apperrors.New("codexadapter.prepareTurnStartSubmission", "turn start submission provider is not available")
+		return nil, appErrors.New("codexadapter.listSkillMatchCandidates", "server context does not support listing skill match candidates")
 	}
-	return provider.PrepareTurnStartSubmission(threadID, input, selectedSkills, manualSkillSelection)
+	return lister.ListSkillMatchCandidates()
 }
 
-func (a *Adapter) appendTurnStartUserTimeline(ctx context.Context, input []TurnInput, opt TurnAppendUserTimelineOptions) {
-	if a == nil || a.ctx == nil {
-		return
-	}
-	provider, ok := any(a.ctx).(turnStartTimelineProvider)
+func (a *Adapter) listAgentSkills(agentID string) []string {
+	getter, ok := any(a.ctx).(agentSkillsGetter)
 	if !ok {
-		return
+		return nil
 	}
-	provider.AppendTurnStartUserTimeline(ctx, input, opt)
-}
-
-func (a *Adapter) prepareTurnSteerSubmission(threadID string, input []TurnInput, selectedSkills []string, manualSkillSelection bool) (TurnSteerEntryPrepareResult, error) {
-	if a == nil || a.ctx == nil {
-		return TurnSteerEntryPrepareResult{}, apperrors.New("codexadapter.prepareTurnSteerSubmission", "server context is not available")
-	}
-	provider, ok := any(a.ctx).(turnSteerSubmissionProvider)
-	if !ok {
-		return TurnSteerEntryPrepareResult{}, apperrors.New("codexadapter.prepareTurnSteerSubmission", "turn steer submission provider is not available")
-	}
-	return provider.PrepareTurnSteerSubmission(threadID, input, selectedSkills, manualSkillSelection)
+	return getter.GetAgentSkills(agentID)
 }

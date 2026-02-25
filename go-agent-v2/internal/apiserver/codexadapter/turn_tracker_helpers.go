@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
@@ -22,7 +21,11 @@ const (
 )
 
 // TrackedTurnSummaryCacheEntry caches the latest summary for one tracked turn.
-type TrackedTurnSummaryCacheEntry = contracts.TrackedTurnSummaryCacheEntry
+type TrackedTurnSummaryCacheEntry struct {
+	TurnID    string
+	Summary   string
+	UpdatedAt time.Time
+}
 
 // TurnTrackerState carries mutable turn-tracker state owned by the caller.
 type TurnTrackerState struct {

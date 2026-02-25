@@ -140,8 +140,7 @@ func (a *Adapter) ThreadResume(ctx context.Context, threadID, path, cwd, model s
 
 // ThreadForkOptions carries dependencies for thread/fork.
 type ThreadForkOptions struct {
-	ThreadID     string
-	NowUnixMilli func() int64
+	ThreadID string
 }
 
 // ThreadForkResult is the normalized thread/fork payload.
@@ -174,8 +173,8 @@ func (a *Adapter) ThreadFork(opt ThreadForkOptions) (ThreadForkResult, error) {
 			}
 			if newID == "" {
 				now := time.Now().UnixMilli()
-				if opt.NowUnixMilli != nil {
-					now = opt.NowUnixMilli()
+				if a != nil && a.ctx != nil && a.ctx.NowUnixMilli != nil {
+					now = a.ctx.NowUnixMilli()
 				}
 				newID = fmt.Sprintf("thread-%d", now)
 			}

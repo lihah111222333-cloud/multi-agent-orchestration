@@ -6,14 +6,26 @@ import (
 	"sync"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-// TrackedTurn 是 turn 跟踪状态的跨包表示。
-type TrackedTurn = contracts.TrackedTurn
+// TrackedTurn is the turn lifecycle tracking state.
+type TrackedTurn struct {
+	ID                   string
+	ThreadID             string
+	StartedAt            time.Time
+	LastEventAt          time.Time
+	InterruptRequested   bool
+	InterruptRequestedAt time.Time
+	StallHintLogged      bool
+	StallGraceStarted    bool
+	StallAutoInterrupted bool
+	Done                 chan string
+	Timer                *time.Timer
+	StallTimer           *time.Timer
+}
 
 func (a *Adapter) trackerNotify() func(string, any) {
 	if a != nil && a.ctx != nil {

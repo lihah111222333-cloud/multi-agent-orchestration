@@ -13,20 +13,68 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 
-// ServerContext 暴露 codex 适配层所需的服务端能力边界。
-// 通过接口隔离 apiserver 内部实现，避免反向依赖具体结构体字段。
-type ServerContext interface {
-	Manager() *runner.AgentManager
-	Store() *uistate.PreferenceManager
-	BindingStore() *store.AgentCodexBindingStore
-	AgentStatusStore() *store.AgentStatusStore
-	UIRuntime() *uistate.RuntimeManager
-	Notify(method string, params any)
+// Deps defines codex adapter runtime dependencies.
+//
+// Function fields keep wiring explicit and avoid hard-coupling Adapter to
+// apiserver.Server method sets.
+type Deps struct {
+	Manager                  func() *runner.AgentManager
+	Store                    func() *uistate.PreferenceManager
+	BindingStore             func() *store.AgentCodexBindingStore
+	AgentStatusStore         func() *store.AgentStatusStore
+	UIRuntime                func() *uistate.RuntimeManager
+	AllSchemas               func() []agentcore.DynamicTool
+	NowUnixMilli             func() int64
+	SetAgentWorkDir          func(agentID, cwd string)
+	CancelCodeRuns           func(agentID string) int
+	ReadSkillContent         func(skillName string) (string, error)
+	ListSkillNames           func() ([]string, error)
+	ListSkillMatchCandidates func() ([]SkillMatchCandidate, error)
+	GetAgentSkills           func(agentID string) []string
+	Notify                   func(method string, params any)
+}
+
+func normalizeDeps(deps Deps) *Deps {
+	d := deps
+	if d.Manager == nil {
+		d.Manager = func() *runner.AgentManager { return nil }
+	}
+	if d.Store == nil {
+		d.Store = func() *uistate.PreferenceManager { return nil }
+	}
+	if d.BindingStore == nil {
+		d.BindingStore = func() *store.AgentCodexBindingStore { return nil }
+	}
+	if d.AgentStatusStore == nil {
+		d.AgentStatusStore = func() *store.AgentStatusStore { return nil }
+	}
+	if d.UIRuntime == nil {
+		d.UIRuntime = func() *uistate.RuntimeManager { return nil }
+	}
+	if d.AllSchemas == nil {
+		d.AllSchemas = func() []agentcore.DynamicTool { return nil }
+	}
+	if d.NowUnixMilli == nil {
+		d.NowUnixMilli = func() int64 { return time.Now().UnixMilli() }
+	}
+	if d.SetAgentWorkDir == nil {
+		d.SetAgentWorkDir = func(string, string) {}
+	}
+	if d.CancelCodeRuns == nil {
+		d.CancelCodeRuns = func(string) int { return 0 }
+	}
+	if d.GetAgentSkills == nil {
+		d.GetAgentSkills = func(string) []string { return nil }
+	}
+	if d.Notify == nil {
+		d.Notify = func(string, any) {}
+	}
+	return &d
 }
 
 // Adapter 封装对 proc.Client 的直接访问。
 type Adapter struct {
-	ctx ServerContext
+	ctx *Deps
 
 	tracker                TurnTrackerState
 	trackerMu              sync.Mutex
@@ -39,8 +87,8 @@ type Adapter struct {
 }
 
 // New 创建 codex 适配器。
-func New(ctx ServerContext) *Adapter {
-	adapter := &Adapter{ctx: ctx}
+func New(deps Deps) *Adapter {
+	adapter := &Adapter{ctx: normalizeDeps(deps)}
 	adapter.initTrackerState()
 	return adapter
 }
@@ -67,8 +115,8 @@ func (a *Adapter) initTrackerState() {
 	}
 }
 
-// Context 返回当前绑定的服务端上下文。
-func (a *Adapter) Context() ServerContext {
+// Context returns configured dependency hooks.
+func (a *Adapter) Context() *Deps {
 	if a == nil {
 		return nil
 	}

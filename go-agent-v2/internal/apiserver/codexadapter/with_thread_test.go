@@ -9,8 +9,6 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
-	"github.com/multi-agent/go-agent-v2/internal/store"
-	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 
 type fakeClient struct {
@@ -47,25 +45,11 @@ func (c *fakeClient) Kill() error {
 }
 func (c *fakeClient) Running() bool { return c.running }
 
-type testServerContext struct {
-	mgr *runner.AgentManager
+func testDeps(mgr *runner.AgentManager) *Deps {
+	return normalizeDeps(Deps{
+		Manager: func() *runner.AgentManager { return mgr },
+	})
 }
-
-func (c testServerContext) Manager() *runner.AgentManager             { return c.mgr }
-func (testServerContext) Store() *uistate.PreferenceManager           { return nil }
-func (testServerContext) BindingStore() *store.AgentCodexBindingStore { return nil }
-func (testServerContext) AgentStatusStore() *store.AgentStatusStore   { return nil }
-func (testServerContext) UIRuntime() *uistate.RuntimeManager          { return nil }
-func (testServerContext) AllSchemas() []agentcore.DynamicTool         { return nil }
-func (testServerContext) SetAgentWorkDir(string, string)              {}
-func (testServerContext) CancelCodeRuns(string) int                   { return 0 }
-func (testServerContext) ReadSkillContent(string) (string, error)     { return "", nil }
-func (testServerContext) ListSkillNames() ([]string, error)           { return nil, nil }
-func (testServerContext) ListSkillMatchCandidates() ([]SkillMatchCandidate, error) {
-	return nil, nil
-}
-func (testServerContext) GetAgentSkills(string) []string { return nil }
-func (testServerContext) Notify(string, any)             {}
 
 func newTestManager(t *testing.T) *runner.AgentManager {
 	t.Helper()
@@ -97,7 +81,7 @@ func TestResolveProcess_ResolverNotConfigured(t *testing.T) {
 
 func TestResolveProcess_NotFound(t *testing.T) {
 	mgr := newTestManager(t)
-	a := &Adapter{ctx: testServerContext{mgr: mgr}}
+	a := &Adapter{ctx: testDeps(mgr)}
 	_, err := a.resolveProcess("Test.resolveProcess", "thread-404")
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("resolveProcess() err = %v, want not found", err)
@@ -111,7 +95,7 @@ func TestWithProcess_Success(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = mgr.Stop("thread-1") })
 
-	a := &Adapter{ctx: testServerContext{mgr: mgr}}
+	a := &Adapter{ctx: testDeps(mgr)}
 	got, err := withProcess(a, "Test.withProcess", "thread-1", func(proc *runner.AgentProcess) (string, error) {
 		if proc == nil {
 			t.Fatal("proc is nil")
@@ -133,7 +117,7 @@ func TestWithProcess_TrimmedThreadID(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = mgr.Stop("thread-1") })
 
-	a := &Adapter{ctx: testServerContext{mgr: mgr}}
+	a := &Adapter{ctx: testDeps(mgr)}
 	_, err := withProcess(a, "Test.withProcess", "  thread-1  ", func(proc *runner.AgentProcess) (int, error) {
 		if proc == nil {
 			t.Fatal("proc is nil")
@@ -152,7 +136,7 @@ func TestWithProcess_PropagatesFnError(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = mgr.Stop("thread-1") })
 
-	a := &Adapter{ctx: testServerContext{mgr: mgr}}
+	a := &Adapter{ctx: testDeps(mgr)}
 	_, err := withProcess(a, "Test.withProcess", "thread-1", func(*runner.AgentProcess) (int, error) {
 		return 0, errors.New("inner error")
 	})

@@ -15,52 +15,11 @@ const (
 	maxLSPUsagePromptHintLen  = 16000
 )
 
-type allSchemasProvider interface {
-	AllSchemas() []agentcore.DynamicTool
-}
-
-type agentWorkDirSetter interface {
-	SetAgentWorkDir(agentID, cwd string)
-}
-
-type codeRunCanceler interface {
-	CancelCodeRuns(agentID string) int
-}
-
-type skillContentReader interface {
-	ReadSkillContent(skillName string) (string, error)
-}
-
-type skillNamesLister interface {
-	ListSkillNames() ([]string, error)
-}
-
-type skillMatchCandidatesLister interface {
-	ListSkillMatchCandidates() ([]SkillMatchCandidate, error)
-}
-
-type agentSkillsGetter interface {
-	GetAgentSkills(agentID string) []string
-}
-
-type turnStartSubmissionProvider interface {
-	PrepareTurnStartSubmission(threadID string, input []TurnInput, selectedSkills []string, manualSkillSelection bool) (TurnStartEntryPrepareResult, error)
-}
-
-type turnStartTimelineProvider interface {
-	AppendTurnStartUserTimeline(ctx context.Context, input []TurnInput, opt TurnAppendUserTimelineOptions)
-}
-
-type turnSteerSubmissionProvider interface {
-	PrepareTurnSteerSubmission(threadID string, input []TurnInput, selectedSkills []string, manualSkillSelection bool) (TurnSteerEntryPrepareResult, error)
-}
-
 func (a *Adapter) allDynamicToolSchemas() []agentcore.DynamicTool {
-	provider, ok := any(a.ctx).(allSchemasProvider)
-	if !ok {
+	if a == nil || a.ctx == nil || a.ctx.AllSchemas == nil {
 		return nil
 	}
-	return provider.AllSchemas()
+	return a.ctx.AllSchemas()
 }
 
 func (a *Adapter) resolveStartInstructionsForLaunch(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
@@ -73,52 +32,46 @@ func (a *Adapter) resolveStartInstructionsForLaunch(ctx context.Context, dynamic
 }
 
 func (a *Adapter) setAgentWorkDir(agentID string, cwd string) {
-	setter, ok := any(a.ctx).(agentWorkDirSetter)
-	if !ok {
+	if a == nil || a.ctx == nil || a.ctx.SetAgentWorkDir == nil {
 		return
 	}
-	setter.SetAgentWorkDir(agentID, cwd)
+	a.ctx.SetAgentWorkDir(agentID, cwd)
 }
 
 func (a *Adapter) cancelCodeRuns(agentID string) int {
-	canceler, ok := any(a.ctx).(codeRunCanceler)
-	if !ok {
+	if a == nil || a.ctx == nil || a.ctx.CancelCodeRuns == nil {
 		return 0
 	}
-	return canceler.CancelCodeRuns(agentID)
+	return a.ctx.CancelCodeRuns(agentID)
 }
 
 func (a *Adapter) readSkillContent(skillName string) (string, error) {
 	if strings.TrimSpace(skillName) == "" {
 		return "", appErrors.New("codexadapter.readSkillContent", "skill name is required")
 	}
-	reader, ok := any(a.ctx).(skillContentReader)
-	if !ok {
-		return "", appErrors.New("codexadapter.readSkillContent", "server context does not support reading skill content")
+	if a == nil || a.ctx == nil || a.ctx.ReadSkillContent == nil {
+		return "", appErrors.New("codexadapter.readSkillContent", "server context is not configured")
 	}
-	return reader.ReadSkillContent(skillName)
+	return a.ctx.ReadSkillContent(skillName)
 }
 
 func (a *Adapter) listSkillNames() ([]string, error) {
-	lister, ok := any(a.ctx).(skillNamesLister)
-	if !ok {
-		return nil, appErrors.New("codexadapter.listSkillNames", "server context does not support listing skill names")
+	if a == nil || a.ctx == nil || a.ctx.ListSkillNames == nil {
+		return nil, appErrors.New("codexadapter.listSkillNames", "server context is not configured")
 	}
-	return lister.ListSkillNames()
+	return a.ctx.ListSkillNames()
 }
 
 func (a *Adapter) listSkillMatchCandidates() ([]SkillMatchCandidate, error) {
-	lister, ok := any(a.ctx).(skillMatchCandidatesLister)
-	if !ok {
-		return nil, appErrors.New("codexadapter.listSkillMatchCandidates", "server context does not support listing skill match candidates")
+	if a == nil || a.ctx == nil || a.ctx.ListSkillMatchCandidates == nil {
+		return nil, appErrors.New("codexadapter.listSkillMatchCandidates", "server context is not configured")
 	}
-	return lister.ListSkillMatchCandidates()
+	return a.ctx.ListSkillMatchCandidates()
 }
 
 func (a *Adapter) listAgentSkills(agentID string) []string {
-	getter, ok := any(a.ctx).(agentSkillsGetter)
-	if !ok {
+	if a == nil || a.ctx == nil || a.ctx.GetAgentSkills == nil {
 		return nil
 	}
-	return getter.GetAgentSkills(agentID)
+	return a.ctx.GetAgentSkills(agentID)
 }

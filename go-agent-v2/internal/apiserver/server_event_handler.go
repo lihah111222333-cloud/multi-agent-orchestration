@@ -78,6 +78,9 @@ func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 		if normalized.ExitCode != nil {
 			payload["uiExitCode"] = *normalized.ExitCode
 		}
+		if normalized.UIType == uistate.UITypeTurnStarted {
+			emitTurnStartDiffReset(s, agentID, payload)
+		}
 		if s.uiRuntime != nil {
 			s.uiRuntime.ApplyAgentEvent(agentID, normalized, payload)
 		}
@@ -101,6 +104,33 @@ func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 		// 普通事件: 广播通知
 		notify(s, method, payload)
 	}
+}
+
+func emitTurnStartDiffReset(s *Server, threadID string, payload map[string]any) {
+	if s == nil {
+		return
+	}
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return
+	}
+	resetPayload := map[string]any{
+		"threadId": id,
+		"diff":     "",
+		"uiText":   "",
+	}
+	if payload != nil {
+		if codexThreadID, _ := payload["codexThreadId"].(string); strings.TrimSpace(codexThreadID) != "" {
+			resetPayload["codexThreadId"] = strings.TrimSpace(codexThreadID)
+		}
+	}
+
+	normalized := uistate.NormalizeEventFromPayload(agentcore.EventTurnDiff, "turn/diff/updated", resetPayload)
+	resetPayload["uiType"] = string(normalized.UIType)
+	if s.uiRuntime != nil {
+		s.uiRuntime.ApplyAgentEvent(id, normalized, resetPayload)
+	}
+	notify(s, "turn/diff/updated", resetPayload)
 }
 
 // enrichReadCommandPayload 检测 exec_command_begin 事件中的阅读类命令。

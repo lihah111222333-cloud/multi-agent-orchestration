@@ -1,11 +1,18 @@
 package apiserver
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/internal/tools"
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 
 func TestResolveDynamicToolThreadIDs(t *testing.T) {
@@ -179,6 +186,7 @@ func TestBuildIncrementalDiffTextFiltersPreexistingChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capture before snapshot: %v", err)
 	}
+	beforeSnapshots := captureWorkingTreeFileSnapshots(repoRoot, sortedDiffMapKeys(beforeByFile))
 
 	if err := os.WriteFile(freshPath, []byte("new-file\n"), 0o644); err != nil {
 		t.Fatalf("write fresh untracked file: %v", err)
@@ -188,7 +196,10 @@ func TestBuildIncrementalDiffTextFiltersPreexistingChanges(t *testing.T) {
 		t.Fatalf("capture after snapshot: %v", err)
 	}
 
-	delta := buildIncrementalDiffText(beforeByFile, afterByFile)
+	delta, err := buildIncrementalDiffText(repoRoot, beforeByFile, afterByFile, beforeSnapshots)
+	if err != nil {
+		t.Fatalf("buildIncrementalDiffText: %v", err)
+	}
 	if !strings.Contains(delta, "fresh.txt") {
 		t.Fatalf("incremental diff should include fresh.txt, got: %s", delta)
 	}
@@ -208,6 +219,7 @@ func TestBuildIncrementalDiffTextIncludesFurtherChangesOnDirtyFile(t *testing.T)
 	if err != nil {
 		t.Fatalf("capture before snapshot: %v", err)
 	}
+	beforeSnapshots := captureWorkingTreeFileSnapshots(repoRoot, sortedDiffMapKeys(beforeByFile))
 
 	if err := os.WriteFile(trackedPath, []byte("line-1\nline-2\nline-3\n"), 0o644); err != nil {
 		t.Fatalf("write second dirty state: %v", err)
@@ -217,10 +229,204 @@ func TestBuildIncrementalDiffTextIncludesFurtherChangesOnDirtyFile(t *testing.T)
 		t.Fatalf("capture after snapshot: %v", err)
 	}
 
-	delta := buildIncrementalDiffText(beforeByFile, afterByFile)
+	delta, err := buildIncrementalDiffText(repoRoot, beforeByFile, afterByFile, beforeSnapshots)
+	if err != nil {
+		t.Fatalf("buildIncrementalDiffText: %v", err)
+	}
 	if !strings.Contains(delta, "tracked.txt") {
 		t.Fatalf("incremental diff should include updated dirty tracked.txt, got: %s", delta)
 	}
+}
+
+func TestSplitUnifiedDiffByFileSupportsQuotedPaths(t *testing.T) {
+	diff := strings.Join([]string{
+		"diff --git \"a/dir with space/a.txt\" \"b/dir with space/a.txt\"",
+		"index 1111111..2222222 100644",
+		"--- \"a/dir with space/a.txt\"",
+		"+++ \"b/dir with space/a.txt\"",
+		"@@ -1 +1,2 @@",
+		" line-1",
+		"+line-2",
+	}, "\n")
+
+	byFile := splitUnifiedDiffByFile(diff)
+	block, ok := byFile["dir with space/a.txt"]
+	if !ok {
+		t.Fatalf("expected quoted path key to be parsed, got keys: %v", sortedDiffMapKeys(byFile))
+	}
+	if !strings.Contains(block, "+line-2") {
+		t.Fatalf("unexpected diff block: %s", block)
+	}
+}
+
+func TestHandleDynamicToolCallUpdatesRuntimeDiffTextForCurrentCall(t *testing.T) {
+	repoRoot := initTestGitRepo(t)
+	preexistingPath := filepath.Join(repoRoot, "preexisting.txt")
+	if err := os.WriteFile(preexistingPath, []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("seed preexisting file: %v", err)
+	}
+
+	const agentID = "thread-123"
+	mgr := newDynamicToolTestManager(t, "019c96bd-1450-7510-800f-6270ab10f06c")
+	if err := mgr.Launch(context.Background(), agentID, agentID, "", repoRoot, "", nil); err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop(agentID) })
+
+	s := New(Deps{Manager: mgr})
+	trackedPath := filepath.Join(repoRoot, "tracked.txt")
+	setRuntimeTool(s, "run", func(_ tools.ToolCallContext, args json.RawMessage) string {
+		var req struct {
+			FilePath string `json:"file_path"`
+			Content  string `json:"content"`
+		}
+		if err := json.Unmarshal(args, &req); err != nil {
+			return "error: " + err.Error()
+		}
+		if err := os.WriteFile(req.FilePath, []byte(req.Content), 0o644); err != nil {
+			return "error: " + err.Error()
+		}
+		return "ok"
+	})
+
+	callArgs, err := json.Marshal(map[string]any{
+		"file_path": trackedPath,
+		"content":   "line-1\nline-2\n",
+	})
+	if err != nil {
+		t.Fatalf("marshal call args: %v", err)
+	}
+	rawCall, err := json.Marshal(agentcore.DynamicToolCallData{
+		ThreadID:  "019c96bd-1450-7510-800f-6270ab10f06c",
+		CallID:    "call-1",
+		Tool:      "run",
+		Arguments: callArgs,
+	})
+	if err != nil {
+		t.Fatalf("marshal call payload: %v", err)
+	}
+
+	responded := false
+	handleDynamicToolCall(s, agentID, agentcore.Event{
+		Type: agentcore.EventDynamicToolCall,
+		Data: rawCall,
+		RespondResultFunc: func(any) error {
+			responded = true
+			return nil
+		},
+	})
+
+	if !responded {
+		t.Fatalf("dynamic tool result callback was not invoked")
+	}
+	diffText := s.uiRuntime.ThreadDiff(agentID)
+	if !strings.Contains(diffText, "tracked.txt") {
+		t.Fatalf("expected tracked file in diff, got: %s", diffText)
+	}
+	if !strings.Contains(diffText, "line-2") {
+		t.Fatalf("expected updated content in diff, got: %s", diffText)
+	}
+	if strings.Contains(diffText, "preexisting.txt") {
+		t.Fatalf("diff should not include preexisting dirty file, got: %s", diffText)
+	}
+}
+
+func TestAgentEventHandlerTurnStartedClearsStaleDiff(t *testing.T) {
+	repoRoot := initTestGitRepo(t)
+	const agentID = "thread-456"
+	mgr := newDynamicToolTestManager(t, "019c96bd-1450-7510-800f-6270ab10f06c")
+	if err := mgr.Launch(context.Background(), agentID, agentID, "", repoRoot, "", nil); err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop(agentID) })
+
+	s := New(Deps{Manager: mgr})
+	stalePayload := map[string]any{
+		"threadId": agentID,
+		"diff":     "stale-diff",
+		"uiText":   "stale-diff",
+	}
+	staleNormalized := uistate.NormalizeEventFromPayload(agentcore.EventTurnDiff, "turn/diff/updated", stalePayload)
+	s.uiRuntime.ApplyAgentEvent(agentID, staleNormalized, stalePayload)
+	if got := s.uiRuntime.ThreadDiff(agentID); got == "" {
+		t.Fatalf("expected stale diff to be set before turn start")
+	}
+
+	handler := AgentEventHandler(s, agentID)
+	handler(agentcore.Event{
+		Type: agentcore.EventTurnStarted,
+		Data: json.RawMessage(`{}`),
+	})
+
+	if got := s.uiRuntime.ThreadDiff(agentID); got != "" {
+		t.Fatalf("turn start should clear stale diff, got: %s", got)
+	}
+}
+
+type dynamicToolFakeClient struct {
+	port     int
+	threadID string
+	running  bool
+	handler  agentcore.EventHandler
+}
+
+func (c *dynamicToolFakeClient) GetPort() int { return c.port }
+
+func (c *dynamicToolFakeClient) GetThreadID() string { return c.threadID }
+
+func (c *dynamicToolFakeClient) SetEventHandler(handler agentcore.EventHandler) { c.handler = handler }
+
+func (c *dynamicToolFakeClient) SpawnAndConnect(context.Context, string, string, string, string, []agentcore.DynamicTool) error {
+	c.running = true
+	return nil
+}
+
+func (c *dynamicToolFakeClient) Submit(string, []string, []string, json.RawMessage) error { return nil }
+
+func (c *dynamicToolFakeClient) SendCommand(string, string) error { return nil }
+
+func (c *dynamicToolFakeClient) SendDynamicToolResult(string, string, *int64) error { return nil }
+
+func (c *dynamicToolFakeClient) RespondError(int64, int, string) error { return nil }
+
+func (c *dynamicToolFakeClient) ListThreads() ([]agentcore.ThreadInfo, error) { return nil, nil }
+
+func (c *dynamicToolFakeClient) ResumeThread(agentcore.ResumeThreadRequest) error { return nil }
+
+func (c *dynamicToolFakeClient) ForkThread(agentcore.ForkThreadRequest) (*agentcore.ForkThreadResponse, error) {
+	return &agentcore.ForkThreadResponse{ThreadID: c.threadID}, nil
+}
+
+func (c *dynamicToolFakeClient) Shutdown() error {
+	c.running = false
+	return nil
+}
+
+func (c *dynamicToolFakeClient) Kill() error {
+	c.running = false
+	return nil
+}
+
+func (c *dynamicToolFakeClient) Running() bool { return c.running }
+
+func newDynamicToolTestManager(t *testing.T, codexThreadID string) *runner.AgentManager {
+	t.Helper()
+	factory := func(port int, agentID string) agentcore.Client {
+		threadID := strings.TrimSpace(codexThreadID)
+		if threadID == "" {
+			threadID = agentID
+		}
+		return &dynamicToolFakeClient{
+			port:     port,
+			threadID: threadID,
+			running:  true,
+		}
+	}
+	mgr, err := runner.NewAgentManager(factory, factory)
+	if err != nil {
+		t.Fatalf("NewAgentManager() error = %v", err)
+	}
+	return mgr
 }
 
 func sameFilePath(left, right string) bool {

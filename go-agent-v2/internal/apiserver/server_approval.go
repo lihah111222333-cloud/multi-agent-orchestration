@@ -35,6 +35,42 @@ func extractBoolFromPayload(payload map[string]any, keys ...string) (bool, bool)
 	return false, false
 }
 
+func extractApprovalDecision(result any) (bool, bool) {
+	payload, ok := result.(map[string]any)
+	if !ok || payload == nil {
+		return false, false
+	}
+	if approved, ok := extractBoolFromPayload(payload, "approved"); ok {
+		return approved, true
+	}
+	rawDecision, _ := payload["decision"].(string)
+	switch strings.ToLower(strings.TrimSpace(rawDecision)) {
+	case "accept", "acceptforsession", "yes", "approved":
+		return true, true
+	case "decline", "cancel", "no", "denied":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func approvalDecisionPayload(_ string, approved bool) map[string]any {
+	decision := "decline"
+	if approved {
+		decision = "accept"
+	}
+	return map[string]any{"decision": decision}
+}
+
+func denyApprovalSafely(event agentcore.Event, agentID string) {
+	if event.DenyFunc == nil {
+		return
+	}
+	if denyErr := event.DenyFunc(); denyErr != nil {
+		logger.Warn("app-server: deny callback failed", logger.FieldAgentID, agentID, logger.FieldError, denyErr)
+	}
+}
+
 // handleApprovalRequest 处理审批事件: 双通道模式。
 //
 // 优先尝试 WebSocket (SendRequestToAll) — 适用于 IDE 客户端。
@@ -64,11 +100,8 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	// 尝试 WebSocket 通道 (IDE 客户端)
 	resp, wsErr := sendRequestToAll(s, method, payload)
 	if wsErr == nil && resp != nil && resp.Result != nil {
-		// WebSocket 客户端已回复
-		if m, ok := resp.Result.(map[string]any); ok {
-			if v, ok := m["approved"]; ok {
-				approved, _ = v.(bool)
-			}
+		if decision, ok := extractApprovalDecision(resp.Result); ok {
+			approved = decision
 		}
 	} else {
 		// 降级: Wails 模式 — 通过 broadcastNotification + pending channel
@@ -107,11 +140,9 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 			defer timer.Stop()
 			select {
 			case wailsResp := <-ch:
-				if wailsResp != nil && wailsResp.Result != nil {
-					if m, ok := wailsResp.Result.(map[string]any); ok {
-						if v, ok := m["approved"]; ok {
-							approved, _ = v.(bool)
-						}
+				if wailsResp != nil {
+					if decision, ok := extractApprovalDecision(wailsResp.Result); ok {
+						approved = decision
 					}
 				}
 			case <-timer.C:
@@ -125,26 +156,31 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 		}
 	}
 
-	// 回传给 codex agent
+	if event.RespondResultFunc != nil {
+		decision := approvalDecisionPayload(method, approved)
+		if err := event.RespondResultFunc(decision); err != nil {
+			logger.Warn("app-server: respond approval result failed",
+				logger.FieldAgentID, agentID,
+				logger.FieldMethod, method,
+				logger.FieldError, err,
+			)
+			denyApprovalSafely(event, agentID)
+		}
+		return
+	}
+
+	// 回退兼容路径: 老协议下无 Request-Response 回调时, 仍用 yes/no submit。
 	if s.mgr == nil {
 		logger.Error("app-server: approval auto-denied — mgr is nil",
 			logger.FieldAgentID, agentID, logger.FieldMethod, method)
-		if event.DenyFunc != nil {
-			if denyErr := event.DenyFunc(); denyErr != nil {
-				logger.Warn("app-server: deny callback failed", logger.FieldAgentID, agentID, logger.FieldError, denyErr)
-			}
-		}
+		denyApprovalSafely(event, agentID)
 		return
 	}
 	proc := s.mgr.Get(agentID)
 	if proc == nil {
 		logger.Error("app-server: approval auto-denied — agent gone",
 			logger.FieldAgentID, agentID, logger.FieldMethod, method)
-		if event.DenyFunc != nil {
-			if denyErr := event.DenyFunc(); denyErr != nil {
-				logger.Warn("app-server: deny callback failed", logger.FieldAgentID, agentID, logger.FieldError, denyErr)
-			}
-		}
+		denyApprovalSafely(event, agentID)
 		return
 	}
 	decision := "no"

@@ -6,6 +6,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/skillutil"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 type AutoMatchInput = contracts.AutoMatchInput
@@ -78,44 +79,49 @@ func (a *Adapter) CollectAutoMatchedSkillMatches(
 	return CollectAutoMatchedSkillMatches(prompt, inputs, configuredSkillNames, candidates, options)
 }
 
-type RenderAutoMatchedSkillPromptOptions struct {
-	Matches          []AutoMatchedSkillMatch
-	ReadSkillContent func(skillName string) (string, error)
-	MergePromptText  func(prompt, extra string) string
-	SkillInputText   func(name, content string) string
-	OnReadSkillError func(skillName, matchedBy string, err error)
+func logAutoMatchedSkillReadError(agentID, skillName, matchedBy string, readErr error) {
+	logger.Warn("turn/start: auto-matched skill unavailable, skip",
+		logger.FieldAgentID, agentID, logger.FieldThreadID, agentID,
+		logger.FieldSkill, skillName,
+		"matched_by", matchedBy,
+		logger.FieldError, readErr,
+	)
 }
 
 // RenderAutoMatchedSkillPrompt renders skill prompt payload for matched skills.
-func RenderAutoMatchedSkillPrompt(opt RenderAutoMatchedSkillPromptOptions) (string, int) {
-	if len(opt.Matches) == 0 || opt.ReadSkillContent == nil || opt.SkillInputText == nil {
+func RenderAutoMatchedSkillPrompt(
+	agentID string,
+	matches []AutoMatchedSkillMatch,
+	readSkillContent func(skillName string) (string, error),
+	mergePromptText func(prompt, extra string) string,
+	skillInputText func(name, content string) string,
+) (string, int) {
+	if len(matches) == 0 || readSkillContent == nil || skillInputText == nil {
 		return "", 0
 	}
 
-	texts := make([]string, 0, len(opt.Matches))
-	for _, match := range opt.Matches {
+	texts := make([]string, 0, len(matches))
+	for _, match := range matches {
 		skillName := strings.TrimSpace(match.Name)
 		if skillName == "" {
 			continue
 		}
-		content, err := opt.ReadSkillContent(skillName)
+		content, err := readSkillContent(skillName)
 		if err != nil {
-			if opt.OnReadSkillError != nil {
-				opt.OnReadSkillError(skillName, match.MatchedBy, err)
-			}
+			logAutoMatchedSkillReadError(agentID, skillName, match.MatchedBy, err)
 			continue
 		}
 		if match.MatchedBy == "force" {
 			instruction := commonadapter.ForceMatchedSkillInstruction(match.MatchedTerms)
 			if strings.TrimSpace(instruction) != "" {
-				if opt.MergePromptText != nil {
-					content = opt.MergePromptText(instruction, content)
+				if mergePromptText != nil {
+					content = mergePromptText(instruction, content)
 				} else {
 					content = strings.TrimSpace(instruction) + "\n" + strings.TrimSpace(content)
 				}
 			}
 		}
-		texts = append(texts, opt.SkillInputText(skillName, content))
+		texts = append(texts, skillInputText(skillName, content))
 	}
 	if len(texts) == 0 {
 		return "", 0
@@ -124,15 +130,15 @@ func RenderAutoMatchedSkillPrompt(opt RenderAutoMatchedSkillPromptOptions) (stri
 }
 
 // RenderAutoMatchedSkillPrompt renders matched-skill prompt using adapter-owned dependencies.
-func (a *Adapter) RenderAutoMatchedSkillPrompt(matches []AutoMatchedSkillMatch, onReadSkillError func(skillName, matchedBy string, err error)) (string, int) {
+func (a *Adapter) RenderAutoMatchedSkillPrompt(agentID string, matches []AutoMatchedSkillMatch) (string, int) {
 	if a == nil {
 		return "", 0
 	}
-	return RenderAutoMatchedSkillPrompt(RenderAutoMatchedSkillPromptOptions{
-		Matches:          matches,
-		ReadSkillContent: a.readSkillContent,
-		MergePromptText:  commonadapter.MergePromptText,
-		SkillInputText:   commonadapter.SkillInputText,
-		OnReadSkillError: onReadSkillError,
-	})
+	return RenderAutoMatchedSkillPrompt(
+		agentID,
+		matches,
+		a.readSkillContent,
+		commonadapter.MergePromptText,
+		commonadapter.SkillInputText,
+	)
 }

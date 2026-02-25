@@ -75,13 +75,13 @@ func main() {
 
 	// 注册 Agent 事件 → JSON-RPC Notification 转发
 	mgr.SetOnEvent(func(agentID string, event agentcore.Event) {
-		handler := srv.AgentEventHandler(agentID)
+		handler := apiserver.AgentEventHandler(srv, agentID)
 		handler(event)
 	})
 
 	// LSP 初始化: 诊断缓存 + 广播
 	cwd, _ := os.Getwd()
-	srv.SetupLSP(cwd)
+	apiserver.SetupLSP(srv, cwd)
 
 	logger.Info("app-server starting", logger.FieldListen, *listen)
 

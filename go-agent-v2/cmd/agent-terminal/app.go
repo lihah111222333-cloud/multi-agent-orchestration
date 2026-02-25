@@ -227,7 +227,7 @@ func (a *App) CallAPI(method string, params any) (result any, callErr error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 
-		result, callErr = a.srv.InvokeMethod(ctx, method, json.RawMessage(paramsJSON))
+		result, callErr = apiserver.InvokeMethod(a.srv, ctx, method, json.RawMessage(paramsJSON))
 	}
 
 	return result, callErr
@@ -282,7 +282,7 @@ func (a *App) handleApprovalRespond(params map[string]any) (any, error) {
 		return nil, apperrors.Newf("App.handleApprovalRespond", "requestId is required")
 	}
 
-	ok := a.srv.ResolvePendingRequest(int64(requestID), map[string]any{"approved": approved})
+	ok := apiserver.ResolvePendingRequest(a.srv, int64(requestID), map[string]any{"approved": approved})
 	if !ok {
 		logger.Warn("ui: approval respond — no pending request",
 			logger.FieldSource, "ui", logger.FieldID, int64(requestID))
@@ -453,7 +453,7 @@ func (a *App) LaunchAgent(name, prompt, cwd string) (any, error) {
 	if err != nil {
 		return nil, apperrors.Wrap(err, "App.LaunchAgent", "marshal params")
 	}
-	result, err := a.srv.InvokeMethod(context.Background(), "thread/start", params)
+	result, err := apiserver.InvokeMethod(a.srv, context.Background(), "thread/start", params)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "App.LaunchAgent", "invoke thread/start")
 	}
@@ -470,7 +470,7 @@ func (a *App) LaunchAgent(name, prompt, cwd string) (any, error) {
 			})
 			if marshalErr != nil {
 				logger.Warn("turn/start marshal failed", logger.FieldAgentID, threadID, logger.FieldError, marshalErr)
-			} else if _, err := a.srv.InvokeMethod(context.Background(), "turn/start", turnParams); err != nil {
+			} else if _, err := apiserver.InvokeMethod(a.srv, context.Background(), "turn/start", turnParams); err != nil {
 				logger.Warn("turn/start invoke failed", logger.FieldAgentID, threadID, logger.FieldError, err)
 			}
 		}
@@ -578,7 +578,7 @@ func (a *App) GetBuildInfo() any {
 func (a *App) GetLSPDiagnostics(filePath string) (string, error) {
 	params, _ := json.Marshal(map[string]string{"file_path": filePath})
 	// 使用 apiserver 内置的 lsp_diagnostics handler
-	result, err := a.srv.InvokeMethod(context.Background(), "lsp_diagnostics_query", params)
+	result, err := apiserver.InvokeMethod(a.srv, context.Background(), "lsp_diagnostics_query", params)
 	if err != nil {
 		// 直接查 diagCache — 如果没有专用 method, 走 JSON-RPC 不通时降级
 		return "{}", nil
@@ -594,7 +594,7 @@ func (a *App) GetLSPDiagnostics(filePath string) (string, error) {
 //	const status = await window.go.main.App.GetLSPStatus()
 //	// 返回: [{"Language":"go","Status":"running","Port":0}...]
 func (a *App) GetLSPStatus() (any, error) {
-	result, err := a.srv.InvokeMethod(context.Background(), "mcpServerStatus/list", json.RawMessage("{}"))
+	result, err := apiserver.InvokeMethod(a.srv, context.Background(), "mcpServerStatus/list", json.RawMessage("{}"))
 	if err != nil {
 		return []any{}, nil
 	}

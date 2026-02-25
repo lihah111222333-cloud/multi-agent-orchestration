@@ -152,7 +152,7 @@ func main() {
 
 	// ─── Wails App ───
 	appSvc := NewApp(*group, *n, appSrv, mgr)
-	appSrv.SetNotifyHook(appSvc.handleBridgeNotification)
+	apiserver.SetNotifyHook(appSrv, appSvc.handleBridgeNotification)
 	var quitOverlayShown atomic.Bool
 	var quitForceAllowed atomic.Bool
 	var coverageFlushed atomic.Bool
@@ -394,17 +394,13 @@ func setupAppServer(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool,
 
 	// 统一事件分发: codex raw event -> apiserver.Notify(method,payload) -> WebSocket/SSE + Wails bridge
 	mgr.SetOnEvent(func(agentID string, event codex.Event) {
-		appSrv.AgentEventHandler(agentID)(event)
+		apiserver.AgentEventHandler(appSrv, agentID)(event)
 	})
 
 	return appSrv, mgr
 }
 
-type lspRootSetupper interface {
-	SetupLSP(rootDir string)
-}
-
-func setupAppServerLSPRoot(server lspRootSetupper) {
+func setupAppServerLSPRoot(server *apiserver.Server) {
 	if server == nil {
 		return
 	}
@@ -413,7 +409,7 @@ func setupAppServerLSPRoot(server lspRootSetupper) {
 		logger.Warn("setup app-server lsp root failed", logger.FieldError, err)
 		return
 	}
-	server.SetupLSP(cwd)
+	apiserver.SetupLSP(server, cwd)
 }
 
 func callerTrace(skip, maxFrames int) string {

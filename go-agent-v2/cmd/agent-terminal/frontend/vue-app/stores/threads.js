@@ -110,6 +110,70 @@ function sortThreadsByStableFirstSeen(threads) {
     .map((entry) => entry.item);
 }
 
+function normalizeEpochMillis(value) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  const rounded = Math.round(value);
+  if (rounded >= 1_000_000_000 && rounded < 1_000_000_000_000) {
+    // 10-digit unix seconds → milliseconds.
+    return rounded * 1000;
+  }
+  return rounded;
+}
+
+function parseEpochMillis(value) {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+  if (typeof value === 'number') {
+    return normalizeEpochMillis(value);
+  }
+  const raw = value.toString().trim();
+  if (!raw) {
+    return 0;
+  }
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric)) {
+    return normalizeEpochMillis(numeric);
+  }
+  const parsed = Date.parse(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 0;
+  }
+  return Math.round(parsed);
+}
+
+function parseThreadCreatedAtFromID(threadId) {
+  const id = (threadId || '').toString().trim();
+  if (!id) return 0;
+  const chunks = id.split(/[^0-9]+/).filter(Boolean);
+  if (chunks.length === 0) return 0;
+  const minEpochMs = Date.UTC(2000, 0, 1);
+  const maxEpochMs = Date.UTC(2100, 0, 1);
+  for (const chunk of chunks) {
+    if (chunk.length < 10 || chunk.length > 16) continue;
+    const ts = parseEpochMillis(chunk);
+    if (ts < minEpochMs || ts > maxEpochMs) continue;
+    return ts;
+  }
+  return 0;
+}
+
+function resolveThreadCreatedAt(threadId) {
+  const id = (threadId || '').toString().trim();
+  if (!id) return 0;
+  const meta = state.agentMetaById?.[id];
+  if (meta && typeof meta === 'object') {
+    const metaKeys = ['createdAt', 'created_at', 'startedAt', 'started_at'];
+    for (const key of metaKeys) {
+      const ts = parseEpochMillis(meta[key]);
+      if (ts > 0) return ts;
+    }
+  }
+  return parseThreadCreatedAtFromID(id);
+}
+
 function perfNow() {
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
     return performance.now();
@@ -616,12 +680,15 @@ function sortChatThreadsByPinned(threads) {
   const list = Array.isArray(threads) ? threads.slice() : [];
   if (list.length <= 1) return list;
   const indexByID = new Map();
+  const createdAtByID = new Map();
   for (let i = 0; i < list.length; i += 1) {
-    indexByID.set((list[i]?.id || '').toString(), i);
+    const id = (list[i]?.id || '').toString().trim();
+    indexByID.set(id, i);
+    createdAtByID.set(id, resolveThreadCreatedAt(id));
   }
   list.sort((left, right) => {
-    const leftID = (left?.id || '').toString();
-    const rightID = (right?.id || '').toString();
+    const leftID = (left?.id || '').toString().trim();
+    const rightID = (right?.id || '').toString().trim();
     const leftPinnedAt = Number(state.pinnedThreadAtById?.[leftID]);
     const rightPinnedAt = Number(state.pinnedThreadAtById?.[rightID]);
     const leftPinned = Number.isFinite(leftPinnedAt) && leftPinnedAt > 0;
@@ -631,6 +698,13 @@ function sortChatThreadsByPinned(threads) {
     }
     if (leftPinned && rightPinned && leftPinnedAt !== rightPinnedAt) {
       return rightPinnedAt - leftPinnedAt;
+    }
+    if (!leftPinned && !rightPinned) {
+      const leftCreatedAt = createdAtByID.get(leftID) ?? 0;
+      const rightCreatedAt = createdAtByID.get(rightID) ?? 0;
+      if (leftCreatedAt !== rightCreatedAt) {
+        return rightCreatedAt - leftCreatedAt;
+      }
     }
     return (indexByID.get(leftID) ?? 0) - (indexByID.get(rightID) ?? 0);
   });

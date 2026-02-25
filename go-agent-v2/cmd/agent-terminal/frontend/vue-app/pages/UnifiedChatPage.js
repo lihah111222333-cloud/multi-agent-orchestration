@@ -619,11 +619,7 @@ export const UnifiedChatPage = {
           isMain: threadID === mainAgentId.value,
         };
       });
-      return cards.sort((/** @type {any} */ left, /** @type {any} */ right) => {
-        const leftArchived = left.isArchived ? 1 : 0;
-        const rightArchived = right.isArchived ? 1 : 0;
-        return leftArchived - rightArchived;
-      });
+      return cards;
     });
     const showArchivedThreadList = ref(false);
     const chatActiveThreadCards = computed(() => chatThreadCards.value.filter((thread) => !thread.isArchived));

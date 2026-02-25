@@ -187,8 +187,8 @@ func buildLSPTools(provider tools.LSPProvider) []tools.Tool {
 		out = append(out, tools.Tool{
 			Schema: schema,
 			Handler: func(h tools.LSPDynamicToolHandler) RuntimeToolHandler {
-				return func(_ tools.ToolCallContext, args json.RawMessage) string {
-					return h(args)
+				return func(callCtx tools.ToolCallContext, args json.RawMessage) string {
+					return h(withLSPToolCallMeta(args, callCtx))
 				}
 			}(handler),
 		})
@@ -214,8 +214,8 @@ func buildLSPTools(provider tools.LSPProvider) []tools.Tool {
 		out = append(out, tools.Tool{
 			Schema: schema,
 			Handler: func(h tools.LSPDynamicToolHandler) RuntimeToolHandler {
-				return func(_ tools.ToolCallContext, args json.RawMessage) string {
-					return h(args)
+				return func(callCtx tools.ToolCallContext, args json.RawMessage) string {
+					return h(withLSPToolCallMeta(args, callCtx))
 				}
 			}(handler),
 		})

@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
-	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
+	"github.com/multi-agent/go-agent-v2/internal/skillutil"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -48,6 +50,7 @@ type turnStartResponse struct {
 var (
 	_ = (*Server).buildConfiguredSkillPrompt
 	_ = (*Server).buildAutoMatchedSkillPrompt
+	_ = (*Server).waitInterruptSettled
 )
 
 func (s *Server) skillInputText(name, content string) string {
@@ -62,21 +65,11 @@ func (s *Server) skillInputText(name, content string) string {
 }
 
 func collectInputSkillNames(inputs []UserInput) map[string]struct{} {
-	if len(inputs) == 0 {
-		return nil
-	}
-	set := make(map[string]struct{}, len(inputs))
-	for _, input := range inputs {
-		if !strings.EqualFold(strings.TrimSpace(input.Type), "skill") {
-			continue
-		}
-		name := strings.ToLower(strings.TrimSpace(input.Name))
-		if name == "" {
-			continue
-		}
-		set[name] = struct{}{}
-	}
-	return set
+	return skillutil.CollectInputSkillNames(
+		inputs,
+		func(input UserInput) string { return input.Type },
+		func(input UserInput) string { return input.Name },
+	)
 }
 
 func collectSkillNameSet(raw []string) map[string]struct{} {
@@ -136,43 +129,17 @@ func validateLSPUsagePromptHint(hint string) error {
 }
 
 func (s *Server) resolveLSPUsagePromptHint(ctx context.Context) string {
-	var getPref func(context.Context, string) (any, error)
-	if s.prefManager != nil {
-		getPref = s.prefManager.Get
+	if s != nil && s.codexAdapter != nil {
+		return s.codexAdapter.ResolveLSPUsagePromptHint(ctx, defaultLSPUsagePromptHint, maxLSPUsagePromptHintLen)
 	}
-	return codexadapter.ResolveLSPUsagePromptHint(ctx, codexadapter.ResolveLSPUsagePromptHintOptions{
-		DefaultHint: defaultLSPUsagePromptHint,
-		MaxHintLen:  maxLSPUsagePromptHintLen,
-		GetPref:     getPref,
-	})
-}
-
-func collectReferencedLSPToolNames(hint string) []string {
-	return commonadapter.CollectReferencedLSPToolNames(hint)
-}
-
-func collectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]struct{} {
-	if len(dynamicTools) == 0 {
-		return nil
-	}
-	toolNames := make(map[string]struct{}, len(dynamicTools))
-	for _, tool := range dynamicTools {
-		name := strings.TrimSpace(tool.Name)
-		if name == "" {
-			continue
-		}
-		toolNames[name] = struct{}{}
-	}
-	return toolNames
+	return defaultLSPUsagePromptHint
 }
 
 func (s *Server) prependLSPAvailabilityWarning(hint string, dynamicTools []agentcore.DynamicTool) (string, []string) {
-	return codexadapter.PrependLSPAvailabilityWarning(codexadapter.PrependLSPAvailabilityWarningOptions{
-		Hint:                       hint,
-		DynamicToolNames:           collectDynamicToolNames(dynamicTools),
-		CollectReferencedToolNames: collectReferencedLSPToolNames,
-		MergePromptText:            s.mergePromptText,
-	})
+	if s != nil && s.codexAdapter != nil {
+		return s.codexAdapter.PrependLSPAvailabilityWarning(hint, dynamicTools, s.mergePromptText)
+	}
+	return hint, nil
 }
 
 func (s *Server) resolveStartInstructionsForLaunch(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
@@ -194,14 +161,10 @@ func (s *Server) buildConfiguredSkillPrompt(agentID string, input []UserInput) (
 }
 
 func (s *Server) buildSelectedSkillPrompt(selectedSkills []string) (string, int) {
-	if s.skillSvc == nil {
-		return "", 0
+	if s != nil && s.codexAdapter != nil {
+		return s.codexAdapter.BuildSelectedSkillPrompt(selectedSkills)
 	}
-	return codexadapter.BuildSelectedSkillPrompt(codexadapter.BuildSelectedSkillPromptOptions{
-		SelectedSkills:   selectedSkills,
-		ReadSkillContent: s.skillSvc.ReadSkillContent,
-		SkillInputText:   s.skillInputText,
-	})
+	return "", 0
 }
 
 func (s *Server) buildTurnSkillPrompt(threadID, prompt string, input []UserInput, selectedSkills []string, manualSkillSelection bool) (string, int, int) {
@@ -213,21 +176,13 @@ func (s *Server) buildTurnSkillPrompt(threadID, prompt string, input []UserInput
 	return s.mergePromptText(selectedSkillPrompt, autoSkillPrompt), selectedSkillCount, autoSkillCount
 }
 
-func lowerMatchedTerms(text string, candidates []string) []string {
-	return commonadapter.LowerMatchedTerms(text, candidates)
-}
-
-type autoMatchedSkillMatch = codexadapter.AutoMatchedSkillMatch
-
-type autoSkillMatchOptions = codexadapter.AutoSkillMatchOptions
-
-func buildAutoMatchInputs(input []UserInput) []codexadapter.AutoMatchInput {
+func buildAutoMatchInputs(input []UserInput) []contracts.AutoMatchInput {
 	if len(input) == 0 {
 		return nil
 	}
-	out := make([]codexadapter.AutoMatchInput, 0, len(input))
+	out := make([]contracts.AutoMatchInput, 0, len(input))
 	for _, item := range input {
-		out = append(out, codexadapter.AutoMatchInput{
+		out = append(out, contracts.AutoMatchInput{
 			Type: item.Type,
 			Name: item.Name,
 		})
@@ -235,7 +190,7 @@ func buildAutoMatchInputs(input []UserInput) []codexadapter.AutoMatchInput {
 	return out
 }
 
-func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []UserInput, options autoSkillMatchOptions) []autoMatchedSkillMatch {
+func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []UserInput, options contracts.AutoSkillMatchOptions) []contracts.AutoMatchedSkillMatch {
 	if s.skillSvc == nil {
 		return nil
 	}
@@ -253,43 +208,46 @@ func (s *Server) collectAutoMatchedSkillMatches(agentID, prompt string, input []
 	if len(allSkills) == 0 {
 		return nil
 	}
-	candidates := make([]codexadapter.SkillMatchCandidate, 0, len(allSkills))
+	candidates := make([]contracts.SkillMatchCandidate, 0, len(allSkills))
 	for _, skill := range allSkills {
 		skillName := strings.TrimSpace(skill.Name)
 		if skillName == "" {
 			continue
 		}
-		candidates = append(candidates, codexadapter.SkillMatchCandidate{
+		candidates = append(candidates, contracts.SkillMatchCandidate{
 			Name:         skillName,
 			ForceWords:   append([]string(nil), skill.ForceWords...),
 			TriggerWords: append([]string(nil), skill.TriggerWords...),
 		})
 	}
-	return codexadapter.CollectAutoMatchedSkillMatches(
+	if s == nil || s.codexAdapter == nil {
+		return nil
+	}
+	return s.codexAdapter.CollectAutoMatchedSkillMatches(
 		prompt,
 		buildAutoMatchInputs(input),
 		s.GetAgentSkills(agentID),
 		candidates,
-		codexadapter.AutoSkillMatchOptions(options),
+		options,
 	)
 }
 
 func (s *Server) buildAutoMatchedSkillPrompt(agentID, prompt string, input []UserInput) (string, int) {
-	matches := s.collectAutoMatchedSkillMatches(agentID, prompt, input, autoSkillMatchOptions{
+	matches := s.collectAutoMatchedSkillMatches(agentID, prompt, input, contracts.AutoSkillMatchOptions{
 		IncludeConfiguredForce: true,
 	})
 	return s.renderAutoMatchedSkillPrompt(agentID, matches)
 }
 
 func (s *Server) buildForcedOrExplicitMatchedSkillPrompt(agentID, prompt string, input []UserInput) (string, int) {
-	matches := s.collectAutoMatchedSkillMatches(agentID, prompt, input, autoSkillMatchOptions{
+	matches := s.collectAutoMatchedSkillMatches(agentID, prompt, input, contracts.AutoSkillMatchOptions{
 		IncludeConfiguredExplicit: true,
 		IncludeConfiguredForce:    true,
 	})
 	if len(matches) == 0 {
 		return "", 0
 	}
-	filtered := make([]autoMatchedSkillMatch, 0, len(matches))
+	filtered := make([]contracts.AutoMatchedSkillMatch, 0, len(matches))
 	for _, match := range matches {
 		switch match.MatchedBy {
 		case "force", "explicit":
@@ -299,24 +257,196 @@ func (s *Server) buildForcedOrExplicitMatchedSkillPrompt(agentID, prompt string,
 	return s.renderAutoMatchedSkillPrompt(agentID, filtered)
 }
 
-func (s *Server) renderAutoMatchedSkillPrompt(agentID string, matches []autoMatchedSkillMatch) (string, int) {
-	if s.skillSvc == nil || len(matches) == 0 {
+func (s *Server) renderAutoMatchedSkillPrompt(agentID string, matches []contracts.AutoMatchedSkillMatch) (string, int) {
+	if len(matches) == 0 {
 		return "", 0
 	}
-	return codexadapter.RenderAutoMatchedSkillPrompt(codexadapter.RenderAutoMatchedSkillPromptOptions{
-		Matches:          matches,
-		ReadSkillContent: s.skillSvc.ReadSkillContent,
-		MergePromptText:  s.mergePromptText,
-		SkillInputText:   s.skillInputText,
-		OnReadSkillError: func(skillName, matchedBy string, readErr error) {
-			logger.Warn("turn/start: auto-matched skill unavailable, skip",
-				logger.FieldAgentID, agentID, logger.FieldThreadID, agentID,
-				logger.FieldSkill, skillName,
-				"matched_by", matchedBy,
-				logger.FieldError, readErr,
-			)
-		},
+	onReadSkillError := func(skillName, matchedBy string, readErr error) {
+		logger.Warn("turn/start: auto-matched skill unavailable, skip",
+			logger.FieldAgentID, agentID, logger.FieldThreadID, agentID,
+			logger.FieldSkill, skillName,
+			"matched_by", matchedBy,
+			logger.FieldError, readErr,
+		)
+	}
+	if s != nil && s.codexAdapter != nil {
+		return s.codexAdapter.RenderAutoMatchedSkillPrompt(matches, onReadSkillError)
+	}
+	return "", 0
+}
+
+func toCodexTurnInputs(input []UserInput) []contracts.TurnInput {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]contracts.TurnInput, 0, len(input))
+	for _, item := range input {
+		out = append(out, contracts.TurnInput{
+			Type:    item.Type,
+			Text:    item.Text,
+			URL:     item.URL,
+			Path:    item.Path,
+			Name:    item.Name,
+			Content: item.Content,
+		})
+	}
+	return out
+}
+
+func toUserInputs(input []contracts.TurnInput) []UserInput {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]UserInput, 0, len(input))
+	for _, item := range input {
+		out = append(out, UserInput{
+			Type:    item.Type,
+			Text:    item.Text,
+			URL:     item.URL,
+			Path:    item.Path,
+			Name:    item.Name,
+			Content: item.Content,
+		})
+	}
+	return out
+}
+
+func (s *Server) prepareTurnStartSubmission(
+	threadID string,
+	input []contracts.TurnInput,
+	selectedSkills []string,
+	manualSkillSelection bool,
+) (contracts.TurnStartEntryPrepareResult, error) {
+	userInputs := toUserInputs(input)
+	prompt, images, files := s.extractInputs(userInputs)
+	skillPrompt, selectedSkillCount, autoMatchedSkillCount := s.buildTurnSkillPrompt(threadID, prompt, userInputs, selectedSkills, manualSkillSelection)
+	submitPrompt := s.mergePromptText(prompt, skillPrompt)
+	return contracts.TurnStartEntryPrepareResult{
+		Prompt:                prompt,
+		SubmitPrompt:          submitPrompt,
+		Images:                images,
+		Files:                 files,
+		SelectedSkillCount:    selectedSkillCount,
+		AutoMatchedSkillCount: autoMatchedSkillCount,
+	}, nil
+}
+
+// PrepareTurnStartSubmission exposes turn/start preparation for codexadapter context integration.
+func (s *Server) PrepareTurnStartSubmission(
+	threadID string,
+	input []contracts.TurnInput,
+	selectedSkills []string,
+	manualSkillSelection bool,
+) (contracts.TurnStartEntryPrepareResult, error) {
+	return s.prepareTurnStartSubmission(threadID, input, selectedSkills, manualSkillSelection)
+}
+
+func (s *Server) appendTurnStartUserTimeline(ctx context.Context, input []contracts.TurnInput, opt contracts.TurnAppendUserTimelineOptions) {
+	if s.uiRuntime == nil {
+		return
+	}
+	attachments := buildUserTimelineAttachmentsFromInputs(toUserInputs(input))
+	if len(attachments) == 0 {
+		attachments = buildUserTimelineAttachments(opt.Images, opt.Files)
+	}
+	showInjected := s.showInjectedPromptInChat(ctx)
+	appendInjectedHint := showInjected && !s.threadTimelineAlreadyShowsInjectedPrompt(opt.ThreadID)
+	injectedHint := ""
+	if appendInjectedHint {
+		injectedHint = s.resolveLSPUsagePromptHint(ctx)
+	}
+	timelineText := s.composeUserTimelineTextForTurn(opt.Prompt, opt.SubmitPrompt, injectedHint, showInjected)
+	s.uiRuntime.AppendUserMessage(opt.ThreadID, timelineText, attachments)
+}
+
+// AppendTurnStartUserTimeline exposes turn/start timeline append for codexadapter context integration.
+func (s *Server) AppendTurnStartUserTimeline(ctx context.Context, input []contracts.TurnInput, opt contracts.TurnAppendUserTimelineOptions) {
+	s.appendTurnStartUserTimeline(ctx, input, opt)
+}
+
+func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, error) {
+	startResult, err := s.codexAdapter.TurnStart(ctx, contracts.TurnStartRequest{
+		ThreadID:             p.ThreadID,
+		Cwd:                  p.Cwd,
+		Input:                toCodexTurnInputs(p.Input),
+		SelectedSkills:       p.SelectedSkills,
+		ManualSkillSelection: p.ManualSkillSelection,
+		OutputSchema:         p.OutputSchema,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	return turnStartResponse{
+		Turn: turnInfo{ID: startResult.TurnID, Status: "inProgress"},
+	}, nil
+}
+
+type turnSteerParams struct {
+	ThreadID             string      `json:"threadId"`
+	Input                []UserInput `json:"input"`
+	SelectedSkills       []string    `json:"selectedSkills,omitempty"`
+	ManualSkillSelection bool        `json:"manualSkillSelection,omitempty"`
+}
+
+func (s *Server) prepareTurnSteerSubmission(
+	threadID string,
+	input []contracts.TurnInput,
+	selectedSkills []string,
+	manualSkillSelection bool,
+) (contracts.TurnSteerEntryPrepareResult, error) {
+	userInputs := toUserInputs(input)
+	prompt, images, files := s.extractInputs(userInputs)
+	skillPrompt, _, _ := s.buildTurnSkillPrompt(threadID, prompt, userInputs, selectedSkills, manualSkillSelection)
+	submitPrompt := s.mergePromptText(prompt, skillPrompt)
+	return contracts.TurnSteerEntryPrepareResult{
+		SubmitPrompt: submitPrompt,
+		Images:       images,
+		Files:        files,
+	}, nil
+}
+
+// PrepareTurnSteerSubmission exposes turn/steer preparation for codexadapter context integration.
+func (s *Server) PrepareTurnSteerSubmission(
+	threadID string,
+	input []contracts.TurnInput,
+	selectedSkills []string,
+	manualSkillSelection bool,
+) (contracts.TurnSteerEntryPrepareResult, error) {
+	return s.prepareTurnSteerSubmission(threadID, input, selectedSkills, manualSkillSelection)
+}
+
+func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, error) {
+	return s.codexAdapter.TurnSteerFromInput(contracts.TurnSteerRequest{
+		ThreadID:             p.ThreadID,
+		Input:                toCodexTurnInputs(p.Input),
+		SelectedSkills:       p.SelectedSkills,
+		ManualSkillSelection: p.ManualSkillSelection,
+	})
+}
+
+func (s *Server) turnInterrupt(_ context.Context, params json.RawMessage) (any, error) {
+	return s.codexAdapter.TurnInterruptFromParams(params)
+}
+
+// turnForceComplete 强制完成当前 turn (中断 + 清理跟踪状态)。
+func (s *Server) turnForceComplete(_ context.Context, params json.RawMessage) (any, error) {
+	return s.codexAdapter.TurnForceCompleteFromParams(params)
+}
+
+func (s *Server) waitInterruptSettled(threadID string, timeout time.Duration) (bool, string, int64) {
+	confirmed, afterState, waitedMS, _ := s.codexAdapter.WaitInterruptOutcome(threadID, timeout, true)
+	return confirmed, afterState, waitedMS
+}
+
+// reviewStartParams review/start 请求参数。
+type reviewStartParams struct {
+	ThreadID string `json:"threadId"`
+	Delivery string `json:"delivery,omitempty"`
+}
+
+func (s *Server) reviewStartTyped(_ context.Context, p reviewStartParams) (any, error) {
+	return s.codexAdapter.ReviewStart(p.ThreadID, p.Delivery)
 }
 
 // ========================================
@@ -329,11 +459,10 @@ type fuzzySearchParams struct {
 }
 
 func (s *Server) fuzzyFileSearchTyped(_ context.Context, p fuzzySearchParams) (any, error) {
-	results := codexadapter.FuzzyFileSearch(codexadapter.FuzzyFileSearchOptions{
-		Query:      p.Query,
-		Roots:      p.Roots,
-		FuzzyMatch: s.fuzzyMatch,
-	})
+	if s == nil || s.codexAdapter == nil {
+		return map[string]any{"files": []map[string]any{}}, nil
+	}
+	results := s.codexAdapter.FuzzyFileSearch(p.Query, p.Roots, s.fuzzyMatch)
 	return map[string]any{"files": results}, nil
 }
 
@@ -347,12 +476,4 @@ func (s *Server) fuzzyMatch(text, pattern string) bool {
 		adapter = commonadapter.New()
 	}
 	return adapter.FuzzyMatch(text, pattern)
-}
-
-func normalizeSkillName(raw string) (string, error) {
-	return commonadapter.NormalizeSkillName(raw)
-}
-
-func normalizeSkillNames(rawNames []string) ([]string, error) {
-	return commonadapter.NormalizeSkillNames(rawNames)
 }

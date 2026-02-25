@@ -104,18 +104,7 @@ func buildAttachmentName(path string) string {
 }
 
 func buildAttachmentPreviewURL(path string) string {
-	value := strings.TrimSpace(path)
-	if value == "" {
-		return ""
-	}
-	lower := strings.ToLower(value)
-	if strings.HasPrefix(lower, "http://") ||
-		strings.HasPrefix(lower, "https://") ||
-		strings.HasPrefix(lower, "data:image/") ||
-		strings.HasPrefix(lower, "file://") {
-		return value
-	}
-	return (&url.URL{Scheme: "file", Path: value}).String()
+	return util.BuildAttachmentPreviewURL(path)
 }
 
 func buildUserTimelineAttachments(images, files []string) []uistate.TimelineAttachment {

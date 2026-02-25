@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 )
 
 type threadStartParams struct {
@@ -36,17 +36,14 @@ type threadStartResponse struct {
 }
 
 func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any, error) {
-	dynamicTools := s.allDynamicToolSchemas()
-	result, err := s.codexAdapter.ThreadStart(ctx, codexadapter.ThreadStartOptions{
-		ThreadID:          fmt.Sprintf("thread-%d-%d", time.Now().UnixMilli(), s.threadSeq.Add(1)),
-		Cwd:               p.Cwd,
-		Model:             p.Model,
-		ModelProvider:     p.ModelProvider,
-		ApprovalPolicy:    p.ApprovalPolicy,
-		DynamicTools:      dynamicTools,
-		StartInstructions: s.resolveStartInstructionsForLaunch(ctx, dynamicTools),
-		RegisterBinding:   s.registerBinding,
-	})
+	result, err := s.codexAdapter.ThreadStartFromParams(
+		ctx,
+		fmt.Sprintf("thread-%d-%d", time.Now().UnixMilli(), s.threadSeq.Add(1)),
+		p.Cwd,
+		p.Model,
+		p.ModelProvider,
+		p.ApprovalPolicy,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -82,11 +79,7 @@ type threadForkResponse struct {
 }
 
 func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, error) {
-	result, err := s.codexAdapter.ThreadFork(codexadapter.ThreadForkOptions{
-		ThreadID:     p.ThreadID,
-		WithThread:   s.withThread,
-		NowUnixMilli: time.Now().UnixMilli,
-	})
+	result, err := s.codexAdapter.ThreadForkByID(p.ThreadID)
 	if err != nil {
 		return nil, err
 	}
@@ -106,21 +99,72 @@ func (s *Server) threadCompact(ctx context.Context, params json.RawMessage) (any
 
 // threadRollbackParams thread/rollback 请求参数。
 
-// threadListItem thread/list 响应项。
-type threadListItem = codexadapter.ThreadListItem
+type threadResumeParams struct {
+	ThreadID string `json:"threadId"`
+	Path     string `json:"path,omitempty"`
+	Cwd      string `json:"cwd,omitempty"`
+	Model    string `json:"model,omitempty"`
+}
+
+type threadResumeResponse struct {
+	Thread threadInfo `json:"thread"`
+	Model  string     `json:"model"`
+}
+
+func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (any, error) {
+	result, err := s.codexAdapter.ThreadResume(ctx, p.ThreadID, p.Path, p.Cwd, p.Model)
+	if err != nil {
+		return nil, err
+	}
+	return threadResumeResponse{
+		Thread: threadInfo{ID: result.ThreadID, Status: result.Status},
+		Model:  result.Model,
+	}, nil
+}
+
+func (s *Server) threadArchiveTyped(ctx context.Context, p threadIDParams) (any, error) {
+	return s.codexAdapter.ThreadArchive(ctx, p.ThreadID)
+}
+
+func (s *Server) threadUnarchiveTyped(ctx context.Context, p threadIDParams) (any, error) {
+	return s.codexAdapter.ThreadUnarchive(ctx, p.ThreadID)
+}
+
+type threadNameSetParams struct {
+	ThreadID string `json:"threadId"`
+	Name     string `json:"name"`
+}
+
+func (s *Server) threadNameSetTyped(ctx context.Context, p threadNameSetParams) (any, error) {
+	return s.codexAdapter.ThreadNameSet(ctx, p.ThreadID, p.Name)
+}
+
+type threadRollbackParams struct {
+	ThreadID  string `json:"threadId"`
+	TurnIndex int    `json:"turnIndex"`
+}
+
+func (s *Server) threadRollbackTyped(_ context.Context, p threadRollbackParams) (any, error) {
+	return s.codexAdapter.ThreadRollback(p.ThreadID, p.TurnIndex)
+}
+
+type threadMessagesParams struct {
+	ThreadID string `json:"threadId"`
+	Limit    int    `json:"limit,omitempty"`
+	Before   int64  `json:"before,omitempty"` // cursor: id < before
+}
+
+func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams) (any, error) {
+	return s.codexAdapter.ThreadMessagesByID(ctx, p.ThreadID, p.Limit, p.Before)
+}
 
 // threadListResponse thread/list 响应。
 type threadListResponse struct {
-	Threads []threadListItem `json:"threads"`
+	Threads []contracts.ThreadListItem `json:"threads"`
 }
 
 func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error) {
-	threads, err := s.codexAdapter.ThreadList(ctx, codexadapter.ThreadListOptions{
-		MethodName:           "thread/list",
-		LoadThreadArchiveMap: s.loadThreadArchiveMap,
-		LoadThreadAliases:    s.loadThreadAliases,
-		ApplyThreadAliases:   applyThreadAliases,
-	})
+	threads, err := s.codexAdapter.ThreadListDefault(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -129,16 +173,11 @@ func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error)
 
 // threadLoadedListResponse thread/loaded/list 响应。
 type threadLoadedListResponse struct {
-	Threads []threadListItem `json:"threads"`
+	Threads []contracts.ThreadListItem `json:"threads"`
 }
 
 func (s *Server) threadLoadedList(ctx context.Context, _ json.RawMessage) (any, error) {
-	threads, err := s.codexAdapter.ThreadLoadedList(ctx, codexadapter.ThreadListOptions{
-		MethodName:           "thread/loaded/list",
-		LoadThreadArchiveMap: s.loadThreadArchiveMap,
-		LoadThreadAliases:    s.loadThreadAliases,
-		ApplyThreadAliases:   applyThreadAliases,
-	})
+	threads, err := s.codexAdapter.ThreadLoadedListDefault(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -146,75 +185,9 @@ func (s *Server) threadLoadedList(ctx context.Context, _ json.RawMessage) (any, 
 }
 
 func (s *Server) threadReadTyped(ctx context.Context, p threadIDParams) (any, error) {
-	return s.codexAdapter.ThreadRead(ctx, codexadapter.ThreadReadOptions{
-		ThreadID:   p.ThreadID,
-		WithThread: s.withThread,
-	})
+	return s.codexAdapter.ThreadReadByID(ctx, p.ThreadID)
 }
 
 func (s *Server) threadResolveTyped(ctx context.Context, p threadIDParams) (any, error) {
-	return s.codexAdapter.ThreadResolve(ctx, codexadapter.ThreadResolveOptions{
-		ThreadID:                    p.ThreadID,
-		ResolvePrimaryCodexThreadID: s.resolvePrimaryCodexThreadID,
-		IsLikelyCodexThreadID:       isLikelyCodexThreadID,
-		ThreadExistsInHistory:       s.threadExistsInHistory,
-	})
-}
-
-// threadMessagesParams thread/messages 请求参数。
-
-const (
-	threadMessageHydrationMaxRecords = 20000
-	threadMessageHydrationPageSize   = 500
-)
-
-// streamRemainingHistory 后台分页加载剩余历史, 加载完后通过 AppendHistory 追加到 timeline。
-//
-// firstPage 已通过 HydrateHistory 加载, 此处只加载后续页并追加。
-
-// msgsToRecords 将消息列表转为 hydration 记录。
-
-func calculateHydrationLoadLimit(initialCount int, total int64) int {
-	if initialCount < 0 {
-		initialCount = 0
-	}
-	limit := initialCount
-	if total > int64(limit) {
-		limit = int(total)
-	}
-	if limit > threadMessageHydrationMaxRecords {
-		limit = threadMessageHydrationMaxRecords
-	}
-	return limit
-}
-
-func (s *Server) loadThreadArchiveMap(ctx context.Context) (map[string]int64, error) {
-	if s.prefManager == nil {
-		return map[string]int64{}, nil
-	}
-	value, err := s.prefManager.Get(ctx, prefThreadArchivesChat)
-	if err != nil {
-		return nil, err
-	}
-	return normalizeThreadArchiveMap(value), nil
-}
-
-func normalizeThreadArchiveMap(value any) map[string]int64 {
-	return codexadapter.NormalizeThreadArchiveMap(value)
-}
-
-func inferThreadArtifactKind(filename string) string {
-	return codexadapter.InferThreadArtifactKind(filename)
-}
-
-func sanitizeArchiveName(raw string) string {
-	return codexadapter.SanitizeArchiveName(raw)
-}
-
-func sanitizeArchiveNameStrict(raw string) (string, error) {
-	return codexadapter.SanitizeArchiveNameStrict(raw)
-}
-
-func pathWithinRoot(root string, path string) (bool, error) {
-	return codexadapter.PathWithinRoot(root, path)
+	return s.codexAdapter.ThreadResolveByID(ctx, p.ThreadID)
 }

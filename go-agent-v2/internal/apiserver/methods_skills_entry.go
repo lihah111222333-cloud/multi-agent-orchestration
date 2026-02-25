@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	skillsruntime "github.com/multi-agent/go-agent-v2/internal/skills"
 )
@@ -43,7 +44,7 @@ func newSkillsManager(s *Server) *skillsruntime.Manager {
 				Content: item.Content,
 			})
 		}
-		matches := s.collectAutoMatchedSkillMatches(threadID, prompt, legacyInput, autoSkillMatchOptions{
+		matches := s.collectAutoMatchedSkillMatches(threadID, prompt, legacyInput, contracts.AutoSkillMatchOptions{
 			IncludeConfiguredExplicit: options.IncludeConfiguredExplicit,
 			IncludeConfiguredForce:    options.IncludeConfiguredForce,
 		})

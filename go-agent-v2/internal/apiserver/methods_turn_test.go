@@ -4,6 +4,9 @@ package apiserver
 import (
 	"errors"
 	"testing"
+
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 )
 
 // ========================================
@@ -35,7 +38,7 @@ func TestNormalizeInterruptState(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := normalizeInterruptState(tt.raw)
+			got := codexadapter.NormalizeInterruptState(tt.raw)
 			if got != tt.want {
 				t.Errorf("normalizeInterruptState(%q) = %q, want %q", tt.raw, got, tt.want)
 			}
@@ -50,13 +53,13 @@ func TestNormalizeInterruptState(t *testing.T) {
 func TestIsInterruptActiveState(t *testing.T) {
 	actives := []string{"starting", "thinking", "responding", "running", "editing", "waiting", "syncing"}
 	for _, s := range actives {
-		if !isInterruptActiveState(s) {
+		if !codexadapter.IsInterruptActiveState(s) {
 			t.Errorf("isInterruptActiveState(%q) = false, want true", s)
 		}
 	}
 	inactives := []string{"", "idle", "completed", "failed", "error", "unknown"}
 	for _, s := range inactives {
-		if isInterruptActiveState(s) {
+		if codexadapter.IsInterruptActiveState(s) {
 			t.Errorf("isInterruptActiveState(%q) = true, want false", s)
 		}
 	}
@@ -80,7 +83,7 @@ func TestIsInterruptNoActiveTurnError(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isInterruptNoActiveTurnError(tt.err)
+			got := codexadapter.IsInterruptNoActiveTurnError(tt.err)
 			if got != tt.want {
 				t.Errorf("isInterruptNoActiveTurnError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
@@ -108,7 +111,7 @@ func TestInterruptSettleMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := interruptSettleMode(tt.confirmed, tt.afterState)
+			got := codexadapter.InterruptSettleMode(tt.confirmed, tt.afterState)
 			if got != tt.want {
 				t.Errorf("interruptSettleMode(%v, %q) = %q, want %q", tt.confirmed, tt.afterState, got, tt.want)
 			}
@@ -152,27 +155,27 @@ func TestFuzzyMatch(t *testing.T) {
 
 func TestNormalizeSkillName(t *testing.T) {
 	// valid
-	if name, err := normalizeSkillName("  MySkill  "); err != nil || name != "MySkill" {
+	if name, err := commonadapter.NormalizeSkillName("  MySkill  "); err != nil || name != "MySkill" {
 		t.Errorf("normalizeSkillName(\"  MySkill  \") = %q, %v; want \"MySkill\", nil", name, err)
 	}
 	// empty
-	if _, err := normalizeSkillName(""); err == nil {
+	if _, err := commonadapter.NormalizeSkillName(""); err == nil {
 		t.Error("normalizeSkillName(\"\") expected error, got nil")
 	}
 	// whitespace only
-	if _, err := normalizeSkillName("   "); err == nil {
+	if _, err := commonadapter.NormalizeSkillName("   "); err == nil {
 		t.Error("normalizeSkillName(\"   \") expected error, got nil")
 	}
 }
 
 func TestNormalizeSkillNames(t *testing.T) {
 	// empty input
-	names, err := normalizeSkillNames(nil)
+	names, err := commonadapter.NormalizeSkillNames(nil)
 	if err != nil || len(names) != 0 {
 		t.Errorf("normalizeSkillNames(nil) = %v, %v; want [], nil", names, err)
 	}
 	// dedup
-	names, err = normalizeSkillNames([]string{"A", "a", "B"})
+	names, err = commonadapter.NormalizeSkillNames([]string{"A", "a", "B"})
 	if err != nil {
 		t.Fatalf("normalizeSkillNames: %v", err)
 	}
@@ -180,7 +183,7 @@ func TestNormalizeSkillNames(t *testing.T) {
 		t.Errorf("normalizeSkillNames dedup: got %d names, want 2", len(names))
 	}
 	// error propagation
-	_, err = normalizeSkillNames([]string{"ok", ""})
+	_, err = commonadapter.NormalizeSkillNames([]string{"ok", ""})
 	if err == nil {
 		t.Error("normalizeSkillNames with empty name expected error, got nil")
 	}
@@ -288,13 +291,13 @@ func TestComposeUserTimelineTextForTurn(t *testing.T) {
 // ========================================
 
 func TestLowerMatchedTerms(t *testing.T) {
-	if got := lowerMatchedTerms("", []string{"a"}); got != nil {
+	if got := commonadapter.LowerMatchedTerms("", []string{"a"}); got != nil {
 		t.Errorf("empty text: got %v, want nil", got)
 	}
-	if got := lowerMatchedTerms("text", nil); got != nil {
+	if got := commonadapter.LowerMatchedTerms("text", nil); got != nil {
 		t.Errorf("nil candidates: got %v, want nil", got)
 	}
-	got := lowerMatchedTerms("hello world foo", []string{"hello", "bar", "World", "HELLO"})
+	got := commonadapter.LowerMatchedTerms("hello world foo", []string{"hello", "bar", "World", "HELLO"})
 	if len(got) != 2 {
 		t.Errorf("matched: got %d, want 2: %v", len(got), got)
 	}

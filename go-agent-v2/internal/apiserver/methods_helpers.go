@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
-
-	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 )
 
 // threadBgTerminalsClean 清理后台终端 (experimental)。
@@ -41,25 +39,23 @@ func (s *Server) threadMCPList(ctx context.Context, params json.RawMessage) (any
 
 // threadSkillsList 列出 Skills（统一走本地 SkillService 缓存，不透传外部 /skills）。
 func (s *Server) threadSkillsList(_ context.Context, _ json.RawMessage) (any, error) {
-	return s.codexAdapter.ThreadSkillsList(codexadapter.ThreadSkillsListOptions{
-		ListSkills: func() ([]string, error) {
-			if s.skillSvc == nil {
-				return []string{}, nil
+	return s.codexAdapter.ThreadSkillsList(func() ([]string, error) {
+		if s.skillSvc == nil {
+			return []string{}, nil
+		}
+		list, err := s.skillSvc.ListSkills()
+		if err != nil {
+			return nil, err
+		}
+		skills := make([]string, 0, len(list))
+		for _, item := range list {
+			name := strings.TrimSpace(item.Name)
+			if name == "" {
+				continue
 			}
-			list, err := s.skillSvc.ListSkills()
-			if err != nil {
-				return nil, err
-			}
-			skills := make([]string, 0, len(list))
-			for _, item := range list {
-				name := strings.TrimSpace(item.Name)
-				if name == "" {
-					continue
-				}
-				skills = append(skills, name)
-			}
-			return skills, nil
-		},
+			skills = append(skills, name)
+		}
+		return skills, nil
 	})
 }
 

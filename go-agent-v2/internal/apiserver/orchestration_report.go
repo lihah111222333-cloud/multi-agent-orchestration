@@ -60,7 +60,10 @@ func (s *Server) maybeAutoReportOrchestrationCompletion(agentID, eventType, meth
 		return
 	}
 
-	_, status, reason, terminal, _ := trackedTurnTerminalFromEvent(eventType, method, payload)
+	if s == nil || s.codexAdapter == nil {
+		return
+	}
+	_, status, reason, terminal, _ := s.codexAdapter.TrackedTurnTerminalFromEvent(eventType, method, payload)
 	if !terminal {
 		return
 	}
@@ -70,9 +73,9 @@ func (s *Server) maybeAutoReportOrchestrationCompletion(agentID, eventType, meth
 		return
 	}
 
-	summary := strings.TrimSpace(trackedTurnSummaryFromPayload(payload))
+	summary := strings.TrimSpace(s.codexAdapter.TrackedTurnSummaryFromPayload(payload))
 	if summary == "" {
-		summary = extractTrackedString(payload, "uiText", "summary", "text", "message", "output")
+		summary = s.codexAdapter.ExtractTrackedString(payload, "uiText", "summary", "text", "message", "output")
 	}
 
 	report := tools.BuildOrchestrationCompletionReport(workerID, status, reason, summary)

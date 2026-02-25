@@ -65,16 +65,8 @@ func TestP3CodexEntryMethodsDelegateToCodexAdapter(t *testing.T) {
 		"threadNameSetTyped",
 		"threadRollbackTyped",
 		"threadMessagesTyped",
-		"archiveThreadArtifacts",
-		"ensureThreadReadyForTurn",
-		"beginTrackedTurn",
-		"hasActiveTrackedTurn",
-		"markTrackedTurnInterruptRequested",
-		"waitTrackedTurnTerminal",
-		"completeTrackedTurnByID",
-		"maybeFinalizeTrackedTurn",
-		"checkTurnStall",
-		"executeStallAutoInterrupt",
+		"threadArchiveTyped",
+		"threadUnarchiveTyped",
 	}
 
 	files := parseAPIServerNonTestFiles(t)
@@ -85,6 +77,18 @@ func TestP3CodexEntryMethodsDelegateToCodexAdapter(t *testing.T) {
 		}
 		if !funcDeclContainsCodexAdapterCall(fd) {
 			t.Fatalf("%s in %s must delegate via s.codexAdapter", fn, fileName)
+		}
+	}
+
+	removed := []string{
+		"ensureThreadReadyForTurn",
+		"completeTrackedTurnByID",
+		"checkTurnStall",
+		"executeStallAutoInterrupt",
+	}
+	for _, fn := range removed {
+		if _, _, ok := findFuncDecl(files, fn); ok {
+			t.Fatalf("function %s should be removed from apiserver and owned by codexadapter", fn)
 		}
 	}
 }
@@ -92,23 +96,25 @@ func TestP3CodexEntryMethodsDelegateToCodexAdapter(t *testing.T) {
 func TestP3ThreadArchiveHelpersMovedToCodexAdapter(t *testing.T) {
 	t.Helper()
 
-	checks := []string{
-		"collectThreadArtifactCandidates",
+	removed := []string{
 		"pruneArchivedCodexSourceFiles",
-		"restoreThreadArchiveSources",
-		"inspectThreadArchiveForRestore",
+		"collectThreadArtifactCandidates",
 		"findLatestThreadArchiveManifestPath",
 		"readThreadArchiveManifest",
 		"writeThreadArchiveManifest",
+		"restoreThreadArchiveSources",
+		"inspectThreadArchiveForRestore",
+		"normalizeThreadArchiveMap",
+		"archiveThreadArtifacts",
+		"threadExistsForArchive",
+		"persistThreadArchivedState",
+		"removeThreadArchivedState",
+		"resolveRolloutHistorySource",
 	}
 	files := parseAPIServerNonTestFiles(t)
-	for _, fn := range checks {
-		fd, fileName, ok := findFuncDecl(files, fn)
-		if !ok {
-			t.Fatalf("function %s not found", fn)
-		}
-		if !funcDeclContainsPackageCall(fd, "codexadapter") {
-			t.Fatalf("%s in %s must delegate to codexadapter package", fn, fileName)
+	for _, fn := range removed {
+		if _, _, ok := findFuncDecl(files, fn); ok {
+			t.Fatalf("function %s should be removed from apiserver and owned by codexadapter", fn)
 		}
 	}
 }
@@ -116,18 +122,14 @@ func TestP3ThreadArchiveHelpersMovedToCodexAdapter(t *testing.T) {
 func TestP3HistoryResolutionHelpersDelegateToCodexAdapter(t *testing.T) {
 	t.Helper()
 
-	checks := []string{
+	removed := []string{
 		"threadExistsInHistory",
 		"resolveCodexThreadCandidates",
 	}
 	files := parseAPIServerNonTestFiles(t)
-	for _, fn := range checks {
-		fd, fileName, ok := findFuncDecl(files, fn)
-		if !ok {
-			t.Fatalf("function %s not found", fn)
-		}
-		if !funcDeclContainsCodexAdapterCall(fd) {
-			t.Fatalf("%s in %s must delegate via s.codexAdapter", fn, fileName)
+	for _, fn := range removed {
+		if _, _, ok := findFuncDecl(files, fn); ok {
+			t.Fatalf("function %s should be removed from apiserver and owned by codexadapter", fn)
 		}
 	}
 }
@@ -179,13 +181,7 @@ func TestP3ResidualMethodsMustDelegateViaCodexAdapter(t *testing.T) {
 
 	checks := []string{
 		"threadArchiveTyped",
-		"threadExistsForArchive",
-		"persistThreadArchivedState",
-		"removeThreadArchivedState",
-		"resolveRolloutHistorySource",
-		"threadExistsInHistory",
-		"resolveCodexThreadCandidates",
-		"finalizeTrackedTurnEvent",
+		"threadUnarchiveTyped",
 	}
 
 	files := parseAPIServerNonTestFiles(t)

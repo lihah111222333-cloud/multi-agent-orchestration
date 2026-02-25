@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
@@ -358,7 +359,7 @@ func normalizeThreadAliases(value any) map[string]string {
 	return aliases
 }
 
-func applyThreadAliases(threads []threadListItem, aliases map[string]string) {
+func applyThreadAliases(threads []contracts.ThreadListItem, aliases map[string]string) {
 	if len(threads) == 0 || len(aliases) == 0 {
 		return
 	}

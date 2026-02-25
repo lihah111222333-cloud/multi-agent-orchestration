@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 func (m *RuntimeManager) setThreadStateLocked(threadID, state string) {
@@ -295,14 +297,14 @@ func (m *RuntimeManager) flushEditingFilesAsSavedLocked(threadID string, ts time
 }
 
 func (m *RuntimeManager) appendToolCallLocked(threadID string, payload map[string]any, ts time.Time) {
-	tool := extractFirstString(payload, "tool", "tool_name")
+	tool := util.ExtractFirstString(payload, "tool", "tool_name")
 	tool = strings.TrimSpace(tool)
 	if tool == "" {
 		return
 	}
 
-	file := strings.TrimSpace(extractFirstString(payload, "file", "file_path"))
-	preview := strings.TrimSpace(extractFirstString(payload, "resultPreview", "preview", "text", "content"))
+	file := strings.TrimSpace(util.ExtractFirstString(payload, "file", "file_path"))
+	preview := strings.TrimSpace(util.ExtractFirstString(payload, "resultPreview", "preview", "text", "content"))
 	status := "ok"
 	if value, ok := payload["success"].(bool); ok && !value {
 		status = "failed"
@@ -513,11 +515,11 @@ func parsePlanEntriesAny(raw any) []planEntry {
 		if !ok {
 			continue
 		}
-		step := strings.TrimSpace(extractFirstString(entryMap, "step", "title", "text", "content"))
+		step := strings.TrimSpace(util.ExtractFirstString(entryMap, "step", "title", "text", "content"))
 		if step == "" {
 			continue
 		}
-		status := strings.ToLower(strings.TrimSpace(extractFirstString(entryMap, "status", "state")))
+		status := strings.ToLower(strings.TrimSpace(util.ExtractFirstString(entryMap, "status", "state")))
 		if status == "" {
 			status = "pending"
 		}
@@ -634,19 +636,6 @@ func isInterruptibleThreadState(state string) bool {
 	default:
 		return false
 	}
-}
-
-func extractFirstString(payload map[string]any, keys ...string) string {
-	for _, key := range keys {
-		value, ok := payload[key]
-		if !ok {
-			continue
-		}
-		if text, ok := value.(string); ok {
-			return text
-		}
-	}
-	return ""
 }
 
 func extractNestedFirstString(payload map[string]any, paths ...[]string) string {

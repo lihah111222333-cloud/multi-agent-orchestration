@@ -452,7 +452,7 @@ func extractUserAttachmentsFromPayload(payload map[string]any) []TimelineAttachm
 		kind := strings.ToLower(strings.TrimSpace(typeValue))
 		switch kind {
 		case "image":
-			path := extractFirstString(item, "url")
+			path := util.ExtractFirstString(item, "url")
 			path = strings.TrimSpace(path)
 			if path == "" {
 				continue
@@ -464,8 +464,8 @@ func extractUserAttachmentsFromPayload(payload map[string]any) []TimelineAttachm
 				PreviewURL: util.BuildAttachmentPreviewURL(path),
 			})
 		case "localimage":
-			path := strings.TrimSpace(extractFirstString(item, "path"))
-			preview := strings.TrimSpace(extractFirstString(item, "url"))
+			path := strings.TrimSpace(util.ExtractFirstString(item, "path"))
+			preview := strings.TrimSpace(util.ExtractFirstString(item, "url"))
 			if preview == "" {
 				preview = path
 			}
@@ -483,7 +483,7 @@ func extractUserAttachmentsFromPayload(payload map[string]any) []TimelineAttachm
 				PreviewURL: util.BuildAttachmentPreviewURL(preview),
 			})
 		case "mention", "filecontent":
-			path := extractFirstString(item, "path")
+			path := util.ExtractFirstString(item, "path")
 			path = strings.TrimSpace(path)
 			if path != "" {
 				attachments = append(attachments, TimelineAttachment{
@@ -496,11 +496,11 @@ func extractUserAttachmentsFromPayload(payload map[string]any) []TimelineAttachm
 			if kind != "filecontent" {
 				continue
 			}
-			content := strings.TrimSpace(extractFirstString(item, "content"))
+			content := strings.TrimSpace(util.ExtractFirstString(item, "content"))
 			if content == "" {
 				continue
 			}
-			name := strings.TrimSpace(extractFirstString(item, "name"))
+			name := strings.TrimSpace(util.ExtractFirstString(item, "name"))
 			if name == "" {
 				name = "inline-file"
 			}

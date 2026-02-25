@@ -35,18 +35,6 @@ func extractBoolFromPayload(payload map[string]any, keys ...string) (bool, bool)
 	return false, false
 }
 
-// extractFirstString 从 payload 中按优先级提取第一个非空字符串字段。
-func extractFirstString(payload map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if v, ok := payload[key]; ok {
-			if s, ok := v.(string); ok && s != "" {
-				return s
-			}
-		}
-	}
-	return ""
-}
-
 // handleApprovalRequest 处理审批事件: 双通道模式。
 //
 // 优先尝试 WebSocket (SendRequestToAll) — 适用于 IDE 客户端。

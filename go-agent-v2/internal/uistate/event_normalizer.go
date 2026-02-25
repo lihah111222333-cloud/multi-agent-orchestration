@@ -3,6 +3,8 @@ package uistate
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // ── classifyEvent: map 查表替代 switch ──
@@ -249,7 +251,7 @@ func extractText(payload map[string]any) string {
 }
 
 func extractNormalizedCommand(payload map[string]any) string {
-	command := strings.TrimSpace(extractFirstString(
+	command := strings.TrimSpace(util.ExtractFirstString(
 		payload,
 		"uiCommand", "command", "cmd",
 		"command_display", "commandDisplay", "displayCommand",
@@ -287,7 +289,7 @@ func extractNormalizedCommand(payload map[string]any) string {
 		if nested == nil {
 			continue
 		}
-		command = strings.TrimSpace(extractFirstString(
+		command = strings.TrimSpace(util.ExtractFirstString(
 			nested,
 			"command", "cmd",
 			"command_display", "commandDisplay", "displayCommand",

@@ -57,8 +57,8 @@ func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 			payload["will_retry"] = willRetry
 			if _, exists := payload["error"]; !exists {
 				payload["error"] = map[string]any{
-					"message":           extractFirstString(payload, "message", "reason"),
-					"additionalDetails": extractFirstString(payload, "additional_details", "additionalDetails"),
+					"message":           util.ExtractFirstString(payload, "message", "reason"),
+					"additionalDetails": util.ExtractFirstString(payload, "additional_details", "additionalDetails"),
 				}
 			}
 		}

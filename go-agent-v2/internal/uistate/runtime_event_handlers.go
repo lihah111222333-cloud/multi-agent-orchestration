@@ -51,13 +51,13 @@ func resolveEventFields(normalized NormalizedEvent, payload map[string]any) reso
 		files:   nil,
 	}
 	if fields.text == "" {
-		fields.text = extractFirstString(payload, "uiText", "delta", "text", "content", "output", "message")
+		fields.text = util.ExtractFirstString(payload, "uiText", "delta", "text", "content", "output", "message")
 	}
 	if fields.command == "" {
 		fields.command = extractNormalizedCommand(payload)
 	}
 	if fields.file == "" {
-		fields.file = extractFirstString(payload, "uiFile", "file")
+		fields.file = util.ExtractFirstString(payload, "uiFile", "file")
 	}
 	fields.files = normalizeFilesAny(payload["uiFiles"])
 	if len(fields.files) == 0 {
@@ -287,7 +287,7 @@ func resolveActivityToolName(text string, payload map[string]any) string {
 	if payload == nil {
 		return ""
 	}
-	if topLevel := strings.TrimSpace(extractFirstString(payload, "tool", "tool_name", "name")); topLevel != "" {
+	if topLevel := strings.TrimSpace(util.ExtractFirstString(payload, "tool", "tool_name", "name")); topLevel != "" {
 		return topLevel
 	}
 	return strings.TrimSpace(extractNestedFirstString(
@@ -572,7 +572,7 @@ func (m *RuntimeManager) applyThreadStatusChangedLocked(threadID string, payload
 	case string:
 		statusType = strings.ToLower(strings.TrimSpace(status))
 	case map[string]any:
-		statusType = strings.ToLower(strings.TrimSpace(extractFirstString(status, "type")))
+		statusType = strings.ToLower(strings.TrimSpace(util.ExtractFirstString(status, "type")))
 		activeFlags = extractStringList(status["activeFlags"])
 		if len(activeFlags) == 0 {
 			activeFlags = extractStringList(status["active_flags"])
@@ -677,7 +677,7 @@ func isTerminalWaitPayload(payload map[string]any) bool {
 }
 
 func deriveTerminalWaitLabel(payload map[string]any) string {
-	command := strings.TrimSpace(extractFirstString(payload, "command", "command_display", "displayCommand"))
+	command := strings.TrimSpace(util.ExtractFirstString(payload, "command", "command_display", "displayCommand"))
 	if command == "" {
 		command = strings.TrimSpace(extractNestedFirstString(payload, []string{"process", "command_display"}, []string{"process", "command"}))
 	}
@@ -688,7 +688,7 @@ func deriveTerminalWaitLabel(payload map[string]any) string {
 }
 
 func deriveMCPStartupLabel(payload map[string]any) string {
-	server := strings.TrimSpace(extractFirstString(payload, "server", "name"))
+	server := strings.TrimSpace(util.ExtractFirstString(payload, "server", "name"))
 	if server == "" {
 		server = strings.TrimSpace(extractNestedFirstString(payload, []string{"status", "server"}, []string{"msg", "server"}))
 	}
@@ -719,7 +719,7 @@ func shouldClearBackgroundOverlay(payload map[string]any) bool {
 	if active, ok := payload["active"].(bool); ok {
 		return !active
 	}
-	status := strings.ToLower(strings.TrimSpace(extractFirstString(payload, "status", "state", "phase")))
+	status := strings.ToLower(strings.TrimSpace(util.ExtractFirstString(payload, "status", "state", "phase")))
 	switch status {
 	case "done", "completed", "complete", "finished", "success", "succeeded", "idle", "stopped", "closed", "ended":
 		return true
@@ -729,9 +729,9 @@ func shouldClearBackgroundOverlay(payload map[string]any) bool {
 }
 
 func deriveBackgroundLabel(payload map[string]any) string {
-	text := extractFirstString(payload, "uiHeader", "statusHeader", "title", "event", "name")
+	text := util.ExtractFirstString(payload, "uiHeader", "statusHeader", "title", "event", "name")
 	if strings.TrimSpace(text) == "" {
-		text = extractFirstString(payload, "message", "text", "content")
+		text = util.ExtractFirstString(payload, "message", "text", "content")
 	}
 	if strings.TrimSpace(text) == "" {
 		text = extractNestedFirstString(
@@ -753,7 +753,7 @@ func deriveBackgroundLabel(payload map[string]any) string {
 }
 
 func deriveBackgroundDetails(payload map[string]any) string {
-	text := extractFirstString(payload, "details", "detail", "description", "message", "text", "content")
+	text := util.ExtractFirstString(payload, "details", "detail", "description", "message", "text", "content")
 	if strings.TrimSpace(text) == "" {
 		text = extractNestedFirstString(
 			payload,
@@ -771,7 +771,7 @@ func deriveBackgroundDetails(payload map[string]any) string {
 }
 
 func deriveStreamErrorDetails(payload map[string]any) string {
-	text := extractFirstString(payload, "additional_details", "additionalDetails", "details")
+	text := util.ExtractFirstString(payload, "additional_details", "additionalDetails", "details")
 	if strings.TrimSpace(text) == "" {
 		text = extractNestedFirstString(
 			payload,
@@ -962,7 +962,7 @@ func handlePlanDeltaEvent(m *RuntimeManager, threadID string, fields resolvedFie
 }
 
 func handleDiffUpdateEvent(m *RuntimeManager, threadID string, _ resolvedFields, payload map[string]any, _ time.Time) {
-	diff := extractFirstString(payload, "diff", "uiText", "text", "content")
+	diff := util.ExtractFirstString(payload, "diff", "uiText", "text", "content")
 	prev := m.snapshot.DiffTextByThread[threadID]
 	m.snapshot.DiffTextByThread[threadID] = diff
 	if prev == diff {

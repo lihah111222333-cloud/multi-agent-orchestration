@@ -107,18 +107,6 @@ type asTurnStartInput struct {
 	Name string `json:"name,omitempty"`
 }
 
-func isRemoteImageURL(raw string) bool {
-	value := strings.ToLower(strings.TrimSpace(raw))
-	switch {
-	case strings.HasPrefix(value, "http://"),
-		strings.HasPrefix(value, "https://"),
-		strings.HasPrefix(value, "data:image/"):
-		return true
-	default:
-		return false
-	}
-}
-
 func mentionNameFromPath(path string) string {
 	base := strings.TrimSpace(filepath.Base(strings.TrimSpace(path)))
 	if base == "" || base == "." || base == string(filepath.Separator) {
@@ -139,7 +127,7 @@ func buildTurnStartInputs(prompt string, images, files []string) []asTurnStartIn
 		if path == "" {
 			continue
 		}
-		if isRemoteImageURL(path) {
+		if util.IsRemoteImageURL(path) {
 			inputs = append(inputs, asTurnStartInput{Type: "image", URL: path})
 			continue
 		}

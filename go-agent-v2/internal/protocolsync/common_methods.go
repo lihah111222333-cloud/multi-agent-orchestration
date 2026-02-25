@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 type MethodCatalog struct {
@@ -32,7 +33,7 @@ func FindProtocolCommonPath() (string, error) {
 	const rel = "app-server-protocol/src/protocol/common.rs"
 
 	if explicit := strings.TrimSpace(os.Getenv("CODEX_RS_PROTOCOL_COMMON")); explicit != "" {
-		if fileExists(explicit) {
+		if util.FileExists(explicit) {
 			return explicit, nil
 		}
 		return "", apperrors.Newf("protocolsync.FindProtocolCommonPath", "CODEX_RS_PROTOCOL_COMMON not found: %s", explicit)
@@ -40,7 +41,7 @@ func FindProtocolCommonPath() (string, error) {
 
 	if root := strings.TrimSpace(os.Getenv("CODEX_RS_ROOT")); root != "" {
 		candidate := filepath.Join(root, rel)
-		if fileExists(candidate) {
+		if util.FileExists(candidate) {
 			return candidate, nil
 		}
 		return "", apperrors.Newf("protocolsync.FindProtocolCommonPath", "CODEX_RS_ROOT set but common.rs missing: %s", candidate)
@@ -62,7 +63,7 @@ func FindProtocolCommonPath() (string, error) {
 
 	for _, candidate := range candidates {
 		candidate = filepath.Clean(candidate)
-		if fileExists(candidate) {
+		if util.FileExists(candidate) {
 			return candidate, nil
 		}
 	}
@@ -216,9 +217,4 @@ func sortedKeys(values map[string]struct{}) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
 }

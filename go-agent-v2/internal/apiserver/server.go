@@ -151,9 +151,8 @@ func New(deps Deps) *Server {
 			CheckOrigin: checkLocalOrigin,
 		},
 	}
-	initRuntimeWiring(s)
-
 	initStores(s, deps.DB)
+	initRuntimeWiring(s)
 	initSkills(s, deps.SkillsDir)
 	s.registerMethods()
 

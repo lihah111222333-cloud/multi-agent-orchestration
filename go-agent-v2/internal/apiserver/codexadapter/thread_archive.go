@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,15 +50,112 @@ type threadArchiveRestoreNotice struct {
 const prefThreadArchivesChat = "threadArchives.chat"
 
 func (a *Adapter) loadThreadArchiveMap(ctx context.Context) (map[string]int64, error) {
+	archivedMap := map[string]int64{}
 	store := a.store()
-	if store == nil {
-		return map[string]int64{}, nil
+	if store != nil {
+		value, err := store.Get(ctx, prefThreadArchivesChat)
+		if err != nil {
+			return nil, err
+		}
+		archivedMap = NormalizeThreadArchiveMap(value)
 	}
-	value, err := store.Get(ctx, prefThreadArchivesChat)
+	if len(archivedMap) > 0 {
+		return archivedMap, nil
+	}
+	fromDisk, err := loadThreadArchiveMapFromDisk()
+	if err != nil {
+		logger.Warn("thread/archive: scan archive root failed", logger.FieldError, err)
+		return archivedMap, nil
+	}
+	return fromDisk, nil
+}
+
+func loadThreadArchiveMapFromDisk() (map[string]int64, error) {
+	rootDir, err := resolveThreadArchiveRootDir()
 	if err != nil {
 		return nil, err
 	}
-	return NormalizeThreadArchiveMap(value), nil
+	return collectThreadArchiveMapFromRoot(rootDir)
+}
+
+func collectThreadArchiveMapFromRoot(rootDir string) (map[string]int64, error) {
+	result := map[string]int64{}
+	root := strings.TrimSpace(rootDir)
+	if root == "" {
+		return result, nil
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return result, nil
+		}
+		return nil, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		threadID := strings.TrimSpace(entry.Name())
+		if threadID == "" {
+			continue
+		}
+		threadDir := filepath.Join(root, entry.Name())
+		archivedAt := latestArchiveTimestampFromThreadDir(threadDir)
+
+		manifestPath, manifestErr := findLatestThreadArchiveManifestPath(threadDir)
+		if manifestErr == nil {
+			manifest, readErr := readThreadArchiveManifest(manifestPath)
+			if readErr == nil {
+				if id := strings.TrimSpace(manifest.ThreadID); id != "" {
+					threadID = id
+				}
+				if parsed := parseArchiveTimestamp(manifest.ArchivedAt); parsed > 0 {
+					archivedAt = parsed
+				}
+			}
+		}
+		if archivedAt <= 0 {
+			continue
+		}
+		if current, ok := result[threadID]; !ok || archivedAt > current {
+			result[threadID] = archivedAt
+		}
+	}
+	return result, nil
+}
+
+func latestArchiveTimestampFromThreadDir(threadDir string) int64 {
+	entries, err := os.ReadDir(threadDir)
+	if err != nil {
+		return 0
+	}
+	var maxAt int64
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		at := parseArchiveTimestamp(entry.Name())
+		if at > maxAt {
+			maxAt = at
+		}
+	}
+	return maxAt
+}
+
+func parseArchiveTimestamp(raw string) int64 {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0
+	}
+	// Snapshot directories may include a numeric suffix, e.g. "1700000000000-2".
+	if idx := strings.Index(value, "-"); idx > 0 {
+		value = value[:idx]
+	}
+	at, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || at <= 0 {
+		return 0
+	}
+	return at
 }
 
 // PersistThreadArchivedState writes thread archive marker to preference storage.

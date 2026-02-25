@@ -123,20 +123,33 @@ func (a *Adapter) Context() *Deps {
 	return a.ctx
 }
 
+// ErrNoProcess is returned when the agent process or its client is nil.
+var ErrNoProcess = errors.New("codexadapter: agent process not found")
+
+// requireClient returns the underlying client or ErrNoProcess.
+func requireClient(proc *runner.AgentProcess) (agentcore.Client, error) {
+	if proc == nil || proc.Client == nil {
+		return nil, ErrNoProcess
+	}
+	return proc.Client, nil
+}
+
 // Submit 发送用户输入到 codex。
 func (a *Adapter) Submit(proc *runner.AgentProcess, prompt string, images, files []string, outputSchema json.RawMessage) error {
-	if proc == nil || proc.Client == nil {
-		return errors.New("codexadapter: agent process not found")
+	c, err := requireClient(proc)
+	if err != nil {
+		return err
 	}
-	return proc.Client.Submit(prompt, images, files, outputSchema)
+	return c.Submit(prompt, images, files, outputSchema)
 }
 
 // SendCommand 发送 slash 命令到 codex。
 func (a *Adapter) SendCommand(proc *runner.AgentProcess, command string, args string) error {
-	if proc == nil || proc.Client == nil {
-		return errors.New("codexadapter: agent process not found")
+	c, err := requireClient(proc)
+	if err != nil {
+		return err
 	}
-	return proc.Client.SendCommand(command, args)
+	return c.SendCommand(command, args)
 }
 
 // GetThreadID 读取当前 codex thread id。
@@ -149,40 +162,45 @@ func (a *Adapter) GetThreadID(proc *runner.AgentProcess) string {
 
 // ResumeThread 恢复历史 codex thread。
 func (a *Adapter) ResumeThread(proc *runner.AgentProcess, req agentcore.ResumeThreadRequest) error {
-	if proc == nil || proc.Client == nil {
-		return errors.New("codexadapter: agent process not found")
+	c, err := requireClient(proc)
+	if err != nil {
+		return err
 	}
-	return proc.Client.ResumeThread(req)
+	return c.ResumeThread(req)
 }
 
 // ListThreads 查询 codex 线程列表。
 func (a *Adapter) ListThreads(proc *runner.AgentProcess) ([]agentcore.ThreadInfo, error) {
-	if proc == nil || proc.Client == nil {
-		return nil, errors.New("codexadapter: agent process not found")
+	c, err := requireClient(proc)
+	if err != nil {
+		return nil, err
 	}
-	return proc.Client.ListThreads()
+	return c.ListThreads()
 }
 
 // ForkThread 基于指定源线程创建分叉线程。
 func (a *Adapter) ForkThread(proc *runner.AgentProcess, req agentcore.ForkThreadRequest) (*agentcore.ForkThreadResponse, error) {
-	if proc == nil || proc.Client == nil {
-		return nil, errors.New("codexadapter: agent process not found")
+	c, err := requireClient(proc)
+	if err != nil {
+		return nil, err
 	}
-	return proc.Client.ForkThread(req)
+	return c.ForkThread(req)
 }
 
 // RespondError 回传 dynamic tool 调用错误。
 func (a *Adapter) RespondError(proc *runner.AgentProcess, id int64, code int, message string) error {
-	if proc == nil || proc.Client == nil {
-		return errors.New("codexadapter: agent process not found")
+	c, err := requireClient(proc)
+	if err != nil {
+		return err
 	}
-	return proc.Client.RespondError(id, code, message)
+	return c.RespondError(id, code, message)
 }
 
 // SendDynamicToolResult 回传 dynamic tool 调用结果。
 func (a *Adapter) SendDynamicToolResult(proc *runner.AgentProcess, callID, output string, requestID *int64) error {
-	if proc == nil || proc.Client == nil {
-		return errors.New("codexadapter: agent process not found")
+	c, err := requireClient(proc)
+	if err != nil {
+		return err
 	}
-	return proc.Client.SendDynamicToolResult(callID, output, requestID)
+	return c.SendDynamicToolResult(callID, output, requestID)
 }

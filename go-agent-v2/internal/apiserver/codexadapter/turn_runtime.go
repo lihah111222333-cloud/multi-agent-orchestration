@@ -244,71 +244,61 @@ func BuildSessionLostNotification(agentID string, lastErr error) (string, map[st
 	}
 }
 
-type StartTurnSubmissionOptions struct {
-	ThreadID     string
-	Cwd          string
-	SubmitPrompt string
-	Images       []string
-	Files        []string
-	OutputSchema json.RawMessage
-
-	EnsureThreadReady    func(context.Context, string, string) (*runner.AgentProcess, error)
-	HasActiveTrackedTurn func(string) bool
-	ResolveActiveTurnID  func(agentcore.Client) string
-	BeginTrackedTurn     func(string, string) string
-}
-
 type StartTurnSubmissionResult struct {
 	Process *runner.AgentProcess
 	TurnID  string
 }
 
 // StartTurnSubmissionAndTrack 负责 submit 与 turn tracking 主流程。
-func (a *Adapter) StartTurnSubmissionAndTrack(ctx context.Context, opt StartTurnSubmissionOptions) (StartTurnSubmissionResult, error) {
-	proc, err := opt.EnsureThreadReady(ctx, opt.ThreadID, opt.Cwd)
+func (a *Adapter) startTurnSubmissionAndTrack(
+	ctx context.Context,
+	threadID string,
+	cwd string,
+	submitPrompt string,
+	images []string,
+	files []string,
+	outputSchema json.RawMessage,
+) (StartTurnSubmissionResult, error) {
+	proc, err := a.EnsureThreadReadyForTurn(ctx, threadID, cwd)
 	if err != nil {
 		return StartTurnSubmissionResult{}, err
 	}
 	logger.Info("turn/start: thread dispatch resolved",
-		logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+		logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 		logger.FieldPort, proc.Client.GetPort(),
 		"codex_thread_id", a.GetThreadID(proc),
 	)
 	submitStart := time.Now()
 	logger.Warn("DIAG: turn/start: about to Submit (events may arrive before tracker setup)",
-		logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+		logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 		logger.FieldPort, proc.Client.GetPort(),
-		"has_active_tracked_turn", opt.HasActiveTrackedTurn(opt.ThreadID),
+		"has_active_tracked_turn", a.HasActiveTrackedTurn(threadID),
 	)
-	if err := a.Submit(proc, opt.SubmitPrompt, opt.Images, opt.Files, opt.OutputSchema); err != nil {
+	if err := a.Submit(proc, submitPrompt, images, files, outputSchema); err != nil {
 		return StartTurnSubmissionResult{}, apperrors.Wrap(err, "Server.turnStart", "submit prompt")
 	}
 	submitElapsed := time.Since(submitStart)
 	logger.Warn("DIAG: turn/start: Submit returned",
-		logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+		logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 		"submit_ms", submitElapsed.Milliseconds(),
-		"has_active_tracked_turn", opt.HasActiveTrackedTurn(opt.ThreadID),
+		"has_active_tracked_turn", a.HasActiveTrackedTurn(threadID),
 	)
 
-	resolveActiveTurnID := opt.ResolveActiveTurnID
-	if resolveActiveTurnID == nil {
-		resolveActiveTurnID = ResolveClientActiveTurnID
-	}
-	resolvedTurnID := resolveActiveTurnID(proc.Client)
+	resolvedTurnID := ResolveClientActiveTurnID(proc.Client)
 	if resolvedTurnID == "" {
 		logger.Warn("turn/start: active turn id unavailable after submit; tracker will use synthetic id",
-			logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+			logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 		)
 	}
 	logger.Warn("DIAG: turn/start: about to beginTrackedTurn",
-		logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+		logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 		"resolved_turn_id", resolvedTurnID,
 		"gap_since_submit_ms", time.Since(submitStart).Milliseconds(),
-		"has_active_tracked_turn", opt.HasActiveTrackedTurn(opt.ThreadID),
+		"has_active_tracked_turn", a.HasActiveTrackedTurn(threadID),
 	)
-	turnID := opt.BeginTrackedTurn(opt.ThreadID, resolvedTurnID)
+	turnID := a.BeginTrackedTurn(threadID, resolvedTurnID)
 	logger.Warn("DIAG: turn/start: beginTrackedTurn completed",
-		logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+		logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 		"turn_id", turnID,
 		"total_gap_ms", time.Since(submitStart).Milliseconds(),
 	)
@@ -952,21 +942,18 @@ func PreviewResumeCandidates(candidates []string, limit int) []string {
 
 // ── Migrated from apiserver/methods_turn.go ──────────────────────────────────
 
-// BuildSelectedSkillPromptOptions carries dependencies for selected-skill prompt building.
-type BuildSelectedSkillPromptOptions struct {
-	SelectedSkills   []string
-	ReadSkillContent func(skillName string) (string, error)
-	SkillInputText   func(name, content string) string
-}
-
 // BuildSelectedSkillPrompt reads skill contents and joins them into a prompt string.
-func BuildSelectedSkillPrompt(opt BuildSelectedSkillPromptOptions) (string, int) {
-	if opt.ReadSkillContent == nil {
+func BuildSelectedSkillPrompt(
+	selectedSkills []string,
+	readSkillContent func(skillName string) (string, error),
+	skillInputText func(name, content string) string,
+) (string, int) {
+	if readSkillContent == nil {
 		return "", 0
 	}
-	ordered := make([]string, 0, len(opt.SelectedSkills))
-	seen := make(map[string]struct{}, len(opt.SelectedSkills))
-	for _, raw := range opt.SelectedSkills {
+	ordered := make([]string, 0, len(selectedSkills))
+	seen := make(map[string]struct{}, len(selectedSkills))
+	for _, raw := range selectedSkills {
 		name := strings.TrimSpace(raw)
 		if name == "" {
 			continue
@@ -983,12 +970,12 @@ func BuildSelectedSkillPrompt(opt BuildSelectedSkillPromptOptions) (string, int)
 	}
 
 	texts := make([]string, 0, len(ordered))
-	inputText := opt.SkillInputText
+	inputText := skillInputText
 	if inputText == nil {
 		inputText = func(name, content string) string { return content }
 	}
 	for _, skillName := range ordered {
-		content, err := opt.ReadSkillContent(skillName)
+		content, err := readSkillContent(skillName)
 		if err != nil {
 			logger.Warn("turn/start: selected skill unavailable, skip",
 				logger.FieldSkill, skillName,
@@ -1009,27 +996,20 @@ func (a *Adapter) BuildSelectedSkillPrompt(selectedSkills []string) (string, int
 	if a == nil {
 		return "", 0
 	}
-	return BuildSelectedSkillPrompt(BuildSelectedSkillPromptOptions{
-		SelectedSkills:   selectedSkills,
-		ReadSkillContent: a.readSkillContent,
-		SkillInputText:   commonadapter.SkillInputText,
-	})
-}
-
-// ResolveLSPUsagePromptHintOptions carries dependencies for LSP hint resolution.
-type ResolveLSPUsagePromptHintOptions struct {
-	DefaultHint string
-	MaxHintLen  int
-	GetPref     func(ctx context.Context, key string) (any, error) // nil → use default
+	return BuildSelectedSkillPrompt(selectedSkills, a.readSkillContent, commonadapter.SkillInputText)
 }
 
 // ResolveLSPUsagePromptHint resolves the user-configured LSP usage prompt hint.
-func ResolveLSPUsagePromptHint(ctx context.Context, opt ResolveLSPUsagePromptHintOptions) string {
-	defaultHint := opt.DefaultHint
-	if opt.GetPref == nil {
+func ResolveLSPUsagePromptHint(
+	ctx context.Context,
+	defaultHint string,
+	maxHintLen int,
+	getPref func(context.Context, string) (any, error),
+) string {
+	if getPref == nil {
 		return defaultHint
 	}
-	value, err := opt.GetPref(ctx, "lsp_usage_prompt_hint")
+	value, err := getPref(ctx, "lsp_usage_prompt_hint")
 	if err != nil {
 		logger.Warn("lsp hint: load preference failed", logger.FieldError, err)
 		return defaultHint
@@ -1041,9 +1021,9 @@ func ResolveLSPUsagePromptHint(ctx context.Context, opt ResolveLSPUsagePromptHin
 	if hint == "" {
 		return defaultHint
 	}
-	if opt.MaxHintLen > 0 && len(hint) > opt.MaxHintLen {
+	if maxHintLen > 0 && len(hint) > maxHintLen {
 		logger.Warn("lsp hint: invalid preference fallback to default",
-			"hint_len", len(hint), "max_len", opt.MaxHintLen)
+			"hint_len", len(hint), "max_len", maxHintLen)
 		return defaultHint
 	}
 	return hint
@@ -1055,19 +1035,7 @@ func (a *Adapter) ResolveLSPUsagePromptHint(ctx context.Context, defaultHint str
 	if a != nil && a.ctx != nil && a.ctx.Store() != nil {
 		getPref = a.ctx.Store().Get
 	}
-	return ResolveLSPUsagePromptHint(ctx, ResolveLSPUsagePromptHintOptions{
-		DefaultHint: defaultHint,
-		MaxHintLen:  maxHintLen,
-		GetPref:     getPref,
-	})
-}
-
-// PrependLSPAvailabilityWarningOptions carries dependencies for LSP warning.
-type PrependLSPAvailabilityWarningOptions struct {
-	Hint                       string
-	DynamicToolNames           map[string]struct{}
-	CollectReferencedToolNames func(string) []string
-	MergePromptText            func(string, string) string
+	return ResolveLSPUsagePromptHint(ctx, defaultHint, maxHintLen, getPref)
 }
 
 // CollectDynamicToolNames builds a set of dynamic tool names.
@@ -1087,62 +1055,60 @@ func CollectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]st
 }
 
 // PrependLSPAvailabilityWarning adds a warning when referenced LSP tools are unavailable.
-func PrependLSPAvailabilityWarning(opt PrependLSPAvailabilityWarningOptions) (string, []string) {
-	collectRefs := opt.CollectReferencedToolNames
+func PrependLSPAvailabilityWarning(
+	hint string,
+	dynamicToolNames map[string]struct{},
+	collectReferencedToolNames func(string) []string,
+	mergePromptText func(string, string) string,
+) (string, []string) {
+	collectRefs := collectReferencedToolNames
 	if collectRefs == nil {
-		return opt.Hint, nil
+		return hint, nil
 	}
-	referenced := collectRefs(opt.Hint)
+	referenced := collectRefs(hint)
 	if len(referenced) == 0 {
-		return opt.Hint, nil
+		return hint, nil
 	}
 	missing := make([]string, 0, len(referenced))
 	for _, name := range referenced {
-		if _, ok := opt.DynamicToolNames[name]; ok {
+		if _, ok := dynamicToolNames[name]; ok {
 			continue
 		}
 		missing = append(missing, name)
 	}
 	if len(missing) == 0 {
-		return opt.Hint, nil
+		return hint, nil
 	}
 	warning := "注意：当前会话未注入以下 LSP 工具（无可用 language server）：" +
 		strings.Join(missing, ", ") +
 		"。不要调用这些工具，请改用当前可用工具完成任务。"
-	merge := opt.MergePromptText
+	merge := mergePromptText
 	if merge == nil {
-		return warning + "\n" + opt.Hint, missing
+		return warning + "\n" + hint, missing
 	}
-	return merge(warning, opt.Hint), missing
+	return merge(warning, hint), missing
 }
 
 // PrependLSPAvailabilityWarning resolves warning content with adapter-owned defaults.
 func (a *Adapter) PrependLSPAvailabilityWarning(hint string, dynamicTools []agentcore.DynamicTool, mergePromptText func(string, string) string) (string, []string) {
-	return PrependLSPAvailabilityWarning(PrependLSPAvailabilityWarningOptions{
-		Hint:                       hint,
-		DynamicToolNames:           CollectDynamicToolNames(dynamicTools),
-		CollectReferencedToolNames: commonadapter.CollectReferencedLSPToolNames,
-		MergePromptText:            mergePromptText,
-	})
-}
-
-// FuzzyFileSearchOptions carries dependencies for fuzzy file search.
-type FuzzyFileSearchOptions struct {
-	Query      string
-	Roots      []string
-	FuzzyMatch func(text, pattern string) bool
+	return PrependLSPAvailabilityWarning(
+		hint,
+		CollectDynamicToolNames(dynamicTools),
+		commonadapter.CollectReferencedLSPToolNames,
+		mergePromptText,
+	)
 }
 
 // FuzzyFileSearch walks directories and returns fuzzy-matched file paths.
-func FuzzyFileSearch(opt FuzzyFileSearchOptions) []map[string]any {
-	query := strings.ToLower(opt.Query)
+func FuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern string) bool) []map[string]any {
+	query = strings.ToLower(query)
 	results := make([]map[string]any, 0)
-	match := opt.FuzzyMatch
+	match := fuzzyMatch
 	if match == nil {
 		return results
 	}
 
-	for _, root := range opt.Roots {
+	for _, root := range roots {
 		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil
@@ -1174,9 +1140,5 @@ func FuzzyFileSearch(opt FuzzyFileSearchOptions) []map[string]any {
 
 // FuzzyFileSearch walks roots using adapter entry.
 func (a *Adapter) FuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern string) bool) []map[string]any {
-	return FuzzyFileSearch(FuzzyFileSearchOptions{
-		Query:      query,
-		Roots:      roots,
-		FuzzyMatch: fuzzyMatch,
-	})
+	return FuzzyFileSearch(query, roots, fuzzyMatch)
 }

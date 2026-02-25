@@ -12,10 +12,10 @@ import (
 const prefThreadAliases = "threads.aliases"
 
 func (a *Adapter) loadThreadAliases(ctx context.Context) map[string]string {
-	if a == nil || a.ctx == nil || a.ctx.Store() == nil {
+	if a == nil || a.ctx == nil || a.ctx.Store == nil {
 		return map[string]string{}
 	}
-	value, err := a.ctx.Store().Get(ctx, prefThreadAliases)
+	value, err := a.ctx.Store.Get(ctx, prefThreadAliases)
 	if err != nil {
 		logger.Warn("thread aliases: load preference failed", logger.FieldError, err)
 		return map[string]string{}
@@ -24,14 +24,14 @@ func (a *Adapter) loadThreadAliases(ctx context.Context) map[string]string {
 }
 
 func (a *Adapter) persistThreadAlias(ctx context.Context, threadID, alias string) error {
-	if a == nil || a.ctx == nil || a.ctx.Store() == nil {
+	if a == nil || a.ctx == nil || a.ctx.Store == nil {
 		return nil
 	}
 	id := strings.TrimSpace(threadID)
 	if id == "" {
 		return nil
 	}
-	value, err := a.ctx.Store().Get(ctx, prefThreadAliases)
+	value, err := a.ctx.Store.Get(ctx, prefThreadAliases)
 	if err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func (a *Adapter) persistThreadAlias(ctx context.Context, threadID, alias string
 	} else {
 		aliases[id] = nextAlias
 	}
-	return a.ctx.Store().Set(ctx, prefThreadAliases, aliases)
+	return a.ctx.Store.Set(ctx, prefThreadAliases, aliases)
 }
 
 // NormalizeThreadAliases parses various formats (map, JSON string, json.RawMessage)
@@ -51,43 +51,47 @@ func (a *Adapter) persistThreadAlias(ctx context.Context, threadID, alias string
 // This is the single canonical implementation — apiserver root delegates here.
 func NormalizeThreadAliases(value any) map[string]string {
 	aliases := map[string]string{}
-	addAlias := func(threadID string, alias any) {
-		id := strings.TrimSpace(threadID)
-		if id == "" {
-			return
-		}
-		name := strings.TrimSpace(StringValue(alias))
-		if name == "" || name == id {
-			return
-		}
-		aliases[id] = name
-	}
 
 	switch typed := value.(type) {
 	case map[string]string:
 		for threadID, alias := range typed {
-			addAlias(threadID, alias)
+			addNormalizedThreadAlias(aliases, threadID, alias)
 		}
 	case map[string]any:
 		for threadID, alias := range typed {
-			addAlias(threadID, alias)
+			addNormalizedThreadAlias(aliases, threadID, alias)
 		}
 	case string:
 		decoded := map[string]any{}
 		if err := json.Unmarshal([]byte(strings.TrimSpace(typed)), &decoded); err == nil {
 			for threadID, alias := range decoded {
-				addAlias(threadID, alias)
+				addNormalizedThreadAlias(aliases, threadID, alias)
 			}
 		}
 	case json.RawMessage:
 		decoded := map[string]any{}
 		if err := json.Unmarshal(typed, &decoded); err == nil {
 			for threadID, alias := range decoded {
-				addAlias(threadID, alias)
+				addNormalizedThreadAlias(aliases, threadID, alias)
 			}
 		}
 	}
 	return aliases
+}
+
+func addNormalizedThreadAlias(aliases map[string]string, threadID string, alias any) {
+	if aliases == nil {
+		return
+	}
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return
+	}
+	name := strings.TrimSpace(StringValue(alias))
+	if name == "" || name == id {
+		return
+	}
+	aliases[id] = name
 }
 
 func applyThreadAliases(threads []ThreadListItem, aliases map[string]string) {

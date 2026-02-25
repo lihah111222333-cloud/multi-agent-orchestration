@@ -10,6 +10,56 @@ import (
 
 const defaultHistoryLookupTimeout = 3 * time.Second
 
+func (a *Adapter) bindingExistsByAgentID(ctx context.Context, agentID string) (bool, error) {
+	if a == nil || a.ctx == nil || a.ctx.BindingStore == nil {
+		return false, nil
+	}
+	binding, err := a.ctx.BindingStore.FindByAgentID(ctx, agentID)
+	if err != nil {
+		return false, err
+	}
+	return binding != nil, nil
+}
+
+func (a *Adapter) agentStatusExistsByID(ctx context.Context, agentID string) (bool, error) {
+	if a == nil || a.ctx == nil || a.ctx.AgentStatusStore == nil {
+		return false, nil
+	}
+	status, err := a.ctx.AgentStatusStore.Get(ctx, agentID)
+	if err != nil {
+		return false, err
+	}
+	return status != nil, nil
+}
+
+func (a *Adapter) bindingCodexThreadIDByAgentID(ctx context.Context, agentID string) (string, error) {
+	if a == nil || a.ctx == nil || a.ctx.BindingStore == nil {
+		return "", nil
+	}
+	binding, err := a.ctx.BindingStore.FindByAgentID(ctx, agentID)
+	if err != nil {
+		return "", err
+	}
+	if binding == nil {
+		return "", nil
+	}
+	return binding.CodexThreadID, nil
+}
+
+func (a *Adapter) statusSessionIDByAgentID(ctx context.Context, agentID string) (string, error) {
+	if a == nil || a.ctx == nil || a.ctx.AgentStatusStore == nil {
+		return "", nil
+	}
+	status, err := a.ctx.AgentStatusStore.Get(ctx, agentID)
+	if err != nil {
+		return "", err
+	}
+	if status == nil {
+		return "", nil
+	}
+	return status.SessionID, nil
+}
+
 // ThreadExistsInHistory checks whether a thread exists in runtime history sources.
 func ThreadExistsInHistory(
 	ctx context.Context,
@@ -77,38 +127,14 @@ func ThreadExistsInHistory(
 
 // ThreadExistsInHistory checks whether a thread exists in historical sources via adapter context stores.
 func (a *Adapter) ThreadExistsInHistory(ctx context.Context, threadID string) bool {
-	var findBindingByAgentID func(context.Context, string) (bool, error)
-	var getAgentStatusByID func(context.Context, string) (bool, error)
-	if a != nil && a.ctx != nil {
-		if bindingStore := a.ctx.BindingStore(); bindingStore != nil {
-			findBindingByAgentID = func(dbCtx context.Context, agentID string) (bool, error) {
-				binding, err := bindingStore.FindByAgentID(dbCtx, agentID)
-				if err != nil {
-					return false, err
-				}
-				return binding != nil, nil
-			}
-		}
-		if statusStore := a.ctx.AgentStatusStore(); statusStore != nil {
-			getAgentStatusByID = func(dbCtx context.Context, agentID string) (bool, error) {
-				status, err := statusStore.Get(dbCtx, agentID)
-				if err != nil {
-					return false, err
-				}
-				return status != nil, nil
-			}
-		}
-	}
-	isLikelyCodexThreadID := a.isLikelyCodexThreadID
-	loadThreadArchiveMap := a.loadThreadArchiveMap
 	return ThreadExistsInHistory(
 		ctx,
 		threadID,
 		0,
-		isLikelyCodexThreadID,
-		findBindingByAgentID,
-		getAgentStatusByID,
-		loadThreadArchiveMap,
+		IsLikelyCodexThreadID,
+		a.bindingExistsByAgentID,
+		a.agentStatusExistsByID,
+		a.loadThreadArchiveMap,
 	)
 }
 
@@ -185,41 +211,13 @@ func (a *Adapter) ResolveCodexThreadCandidates(
 	appendUniqueThreadID func(dst []string, seen map[string]struct{}, candidate string) []string,
 	previewCandidates func([]string, int) []string,
 ) []string {
-	var findBindingCodexThreadID func(context.Context, string) (string, error)
-	var findStatusSessionID func(context.Context, string) (string, error)
-	if a != nil && a.ctx != nil {
-		if bindingStore := a.ctx.BindingStore(); bindingStore != nil {
-			findBindingCodexThreadID = func(dbCtx context.Context, id string) (string, error) {
-				binding, err := bindingStore.FindByAgentID(dbCtx, id)
-				if err != nil {
-					return "", err
-				}
-				if binding == nil {
-					return "", nil
-				}
-				return binding.CodexThreadID, nil
-			}
-		}
-		if statusStore := a.ctx.AgentStatusStore(); statusStore != nil {
-			findStatusSessionID = func(dbCtx context.Context, id string) (string, error) {
-				status, err := statusStore.Get(dbCtx, id)
-				if err != nil {
-					return "", err
-				}
-				if status == nil {
-					return "", nil
-				}
-				return status.SessionID, nil
-			}
-		}
-	}
 	return ResolveCodexThreadCandidates(
 		ctx,
 		agentID,
 		0,
 		appendUniqueThreadID,
-		findBindingCodexThreadID,
-		findStatusSessionID,
+		a.bindingCodexThreadIDByAgentID,
+		a.statusSessionIDByAgentID,
 		previewCandidates,
 	)
 }

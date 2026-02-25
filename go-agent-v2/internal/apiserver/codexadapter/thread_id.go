@@ -26,14 +26,3 @@ func NormalizeCodexThreadID(raw string) string {
 func IsLikelyCodexThreadID(raw string) bool {
 	return NormalizeCodexThreadID(raw) != ""
 }
-
-// Adapter method wrappers — keep backward compatibility for internal callers
-// that reference a.normalizeCodexThreadID / a.isLikelyCodexThreadID.
-
-func (a *Adapter) normalizeCodexThreadID(raw string) string {
-	return NormalizeCodexThreadID(raw)
-}
-
-func (a *Adapter) isLikelyCodexThreadID(raw string) bool {
-	return IsLikelyCodexThreadID(raw)
-}

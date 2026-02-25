@@ -11,26 +11,6 @@ import (
 
 // ThreadNameSet sets codex thread name and persists alias.
 func (a *Adapter) ThreadNameSet(ctx context.Context, threadID, name string) (map[string]any, error) {
-	var getProcessFn func(string) *runner.AgentProcess
-	var existsInRuntimeFn func(string) bool
-	var setRuntimeThreadNameFn func(string, string)
-	if a != nil && a.ctx != nil {
-		if mgr := a.ctx.Manager(); mgr != nil {
-			getProcessFn = mgr.Get
-		}
-		if runtime := a.ctx.UIRuntime(); runtime != nil {
-			existsInRuntimeFn = func(id string) bool {
-				for _, item := range runtime.SnapshotLight().Threads {
-					if strings.TrimSpace(item.ID) == strings.TrimSpace(id) {
-						return true
-					}
-				}
-				return false
-			}
-			setRuntimeThreadNameFn = runtime.SetThreadName
-		}
-	}
-
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
 		return nil, apperrors.New("Server.threadNameSet", "threadId is required")
@@ -46,14 +26,11 @@ func (a *Adapter) ThreadNameSet(ctx context.Context, threadID, name string) (map
 	}
 
 	var proc *runner.AgentProcess
-	if getProcessFn != nil {
-		proc = getProcessFn(threadID)
+	if a != nil && a.ctx != nil && a.ctx.Manager != nil {
+		proc = a.ctx.Manager.Get(threadID)
 	}
-	existsInRuntime := false
-	if existsInRuntimeFn != nil {
-		existsInRuntime = existsInRuntimeFn(threadID)
-	}
-	hasHistory := a.threadExistsInHistory(ctx, threadID)
+	existsInRuntime := a.threadExistsInRuntime(threadID)
+	hasHistory := a.ThreadExistsInHistory(ctx, threadID)
 	if proc == nil && !existsInRuntime && !hasHistory {
 		return nil, apperrors.Newf("Server.threadNameSet", "thread %s not found", threadID)
 	}
@@ -64,8 +41,8 @@ func (a *Adapter) ThreadNameSet(ctx context.Context, threadID, name string) (map
 		}
 	}
 
-	if setRuntimeThreadNameFn != nil {
-		setRuntimeThreadNameFn(threadID, persistedAlias)
+	if a != nil && a.ctx != nil && a.ctx.UIRuntime != nil {
+		a.ctx.UIRuntime.SetThreadName(threadID, persistedAlias)
 	}
 	if err := a.persistThreadAlias(ctx, threadID, persistedAlias); err != nil {
 		logger.Warn("thread/name/set: persist alias failed",
@@ -79,30 +56,6 @@ func (a *Adapter) ThreadNameSet(ctx context.Context, threadID, name string) (map
 
 // ThreadUnarchive clears archive state and attempts source restore if archived.
 func (a *Adapter) ThreadUnarchive(ctx context.Context, threadID string) (map[string]any, error) {
-	inspect := func(id string) (ThreadArchiveRestoreNotice, error) {
-		return InspectThreadArchiveForRestore(InspectThreadArchiveForRestoreOptions{
-			ThreadID:                            id,
-			ResolveThreadArchiveRoot:            resolveThreadArchiveRootDir,
-			SanitizeArchiveNameStrict:           SanitizeArchiveNameStrict,
-			PathWithinRoot:                      PathWithinRoot,
-			FileSHA256:                          fileSHA256,
-			FindLatestThreadArchiveManifestPath: FindLatestThreadArchiveManifestPath,
-			ReadThreadArchiveManifest:           ReadThreadArchiveManifest,
-		})
-	}
-	restore := func(id string) ([]string, []string, error) {
-		return RestoreThreadArchiveSources(RestoreThreadArchiveSourcesOptions{
-			ThreadID:                            id,
-			ResolveThreadArchiveRoot:            resolveThreadArchiveRootDir,
-			SanitizeArchiveNameStrict:           SanitizeArchiveNameStrict,
-			ResolveCodexRootDir:                 resolveCodexRootDir,
-			PathWithinRoot:                      PathWithinRoot,
-			CopyFileOverwrite:                   copyFileOverwrite,
-			FileSHA256:                          fileSHA256,
-			FindLatestThreadArchiveManifestPath: FindLatestThreadArchiveManifestPath,
-			ReadThreadArchiveManifest:           ReadThreadArchiveManifest,
-		})
-	}
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
 		return nil, apperrors.New("Server.threadUnarchive", "threadId is required")
@@ -121,7 +74,7 @@ func (a *Adapter) ThreadUnarchive(ctx context.Context, threadID string) (map[str
 	restoredFiles := []string{}
 	skippedRestoreFiles := []string{}
 	if wasArchived {
-		notice, err := inspect(threadID)
+		notice, err := a.inspectThreadArchiveForRestore(threadID)
 		if err != nil {
 			logger.Error("thread/unarchive: inspect archive integrity failed",
 				logger.FieldThreadID, threadID,
@@ -130,7 +83,7 @@ func (a *Adapter) ThreadUnarchive(ctx context.Context, threadID string) (map[str
 		} else {
 			restoreNotice = notice
 		}
-		restored, skipped, err := restore(threadID)
+		restored, skipped, err := a.restoreThreadArchiveSources(threadID)
 		if err != nil {
 			logger.Error("thread/unarchive: restore archived codex artifacts failed",
 				logger.FieldThreadID, threadID,
@@ -141,7 +94,7 @@ func (a *Adapter) ThreadUnarchive(ctx context.Context, threadID string) (map[str
 			skippedRestoreFiles = skipped
 		}
 	}
-	if err := a.RemoveThreadArchivedState(ctx, threadID, a.loadThreadArchiveMap); err != nil {
+	if err := a.RemoveThreadArchivedState(ctx, threadID); err != nil {
 		return nil, apperrors.Wrap(err, "Server.threadUnarchive", "persist archive state")
 	}
 	result := map[string]any{

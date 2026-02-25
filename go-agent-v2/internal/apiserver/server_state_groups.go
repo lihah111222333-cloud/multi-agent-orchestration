@@ -26,6 +26,20 @@ type connManagerState struct {
 	nextReqID atomic.Int64
 }
 
+type pendingResponseCleanup struct {
+	state *connManagerState
+	reqID int64
+}
+
+func (c pendingResponseCleanup) run() {
+	if c.state == nil {
+		return
+	}
+	c.state.pendingMu.Lock()
+	delete(c.state.pending, c.reqID)
+	c.state.pendingMu.Unlock()
+}
+
 func (s *connManagerState) connectionCount() int {
 	if s == nil {
 		return 0
@@ -114,12 +128,8 @@ func (s *connManagerState) allocPendingRequest() (reqID int64, ch <-chan *Respon
 	}
 	s.pending[id] = respCh
 	s.pendingMu.Unlock()
-	cleanupFn := func() {
-		s.pendingMu.Lock()
-		delete(s.pending, id)
-		s.pendingMu.Unlock()
-	}
-	return id, respCh, cleanupFn
+	cleanupRef := pendingResponseCleanup{state: s, reqID: id}
+	return id, respCh, cleanupRef.run
 }
 
 func (s *connManagerState) pendingResponseChannel(reqID int64) (chan *Response, bool) {
@@ -149,6 +159,45 @@ func (s *connManagerState) deliverPendingResponse(reqID int64, resp *Response) (
 type diagnosticsCacheState struct {
 	diagMu    sync.RWMutex
 	diagCache map[string][]lsp.Diagnostic // uri -> diagnostics
+}
+
+func (s *diagnosticsCacheState) setDiagnostics(uri string, diagnostics []lsp.Diagnostic) {
+	if s == nil {
+		return
+	}
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	if s.diagCache == nil {
+		s.diagCache = map[string][]lsp.Diagnostic{}
+	}
+	copied := cloneDiagnostics(diagnostics)
+	if len(copied) == 0 {
+		delete(s.diagCache, uri)
+		return
+	}
+	s.diagCache[uri] = copied
+}
+
+func (s *diagnosticsCacheState) getDiagnostics(uri string) []lsp.Diagnostic {
+	if s == nil {
+		return nil
+	}
+	s.diagMu.RLock()
+	defer s.diagMu.RUnlock()
+	return cloneDiagnostics(s.diagCache[uri])
+}
+
+func (s *diagnosticsCacheState) allDiagnostics() map[string][]lsp.Diagnostic {
+	if s == nil {
+		return map[string][]lsp.Diagnostic{}
+	}
+	s.diagMu.RLock()
+	defer s.diagMu.RUnlock()
+	out := make(map[string][]lsp.Diagnostic, len(s.diagCache))
+	for uri, diagnostics := range s.diagCache {
+		out[uri] = cloneDiagnostics(diagnostics)
+	}
+	return out
 }
 
 // codeRunState 聚合 code_run 执行状态与 agent 工作目录缓存。

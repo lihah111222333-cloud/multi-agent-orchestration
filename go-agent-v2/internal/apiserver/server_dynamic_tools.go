@@ -3,8 +3,6 @@ package apiserver
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,47 +11,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/tooladapter"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
-
-func defaultSkillsCacheDir() string {
-	ensureLocalFallback := func(path string) string {
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			logger.Warn("skills directory: ensure local fallback failed", logger.FieldError, err, logger.FieldPath, path)
-		}
-		return path
-	}
-	localFallback := filepath.Join(".multi-agent", "skills-cache")
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		logger.Warn("skills directory: resolve user home failed, fallback to local path",
-			logger.FieldError, err,
-		)
-		return ensureLocalFallback(localFallback)
-	}
-	homeDir = strings.TrimSpace(homeDir)
-	if homeDir == "" {
-		logger.Warn("skills directory: user home empty, fallback to local path")
-		return ensureLocalFallback(localFallback)
-	}
-
-	appRootDir := filepath.Join(homeDir, ".multi-agent")
-	if err := os.MkdirAll(appRootDir, 0o755); err != nil {
-		logger.Warn("skills directory: ensure app root failed, fallback to local path",
-			logger.FieldError, err,
-			logger.FieldPath, appRootDir,
-		)
-		return ensureLocalFallback(localFallback)
-	}
-	cacheDir := filepath.Join(appRootDir, "skills-cache")
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		logger.Warn("skills directory: ensure cache dir failed, fallback to local path",
-			logger.FieldError, err,
-			logger.FieldPath, cacheDir,
-		)
-		return ensureLocalFallback(localFallback)
-	}
-	return cacheDir
-}
 
 func toolAdapterProviders(s *Server) tooladapter.Providers {
 	return tooladapter.Providers{

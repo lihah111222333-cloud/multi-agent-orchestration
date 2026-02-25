@@ -34,17 +34,7 @@ func setDiagnostics(s *Server, uri string, diagnostics []lsp.Diagnostic) {
 	if normalized == "" {
 		return
 	}
-	copied := cloneDiagnostics(diagnostics)
-	s.diagnosticsCacheState.diagMu.Lock()
-	defer s.diagnosticsCacheState.diagMu.Unlock()
-	if s.diagnosticsCacheState.diagCache == nil {
-		s.diagnosticsCacheState.diagCache = map[string][]lsp.Diagnostic{}
-	}
-	if len(copied) == 0 {
-		delete(s.diagnosticsCacheState.diagCache, normalized)
-		return
-	}
-	s.diagnosticsCacheState.diagCache[normalized] = copied
+	setDiagnosticsCacheState(s, normalized, diagnostics)
 }
 
 func getDiagnostics(s *Server, uri string) []lsp.Diagnostic {
@@ -55,22 +45,14 @@ func getDiagnostics(s *Server, uri string) []lsp.Diagnostic {
 	if normalized == "" {
 		return nil
 	}
-	s.diagnosticsCacheState.diagMu.RLock()
-	defer s.diagnosticsCacheState.diagMu.RUnlock()
-	return cloneDiagnostics(s.diagnosticsCacheState.diagCache[normalized])
+	return getDiagnosticsCacheState(s, normalized)
 }
 
 func getAllDiagnostics(s *Server) map[string][]lsp.Diagnostic {
 	if s == nil {
 		return map[string][]lsp.Diagnostic{}
 	}
-	s.diagnosticsCacheState.diagMu.RLock()
-	defer s.diagnosticsCacheState.diagMu.RUnlock()
-	out := make(map[string][]lsp.Diagnostic, len(s.diagnosticsCacheState.diagCache))
-	for uri, diagnostics := range s.diagnosticsCacheState.diagCache {
-		out[uri] = cloneDiagnostics(diagnostics)
-	}
-	return out
+	return allDiagnosticsCacheState(s)
 }
 
 func cloneDiagnostics(in []lsp.Diagnostic) []lsp.Diagnostic {

@@ -31,7 +31,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	skillsruntime "github.com/multi-agent/go-agent-v2/internal/skills"
-	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/internal/tooladapter"
 	"github.com/multi-agent/go-agent-v2/internal/tools"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
@@ -167,56 +166,9 @@ func New(deps Deps) *Server {
 	s.lspDiagnosticsQueryTyped = func(_ context.Context, p lspDiagnosticsQueryParams) (any, error) {
 		return s.lspTools.DiagnosticsQuery(p.FilePath), nil
 	}
-	if deps.DB != nil {
-		s.prefManager = uistate.NewPreferenceManager(store.NewUIPreferenceStore(deps.DB))
-		s.dagStore = store.NewTaskDAGStore(deps.DB)
-		s.cmdStore = store.NewCommandCardStore(deps.DB)
-		s.promptStore = store.NewPromptTemplateStore(deps.DB)
-		s.fileStore = store.NewSharedFileStore(deps.DB)
-		s.workspaceRunStore = store.NewWorkspaceRunStore(deps.DB)
-		s.sysLogStore = store.NewSystemLogStore(deps.DB)
-		// Dashboard stores
-		s.agentStatusStore = store.NewAgentStatusStore(deps.DB)
-		s.auditLogStore = store.NewAuditLogStore(deps.DB)
-		s.aiLogStore = store.NewAILogStore(deps.DB)
-		s.busLogStore = store.NewBusLogStore(deps.DB)
-		s.taskAckStore = store.NewTaskAckStore(deps.DB)
-		s.taskTraceStore = store.NewTaskTraceStore(deps.DB)
-		s.bindingStore = store.NewAgentCodexBindingStore(deps.DB)
 
-		if s.cfg != nil {
-			maxFileBytes := int64(s.cfg.OrchestrationWorkspaceMaxFileBytes)
-			maxTotalBytes := int64(s.cfg.OrchestrationWorkspaceMaxTotalBytes)
-			workspaceMgr, mgrErr := service.NewWorkspaceManager(
-				s.workspaceRunStore,
-				s.cfg.OrchestrationWorkspaceRoot,
-				s.cfg.OrchestrationWorkspaceMaxFiles,
-				maxFileBytes,
-				maxTotalBytes,
-			)
-			if mgrErr != nil {
-				logger.Warn("app-server: workspace manager unavailable", logger.FieldError, mgrErr)
-			} else {
-				s.workspaceMgr = workspaceMgr
-				logger.Info("app-server: workspace manager enabled", logger.FieldRoot, workspaceMgr.RootDir())
-			}
-		}
-		logger.Info("app-server: resource tools + dashboard enabled")
-	}
-	// Skills service (filesystem, no DB required)
-	skillsDir := strings.TrimSpace(deps.SkillsDir)
-	if skillsDir == "" {
-		skillsDir = defaultSkillsCacheDir()
-	} else if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-		logger.Warn("app-server: ensure custom skills dir failed, fallback to app cache",
-			logger.FieldError, err,
-			logger.FieldPath, skillsDir,
-		)
-		skillsDir = defaultSkillsCacheDir()
-	}
-	s.skillsDir = skillsDir
-	s.skillSvc = service.NewSkillService(skillsDir)
-	s.skillsMgr = newSkillsManager(s)
+	initStores(s, deps.DB)
+	initSkills(s, deps.SkillsDir)
 	s.registerMethods()
 
 	// 从 Config 加载 stall 参数
@@ -230,7 +182,11 @@ func New(deps Deps) *Server {
 	}
 
 	// 代码执行引擎 (无外部依赖, 仅需 workDir)
-	workDir, _ := os.Getwd()
+	workDir, wdErr := os.Getwd()
+	if wdErr != nil {
+		logger.Warn("app-server: resolve working directory failed; fallback to current path", logger.FieldError, wdErr)
+		workDir = "."
+	}
 	if cr, crErr := executor.NewCodeRunner(workDir); crErr != nil {
 		logger.Warn("app-server: code runner unavailable", logger.FieldError, crErr)
 	} else {
@@ -248,6 +204,9 @@ func New(deps Deps) *Server {
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	defer s.cleanupRuntimeResources()
 
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	// 解析地址: 去掉 ws:// 前缀
 	host := strings.TrimPrefix(addr, "ws://")
 	host = strings.TrimPrefix(host, "wss://")
@@ -260,44 +219,49 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	srv := &http.Server{
 		Addr:              host,
 		Handler:           recoveryMiddleware(corsMiddleware(mux)),
-		BaseContext:       func(_ net.Listener) context.Context { return ctx },
+		BaseContext:       func(_ net.Listener) context.Context { return runCtx },
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	ln, err := net.Listen("tcp", host)
+	if err != nil {
+		return pkgerr.Wrap(err, "Server.ListenAndServe", "listen")
+	}
+	defer func() { _ = ln.Close() }()
+
 	// 优雅关闭: 给活跃连接 5 秒完成处理
 	util.SafeGo(func() {
-		<-ctx.Done()
+		<-runCtx.Done()
+		if ctx.Err() == nil {
+			return
+		}
 		logger.Info("app-server: shutdown trigger", "ctx_err", ctx.Err())
 		logger.Info("app-server: shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			logger.Warn("app-server: shutdown error", logger.FieldError, err)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if shutdownErr := srv.Shutdown(shutdownCtx); shutdownErr != nil && shutdownErr != http.ErrServerClosed {
+			logger.Warn("app-server: shutdown error", logger.FieldError, shutdownErr)
 			return
 		}
 		logger.Info("app-server: shutdown completed")
 	})
 
 	logger.Info("app-server: listening", logger.FieldAddr, host)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return pkgerr.Wrap(err, "Server.ListenAndServe", "listen")
 	}
 	return nil
 }
 
-func cleanupRuntimeResources(s *Server) {
+func (s *Server) cleanupRuntimeResources() {
 	if s == nil {
 		return
 	}
-	s.runtimeGuardState.doCleanup(func() {
+	doRuntimeCleanupState(s, func() {
 		cancelAllCodeRuns(s)
 		if s.codeRunner != nil {
 			s.codeRunner.Cleanup()
 		}
-		s.codeRunState.clearAllAgentWorkDirs()
+		clearAllAgentWorkDirsState(s)
 	})
-}
-
-func (s *Server) cleanupRuntimeResources() {
-	cleanupRuntimeResources(s)
 }

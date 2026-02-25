@@ -130,7 +130,7 @@ func broadcastNotification(s *Server, method string, params any) {
 	if s == nil {
 		return
 	}
-	hook := s.notifyHookState.hook()
+	hook := notifyHookFuncState(s)
 	if hook != nil {
 		hook(method, params)
 	}
@@ -143,7 +143,7 @@ func broadcastNotification(s *Server, method string, params any) {
 	}
 
 	// SSE 广播 — 将事件推给浏览器调试客户端
-	clients := s.sseState.snapshotClients()
+	clients := snapshotSSEClientsState(s)
 	if len(clients) > 0 {
 		logger.Debug("sse: broadcasting", logger.FieldMethod, method, "clients", len(clients), logger.FieldDataLen, len(data))
 		for _, ch := range clients {
@@ -156,7 +156,7 @@ func broadcastNotification(s *Server, method string, params any) {
 		}
 	}
 
-	snapshot := s.connManagerState.connsSnapshot()
+	snapshot := connsSnapshotState(s)
 	for id, entry := range snapshot {
 		enqueueConnMessage(s, id, entry, websocket.TextMessage, data, "notify_backpressure")
 	}
@@ -190,7 +190,7 @@ func disconnectConn(s *Server, connID string) {
 	if id == "" {
 		return
 	}
-	entry, ok := s.connManagerState.removeConn(id)
+	entry, ok := removeConnState(s, id)
 	if ok && entry != nil {
 		entry.closeNow()
 	}
@@ -204,7 +204,7 @@ func sendRequest(s *Server, connID, method string, params any) (*Response, error
 	if s == nil {
 		return nil, pkgerr.New("Server.SendRequest", "server is nil")
 	}
-	reqID, ch, cleanupPending := s.connManagerState.allocPendingRequest()
+	reqID, ch, cleanupPending := allocPendingRequestState(s)
 	defer cleanupPending()
 
 	req := Request{
@@ -226,7 +226,7 @@ func sendRequest(s *Server, connID, method string, params any) (*Response, error
 	}
 
 	// 发送到指定连接
-	entry, ok := s.connManagerState.getConn(connID)
+	entry, ok := getConnState(s, connID)
 	if !ok {
 		return nil, pkgerr.Newf("Server.SendRequest", "connection %s not found", connID)
 	}
@@ -255,7 +255,7 @@ func sendRequestToAll(s *Server, method string, params any) (*Response, error) {
 	if s == nil {
 		return nil, pkgerr.New("Server.SendRequestToAll", "server is nil")
 	}
-	firstConn := s.connManagerState.firstConnID()
+	firstConn := firstConnIDState(s)
 	if firstConn == "" {
 		return nil, pkgerr.New("Server.SendRequestToAll", "no connected clients")
 	}
@@ -281,7 +281,7 @@ func ResolvePendingRequest(s *Server, reqID int64, result map[string]any) bool {
 		ID:      reqID,
 		Result:  result,
 	}
-	found, delivered := s.connManagerState.deliverPendingResponse(reqID, resp)
+	found, delivered := deliverPendingResponseState(s, reqID, resp)
 	if !found {
 		logger.Warn("app-server: ResolvePendingRequest — no pending request",
 			logger.FieldID, reqID)
@@ -310,7 +310,7 @@ func allocPendingRequest(s *Server) (reqID int64, ch <-chan *Response, cleanup f
 	if s == nil {
 		return 0, nil, func() {}
 	}
-	return s.connManagerState.allocPendingRequest()
+	return allocPendingRequestState(s)
 }
 
 func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
@@ -319,7 +319,7 @@ func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 连接数限制
-	numConns := s.connManagerState.connectionCount()
+	numConns := connectionCountState(s)
 	if numConns >= maxConnections {
 		http.Error(w, "too many connections", http.StatusServiceUnavailable)
 		logger.Warn("app-server: connection rejected (max reached)", logger.FieldMax, maxConnections)
@@ -335,9 +335,9 @@ func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
 	// 消息大小限制
 	ws.SetReadLimit(maxMessageSize)
 
-	connID := s.connManagerState.allocConnID()
+	connID := allocConnIDState(s)
 	entry := newConnEntry(ws)
-	s.connManagerState.addConn(connID, entry)
+	addConnState(s, connID, entry)
 	util.SafeGo(func() {
 		if err := entry.writeLoop(); err != nil {
 			logger.Warn("app-server: write loop failed", logger.FieldConn, connID, logger.FieldError, err)
@@ -348,7 +348,7 @@ func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
 	logger.Info("app-server: client connected", logger.FieldConn, connID, logger.FieldRemote, r.RemoteAddr)
 
 	defer func() {
-		s.connManagerState.removeConn(connID)
+		removeConnState(s, connID)
 		entry.closeNow()
 		logger.Info("app-server: client disconnected", logger.FieldConn, connID)
 	}()
@@ -527,7 +527,7 @@ func handleClientResponse(s *Server, env rpcEnvelope) bool {
 		}
 		resp.Error = &rpcErr
 	}
-	found, _ := s.connManagerState.deliverPendingResponse(reqID, resp)
+	found, _ := deliverPendingResponseState(s, reqID, resp)
 	return found
 }
 

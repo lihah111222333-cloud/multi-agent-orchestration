@@ -55,3 +55,17 @@ func AsStringSlice(raw any) []string {
 		return nil
 	}
 }
+
+// ExtractFirstString 从 payload 中按优先级提取第一个非空字符串字段。
+//
+// 用于统一 apiserver.extractFirstString 和 uistate.extractFirstString。
+func ExtractFirstString(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if v, ok := payload[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}

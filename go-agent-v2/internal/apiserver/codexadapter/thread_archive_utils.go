@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,62 +18,87 @@ import (
 // NormalizeThreadArchiveMap normalizes archive state payload into map[string]int64.
 func NormalizeThreadArchiveMap(value any) map[string]int64 {
 	result := map[string]int64{}
-	appendEntry := func(rawID string, rawAt any) {
-		id := strings.TrimSpace(rawID)
-		if id == "" {
-			return
-		}
-		var at int64
-		switch v := rawAt.(type) {
-		case int:
-			at = int64(v)
-		case int64:
-			at = v
-		case float64:
-			at = int64(v)
-		case json.Number:
-			parsed, err := v.Int64()
-			if err == nil {
-				at = parsed
-			}
-		case string:
-			parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-			if err == nil {
-				at = parsed
-			}
-		}
-		if at <= 0 {
-			return
-		}
-		result[id] = at
-	}
 
 	switch typed := value.(type) {
 	case map[string]int64:
 		for id, at := range typed {
-			appendEntry(id, at)
+			addThreadArchiveMapEntry(result, id, at)
 		}
 	case map[string]any:
 		for id, at := range typed {
-			appendEntry(id, at)
+			addThreadArchiveMapEntry(result, id, at)
 		}
 	case string:
 		decoded := map[string]any{}
 		if err := json.Unmarshal([]byte(strings.TrimSpace(typed)), &decoded); err == nil {
 			for id, at := range decoded {
-				appendEntry(id, at)
+				addThreadArchiveMapEntry(result, id, at)
 			}
 		}
 	case json.RawMessage:
 		decoded := map[string]any{}
 		if err := json.Unmarshal(typed, &decoded); err == nil {
 			for id, at := range decoded {
-				appendEntry(id, at)
+				addThreadArchiveMapEntry(result, id, at)
 			}
 		}
 	}
 
 	return result
+}
+
+func addThreadArchiveMapEntry(result map[string]int64, rawID string, rawAt any) {
+	if result == nil {
+		return
+	}
+	id := strings.TrimSpace(rawID)
+	if id == "" {
+		return
+	}
+	at := normalizeThreadArchiveTimestamp(rawAt)
+	if at <= 0 {
+		return
+	}
+	result[id] = at
+}
+
+func normalizeThreadArchiveTimestamp(rawAt any) int64 {
+	switch v := rawAt.(type) {
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	case json.Number:
+		parsed, err := v.Int64()
+		if err == nil {
+			return parsed
+		}
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err == nil {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func allocateUniquePath(primary string, next func(index int) string) (string, error) {
+	if _, err := os.Stat(primary); os.IsNotExist(err) {
+		return primary, nil
+	} else if err != nil {
+		return "", err
+	}
+	for i := 2; i <= 9999; i++ {
+		candidate := next(i)
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate, nil
+		} else if err != nil {
+			return "", err
+		}
+	}
+	return "", os.ErrExist
 }
 
 // resolveThreadArchiveRootDir resolves and ensures ~/.multi-agent/thread-archives.
@@ -111,20 +137,16 @@ func resolveThreadArchiveSnapshotDir(rootDir string, threadID string, archivedAt
 		return "", apperrors.Wrap(err, "resolveThreadArchiveSnapshotDir", "sanitize archive timestamp")
 	}
 	snapshotDir := filepath.Join(threadDir, snapshotName)
-	if _, err := os.Stat(snapshotDir); os.IsNotExist(err) {
-		return snapshotDir, nil
-	} else if err != nil {
-		return "", apperrors.Wrap(err, "resolveThreadArchiveSnapshotDir", "stat snapshot dir")
+	resolved, err := allocateUniquePath(snapshotDir, func(i int) string {
+		return filepath.Join(threadDir, fmt.Sprintf("%s-%d", snapshotName, i))
+	})
+	if err == nil {
+		return resolved, nil
 	}
-	for i := 2; i <= 9999; i++ {
-		candidate := filepath.Join(threadDir, fmt.Sprintf("%s-%d", snapshotName, i))
-		if _, err := os.Stat(candidate); os.IsNotExist(err) {
-			return candidate, nil
-		} else if err != nil {
-			return "", apperrors.Wrap(err, "resolveThreadArchiveSnapshotDir", "stat snapshot candidate")
-		}
+	if errors.Is(err, os.ErrExist) {
+		return "", apperrors.New("resolveThreadArchiveSnapshotDir", "unable to allocate unique archive snapshot dir")
 	}
-	return "", apperrors.New("resolveThreadArchiveSnapshotDir", "unable to allocate unique archive snapshot dir")
+	return "", apperrors.Wrap(err, "resolveThreadArchiveSnapshotDir", "stat snapshot candidate")
 }
 
 // SanitizeArchiveName sanitizes archive file and directory names.
@@ -170,64 +192,31 @@ func nextArchiveFilePath(dir, filename string) (string, error) {
 	ext := filepath.Ext(base)
 	stem := strings.TrimSuffix(base, ext)
 	candidate := filepath.Join(dir, base)
-	if _, err := os.Stat(candidate); os.IsNotExist(err) {
-		return candidate, nil
-	} else if err != nil {
-		return "", apperrors.Wrap(err, "nextArchiveFilePath", "stat archive target")
+	resolved, err := allocateUniquePath(candidate, func(i int) string {
+		return filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, i, ext))
+	})
+	if err == nil {
+		return resolved, nil
 	}
-	for i := 2; i <= 9999; i++ {
-		candidate = filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, i, ext))
-		if _, err := os.Stat(candidate); os.IsNotExist(err) {
-			return candidate, nil
-		} else if err != nil {
-			return "", apperrors.Wrap(err, "nextArchiveFilePath", "stat archive target candidate")
+	if errors.Is(err, os.ErrExist) {
+		return "", apperrors.New("nextArchiveFilePath", "unable to allocate unique archive filename")
+	}
+	return "", apperrors.Wrap(err, "nextArchiveFilePath", "stat archive target candidate")
+}
+
+func copyFileAtomic(srcPath, targetPath string, overwrite bool) error {
+	op := "copyFile"
+	if overwrite {
+		op = "copyFileOverwrite"
+	}
+	if !overwrite {
+		if _, err := os.Stat(targetPath); err == nil {
+			return apperrors.Newf(op, "target already exists: %s", targetPath)
+		} else if !os.IsNotExist(err) {
+			return apperrors.Wrap(err, op, "stat target path")
 		}
 	}
-	return "", apperrors.New("nextArchiveFilePath", "unable to allocate unique archive filename")
-}
 
-// copyFile copies src to target and fails if target exists.
-func copyFile(srcPath, targetPath string) error {
-	if _, err := os.Stat(targetPath); err == nil {
-		return apperrors.Newf("copyFile", "target already exists: %s", targetPath)
-	} else if !os.IsNotExist(err) {
-		return apperrors.Wrap(err, "copyFile", "stat target path")
-	}
-
-	src, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = src.Close() }()
-
-	info, err := src.Stat()
-	if err != nil {
-		return err
-	}
-	mode := info.Mode().Perm()
-	if mode == 0 {
-		mode = 0o644
-	}
-
-	tmpPath := targetPath + ".tmp"
-	dst, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		_ = dst.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := dst.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	return os.Rename(tmpPath, targetPath)
-}
-
-// copyFileOverwrite copies src to target with atomic overwrite semantics.
-func copyFileOverwrite(srcPath, targetPath string) error {
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return err
@@ -244,8 +233,10 @@ func copyFileOverwrite(srcPath, targetPath string) error {
 	}
 
 	targetDir := filepath.Dir(targetPath)
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return err
+	if overwrite {
+		if err := os.MkdirAll(targetDir, 0o755); err != nil {
+			return err
+		}
 	}
 	tmpFile, err := os.CreateTemp(targetDir, "."+filepath.Base(targetPath)+".tmp-*")
 	if err != nil {
@@ -270,6 +261,16 @@ func copyFileOverwrite(srcPath, targetPath string) error {
 		return err
 	}
 	return nil
+}
+
+// copyFile copies src to target and fails if target exists.
+func copyFile(srcPath, targetPath string) error {
+	return copyFileAtomic(srcPath, targetPath, false)
+}
+
+// copyFileOverwrite copies src to target with atomic overwrite semantics.
+func copyFileOverwrite(srcPath, targetPath string) error {
+	return copyFileAtomic(srcPath, targetPath, true)
 }
 
 // fileSHA256 computes file SHA256 checksum in hex.

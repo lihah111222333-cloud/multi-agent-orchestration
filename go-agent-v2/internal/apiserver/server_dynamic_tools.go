@@ -73,6 +73,20 @@ func SetupLSP(s *Server, rootDir string) {
 	})
 }
 
+func resolveDynamicToolThreadIDs(agentID, rawThreadID string) (threadID, codexThreadID string) {
+	agentThreadID := strings.TrimSpace(agentID)
+	codexThreadID = strings.TrimSpace(rawThreadID)
+	if agentThreadID != "" {
+		threadID = agentThreadID
+	} else {
+		threadID = codexThreadID
+	}
+	if codexThreadID == "" || codexThreadID == threadID {
+		codexThreadID = ""
+	}
+	return threadID, codexThreadID
+}
+
 // handleDynamicToolCall 处理 codex 发回的动态工具调用 — 调 LSP 并回传结果。
 func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 	if s == nil {
@@ -118,10 +132,7 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 		}
 		return
 	}
-	threadID := strings.TrimSpace(call.ThreadID)
-	if threadID == "" {
-		threadID = agentID
-	}
+	threadID, codexThreadID := resolveDynamicToolThreadIDs(agentID, call.ThreadID)
 
 	start := time.Now()
 	var totalCalls int64
@@ -166,6 +177,9 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 
 	// 广播到前端 — 让 UI 可以显示 LSP 调用
 	notifyPayload := buildToolNotifyPayload(threadID, agentID, call, argMap, filePath, success, totalCalls, elapsed, result)
+	if codexThreadID != "" {
+		notifyPayload["codexThreadId"] = codexThreadID
+	}
 	notify(s, "dynamic-tool/called", notifyPayload)
 
 	// 回传结果: 使用 event.RequestID 发送 JSON-RPC response (codex 发的是 server request)

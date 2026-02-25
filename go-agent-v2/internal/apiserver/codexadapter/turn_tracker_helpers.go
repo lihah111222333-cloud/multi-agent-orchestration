@@ -26,6 +26,7 @@ type TrackedTurnSummaryCacheEntry = contracts.TrackedTurnSummaryCacheEntry
 
 // TurnTrackerState carries mutable turn-tracker state owned by the caller.
 type TurnTrackerState struct {
+	Mu                  *sync.Mutex
 	ActiveTurns         *map[string]*TrackedTurn
 	TurnWatchdogTimeout *time.Duration
 	TurnSummaryCache    *map[string]TrackedTurnSummaryCacheEntry
@@ -60,13 +61,7 @@ func (a *Adapter) trackerHelperState() TurnTrackerState {
 	if a == nil {
 		return TurnTrackerState{}
 	}
-	return TurnTrackerState{
-		ActiveTurns:         &a.deps.TrackerActiveTurns,
-		TurnWatchdogTimeout: a.deps.TrackerWatchdogTimeout,
-		TurnSummaryCache:    a.deps.TrackerSummaryCache,
-		TurnSummaryTTL:      a.deps.TrackerSummaryTTL,
-		StallThreshold:      a.deps.TrackerStallThreshold,
-	}
+	return a.deps.Tracker
 }
 
 // EnsureTurnTrackerStateLocked initializes tracker defaults using adapter-owned state.
@@ -82,7 +77,8 @@ func (a *Adapter) LookupTrackedTurnSummary(threadID, turnID string) string {
 	if a == nil {
 		return ""
 	}
-	return LookupTrackedTurnSummary(a.trackerHelperState(), a.deps.TrackerMu, threadID, turnID)
+	state := a.trackerHelperState()
+	return LookupTrackedTurnSummary(state, state.Mu, threadID, turnID)
 }
 
 // TouchTrackedTurnLastEvent updates turn heartbeat using adapter-owned tracker state.

@@ -31,6 +31,10 @@ type skillContentReader interface {
 	ReadSkillContent(skillName string) (string, error)
 }
 
+type skillNamesLister interface {
+	ListSkillNames() ([]string, error)
+}
+
 type turnStartSubmissionProvider interface {
 	PrepareTurnStartSubmission(threadID string, input []TurnInput, selectedSkills []string, manualSkillSelection bool) (TurnStartEntryPrepareResult, error)
 }
@@ -97,6 +101,24 @@ func (a *Adapter) readSkillContent(skillName string) (string, error) {
 		return "", apperrors.New("codexadapter.readSkillContent", "skill content reader is not available")
 	}
 	return reader.ReadSkillContent(skillName)
+}
+
+func (a *Adapter) listSkillNames() ([]string, error) {
+	if a == nil || a.ctx == nil {
+		return []string{}, nil
+	}
+	lister, ok := any(a.ctx).(skillNamesLister)
+	if !ok {
+		return []string{}, nil
+	}
+	names, err := lister.ListSkillNames()
+	if err != nil {
+		return nil, err
+	}
+	if names == nil {
+		return []string{}, nil
+	}
+	return names, nil
 }
 
 func (a *Adapter) prepareTurnStartSubmission(threadID string, input []TurnInput, selectedSkills []string, manualSkillSelection bool) (TurnStartEntryPrepareResult, error) {

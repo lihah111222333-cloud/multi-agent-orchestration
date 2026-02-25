@@ -26,15 +26,19 @@ func (a *Adapter) trackerState() (map[string]*TrackedTurn, *sync.Mutex, time.Dur
 	if a == nil {
 		return nil, nil, 0, 0
 	}
-	activeTurns := a.deps.TrackerActiveTurns
-	turnMu := a.deps.TrackerMu
+	state := a.deps.Tracker
+	var activeTurns map[string]*TrackedTurn
+	if state.ActiveTurns != nil {
+		activeTurns = *state.ActiveTurns
+	}
+	turnMu := state.Mu
 	watchdogTimeout := DefaultTurnWatchdogTimeout
-	if a.deps.TrackerWatchdogTimeout != nil && *a.deps.TrackerWatchdogTimeout > 0 {
-		watchdogTimeout = *a.deps.TrackerWatchdogTimeout
+	if state.TurnWatchdogTimeout != nil && *state.TurnWatchdogTimeout > 0 {
+		watchdogTimeout = *state.TurnWatchdogTimeout
 	}
 	stallThreshold := DefaultStallThreshold
-	if a.deps.TrackerStallThreshold != nil && *a.deps.TrackerStallThreshold > 0 {
-		stallThreshold = *a.deps.TrackerStallThreshold
+	if state.StallThreshold != nil && *state.StallThreshold > 0 {
+		stallThreshold = *state.StallThreshold
 	}
 	return activeTurns, turnMu, watchdogTimeout, stallThreshold
 }
@@ -317,7 +321,8 @@ func (a *Adapter) RememberTrackedTurnSummary(threadID, turnID, summary string) {
 	if a == nil {
 		return
 	}
-	RememberTrackedTurnSummary(a.trackerHelperState(), a.deps.TrackerMu, threadID, turnID, summary)
+	state := a.trackerHelperState()
+	RememberTrackedTurnSummary(state, state.Mu, threadID, turnID, summary)
 }
 
 // CaptureAndInjectTurnSummary captures terminal summaries and injects them into completion payloads.

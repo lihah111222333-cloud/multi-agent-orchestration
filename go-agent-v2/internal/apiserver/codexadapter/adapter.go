@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
@@ -29,12 +27,7 @@ type Deps struct {
 	Context ServerContext
 
 	// Turn tracker state/hooks.
-	TrackerActiveTurns     map[string]*TrackedTurn
-	TrackerMu              *sync.Mutex
-	TrackerWatchdogTimeout *time.Duration
-	TrackerSummaryCache    *map[string]TrackedTurnSummaryCacheEntry
-	TrackerSummaryTTL      *time.Duration
-	TrackerStallThreshold  *time.Duration
+	Tracker TurnTrackerState
 }
 
 // Adapter 封装对 proc.Client 的直接访问。

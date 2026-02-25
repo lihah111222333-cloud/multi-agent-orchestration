@@ -126,11 +126,8 @@ func (a *Adapter) SendSlashCommandWithArgs(params json.RawMessage, command strin
 }
 
 // ThreadSkillsList normalizes thread/skills/list payload.
-func (a *Adapter) ThreadSkillsList(listSkills func() ([]string, error)) (map[string]any, error) {
-	if listSkills == nil {
-		return map[string]any{"skills": []string{}}, nil
-	}
-	skills, err := listSkills()
+func (a *Adapter) ThreadSkillsList() (map[string]any, error) {
+	skills, err := a.listSkillNames()
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.threadSkillsList", "list skills")
 	}

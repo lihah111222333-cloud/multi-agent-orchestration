@@ -323,3 +323,23 @@ func buildToolNotifyPayload(
 	payload["resultPreview"] = result
 	return payload
 }
+
+// ========================================
+// 编排类工具 (merged from orchestration_tools.go)
+// ========================================
+
+// allDynamicToolSchemas 构建全部动态工具列表。
+func (s *Server) allDynamicToolSchemas() []agentcore.DynamicTool {
+	if s == nil {
+		return nil
+	}
+	return tooladapter.AllSchemas(s.toolAdapterProviders())
+}
+
+func (s *Server) AllSchemas() []agentcore.DynamicTool {
+	return s.allDynamicToolSchemas()
+}
+
+func (s *Server) NextThreadSeq() int64 {
+	return s.threadSeq.Add(1)
+}

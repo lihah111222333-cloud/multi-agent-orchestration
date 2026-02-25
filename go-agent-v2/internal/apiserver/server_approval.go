@@ -2,6 +2,7 @@
 package apiserver
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -164,4 +165,34 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 	if err := s.codexAdapter.Submit(proc, decision, nil, nil, nil); err != nil {
 		logger.Warn("app-server: relay approval to codex failed", logger.FieldAgentID, agentID, logger.FieldError, err)
 	}
+}
+
+// ========================================
+// 审批回复 JSON-RPC 方法 (merged from methods_approval.go)
+// ========================================
+
+type approvalRespondParams struct {
+	RequestID int64 `json:"requestId"`
+	Approved  bool  `json:"approved"`
+}
+
+func (s *Server) approvalRespondTyped(_ context.Context, p approvalRespondParams) (any, error) {
+	if p.RequestID <= 0 {
+		return map[string]any{
+			"ok":     false,
+			"status": "invalid_request_id",
+		}, nil
+	}
+
+	if !s.ResolvePendingRequest(p.RequestID, map[string]any{"approved": p.Approved}) {
+		return map[string]any{
+			"ok":     false,
+			"status": "not_pending",
+		}, nil
+	}
+
+	return map[string]any{
+		"ok":     true,
+		"status": "resolved",
+	}, nil
 }

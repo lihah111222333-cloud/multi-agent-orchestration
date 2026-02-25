@@ -28,7 +28,6 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
-	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/config"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
@@ -147,9 +146,9 @@ type Server struct {
 
 	// turn 生命周期跟踪 (threadId → active turn)
 	turnMu              sync.Mutex
-	activeTurns         map[string]*contracts.TrackedTurn
+	activeTurns         map[string]*codexadapter.TrackedTurn
 	turnWatchdogTimeout time.Duration
-	turnSummaryCache    map[string]contracts.TrackedTurnSummaryCacheEntry
+	turnSummaryCache    map[string]codexadapter.TrackedTurnSummaryCacheEntry
 	turnSummaryTTL      time.Duration
 	stallThreshold      time.Duration // 无事件多久(秒)触发 stall 自动中断
 	stallHeartbeat      time.Duration // dynamic tool call / 审批等待时的保活心跳间隔
@@ -202,11 +201,11 @@ func New(deps Deps) *Server {
 		activeCodeRuns:              make(map[string]map[string]context.CancelFunc),
 		agentWorkDirs:               make(map[string]string),
 		fileChangeByThread:          make(map[string][]string),
-		activeTurns:                 make(map[string]*contracts.TrackedTurn),
+		activeTurns:                 make(map[string]*codexadapter.TrackedTurn),
 		turnWatchdogTimeout:         defaultTurnWatchdogTimeout,
 		stallThreshold:              defaultStallThreshold,
 		stallHeartbeat:              defaultStallHeartbeat,
-		turnSummaryCache:            make(map[string]contracts.TrackedTurnSummaryCacheEntry),
+		turnSummaryCache:            make(map[string]codexadapter.TrackedTurnSummaryCacheEntry),
 		turnSummaryTTL:              defaultTrackedTurnSummaryTTL,
 		orchestrationPendingReports: make(map[string]map[string]time.Time),
 		orchestrationReportTTL:      defaultOrchestrationReportTTL,
@@ -222,13 +221,16 @@ func New(deps Deps) *Server {
 		s.submitAgentMessage = s.mgr.Submit
 	}
 	s.codexAdapter = codexadapter.New(codexadapter.Deps{
-		Context:               s,
-		TrackerActiveTurns:    s.activeTurns,
-		TrackerMu:             &s.turnMu,
-		TrackerWatchdogTimeout: &s.turnWatchdogTimeout,
-		TrackerSummaryCache:   &s.turnSummaryCache,
-		TrackerSummaryTTL:     &s.turnSummaryTTL,
-		TrackerStallThreshold: &s.stallThreshold,
+		Context: s,
+		Tracker: codexadapter.TurnTrackerState{
+			Mu:                  &s.turnMu,
+			ActiveTurns:         &s.activeTurns,
+			TurnWatchdogTimeout: &s.turnWatchdogTimeout,
+			TurnSummaryCache:    &s.turnSummaryCache,
+			TurnSummaryTTL:      &s.turnSummaryTTL,
+			StallThreshold:      &s.stallThreshold,
+			StallHeartbeat:      &s.stallHeartbeat,
+		},
 	})
 	s.commonAdapter = commonadapter.New()
 	s.lspTools = lsp.NewToolHandlers(s.lsp, s)
@@ -471,4 +473,52 @@ func (s *Server) ReadSkillContent(skillName string) (string, error) {
 		return "", pkgerr.New("Server.skillService", "skill service is not initialized")
 	}
 	return s.skillSvc.ReadSkillContent(skillName)
+}
+
+// ========================================
+// 资源类 Store 访问入口 (merged from resource_tools.go)
+// ========================================
+
+func (s *Server) DAGStore() *store.TaskDAGStore {
+	return s.dagStore
+}
+
+func (s *Server) CommandCardStore() *store.CommandCardStore {
+	return s.cmdStore
+}
+
+func (s *Server) PromptTemplateStore() *store.PromptTemplateStore {
+	return s.promptStore
+}
+
+func (s *Server) SharedFileStore() *store.SharedFileStore {
+	return s.fileStore
+}
+
+func (s *Server) WorkspaceManager() *service.WorkspaceManager {
+	return s.workspaceMgr
+}
+
+func (s *Server) NotifyEvent(method string, params any) {
+	s.Notify(method, params)
+}
+
+// ListSkillNames provides codexadapter skill list access via ServerContext.
+func (s *Server) ListSkillNames() ([]string, error) {
+	if s == nil || s.skillSvc == nil {
+		return []string{}, nil
+	}
+	list, err := s.skillSvc.ListSkills()
+	if err != nil {
+		return nil, err
+	}
+	skills := make([]string, 0, len(list))
+	for _, item := range list {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		skills = append(skills, name)
+	}
+	return skills, nil
 }

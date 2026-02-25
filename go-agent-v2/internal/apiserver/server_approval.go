@@ -64,7 +64,7 @@ func (s *Server) handleApprovalRequest(agentID, method string, payload map[strin
 	defer s.approvalInFlight.Delete(inflightKey)
 
 	// 心跳委派到 turn tracker: 防止 stall 检测在等待审批期间误杀。
-	stopHeartbeat := s.startApprovalStallHeartbeat(agentID)
+	stopHeartbeat := s.codexAdapter.StartApprovalStallHeartbeat(agentID)
 	defer stopHeartbeat()
 
 	approved := false

@@ -528,7 +528,7 @@ func (s *Server) AgentEventHandler(agentID string) agentcore.EventHandler {
 		payload["threadId"] = agentID
 		s.enrichFileChangePayload(agentID, event.Type, method, payload)
 		s.enrichReadCommandPayload(event.Type, payload)
-		s.captureTrackedTurnEventSummary(agentID, event.Type, method, payload)
+		s.codexAdapter.CaptureAndInjectTurnSummary(agentID, event.Type, method, payload)
 		if method == "error" {
 			willRetry, hasWillRetry := extractBoolFromPayload(payload, "willRetry", "will_retry", "recoverable")
 			if !hasWillRetry {
@@ -563,7 +563,7 @@ func (s *Server) AgentEventHandler(agentID string) agentcore.EventHandler {
 			s.uiRuntime.ApplyAgentEvent(agentID, normalized, payload)
 		}
 
-		s.finalizeTrackedTurnEvent(agentID, event.Type, method, payload)
+		s.codexAdapter.FinalizeTrackedTurnEvent(agentID, event.Type, method, payload)
 		s.maybeAutoReportOrchestrationCompletion(agentID, event.Type, method, payload)
 
 		// § 二 审批事件: 需要客户端回复 (双向请求)
@@ -726,27 +726,6 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			logger.Info("sse: client disconnected", logger.FieldRemote, r.RemoteAddr)
 			return
 		}
-	}
-}
-
-// isTerminalEventType returns true if the event type or method indicates a turn-terminal event.
-// Used for diagnostic logging only.
-func isTerminalEventType(eventType, method string) bool {
-	et := strings.ToLower(strings.TrimSpace(eventType))
-	mt := strings.ToLower(strings.TrimSpace(method))
-	switch {
-	case et == "turn_complete" || et == "turn/completed" || et == "idle" ||
-		et == "turn_aborted" || et == "codex/event/task_complete" ||
-		et == "shutdown_complete":
-		return true
-	case mt == "turn/completed" || mt == "turn/aborted" ||
-		mt == "codex/event/task_complete" || mt == "thread/status/changed":
-		return true
-	case et == "error" || et == "stream_error" ||
-		mt == "error" || mt == "codex/event/stream_error":
-		return true
-	default:
-		return false
 	}
 }
 

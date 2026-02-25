@@ -174,7 +174,7 @@ func (s *Server) handleDynamicToolCall(agentID string, event agentcore.Event) {
 		for {
 			select {
 			case <-ticker.C:
-				s.touchTrackedTurnLastEvent(agentID)
+				s.codexAdapter.TouchTrackedTurnLastEvent(agentID)
 			case <-heartbeatDone:
 				return
 			}
@@ -217,6 +217,10 @@ func (s *Server) handleDynamicToolCall(agentID string, event agentcore.Event) {
 		}
 		return
 	}
+	threadID := strings.TrimSpace(call.ThreadID)
+	if threadID == "" {
+		threadID = agentID
+	}
 
 	start := time.Now()
 	var totalCalls int64
@@ -256,11 +260,11 @@ func (s *Server) handleDynamicToolCall(agentID string, event agentcore.Event) {
 
 	// 递增活动统计 (lsp_ 前缀工具会自动累加到 lspCalls)
 	if s.uiRuntime != nil {
-		s.uiRuntime.IncrActivityStat(agentID, "toolCall", call.Tool)
+		s.uiRuntime.IncrActivityStat(threadID, "toolCall", call.Tool)
 	}
 
 	// 广播到前端 — 让 UI 可以显示 LSP 调用
-	notifyPayload := buildToolNotifyPayload(agentID, call, argMap, filePath, success, totalCalls, elapsed, result)
+	notifyPayload := buildToolNotifyPayload(threadID, agentID, call, argMap, filePath, success, totalCalls, elapsed, result)
 	s.Notify("dynamic-tool/called", notifyPayload)
 
 	// 回传结果: 使用 event.RequestID 发送 JSON-RPC response (codex 发的是 server request)
@@ -287,6 +291,7 @@ func extractToolFilePath(args map[string]any) string {
 }
 
 func buildToolNotifyPayload(
+	threadID string,
 	agentID string,
 	call agentcore.DynamicToolCallData,
 	argMap map[string]any,
@@ -297,7 +302,7 @@ func buildToolNotifyPayload(
 	result string,
 ) map[string]any {
 	payload := map[string]any{
-		"threadId":   agentID,
+		"threadId":   threadID,
 		"agent":      agentID,
 		"tool":       call.Tool,
 		"callId":     call.CallID,

@@ -28,6 +28,7 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/config"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
 	"github.com/multi-agent/go-agent-v2/internal/lsp"
@@ -146,9 +147,9 @@ type Server struct {
 
 	// turn 生命周期跟踪 (threadId → active turn)
 	turnMu              sync.Mutex
-	activeTurns         map[string]*trackedTurn
+	activeTurns         map[string]*contracts.TrackedTurn
 	turnWatchdogTimeout time.Duration
-	turnSummaryCache    map[string]codexadapter.TrackedTurnSummaryCacheEntry
+	turnSummaryCache    map[string]contracts.TrackedTurnSummaryCacheEntry
 	turnSummaryTTL      time.Duration
 	stallThreshold      time.Duration // 无事件多久(秒)触发 stall 自动中断
 	stallHeartbeat      time.Duration // dynamic tool call / 审批等待时的保活心跳间隔
@@ -201,11 +202,11 @@ func New(deps Deps) *Server {
 		activeCodeRuns:              make(map[string]map[string]context.CancelFunc),
 		agentWorkDirs:               make(map[string]string),
 		fileChangeByThread:          make(map[string][]string),
-		activeTurns:                 make(map[string]*trackedTurn),
+		activeTurns:                 make(map[string]*contracts.TrackedTurn),
 		turnWatchdogTimeout:         defaultTurnWatchdogTimeout,
 		stallThreshold:              defaultStallThreshold,
 		stallHeartbeat:              defaultStallHeartbeat,
-		turnSummaryCache:            make(map[string]codexadapter.TrackedTurnSummaryCacheEntry),
+		turnSummaryCache:            make(map[string]contracts.TrackedTurnSummaryCacheEntry),
 		turnSummaryTTL:              defaultTrackedTurnSummaryTTL,
 		orchestrationPendingReports: make(map[string]map[string]time.Time),
 		orchestrationReportTTL:      defaultOrchestrationReportTTL,
@@ -220,7 +221,15 @@ func New(deps Deps) *Server {
 	if s.mgr != nil {
 		s.submitAgentMessage = s.mgr.Submit
 	}
-	s.codexAdapter = codexadapter.New(s)
+	s.codexAdapter = codexadapter.New(codexadapter.Deps{
+		Context:               s,
+		TrackerActiveTurns:    s.activeTurns,
+		TrackerMu:             &s.turnMu,
+		TrackerWatchdogTimeout: &s.turnWatchdogTimeout,
+		TrackerSummaryCache:   &s.turnSummaryCache,
+		TrackerSummaryTTL:     &s.turnSummaryTTL,
+		TrackerStallThreshold: &s.stallThreshold,
+	})
 	s.commonAdapter = commonadapter.New()
 	s.lspTools = lsp.NewToolHandlers(s.lsp, s)
 	s.lspDiagnosticsQueryTyped = func(_ context.Context, p lspDiagnosticsQueryParams) (any, error) {
@@ -454,4 +463,12 @@ func (s *Server) UIRuntime() *uistate.RuntimeManager {
 		return nil
 	}
 	return s.uiRuntime
+}
+
+// ReadSkillContent provides codexadapter skill content access via ServerContext.
+func (s *Server) ReadSkillContent(skillName string) (string, error) {
+	if s == nil || s.skillSvc == nil {
+		return "", pkgerr.New("Server.skillService", "skill service is not initialized")
+	}
+	return s.skillSvc.ReadSkillContent(skillName)
 }

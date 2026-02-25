@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
@@ -22,14 +24,28 @@ type ServerContext interface {
 	Notify(method string, params any)
 }
 
+// Deps holds constructor-time dependencies for codex adapter entrypoints.
+type Deps struct {
+	Context ServerContext
+
+	// Turn tracker state/hooks.
+	TrackerActiveTurns     map[string]*TrackedTurn
+	TrackerMu              *sync.Mutex
+	TrackerWatchdogTimeout *time.Duration
+	TrackerSummaryCache    *map[string]TrackedTurnSummaryCacheEntry
+	TrackerSummaryTTL      *time.Duration
+	TrackerStallThreshold  *time.Duration
+}
+
 // Adapter 封装对 proc.Client 的直接访问。
 type Adapter struct {
-	ctx ServerContext
+	ctx  ServerContext
+	deps Deps
 }
 
 // New 创建 codex 适配器。
-func New(ctx ServerContext) *Adapter {
-	return &Adapter{ctx: ctx}
+func New(deps Deps) *Adapter {
+	return &Adapter{ctx: deps.Context, deps: deps}
 }
 
 // Context 返回当前绑定的服务端上下文。
@@ -102,39 +118,4 @@ func (a *Adapter) SendDynamicToolResult(proc *runner.AgentProcess, callID, outpu
 		return errors.New("codexadapter: agent process not found")
 	}
 	return proc.Client.SendDynamicToolResult(callID, output, requestID)
-}
-
-// CollectThreadArtifactCandidates proxies package-level archive candidate discovery.
-func (a *Adapter) CollectThreadArtifactCandidates(codexThreadID string, rolloutPath string) []ThreadArtifactCandidate {
-	return CollectThreadArtifactCandidates(codexThreadID, rolloutPath)
-}
-
-// PruneArchivedCodexSourceFiles proxies package-level source pruning.
-func (a *Adapter) PruneArchivedCodexSourceFiles(opt PruneArchivedCodexSourceFilesOptions) {
-	PruneArchivedCodexSourceFiles(opt)
-}
-
-// RestoreThreadArchiveSources proxies package-level source restore.
-func (a *Adapter) RestoreThreadArchiveSources(opt RestoreThreadArchiveSourcesOptions) ([]string, []string, error) {
-	return RestoreThreadArchiveSources(opt)
-}
-
-// InspectThreadArchiveForRestore proxies package-level archive integrity inspection.
-func (a *Adapter) InspectThreadArchiveForRestore(opt InspectThreadArchiveForRestoreOptions) (ThreadArchiveRestoreNotice, error) {
-	return InspectThreadArchiveForRestore(opt)
-}
-
-// FindLatestThreadArchiveManifestPath proxies package-level latest-manifest resolution.
-func (a *Adapter) FindLatestThreadArchiveManifestPath(threadDir string) (string, error) {
-	return FindLatestThreadArchiveManifestPath(threadDir)
-}
-
-// ReadThreadArchiveManifest proxies package-level manifest read.
-func (a *Adapter) ReadThreadArchiveManifest(manifestPath string) (ThreadArchiveManifest, error) {
-	return ReadThreadArchiveManifest(manifestPath)
-}
-
-// WriteThreadArchiveManifest proxies package-level manifest write.
-func (a *Adapter) WriteThreadArchiveManifest(manifest ThreadArchiveManifest) error {
-	return WriteThreadArchiveManifest(manifest)
 }

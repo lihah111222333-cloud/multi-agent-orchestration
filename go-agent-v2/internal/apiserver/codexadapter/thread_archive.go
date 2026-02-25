@@ -398,8 +398,8 @@ func (a *Adapter) ArchiveThreadArtifacts(ctx context.Context, threadID string) (
 		return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "ensure archive dir")
 	}
 
-	codexThreadID, rolloutPath := a.ResolveRolloutHistorySource(ctx, id, NormalizeCodexThreadID)
-	manifest.CodexThreadID = NormalizeCodexThreadID(codexThreadID)
+	codexThreadID, rolloutPath := a.ResolveRolloutHistorySource(ctx, id, normalizeCodexThreadID)
+	manifest.CodexThreadID = normalizeCodexThreadID(codexThreadID)
 	candidates := collectThreadArtifactCandidates(manifest.CodexThreadID, rolloutPath)
 
 	for _, candidate := range candidates {

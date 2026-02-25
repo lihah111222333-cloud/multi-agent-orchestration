@@ -21,8 +21,8 @@ func resolveClientActiveTurnID(client agentcore.Client) string {
 	return strings.TrimSpace(reader.GetActiveTurnID())
 }
 
-// NormalizeInterruptState normalizes runtime status names used by interrupt flow.
-func NormalizeInterruptState(raw string) string {
+// normalizeInterruptState normalizes runtime status names used by interrupt flow.
+func normalizeInterruptState(raw string) string {
 	state := strings.ToLower(strings.TrimSpace(raw))
 	if state == "" {
 		return "idle"
@@ -37,8 +37,8 @@ func NormalizeInterruptState(raw string) string {
 	}
 }
 
-// IsInterruptNoActiveTurnError reports whether interrupt failure means no active turn.
-func IsInterruptNoActiveTurnError(err error) bool {
+// isInterruptNoActiveTurnError reports whether interrupt failure means no active turn.
+func isInterruptNoActiveTurnError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -48,9 +48,9 @@ func IsInterruptNoActiveTurnError(err error) bool {
 		strings.Contains(message, "not interruptible")
 }
 
-// IsInterruptActiveState reports whether current state is still active.
-func IsInterruptActiveState(state string) bool {
-	s := NormalizeInterruptState(state)
+// isInterruptActiveState reports whether current state is still active.
+func isInterruptActiveState(state string) bool {
+	s := normalizeInterruptState(state)
 	switch s {
 	case "inprogress", "in_progress", "running", "streaming", "thinking", "starting", "responding", "editing", "waiting", "syncing":
 		return true
@@ -59,12 +59,12 @@ func IsInterruptActiveState(state string) bool {
 	}
 }
 
-// InterruptSettleMode classifies interrupt settle outcome.
-func InterruptSettleMode(confirmed bool, afterState string) string {
+// interruptSettleMode classifies interrupt settle outcome.
+func interruptSettleMode(confirmed bool, afterState string) string {
 	if confirmed {
 		return "interrupt_confirmed"
 	}
-	switch NormalizeInterruptState(afterState) {
+	switch normalizeInterruptState(afterState) {
 	case "error":
 		return "interrupt_terminal_failed"
 	case "idle":
@@ -86,7 +86,7 @@ func readThreadRuntimeStateByHooks(threadID string, readRuntimeStatus func(strin
 		}
 		return ""
 	}
-	state := NormalizeInterruptState(readRuntimeStatus(id))
+	state := normalizeInterruptState(readRuntimeStatus(id))
 	if state == "idle" && hasActiveTrackedTurn != nil && hasActiveTrackedTurn(id) {
 		return "running"
 	}
@@ -127,7 +127,7 @@ func waitInterruptOutcome(
 	observedActive := activeHint
 	if waitTrackedTurnTerminal != nil {
 		if terminalStatus, ok := waitTrackedTurnTerminal(id, timeout); ok {
-			afterState := NormalizeInterruptState(terminalStatus)
+			afterState := normalizeInterruptState(terminalStatus)
 			confirmed := strings.EqualFold(terminalStatus, "interrupted")
 			return confirmed, afterState, time.Since(start).Milliseconds(), true
 		}
@@ -137,11 +137,11 @@ func waitInterruptOutcome(
 	}
 	deadline := start.Add(timeout)
 	lastState := readThreadRuntimeState(id)
-	if IsInterruptActiveState(lastState) {
+	if isInterruptActiveState(lastState) {
 		observedActive = true
 	}
 	for {
-		if !IsInterruptActiveState(lastState) {
+		if !isInterruptActiveState(lastState) {
 			if !observedActive {
 				return false, lastState, time.Since(start).Milliseconds(), false
 			}
@@ -163,7 +163,7 @@ func (a *Adapter) waitInterruptOutcome(threadID string, timeout time.Duration, a
 
 func (a *Adapter) sendInterruptCommand(proc *runner.AgentProcess) (bool, error) {
 	if err := a.SendCommand(proc, "/interrupt", ""); err != nil {
-		if IsInterruptNoActiveTurnError(err) {
+		if isInterruptNoActiveTurnError(err) {
 			return true, nil
 		}
 		return false, err
@@ -192,7 +192,7 @@ func (a *Adapter) TurnInterrupt(threadID string) (any, error) {
 	start := time.Now()
 	beforeState := a.readThreadRuntimeState(threadID)
 	activeTrackedBefore := a.hasActiveTrackedTurn(threadID)
-	activeBefore := IsInterruptActiveState(beforeState)
+	activeBefore := isInterruptActiveState(beforeState)
 	logger.Info("turn/interrupt: request",
 		append(threadLogFields(threadID),
 			"state_before", beforeState,
@@ -247,7 +247,7 @@ func (a *Adapter) TurnInterrupt(threadID string) (any, error) {
 			6*time.Second,
 			activeBefore || activeTrackedBefore,
 		)
-		mode := InterruptSettleMode(confirmed, afterState)
+		mode := interruptSettleMode(confirmed, afterState)
 		if !observedActive {
 			confirmed = false
 			mode = "no_active_turn"

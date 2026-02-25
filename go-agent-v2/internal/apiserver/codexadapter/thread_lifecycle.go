@@ -79,7 +79,7 @@ func (a *Adapter) ThreadResume(ctx context.Context, threadID, path, cwd, model s
 	}
 	return withProcess(a, "Server.threadResume", id, func(proc *runner.AgentProcess) (threadResumeResult, error) {
 		resolved := a.ResolveCodexThreadCandidates(ctx, id, appendUniqueThreadIDFallback, PreviewResumeCandidates)
-		candidates := BuildResumeCandidates(id, resolved, NormalizeCodexThreadID)
+		candidates := BuildResumeCandidates(id, resolved, normalizeCodexThreadID)
 		logger.Info("thread/resume: resolved candidates",
 			append(threadLogFields(id),
 				"candidate_count", len(candidates),
@@ -253,7 +253,7 @@ func (a *Adapter) ThreadResolve(ctx context.Context, threadID string) (map[strin
 	if codexThreadID != "" {
 		result["codexThreadId"] = codexThreadID
 	}
-	if IsLikelyCodexThreadID(codexThreadID) {
+	if isLikelyCodexThreadID(codexThreadID) {
 		result["uuid"] = codexThreadID
 	}
 	hasHistory := a.ThreadExistsInHistory(ctx, id)
@@ -312,9 +312,9 @@ func (a *Adapter) threadExistsInRuntime(threadID string) bool {
 // codexThreadIDPattern matches a lowercase UUID (codex thread ID format).
 var codexThreadIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// NormalizeCodexThreadID trims, lowercases, strips "urn:uuid:" prefix,
+// normalizeCodexThreadID trims, lowercases, strips "urn:uuid:" prefix,
 // and validates against UUID pattern. Returns "" if invalid.
-func NormalizeCodexThreadID(raw string) string {
+func normalizeCodexThreadID(raw string) string {
 	id := strings.TrimSpace(raw)
 	if id == "" {
 		return ""
@@ -326,7 +326,7 @@ func NormalizeCodexThreadID(raw string) string {
 	return id
 }
 
-// IsLikelyCodexThreadID reports whether raw looks like a valid codex thread ID.
-func IsLikelyCodexThreadID(raw string) bool {
-	return NormalizeCodexThreadID(raw) != ""
+// isLikelyCodexThreadID reports whether raw looks like a valid codex thread ID.
+func isLikelyCodexThreadID(raw string) bool {
+	return normalizeCodexThreadID(raw) != ""
 }

@@ -190,7 +190,7 @@ func (a *Adapter) ThreadExistsInHistory(ctx context.Context, threadID string) bo
 		ctx,
 		threadID,
 		0,
-		IsLikelyCodexThreadID,
+		isLikelyCodexThreadID,
 		a.bindingExistsByAgentID,
 		a.agentStatusExistsByID,
 		a.loadThreadArchiveMap,

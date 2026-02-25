@@ -95,7 +95,7 @@ func parseTurnInputs(inputs []contracts.TurnInput) parsedTurnInputs {
 		case "localimage":
 			imagePath := strings.TrimSpace(inp.Path)
 			preview := strings.TrimSpace(inp.URL)
-			if isRemoteImageURL(preview) {
+			if util.IsRemoteImageURL(preview) {
 				images = append(images, preview)
 			} else if imagePath != "" {
 				images = append(images, imagePath)
@@ -179,13 +179,6 @@ func appendFileTimelineAttachment(
 func ExtractTurnInputs(inputs []contracts.TurnInput) (prompt string, images, files []string) {
 	parsed := parseTurnInputs(inputs)
 	return parsed.Prompt, parsed.Images, parsed.Files
-}
-
-func isRemoteImageURL(raw string) bool {
-	value := strings.ToLower(strings.TrimSpace(raw))
-	return strings.HasPrefix(value, "http://") ||
-		strings.HasPrefix(value, "https://") ||
-		strings.HasPrefix(value, "data:image/")
 }
 
 func BuildAttachmentName(path string) string {

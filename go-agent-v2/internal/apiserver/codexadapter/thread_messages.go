@@ -80,7 +80,7 @@ func (a *Adapter) LoadAllThreadMessagesFromRollout(ctx context.Context, threadID
 		ctx,
 		threadID,
 		a.resolveRolloutHistorySource,
-		NormalizeCodexThreadID,
+		normalizeCodexThreadID,
 		nil,
 		nil,
 		showInjectedPromptInChat,
@@ -423,7 +423,7 @@ func (a *Adapter) bindingRolloutSourceByAgentID(ctx context.Context, agentID str
 }
 
 func (a *Adapter) resolveRolloutHistorySource(ctx context.Context, threadID string) (string, string) {
-	return a.ResolveRolloutHistorySource(ctx, threadID, NormalizeCodexThreadID)
+	return a.ResolveRolloutHistorySource(ctx, threadID, normalizeCodexThreadID)
 }
 
 // streamRemainingHistory appends history pages beyond first page and emits one summary notification.

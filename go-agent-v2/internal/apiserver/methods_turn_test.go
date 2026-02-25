@@ -3,9 +3,9 @@ package apiserver
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
-	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 )
 
@@ -38,7 +38,7 @@ func TestNormalizeInterruptState(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := codexadapter.NormalizeInterruptState(tt.raw)
+			got := normalizeInterruptState(tt.raw)
 			if got != tt.want {
 				t.Errorf("normalizeInterruptState(%q) = %q, want %q", tt.raw, got, tt.want)
 			}
@@ -53,13 +53,13 @@ func TestNormalizeInterruptState(t *testing.T) {
 func TestIsInterruptActiveState(t *testing.T) {
 	actives := []string{"starting", "thinking", "responding", "running", "editing", "waiting", "syncing"}
 	for _, s := range actives {
-		if !codexadapter.IsInterruptActiveState(s) {
+		if !isInterruptActiveState(s) {
 			t.Errorf("isInterruptActiveState(%q) = false, want true", s)
 		}
 	}
 	inactives := []string{"", "idle", "completed", "failed", "error", "unknown"}
 	for _, s := range inactives {
-		if codexadapter.IsInterruptActiveState(s) {
+		if isInterruptActiveState(s) {
 			t.Errorf("isInterruptActiveState(%q) = true, want false", s)
 		}
 	}
@@ -83,7 +83,7 @@ func TestIsInterruptNoActiveTurnError(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := codexadapter.IsInterruptNoActiveTurnError(tt.err)
+			got := isInterruptNoActiveTurnError(tt.err)
 			if got != tt.want {
 				t.Errorf("isInterruptNoActiveTurnError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
@@ -111,7 +111,7 @@ func TestInterruptSettleMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := codexadapter.InterruptSettleMode(tt.confirmed, tt.afterState)
+			got := interruptSettleMode(tt.confirmed, tt.afterState)
 			if got != tt.want {
 				t.Errorf("interruptSettleMode(%v, %q) = %q, want %q", tt.confirmed, tt.afterState, got, tt.want)
 			}
@@ -330,5 +330,53 @@ func TestFileContentInputText(t *testing.T) {
 	got = fileContentInputText("", "content")
 	if got != "content" {
 		t.Errorf("empty name: got %q, want %q", got, "content")
+	}
+}
+
+func normalizeInterruptState(raw string) string {
+	state := strings.ToLower(strings.TrimSpace(raw))
+	if state == "" {
+		return "idle"
+	}
+	switch state {
+	case "completed", "complete", "done", "success", "succeeded", "ready", "stopped", "ended", "closed":
+		return "idle"
+	case "failed", "fail":
+		return "error"
+	default:
+		return state
+	}
+}
+
+func isInterruptNoActiveTurnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no active turn") ||
+		strings.Contains(message, "nothing to interrupt") ||
+		strings.Contains(message, "not interruptible")
+}
+
+func isInterruptActiveState(state string) bool {
+	switch normalizeInterruptState(state) {
+	case "inprogress", "in_progress", "running", "streaming", "thinking", "starting", "responding", "editing", "waiting", "syncing":
+		return true
+	default:
+		return false
+	}
+}
+
+func interruptSettleMode(confirmed bool, afterState string) string {
+	if confirmed {
+		return "interrupt_confirmed"
+	}
+	switch normalizeInterruptState(afterState) {
+	case "error":
+		return "interrupt_terminal_failed"
+	case "idle":
+		return "interrupt_terminal_completed"
+	default:
+		return "interrupt_timeout"
 	}
 }

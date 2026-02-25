@@ -17,10 +17,10 @@ import (
 )
 
 type jsonRPCRequest struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      int64  `json:"id"`
-	Method  string `json:"method"`
-	Params  any    `json:"params,omitempty"`
+	JSONRPC string    `json:"jsonrpc"`
+	ID      jsonRPCID `json:"id"`
+	Method  string    `json:"method"`
+	Params  any       `json:"params,omitempty"`
 }
 
 // jsonRPCNotification JSON-RPC 2.0 通知 (无 id)。
@@ -33,7 +33,7 @@ type jsonRPCNotification struct {
 // jsonRPCMessage JSON-RPC 通用消息 (用于读取解析)。
 type jsonRPCMessage struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      *int64          `json:"id,omitempty"` // nil = 通知
+	ID      *jsonRPCID      `json:"id,omitempty"` // nil = 通知
 	Method  string          `json:"method,omitempty"`
 	Params  json.RawMessage `json:"params,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
@@ -48,9 +48,9 @@ type jsonRPCError struct {
 
 // jsonRPCResponse JSON-RPC 2.0 响应 (用于回复 server request)。
 type jsonRPCResponse struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      int64  `json:"id"`
-	Result  any    `json:"result,omitempty"`
+	JSONRPC string    `json:"jsonrpc"`
+	ID      jsonRPCID `json:"id"`
+	Result  any       `json:"result,omitempty"`
 }
 
 // pendingCall 等待响应的 JSON-RPC 调用。

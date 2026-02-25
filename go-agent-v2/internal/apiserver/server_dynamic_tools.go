@@ -125,7 +125,11 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 		logger.Warn("app-server: bad dynamic_tool_call data", logger.FieldAgentID, agentID, logger.FieldError, err,
 			"raw", string(event.Data))
 		// 必须回复 error response，否则 codex turn 永挂。
-		if event.RequestID != nil {
+		if event.RespondFunc != nil {
+			if respErr := event.RespondFunc(-32602, "bad dynamic_tool_call data: "+err.Error()); respErr != nil {
+				logger.Warn("app-server: respond error failed", logger.FieldAgentID, agentID, logger.FieldError, respErr)
+			}
+		} else if event.RequestID != nil {
 			if respErr := s.codexAdapter.RespondError(proc, *event.RequestID, -32602, "bad dynamic_tool_call data: "+err.Error()); respErr != nil {
 				logger.Warn("app-server: respond error failed", logger.FieldAgentID, agentID, logger.FieldError, respErr)
 			}
@@ -182,7 +186,13 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 	}
 	notify(s, "dynamic-tool/called", notifyPayload)
 
-	// 回传结果: 使用 event.RequestID 发送 JSON-RPC response (codex 发的是 server request)
+	// 回传结果: 优先使用 event 绑定的响应回调，兼容 string/int 两种 JSON-RPC id。
+	if event.RespondResultFunc != nil {
+		if err := event.RespondResultFunc(dynamicToolCallResultPayload(result)); err != nil {
+			logger.Warn("app-server: send tool result failed", logger.FieldAgentID, agentID, logger.FieldToolName, call.Tool, logger.FieldError, err)
+		}
+		return
+	}
 	if err := s.codexAdapter.SendDynamicToolResult(proc, call.CallID, result, event.RequestID); err != nil {
 		logger.Warn("app-server: send tool result failed", logger.FieldAgentID, agentID, logger.FieldToolName, call.Tool, logger.FieldError, err)
 	}
@@ -237,4 +247,14 @@ func buildToolNotifyPayload(
 	}
 	payload["resultPreview"] = result
 	return payload
+}
+
+func dynamicToolCallResultPayload(output string) map[string]any {
+	return map[string]any{
+		"contentItems": []map[string]any{{
+			"type": "inputText",
+			"text": output,
+		}},
+		"success": true,
+	}
 }

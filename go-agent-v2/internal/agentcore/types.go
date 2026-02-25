@@ -4,13 +4,15 @@ import "encoding/json"
 
 // Event is the CLI-agnostic event envelope.
 type Event struct {
-	Type      string          `json:"type"`
-	Data      json.RawMessage `json:"data,omitempty"`
-	RequestID *int64          `json:"-"`
+	Type         string          `json:"type"`
+	Data         json.RawMessage `json:"data,omitempty"`
+	RequestID    *int64          `json:"-"`
+	RequestIDRaw json.RawMessage `json:"-"`
 
 	// Keep callback signatures unchanged in Phase 1.
-	RespondFunc func(code int, message string) error `json:"-"`
-	DenyFunc    func() error                         `json:"-"`
+	RespondFunc       func(code int, message string) error `json:"-"`
+	RespondResultFunc func(result any) error               `json:"-"`
+	DenyFunc          func() error                         `json:"-"`
 }
 
 // TextData is shared by message/reasoning/exec deltas.

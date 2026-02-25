@@ -307,16 +307,18 @@ func (c *AppServerClient) handleReconnectExhausted(trigger, activeTurnID string,
 // call 发送 JSON-RPC 请求并等待响应。
 func (c *AppServerClient) call(method string, params any, timeout time.Duration) (json.RawMessage, error) {
 	id := c.nextID.Add(1)
+	rpcID := newJSONRPCIntID(id)
 	req := jsonRPCRequest{
 		JSONRPC: "2.0",
-		ID:      id,
+		ID:      rpcID,
 		Method:  method,
 		Params:  params,
 	}
 
+	pendingKey := rpcID.pendingKey()
 	pc := &pendingCall{done: make(chan struct{})}
-	c.pending.Store(id, pc)
-	defer c.pending.Delete(id)
+	c.pending.Store(pendingKey, pc)
+	defer c.pending.Delete(pendingKey)
 
 	if err := c.asWriteJSON(req); err != nil {
 		return nil, err
@@ -346,6 +348,10 @@ func (c *AppServerClient) notify(method string, params any) error {
 
 // respond 发送 JSON-RPC 响应 (回复 server request)。
 func (c *AppServerClient) respond(id int64, result any) error {
+	return c.respondWithID(newJSONRPCIntID(id), result)
+}
+
+func (c *AppServerClient) respondWithID(id jsonRPCID, result any) error {
 	resp := jsonRPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -360,9 +366,13 @@ func (c *AppServerClient) respond(id int64, result any) error {
 // 我方必须回复 response; 若处理过程中遇到错误, 用此方法发 error response,
 // 避免 codex turn 永久挂起。
 func (c *AppServerClient) RespondError(id int64, code int, message string) error {
+	return c.respondErrorWithID(newJSONRPCIntID(id), code, message)
+}
+
+func (c *AppServerClient) respondErrorWithID(id jsonRPCID, code int, message string) error {
 	resp := struct {
 		JSONRPC string        `json:"jsonrpc"`
-		ID      int64         `json:"id"`
+		ID      jsonRPCID     `json:"id"`
 		Error   *jsonRPCError `json:"error"`
 	}{
 		JSONRPC: "2.0",

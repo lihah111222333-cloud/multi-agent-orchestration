@@ -20,7 +20,7 @@ func (a *Adapter) loadThreadAliases(ctx context.Context) map[string]string {
 		logger.Warn("thread aliases: load preference failed", logger.FieldError, err)
 		return map[string]string{}
 	}
-	return normalizeThreadAliases(value)
+	return NormalizeThreadAliases(value)
 }
 
 func (a *Adapter) persistThreadAlias(ctx context.Context, threadID, alias string) error {
@@ -35,7 +35,7 @@ func (a *Adapter) persistThreadAlias(ctx context.Context, threadID, alias string
 	if err != nil {
 		return err
 	}
-	aliases := normalizeThreadAliases(value)
+	aliases := NormalizeThreadAliases(value)
 	nextAlias := strings.TrimSpace(alias)
 	if nextAlias == "" || nextAlias == id {
 		delete(aliases, id)
@@ -45,14 +45,18 @@ func (a *Adapter) persistThreadAlias(ctx context.Context, threadID, alias string
 	return a.ctx.Store().Set(ctx, prefThreadAliases, aliases)
 }
 
-func normalizeThreadAliases(value any) map[string]string {
+// NormalizeThreadAliases parses various formats (map, JSON string, json.RawMessage)
+// into a normalized map[string]string of thread aliases.
+//
+// This is the single canonical implementation — apiserver root delegates here.
+func NormalizeThreadAliases(value any) map[string]string {
 	aliases := map[string]string{}
 	addAlias := func(threadID string, alias any) {
 		id := strings.TrimSpace(threadID)
 		if id == "" {
 			return
 		}
-		name := strings.TrimSpace(stringValue(alias))
+		name := strings.TrimSpace(StringValue(alias))
 		if name == "" || name == id {
 			return
 		}
@@ -103,7 +107,10 @@ func applyThreadAliases(threads []ThreadListItem, aliases map[string]string) {
 	}
 }
 
-func stringValue(value any) string {
+// StringValue extracts a string from any value (string or fmt.Stringer).
+//
+// Equivalent to apiserver.asString — canonical location for codexadapter usage.
+func StringValue(value any) string {
 	switch v := value.(type) {
 	case string:
 		return v

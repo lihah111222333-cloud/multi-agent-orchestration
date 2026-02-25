@@ -534,7 +534,13 @@ func IsInterruptNoActiveTurnError(err error) bool {
 
 // IsInterruptActiveState reports whether current state is still active.
 func IsInterruptActiveState(state string) bool {
-	return isInterruptActiveState(state)
+	s := NormalizeInterruptState(state)
+	switch s {
+	case "inprogress", "in_progress", "running", "streaming", "thinking", "starting", "responding", "editing", "waiting", "syncing":
+		return true
+	default:
+		return false
+	}
 }
 
 // InterruptSettleMode classifies interrupt settle outcome.
@@ -613,11 +619,11 @@ func WaitInterruptOutcome(
 	}
 	deadline := start.Add(timeout)
 	lastState := readThreadRuntimeState(id)
-	if isInterruptActiveState(lastState) {
+	if IsInterruptActiveState(lastState) {
 		observedActive = true
 	}
 	for {
-		if !isInterruptActiveState(lastState) {
+		if !IsInterruptActiveState(lastState) {
 			if !observedActive {
 				return false, lastState, time.Since(start).Milliseconds(), false
 			}
@@ -665,7 +671,7 @@ func (a *Adapter) TurnInterrupt(threadID string, paramsLen int) (any, error) {
 	start := time.Now()
 	beforeState := readThreadRuntimeState(threadID)
 	activeTrackedBefore := hasActiveTrackedTurn(threadID)
-	activeBefore := isInterruptActiveState(beforeState)
+	activeBefore := IsInterruptActiveState(beforeState)
 	logger.Info("turn/interrupt: request",
 		logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 		logger.FieldParamsLen, paramsLen,
@@ -942,16 +948,6 @@ func PreviewResumeCandidates(candidates []string, limit int) []string {
 	out := append([]string(nil), candidates[:limit]...)
 	out = append(out, fmt.Sprintf("...+%d more", len(candidates)-limit))
 	return out
-}
-
-func isInterruptActiveState(state string) bool {
-	s := NormalizeInterruptState(state)
-	switch s {
-	case "inprogress", "in_progress", "running", "streaming", "thinking", "starting", "responding", "editing", "waiting", "syncing":
-		return true
-	default:
-		return false
-	}
 }
 
 // ── Migrated from apiserver/methods_turn.go ──────────────────────────────────

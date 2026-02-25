@@ -26,7 +26,7 @@ func (a *Adapter) trackerState() (map[string]*TrackedTurn, *sync.Mutex, time.Dur
 	if a == nil {
 		return nil, nil, 0, 0
 	}
-	state := a.deps.Tracker
+	state := a.trackerHelperState()
 	var activeTurns map[string]*TrackedTurn
 	if state.ActiveTurns != nil {
 		activeTurns = *state.ActiveTurns

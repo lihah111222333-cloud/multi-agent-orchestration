@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
@@ -22,23 +24,47 @@ type ServerContext interface {
 	Notify(method string, params any)
 }
 
-// Deps holds constructor-time dependencies for codex adapter entrypoints.
-type Deps struct {
-	Context ServerContext
-
-	// Turn tracker state/hooks.
-	Tracker TurnTrackerState
-}
-
 // Adapter 封装对 proc.Client 的直接访问。
 type Adapter struct {
-	ctx  ServerContext
-	deps Deps
+	ctx ServerContext
+
+	tracker                TurnTrackerState
+	trackerMu              sync.Mutex
+	trackerActiveTurns     map[string]*TrackedTurn
+	trackerWatchdogTimeout time.Duration
+	trackerSummaryCache    map[string]TrackedTurnSummaryCacheEntry
+	trackerSummaryTTL      time.Duration
+	trackerStallThreshold  time.Duration
+	trackerStallHeartbeat  time.Duration
 }
 
 // New 创建 codex 适配器。
-func New(deps Deps) *Adapter {
-	return &Adapter{ctx: deps.Context, deps: deps}
+func New(ctx ServerContext) *Adapter {
+	adapter := &Adapter{ctx: ctx}
+	adapter.initTrackerState()
+	return adapter
+}
+
+func (a *Adapter) initTrackerState() {
+	if a == nil {
+		return
+	}
+	a.trackerActiveTurns = make(map[string]*TrackedTurn)
+	a.trackerWatchdogTimeout = DefaultTurnWatchdogTimeout
+	a.trackerSummaryCache = make(map[string]TrackedTurnSummaryCacheEntry)
+	a.trackerSummaryTTL = DefaultTrackedTurnSummaryTTL
+	a.trackerStallThreshold = DefaultStallThreshold
+	a.trackerStallHeartbeat = DefaultStallHeartbeat
+
+	a.tracker = TurnTrackerState{
+		Mu:                  &a.trackerMu,
+		ActiveTurns:         &a.trackerActiveTurns,
+		TurnWatchdogTimeout: &a.trackerWatchdogTimeout,
+		TurnSummaryCache:    &a.trackerSummaryCache,
+		TurnSummaryTTL:      &a.trackerSummaryTTL,
+		StallThreshold:      &a.trackerStallThreshold,
+		StallHeartbeat:      &a.trackerStallHeartbeat,
+	}
 }
 
 // Context 返回当前绑定的服务端上下文。

@@ -61,7 +61,7 @@ func (a *Adapter) trackerHelperState() TurnTrackerState {
 	if a == nil {
 		return TurnTrackerState{}
 	}
-	return a.deps.Tracker
+	return a.tracker
 }
 
 // EnsureTurnTrackerStateLocked initializes tracker defaults using adapter-owned state.
@@ -111,6 +111,69 @@ func (a *Adapter) HandleStallGracePeriod(
 func (a *Adapter) StartApprovalStallHeartbeat(threadID string) func() {
 	_, _, _, stallThreshold := a.trackerState()
 	return StartApprovalStallHeartbeat(threadID, stallThreshold, DefaultStallThreshold, a.TouchTrackedTurnLastEvent)
+}
+
+// StartDynamicToolStallHeartbeat starts heartbeat while dynamic tools execute.
+func (a *Adapter) StartDynamicToolStallHeartbeat(threadID string) func() {
+	return StartApprovalStallHeartbeat(threadID, a.StallThreshold(), DefaultStallThreshold, a.TouchTrackedTurnLastEvent)
+}
+
+// StallThreshold returns current tracker stall threshold.
+func (a *Adapter) StallThreshold() time.Duration {
+	state := a.trackerHelperState()
+	if state.Mu != nil {
+		state.Mu.Lock()
+		defer state.Mu.Unlock()
+	}
+	if state.StallThreshold != nil && *state.StallThreshold > 0 {
+		return *state.StallThreshold
+	}
+	return DefaultStallThreshold
+}
+
+// SetStallThreshold updates tracker stall threshold.
+func (a *Adapter) SetStallThreshold(threshold time.Duration) {
+	if threshold <= 0 {
+		return
+	}
+	state := a.trackerHelperState()
+	if state.Mu != nil {
+		state.Mu.Lock()
+		defer state.Mu.Unlock()
+	}
+	EnsureTurnTrackerStateLocked(state)
+	if state.StallThreshold != nil {
+		*state.StallThreshold = threshold
+	}
+}
+
+// StallHeartbeat returns current configured stall heartbeat interval.
+func (a *Adapter) StallHeartbeat() time.Duration {
+	state := a.trackerHelperState()
+	if state.Mu != nil {
+		state.Mu.Lock()
+		defer state.Mu.Unlock()
+	}
+	if state.StallHeartbeat != nil && *state.StallHeartbeat > 0 {
+		return *state.StallHeartbeat
+	}
+	return DefaultStallHeartbeat
+}
+
+// SetStallHeartbeat updates stall heartbeat interval.
+func (a *Adapter) SetStallHeartbeat(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	state := a.trackerHelperState()
+	if state.Mu != nil {
+		state.Mu.Lock()
+		defer state.Mu.Unlock()
+	}
+	EnsureTurnTrackerStateLocked(state)
+	if state.StallHeartbeat != nil {
+		*state.StallHeartbeat = interval
+	}
 }
 
 // PeekTrackedTurnMeta reads active-turn metadata from adapter-owned tracker state.

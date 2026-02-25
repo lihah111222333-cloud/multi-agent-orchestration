@@ -1,12 +1,12 @@
-// methods.go — JSON-RPC 方法注册与初始化入口。
-//
-// 说明: 具体方法实现已拆分到 methods_*.go，本文件仅保留公共常量与注册逻辑。
 package apiserver
 
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"runtime"
 
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -34,11 +34,9 @@ func bindTyped[P any](s *Server, fn func(*Server, context.Context, P) (any, erro
 func (s *Server) registerMethods() {
 	noop := noopHandler()
 
-	// § 1. 初始化
 	s.methods["initialize"] = bindRaw(s, initialize)
 	s.methods["initialized"] = noop
 
-	// § 2. 线程生命周期 (12 methods)
 	s.methods["thread/start"] = typedHandler(s.threadStartTyped)
 	s.methods["thread/resume"] = typedHandler(s.threadResumeTyped)
 	s.methods["thread/fork"] = typedHandler(s.threadForkTyped)
@@ -54,20 +52,17 @@ func (s *Server) registerMethods() {
 	s.methods["thread/messages"] = typedHandler(s.threadMessagesTyped)
 	s.methods["thread/backgroundTerminals/clean"] = s.threadBgTerminalsClean
 
-	// § 3. 对话控制 (4 methods)
 	s.methods["turn/start"] = typedHandler(s.turnStartTyped)
 	s.methods["turn/steer"] = typedHandler(s.turnSteerTyped)
 	s.methods["turn/interrupt"] = typedHandler(s.turnInterrupt)
 	s.methods["turn/forceComplete"] = typedHandler(s.turnForceComplete)
 	s.methods["review/start"] = typedHandler(s.reviewStartTyped)
 
-	// § 4. 文件搜索 (4 methods)
 	s.methods["fuzzyFileSearch"] = bindTyped(s, fuzzyFileSearchTyped)
 	s.methods["fuzzyFileSearch/sessionStart"] = noop
 	s.methods["fuzzyFileSearch/sessionUpdate"] = noop
 	s.methods["fuzzyFileSearch/sessionStop"] = noop
 
-	// § 5. Skills / Apps (5 methods)
 	s.methods["skills/list"] = bindRaw(s, skillsList)
 	s.methods["skills/local/read"] = bindTyped(s, skillsLocalReadTyped)
 	s.methods["skills/local/importDir"] = bindTyped(s, skillsLocalImportDirTyped)
@@ -80,7 +75,6 @@ func (s *Server) registerMethods() {
 	s.methods["skills/match/preview"] = bindTyped(s, skillsMatchPreviewTyped)
 	s.methods["app/list"] = bindRaw(s, appList)
 
-	// § 6. 模型 / 配置 (7 methods)
 	s.methods["model/list"] = bindRaw(s, modelList)
 	s.methods["collaborationMode/list"] = bindRaw(s, collaborationModeList)
 	s.methods["experimentalFeature/list"] = bindRaw(s, experimentalFeatureList)
@@ -91,25 +85,21 @@ func (s *Server) registerMethods() {
 	s.methods["config/lspPromptHint/write"] = bindTyped(s, configLSPPromptHintWriteTyped)
 	s.methods["configRequirements/read"] = bindRaw(s, configRequirementsRead)
 
-	// § 7. 账号 (5 methods)
 	s.methods["account/login/start"] = bindTyped(s, accountLoginStartTyped)
 	s.methods["account/login/cancel"] = bindRaw(s, accountLoginCancel)
 	s.methods["account/logout"] = bindRaw(s, accountLogout)
 	s.methods["account/read"] = bindRaw(s, accountRead)
 	s.methods["account/rateLimits/read"] = bindRaw(s, accountRateLimitsRead)
 
-	// § 8. MCP (3 methods)
 	s.methods["mcpServer/oauth/login"] = noop
 	s.methods["config/mcpServer/reload"] = bindRaw(s, mcpServerReload)
 	s.methods["mcpServerStatus/list"] = bindRaw(s, mcpServerStatusList)
 	s.methods["lsp_diagnostics_query"] = typedHandler(s.lspDiagnosticsQueryTyped)
 
-	// § 9. 命令执行 / 其他 (2 methods)
 	s.methods["command/exec"] = bindTyped(s, commandExecTyped)
 	s.methods["approval/respond"] = bindTyped(s, approvalRespondTyped)
 	s.methods["feedback/upload"] = noop
 
-	// § 10. 斜杠命令 (SOCKS 独有, JSON-RPC 化)
 	s.methods["thread/undo"] = s.threadUndo
 	s.methods["thread/model/set"] = s.threadModelSet
 	s.methods["thread/personality/set"] = s.threadPersonality
@@ -118,21 +108,17 @@ func (s *Server) registerMethods() {
 	s.methods["thread/skills/list"] = s.threadSkillsList
 	s.methods["thread/debugMemory"] = s.threadDebugMemory
 
-	// § 11. 系统日志查询 (2 methods)
 	s.methods["log/list"] = bindTyped(s, logListTyped)
 	s.methods["log/filters"] = bindRaw(s, logFilters)
 
-	// § 12. Dashboard 数据查询 (12 methods, 替代 Wails Dashboard 绑定)
 	registerDashboardMethods(s)
 
-	// § 13. Workspace Run (双通道编排: 虚拟目录 + PG 状态)
 	s.methods["workspace/run/create"] = bindRaw(s, workspaceRunCreate)
 	s.methods["workspace/run/get"] = bindRaw(s, workspaceRunGet)
 	s.methods["workspace/run/list"] = bindRaw(s, workspaceRunList)
 	s.methods["workspace/run/merge"] = bindRaw(s, workspaceRunMerge)
 	s.methods["workspace/run/abort"] = bindRaw(s, workspaceRunAbort)
 
-	// § 14. UI State (UI 偏好持久化)
 	s.methods["ui/preferences/get"] = bindTyped(s, uiPreferencesGet)
 	s.methods["ui/preferences/set"] = bindTyped(s, uiPreferencesSet)
 	s.methods["ui/preferences/getAll"] = bindRaw(s, uiPreferencesGetAll)
@@ -144,19 +130,14 @@ func (s *Server) registerMethods() {
 	s.methods["ui/dashboard/get"] = bindTyped(s, uiDashboardGet)
 	s.methods["ui/state/get"] = bindRaw(s, uiStateGet)
 
-	// § 15. Debug (运行时诊断)
 	s.methods["debug/runtime"] = bindRaw(s, debugRuntime)
 	s.methods["debug/gc"] = bindRaw(s, debugForceGC)
 
-	// § 16. 前端兼容 Stub (返回空数据, 防止前端 "unregistered method" 报错)
-	//
-	// 这些方法对应原 Codex Electron 前端的查询接口, 当前 Go 后端尚未实现。
-	// 注册空响应使前端能正常渲染, 后续按需逐步实现。
 	s.methods["workspace-root-options"] = stubHandler(map[string]any{"roots": []any{}, "labels": map[string]any{}})
 	s.methods["codex-home"] = stubHandler(map[string]any{"codexHome": ""})
 	s.methods["git-origins"] = stubHandler(map[string]any{"origins": []any{}})
 	s.methods["mcp-servers"] = stubHandler(map[string]any{"servers": []any{}})
-	s.methods["platform-info"] = stubHandler(map[string]any{"platform": "darwin", "arch": "arm64"})
+	s.methods["platform-info"] = stubHandler(map[string]any{"platform": runtime.GOOS, "arch": runtime.GOARCH})
 	s.methods["open-in-targets"] = stubHandler(map[string]any{"targets": []any{}})
 	s.methods["codex-agents-md"] = stubHandler(map[string]any{})
 	s.methods["local-environments/list"] = stubHandler(map[string]any{"environments": []any{}})
@@ -176,10 +157,6 @@ func (s *Server) registerMethods() {
 		}
 	}
 }
-
-// ========================================
-// 初始化
-// ========================================
 
 type initializeParams struct {
 	ProtocolVersion string `json:"protocolVersion,omitempty"`
@@ -208,4 +185,146 @@ func initialize(_ *Server, _ context.Context, params json.RawMessage) (any, erro
 			"exec":       true,
 		},
 	}, nil
+}
+
+// accountLoginStartParams account/login/start 请求参数。
+type accountLoginStartParams struct {
+	AuthMode string `json:"authMode"`
+	APIKey   string `json:"apiKey,omitempty"`
+}
+
+func accountLoginStartTyped(_ *Server, _ context.Context, p accountLoginStartParams) (any, error) {
+	if p.APIKey != "" {
+		if err := os.Setenv("OPENAI_API_KEY", p.APIKey); err != nil {
+			logger.Warn("account/login: setenv failed", logger.FieldError, err)
+			return nil, apperrors.Wrap(err, "Server.accountLoginStart", "setenv OPENAI_API_KEY")
+		}
+		return map[string]any{}, nil
+	}
+	return map[string]any{"loginUrl": "https://platform.openai.com/api-keys"}, nil
+}
+
+func accountLoginCancel(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
+	return map[string]any{}, nil
+}
+
+func accountLogout(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
+	if err := os.Unsetenv("OPENAI_API_KEY"); err != nil {
+		logger.Warn("account/logout: unsetenv failed", logger.FieldError, err)
+	}
+	return map[string]any{}, nil
+}
+
+func accountRead(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
+	key := os.Getenv("OPENAI_API_KEY")
+	masked := ""
+	if len(key) > 8 {
+		masked = key[:4] + "..." + key[len(key)-4:]
+	}
+	return map[string]any{
+		"account": map[string]any{
+			"hasApiKey": key != "",
+			"maskedKey": masked,
+		},
+	}, nil
+}
+
+// accountRateLimitsRead 读取速率限制。
+func accountRateLimitsRead(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
+	return map[string]any{"rateLimits": map[string]any{}}, nil
+}
+func offline52MethodList() []string {
+	return []string{
+		"initialize",
+		"thread/resume",
+		"thread/fork",
+		"thread/rollback",
+		"thread/loaded/list",
+		"thread/read",
+		"thread/resolve",
+		"thread/backgroundTerminals/clean",
+		"turn/steer",
+		"turn/forceComplete",
+		"review/start",
+		"fuzzyFileSearch",
+		"skills/list",
+		"skills/remote/read",
+		"skills/remote/write",
+		"app/list",
+		"model/list",
+		"collaborationMode/list",
+		"experimentalFeature/list",
+		"config/read",
+		"config/value/write",
+		"config/batchWrite",
+		"configRequirements/read",
+		"account/login/start",
+		"account/login/cancel",
+		"account/logout",
+		"account/read",
+		"account/rateLimits/read",
+		"config/mcpServer/reload",
+		"mcpServerStatus/list",
+		"lsp_diagnostics_query",
+		"command/exec",
+		"thread/undo",
+		"thread/model/set",
+		"thread/personality/set",
+		"thread/approvals/set",
+		"thread/mcp/list",
+		"thread/skills/list",
+		"thread/debugMemory",
+		"log/list",
+		"log/filters",
+		"workspace/run/create",
+		"workspace/run/get",
+		"workspace/run/list",
+		"workspace/run/merge",
+		"workspace/run/abort",
+		"ui/preferences/getAll",
+		"ui/projects/add",
+		"ui/projects/remove",
+		"debug/runtime",
+		"debug/gc",
+	}
+}
+
+// threadBgTerminalsClean 清理后台终端 (experimental)。
+func (s *Server) threadBgTerminalsClean(ctx context.Context, params json.RawMessage) (any, error) {
+	return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/clean")
+}
+
+// threadUndo 撤销上一步 (/undo)。
+func (s *Server) threadUndo(ctx context.Context, params json.RawMessage) (any, error) {
+	return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/undo")
+}
+
+// threadModelSet 切换模型 (/model <name>)。
+func (s *Server) threadModelSet(_ context.Context, params json.RawMessage) (any, error) {
+	return s.codexAdapter.SendSlashCommandWithArgs(params, "/model", "model")
+}
+
+// threadPersonality 设置人格 (/personality <type>)。
+func (s *Server) threadPersonality(_ context.Context, params json.RawMessage) (any, error) {
+	return s.codexAdapter.SendSlashCommandWithArgs(params, "/personality", "personality")
+}
+
+// threadApprovals 设置审批策略 (/approvals <policy>)。
+func (s *Server) threadApprovals(_ context.Context, params json.RawMessage) (any, error) {
+	return s.codexAdapter.SendSlashCommandWithArgs(params, "/approvals", "policy")
+}
+
+// threadMCPList 列出 MCP 工具 (/mcp)。
+func (s *Server) threadMCPList(ctx context.Context, params json.RawMessage) (any, error) {
+	return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/mcp")
+}
+
+// threadSkillsList 列出 Skills（统一走本地 SkillService 缓存，不透传外部 /skills）。
+func (s *Server) threadSkillsList(_ context.Context, _ json.RawMessage) (any, error) {
+	return s.codexAdapter.ThreadSkillsList()
+}
+
+// threadDebugMemory 调试记忆 (/debug-m-drop 或 /debug-m-update)。
+func (s *Server) threadDebugMemory(_ context.Context, params json.RawMessage) (any, error) {
+	return s.codexAdapter.SendSlashCommandWithArgs(params, "/debug-m-drop", "action")
 }

@@ -12,7 +12,7 @@ func TestThreadExistsInHistorySkipsStoreLookupForLikelyThreadID(t *testing.T) {
 	t.Helper()
 
 	calls := 0
-	got := ThreadExistsInHistory(
+	got := threadExistsInHistory(
 		context.Background(),
 		"thread-1",
 		0,
@@ -27,7 +27,7 @@ func TestThreadExistsInHistorySkipsStoreLookupForLikelyThreadID(t *testing.T) {
 		nil,
 	)
 	if !got {
-		t.Fatalf("ThreadExistsInHistory() = false, want true")
+		t.Fatalf("threadExistsInHistory() = false, want true")
 	}
 	if calls != 0 {
 		t.Fatalf("store lookup calls = %d, want 0", calls)
@@ -38,7 +38,7 @@ func TestThreadExistsInHistoryChecksSourcesInOrder(t *testing.T) {
 	t.Helper()
 
 	loadArchiveCalls := 0
-	got := ThreadExistsInHistory(
+	got := threadExistsInHistory(
 		context.Background(),
 		"agent-a",
 		defaultHistoryLookupTimeout,
@@ -57,7 +57,7 @@ func TestThreadExistsInHistoryChecksSourcesInOrder(t *testing.T) {
 		},
 	)
 	if !got {
-		t.Fatalf("ThreadExistsInHistory() = false, want true")
+		t.Fatalf("threadExistsInHistory() = false, want true")
 	}
 	if loadArchiveCalls != 0 {
 		t.Fatalf("archive lookup calls = %d, want 0", loadArchiveCalls)
@@ -67,7 +67,7 @@ func TestThreadExistsInHistoryChecksSourcesInOrder(t *testing.T) {
 func TestThreadExistsInHistoryReturnsFalseOnLookupErrors(t *testing.T) {
 	t.Helper()
 
-	got := ThreadExistsInHistory(
+	got := threadExistsInHistory(
 		context.Background(),
 		"agent-a",
 		time.Second,
@@ -85,14 +85,14 @@ func TestThreadExistsInHistoryReturnsFalseOnLookupErrors(t *testing.T) {
 		},
 	)
 	if got {
-		t.Fatalf("ThreadExistsInHistory() = true, want false")
+		t.Fatalf("threadExistsInHistory() = true, want false")
 	}
 }
 
 func TestResolveCodexThreadCandidatesDefaultAppendUnique(t *testing.T) {
 	t.Helper()
 
-	got := ResolveCodexThreadCandidates(
+	got := resolveCodexThreadCandidates(
 		context.Background(),
 		"agent-a",
 		0,
@@ -134,7 +134,7 @@ func TestResolveCodexThreadCandidatesUsesInjectedAppendUnique(t *testing.T) {
 		return append(dst, value)
 	}
 
-	got := ResolveCodexThreadCandidates(
+	got := resolveCodexThreadCandidates(
 		context.Background(),
 		"agent-a",
 		0,

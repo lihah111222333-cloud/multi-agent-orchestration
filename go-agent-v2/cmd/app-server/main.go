@@ -53,9 +53,12 @@ func main() {
 	defer dbPool.Close()
 
 	// 自动迁移
-	migrationsDir := filepath.Join(filepath.Dir(os.Args[0]), "..", "..", "migrations")
-	if _, err := os.Stat(migrationsDir); os.IsNotExist(err) {
-		migrationsDir = "migrations"
+	migrationsDir := cfg.MigrationsDir
+	if migrationsDir == "" {
+		migrationsDir = filepath.Join(filepath.Dir(os.Args[0]), "..", "..", "migrations")
+		if _, err := os.Stat(migrationsDir); os.IsNotExist(err) {
+			migrationsDir = "migrations"
+		}
 	}
 	if err := database.Migrate(ctx, dbPool, migrationsDir); err != nil {
 		if cfg.MigrationNonFatal {

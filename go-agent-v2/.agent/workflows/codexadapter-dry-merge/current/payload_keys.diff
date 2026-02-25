@@ -1,0 +1,107 @@
+--- .agent/workflows/codexadapter-dry-merge/baseline/payload_keys.txt	2026-02-26 02:34:43
++++ .agent/workflows/codexadapter-dry-merge/current/payload_keys.txt	2026-02-26 04:27:54
+@@ -1,52 +1,41 @@
+-internal/apiserver/codexadapter/slash_command_api.go:12:	ThreadID string `json:"threadId"`
+-internal/apiserver/codexadapter/slash_command_api.go:61:	parsed.ThreadID = ExtractTrackedString(decoded, "threadId", "threadID", "thread_id")
+-internal/apiserver/codexadapter/thread_archive_restore.go:34:			"reason", reason,
+-internal/apiserver/codexadapter/thread_archive_restore.go:42:			"reason", reason,
+-internal/apiserver/codexadapter/thread_archive_types.go:12:	ThreadID      string              `json:"threadId"`
+-internal/apiserver/codexadapter/thread_manage.go:102:		"threadId": threadID,
+-internal/apiserver/codexadapter/thread_messages.go:106:				"threadId":   id,
+-internal/apiserver/codexadapter/thread_resolve.go:31:		"threadId": id,
+-internal/apiserver/codexadapter/thread_usecases.go:83:		"threadId":      threadID,
+-internal/apiserver/codexadapter/turn_interrupt_helpers.go:181:			"threadId": threadID,
+-internal/apiserver/codexadapter/turn_interrupt_helpers.go:182:			"status":   status,
+-internal/apiserver/codexadapter/turn_interrupt_helpers.go:183:			"reason":   reason,
+-internal/apiserver/codexadapter/turn_resume.go:51:			"reason", "no codex thread ID resolved from history",
+-internal/apiserver/codexadapter/turn_resume.go:81:		"reason", "all historical rollouts unavailable",
+-internal/apiserver/codexadapter/turn_tracker_event_diag.go:36:		"payload_status_raw", ExtractTrackedString(payload, "status", "state"),
+-internal/apiserver/codexadapter/turn_tracker_event_diag.go:37:		"payload_reason_raw", ExtractTrackedString(payload, "reason", "message"),
+-internal/apiserver/codexadapter/turn_tracker_event_extract.go:36:		if id := ExtractTrackedString(turn, "id", "turnId", "turn_id"); id != "" {
+-internal/apiserver/codexadapter/turn_tracker_event_extract.go:40:	return ExtractTrackedString(payload, "turnId", "turn_id", "id")
+-internal/apiserver/codexadapter/turn_tracker_event_extract.go:49:		if status := ExtractTrackedString(turn, "status", "state"); status != "" {
+-internal/apiserver/codexadapter/turn_tracker_event_extract.go:53:	return ExtractTrackedString(payload, "status", "state")
+-internal/apiserver/codexadapter/turn_tracker_event_extract.go:62:		if reason := ExtractTrackedString(turn, "reason", "message"); reason != "" {
+-internal/apiserver/codexadapter/turn_tracker_event_extract.go:66:	return ExtractTrackedString(payload, "reason", "message")
+-internal/apiserver/codexadapter/turn_tracker_event_terminal.go:16:	switch raw := payload["status"].(type) {
+-internal/apiserver/codexadapter/turn_tracker_finalize.go:108:		"reason", strings.TrimSpace(reason),
+-internal/apiserver/codexadapter/turn_tracker_finalize.go:82:			"reason", strings.TrimSpace(reason),
+-internal/apiserver/codexadapter/turn_tracker_finalize.go:95:			"reason", strings.TrimSpace(reason),
+-internal/apiserver/codexadapter/turn_tracker_lifecycle.go:72:			"threadId": id,
+-internal/apiserver/codexadapter/turn_tracker_lifecycle.go:75:				"status": "failed",
+-internal/apiserver/codexadapter/turn_tracker_lifecycle.go:77:			"status": "failed",
+-internal/apiserver/codexadapter/turn_tracker_lifecycle.go:78:			"reason": "superseded_by_new_turn",
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:10:	if summary := ExtractTrackedString(payload, "lastAgentMessage", "last_agent_message", "summary", "result", "message"); summary != "" {
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:14:		if summary := ExtractTrackedString(turn, "lastAgentMessage", "last_agent_message", "summary", "result", "message"); summary != "" {
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:19:		if summary := ExtractTrackedString(msg, "lastAgentMessage", "last_agent_message", "summary", "result", "message"); summary != "" {
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:35:	if strings.TrimSpace(ExtractTrackedString(payload, "lastAgentMessage")) == "" {
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:36:		payload["lastAgentMessage"] = text
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:38:	if strings.TrimSpace(ExtractTrackedString(payload, "summary")) == "" {
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:39:		payload["summary"] = text
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:46:	if strings.TrimSpace(ExtractTrackedString(turn, "lastAgentMessage")) == "" {
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:47:		turn["lastAgentMessage"] = text
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:49:	if strings.TrimSpace(ExtractTrackedString(turn, "summary")) == "" {
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:50:		turn["summary"] = text
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:59:	for _, key := range []string{"threadId", "status", "reason", "summary"} {
+-internal/apiserver/codexadapter/turn_tracker_summary_payload.go:70:		for _, key := range []string{"id", "status", "reason", "summary"} {
+-internal/apiserver/codexadapter/turn_tracker_terminal.go:104:			"reason", strings.TrimSpace(reason),
+-internal/apiserver/codexadapter/turn_tracker_terminal.go:127:		"threadId": id,
+-internal/apiserver/codexadapter/turn_tracker_terminal.go:130:			"status": finalStatus,
+-internal/apiserver/codexadapter/turn_tracker_terminal.go:132:		"status": finalStatus,
+-internal/apiserver/codexadapter/turn_tracker_terminal.go:133:		"reason": reasonText,
+-internal/apiserver/codexadapter/turn_tracker_terminal.go:139:		"reason", reasonText,
++internal/apiserver/codexadapter/slash_command.go:14:	ThreadID string `json:"threadId"`
++internal/apiserver/codexadapter/slash_command.go:63:	parsed.ThreadID = ExtractTrackedString(decoded, "threadId", "threadID", "thread_id")
++internal/apiserver/codexadapter/thread_archive.go:24:	ThreadID      string              `json:"threadId"`
++internal/apiserver/codexadapter/thread_archive.go:264:		"threadId":      id,
++internal/apiserver/codexadapter/thread_archive.go:318:		"threadId": id,
++internal/apiserver/codexadapter/thread_archive.go:682:			"reason", reason,
++internal/apiserver/codexadapter/thread_archive.go:690:			"reason", reason,
++internal/apiserver/codexadapter/thread_lifecycle.go:235:		"threadId": id,
++internal/apiserver/codexadapter/thread_messages.go:166:				"threadId":   id,
++internal/apiserver/codexadapter/turn_interrupt.go:183:			"threadId": threadID,
++internal/apiserver/codexadapter/turn_interrupt.go:184:			"status":   status,
++internal/apiserver/codexadapter/turn_interrupt.go:185:			"reason":   reason,
++internal/apiserver/codexadapter/turn_resume.go:53:				"reason", "no codex thread ID resolved from history",
++internal/apiserver/codexadapter/turn_resume.go:85:			"reason", "all historical rollouts unavailable",
++internal/apiserver/codexadapter/turn_tracker_event.go:101:	return ExtractTrackedString(payload, "status", "state")
++internal/apiserver/codexadapter/turn_tracker_event.go:110:		if reason := ExtractTrackedString(turn, "reason", "message"); reason != "" {
++internal/apiserver/codexadapter/turn_tracker_event.go:114:	return ExtractTrackedString(payload, "reason", "message")
++internal/apiserver/codexadapter/turn_tracker_event.go:124:	switch raw := payload["status"].(type) {
++internal/apiserver/codexadapter/turn_tracker_event.go:250:		"payload_status_raw", ExtractTrackedString(payload, "status", "state"),
++internal/apiserver/codexadapter/turn_tracker_event.go:251:		"payload_reason_raw", ExtractTrackedString(payload, "reason", "message"),
++internal/apiserver/codexadapter/turn_tracker_event.go:351:	if summary := ExtractTrackedString(payload, "lastAgentMessage", "last_agent_message", "summary", "result", "message"); summary != "" {
++internal/apiserver/codexadapter/turn_tracker_event.go:355:		if summary := ExtractTrackedString(turn, "lastAgentMessage", "last_agent_message", "summary", "result", "message"); summary != "" {
++internal/apiserver/codexadapter/turn_tracker_event.go:360:		if summary := ExtractTrackedString(msg, "lastAgentMessage", "last_agent_message", "summary", "result", "message"); summary != "" {
++internal/apiserver/codexadapter/turn_tracker_event.go:376:	if strings.TrimSpace(ExtractTrackedString(payload, "lastAgentMessage")) == "" {
++internal/apiserver/codexadapter/turn_tracker_event.go:377:		payload["lastAgentMessage"] = text
++internal/apiserver/codexadapter/turn_tracker_event.go:379:	if strings.TrimSpace(ExtractTrackedString(payload, "summary")) == "" {
++internal/apiserver/codexadapter/turn_tracker_event.go:380:		payload["summary"] = text
++internal/apiserver/codexadapter/turn_tracker_event.go:387:	if strings.TrimSpace(ExtractTrackedString(turn, "lastAgentMessage")) == "" {
++internal/apiserver/codexadapter/turn_tracker_event.go:388:		turn["lastAgentMessage"] = text
++internal/apiserver/codexadapter/turn_tracker_event.go:390:	if strings.TrimSpace(ExtractTrackedString(turn, "summary")) == "" {
++internal/apiserver/codexadapter/turn_tracker_event.go:391:		turn["summary"] = text
++internal/apiserver/codexadapter/turn_tracker_event.go:400:	for _, key := range []string{"threadId", "status", "reason", "summary"} {
++internal/apiserver/codexadapter/turn_tracker_event.go:411:		for _, key := range []string{"id", "status", "reason", "summary"} {
++internal/apiserver/codexadapter/turn_tracker_event.go:530:		"reason", strings.TrimSpace(reason),
++internal/apiserver/codexadapter/turn_tracker_event.go:605:		"reason", strings.TrimSpace(reason),
++internal/apiserver/codexadapter/turn_tracker_event.go:84:		if id := ExtractTrackedString(turn, "id", "turnId", "turn_id"); id != "" {
++internal/apiserver/codexadapter/turn_tracker_event.go:88:	return ExtractTrackedString(payload, "turnId", "turn_id", "id")
++internal/apiserver/codexadapter/turn_tracker_event.go:97:		if status := ExtractTrackedString(turn, "status", "state"); status != "" {
+ internal/apiserver/codexadapter/turn_tracker_test.go:108:	p = map[string]any{"turnId": "turn-456"}
+ internal/apiserver/codexadapter/turn_tracker_test.go:115:	p := map[string]any{"turn": map[string]any{"status": "completed"}}
+ internal/apiserver/codexadapter/turn_tracker_test.go:119:	p = map[string]any{"status": "failed"}
+@@ -77,3 +66,13 @@
+ internal/apiserver/codexadapter/turn_tracker_test.go:61:		{"status_map", map[string]any{"status": map[string]any{"type": "idle"}}, "completed", "thread_status_idle", true},
+ internal/apiserver/codexadapter/turn_tracker_test.go:82:	p := map[string]any{"lastAgentMessage": "hello"}
+ internal/apiserver/codexadapter/turn_tracker_test.go:90:	p = map[string]any{"msg": map[string]any{"lastAgentMessage": "msg_nested"}}
++internal/apiserver/codexadapter/turn_tracker.go:181:		"threadId": threadID,
++internal/apiserver/codexadapter/turn_tracker.go:184:			"status": "failed",
++internal/apiserver/codexadapter/turn_tracker.go:186:		"status": "failed",
++internal/apiserver/codexadapter/turn_tracker.go:187:		"reason": "superseded_by_new_turn",
++internal/apiserver/codexadapter/turn_tracker.go:322:				"reason", strings.TrimSpace(reason),
++internal/apiserver/codexadapter/turn_tracker.go:352:		"threadId": completedThreadID,
++internal/apiserver/codexadapter/turn_tracker.go:355:			"status": finalStatus,
++internal/apiserver/codexadapter/turn_tracker.go:357:		"status": finalStatus,
++internal/apiserver/codexadapter/turn_tracker.go:358:		"reason": reasonText,
++internal/apiserver/codexadapter/turn_tracker.go:363:		"reason", reasonText,

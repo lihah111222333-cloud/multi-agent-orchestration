@@ -6,6 +6,8 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
+	"github.com/multi-agent/go-agent-v2/internal/skillutil"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -13,8 +15,8 @@ func passthroughSkillInputText(_ string, content string) string {
 	return content
 }
 
-// BuildSelectedSkillPrompt reads skill contents and joins them into a prompt string.
-func BuildSelectedSkillPrompt(
+// buildSelectedSkillPrompt reads skill contents and joins them into a prompt string.
+func buildSelectedSkillPrompt(
 	selectedSkills []string,
 	readSkillContent func(skillName string) (string, error),
 	skillInputText func(name, content string) string,
@@ -67,11 +69,11 @@ func (a *Adapter) BuildSelectedSkillPrompt(selectedSkills []string) (string, int
 	if a == nil {
 		return "", 0
 	}
-	return BuildSelectedSkillPrompt(selectedSkills, a.readSkillContent, commonadapter.SkillInputText)
+	return buildSelectedSkillPrompt(selectedSkills, a.readSkillContent, commonadapter.SkillInputText)
 }
 
-// ResolveLSPUsagePromptHint resolves the user-configured LSP usage prompt hint.
-func ResolveLSPUsagePromptHint(
+// resolveLSPUsagePromptHint resolves the user-configured LSP usage prompt hint.
+func resolveLSPUsagePromptHint(
 	ctx context.Context,
 	defaultHint string,
 	maxHintLen int,
@@ -103,14 +105,14 @@ func ResolveLSPUsagePromptHint(
 // ResolveLSPUsagePromptHint resolves LSP hint using adapter-owned preference store.
 func (a *Adapter) ResolveLSPUsagePromptHint(ctx context.Context, defaultHint string, maxHintLen int) string {
 	var getPref func(context.Context, string) (any, error)
-	if a != nil && a.ctx != nil && a.ctx.Store != nil {
-		getPref = a.ctx.Store.Get
+	if store := a.store(); store != nil {
+		getPref = store.Get
 	}
-	return ResolveLSPUsagePromptHint(ctx, defaultHint, maxHintLen, getPref)
+	return resolveLSPUsagePromptHint(ctx, defaultHint, maxHintLen, getPref)
 }
 
-// CollectDynamicToolNames builds a set of dynamic tool names.
-func CollectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]struct{} {
+// collectDynamicToolNames builds a set of dynamic tool names.
+func collectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]struct{} {
 	if len(dynamicTools) == 0 {
 		return nil
 	}
@@ -125,8 +127,8 @@ func CollectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]st
 	return toolNames
 }
 
-// PrependLSPAvailabilityWarning adds a warning when referenced LSP tools are unavailable.
-func PrependLSPAvailabilityWarning(
+// prependLSPAvailabilityWarning adds a warning when referenced LSP tools are unavailable.
+func prependLSPAvailabilityWarning(
 	hint string,
 	dynamicToolNames map[string]struct{},
 	collectReferencedToolNames func(string) []string,
@@ -162,10 +164,143 @@ func PrependLSPAvailabilityWarning(
 
 // PrependLSPAvailabilityWarning resolves warning content with adapter-owned defaults.
 func (a *Adapter) PrependLSPAvailabilityWarning(hint string, dynamicTools []agentcore.DynamicTool, mergePromptText func(string, string) string) (string, []string) {
-	return PrependLSPAvailabilityWarning(
+	return prependLSPAvailabilityWarning(
 		hint,
-		CollectDynamicToolNames(dynamicTools),
+		collectDynamicToolNames(dynamicTools),
 		commonadapter.CollectReferencedLSPToolNames,
 		mergePromptText,
+	)
+}
+
+type autoMatchInput = contracts.AutoMatchInput
+type autoMatchedSkillMatch = contracts.AutoMatchedSkillMatch
+
+// collectAutoMatchedSkillMatches classifies force/explicit matched skills for turn prompt injection.
+func collectAutoMatchedSkillMatches(
+	prompt string,
+	inputs []autoMatchInput,
+	configuredSkillNames []string,
+	candidates []contracts.SkillMatchCandidate,
+	options contracts.AutoSkillMatchOptions,
+) []autoMatchedSkillMatch {
+	normalizedPrompt := strings.ToLower(strings.TrimSpace(prompt))
+	if normalizedPrompt == "" || len(candidates) == 0 {
+		return nil
+	}
+	inputSkillSet := skillutil.CollectInputSkillNames(
+		inputs,
+		func(input autoMatchInput) string { return input.Type },
+		func(input autoMatchInput) string { return input.Name },
+	)
+	configuredSet := commonadapter.CollectSkillNameSet(configuredSkillNames)
+
+	matches := make([]autoMatchedSkillMatch, 0, len(candidates))
+	for _, skill := range candidates {
+		skillName := strings.TrimSpace(skill.Name)
+		if skillName == "" {
+			continue
+		}
+		skillNameLower := strings.ToLower(skillName)
+		if _, exists := inputSkillSet[skillNameLower]; exists {
+			continue
+		}
+		matchedBy, matchedTerms := commonadapter.ClassifyAutoSkillMatch(normalizedPrompt, skillName, skill.ForceWords, skill.TriggerWords)
+		if matchedBy == "" {
+			continue
+		}
+		if _, configured := configuredSet[skillNameLower]; configured {
+			includeConfigured := false
+			switch matchedBy {
+			case "explicit":
+				includeConfigured = options.IncludeConfiguredExplicit
+			case "force":
+				includeConfigured = options.IncludeConfiguredForce
+			}
+			if !includeConfigured {
+				continue
+			}
+		}
+		matches = append(matches, autoMatchedSkillMatch{
+			Name:         skillName,
+			MatchedBy:    matchedBy,
+			MatchedTerms: matchedTerms,
+		})
+	}
+	return matches
+}
+
+// CollectAutoMatchedSkillMatches evaluates auto-match candidates with adapter entry.
+func (a *Adapter) CollectAutoMatchedSkillMatches(
+	prompt string,
+	inputs []autoMatchInput,
+	configuredSkillNames []string,
+	candidates []contracts.SkillMatchCandidate,
+	options contracts.AutoSkillMatchOptions,
+) []autoMatchedSkillMatch {
+	return collectAutoMatchedSkillMatches(prompt, inputs, configuredSkillNames, candidates, options)
+}
+
+func logAutoMatchedSkillReadError(agentID, skillName, matchedBy string, readErr error) {
+	logger.Warn("turn/start: auto-matched skill unavailable, skip",
+		append(threadLogFields(agentID),
+			logger.FieldSkill, skillName,
+			"matched_by", matchedBy,
+			logger.FieldError, readErr,
+		)...,
+	)
+}
+
+// renderAutoMatchedSkillPrompt renders skill prompt payload for matched skills.
+func renderAutoMatchedSkillPrompt(
+	agentID string,
+	matches []autoMatchedSkillMatch,
+	readSkillContent func(skillName string) (string, error),
+	mergePromptText func(prompt, extra string) string,
+	skillInputText func(name, content string) string,
+) (string, int) {
+	if len(matches) == 0 || readSkillContent == nil || skillInputText == nil {
+		return "", 0
+	}
+
+	texts := make([]string, 0, len(matches))
+	for _, match := range matches {
+		skillName := strings.TrimSpace(match.Name)
+		if skillName == "" {
+			continue
+		}
+		content, err := readSkillContent(skillName)
+		if err != nil {
+			logAutoMatchedSkillReadError(agentID, skillName, match.MatchedBy, err)
+			continue
+		}
+		if match.MatchedBy == "force" {
+			instruction := commonadapter.ForceMatchedSkillInstruction(match.MatchedTerms)
+			if strings.TrimSpace(instruction) != "" {
+				if mergePromptText != nil {
+					content = mergePromptText(instruction, content)
+				} else {
+					content = strings.TrimSpace(instruction) + "\n" + strings.TrimSpace(content)
+				}
+			}
+		}
+		texts = append(texts, skillInputText(skillName, content))
+	}
+	if len(texts) == 0 {
+		return "", 0
+	}
+	return strings.Join(texts, "\n"), len(texts)
+}
+
+// RenderAutoMatchedSkillPrompt renders matched-skill prompt using adapter-owned dependencies.
+func (a *Adapter) RenderAutoMatchedSkillPrompt(agentID string, matches []autoMatchedSkillMatch) (string, int) {
+	if a == nil {
+		return "", 0
+	}
+	return renderAutoMatchedSkillPrompt(
+		agentID,
+		matches,
+		a.readSkillContent,
+		commonadapter.MergePromptText,
+		commonadapter.SkillInputText,
 	)
 }

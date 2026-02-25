@@ -142,7 +142,7 @@ func TestP2DiagCacheNotAccessedOutsideServerAccessors(t *testing.T) {
 			continue
 		}
 		name := entry.Name()
-		if filepath.Ext(name) != ".go" || isTestGoFile(name) || name == "server.go" || name == "server_diagnostics.go" || name == "server_state_groups.go" {
+		if filepath.Ext(name) != ".go" || isTestGoFile(name) || name == "server_state_groups.go" {
 			continue
 		}
 		file, parseErr := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
@@ -155,8 +155,7 @@ func TestP2DiagCacheNotAccessedOutsideServerAccessors(t *testing.T) {
 			if !ok || sel.Sel == nil || sel.Sel.Name != "diagCache" {
 				return true
 			}
-			id, ok := sel.X.(*ast.Ident)
-			if !ok || id.Name != "s" {
+			if !isServerStateOwner(sel.X) {
 				return true
 			}
 			pos := fset.Position(sel.Pos())
@@ -166,7 +165,7 @@ func TestP2DiagCacheNotAccessedOutsideServerAccessors(t *testing.T) {
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf("diagCache direct access must stay inside server accessors (server.go/server_diagnostics.go):\n%s", strings.Join(violations, "\n"))
+		t.Fatalf("diagCache direct access must stay inside grouped state internals (server_state_groups.go):\n%s", strings.Join(violations, "\n"))
 	}
 }
 
@@ -188,8 +187,7 @@ func lspDynToolKey(lhs ast.Expr) (string, bool) {
 	if !ok || sel.Sel == nil || sel.Sel.Name != "dynTools" {
 		return "", false
 	}
-	owner, ok := sel.X.(*ast.Ident)
-	if !ok || owner.Name != "s" {
+	if !isServerStateOwner(sel.X) {
 		return "", false
 	}
 	lit, ok := idx.Index.(*ast.BasicLit)
@@ -212,6 +210,5 @@ func isLSPToolsSelector(rhs ast.Expr) bool {
 	if !ok || base.Sel == nil || base.Sel.Name != "lspTools" {
 		return false
 	}
-	owner, ok := base.X.(*ast.Ident)
-	return ok && owner.Name == "s"
+	return isServerStateOwner(base.X)
 }

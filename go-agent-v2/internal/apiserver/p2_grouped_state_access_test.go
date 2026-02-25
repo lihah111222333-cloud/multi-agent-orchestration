@@ -65,11 +65,7 @@ func TestP2GroupedStateFieldAccessBoundaries(t *testing.T) {
 
 	allowedStateGroupSelectorFiles := allowFileSet(
 		"server_state_groups.go",
-		"server_context_accessors.go",
-		"server_context_turn_ui_runtime.go",
-		"server_context_conn_accessors.go",
-		"server_context_diag_accessors.go",
-		"server_context_codex.go",
+		"server_context.go",
 	)
 
 	fset := token.NewFileSet()

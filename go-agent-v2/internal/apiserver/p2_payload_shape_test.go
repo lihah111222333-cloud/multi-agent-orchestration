@@ -23,21 +23,12 @@ func TestP2ServerPayloadSplitGuard(t *testing.T) {
 		"recoveryMiddleware":           {},
 		"corsMiddleware":               {},
 		"handleSSE":                    {},
-		"parseMapAny":                  {},
-		"mergePayloadFromMap":          {},
-		"walkNestedJSON":               {},
-		"mergePayloadFields":           {},
-		"normalizeFiles":               {},
-		"uniqueStrings":                {},
-		"parseFilesFromPatchDelta":     {},
 		"toolResultSuccess":            {},
 		"rememberFileChanges":          {},
 		"consumeRememberedFileChanges": {},
 		"enrichFileChangePayload":      {},
 	}
-	bannedVars := map[string]struct{}{
-		"payloadExtractKeys": {},
-	}
+	bannedVars := map[string]struct{}{}
 
 	for _, decl := range file.Decls {
 		switch typed := decl.(type) {

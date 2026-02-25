@@ -86,11 +86,16 @@ func extractModel(msg string) string {
 
 // Query 查询 AI 日志 (从 system_logs 读取、分类、提取 12 字段)。
 func (s *AILogStore) Query(ctx context.Context, category, keyword string, limit int) ([]AILogRow, error) {
+	// 当指定 category 过滤时, SQL LIMIT 放大补偿 Go 侧后置过滤的数据损耗。
+	fetchLimit := limit
+	if category != "" {
+		fetchLimit = limit * 5
+	}
 	q := NewQueryBuilder().
 		KeywordLike(keyword, "message")
 	sql, params := q.Build(
 		"SELECT "+sysLogCols+" FROM system_logs",
-		"ts DESC, id DESC", limit)
+		"ts DESC, id DESC", fetchLimit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err
@@ -124,6 +129,9 @@ func (s *AILogStore) Query(ctx context.Context, category, keyword string, limit 
 			StatusText: statusText,
 			Model:      model,
 		})
+		if len(result) >= limit {
+			break
+		}
 	}
 	return result, nil
 }

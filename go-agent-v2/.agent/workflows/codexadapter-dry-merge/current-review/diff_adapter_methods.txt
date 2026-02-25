@@ -1,0 +1,105 @@
+--- .agent/workflows/codexadapter-dry-merge/baseline/adapter_methods.txt	2026-02-26 02:34:43
++++ .agent/workflows/codexadapter-dry-merge/current-review/adapter_methods.txt	2026-02-26 03:09:39
+@@ -78,25 +78,26 @@
+ internal/apiserver/codexadapter/thread_usecases.go:func (a *Adapter) threadExistsForArchive(ctx context.Context, threadID string) bool {
+ internal/apiserver/codexadapter/thread_usecases.go:func (a *Adapter) threadExistsInRuntime(threadID string) bool {
+ internal/apiserver/codexadapter/thread_usecases.go:func (a *Adapter) ThreadMessages(ctx context.Context, threadID string, limit int, before int64) (map[string]any, error) {
+-internal/apiserver/codexadapter/turn_interrupt_helpers.go:func (a *Adapter) notifyTurnCompleted(threadID, status, reason string) {
+-internal/apiserver/codexadapter/turn_interrupt_helpers.go:func (a *Adapter) readRuntimeStatus(threadID string) string {
+-internal/apiserver/codexadapter/turn_interrupt_helpers.go:func (a *Adapter) ReadThreadRuntimeState(threadID string) string {
+-internal/apiserver/codexadapter/turn_interrupt_helpers.go:func (a *Adapter) sendInterruptCommand(proc *runner.AgentProcess) (bool, error) {
+-internal/apiserver/codexadapter/turn_interrupt_helpers.go:func (a *Adapter) WaitInterruptOutcome(threadID string, timeout time.Duration, activeHint bool) (bool, string, int64, bool) {
++internal/apiserver/codexadapter/turn_interrupt.go:func (a *Adapter) notifyTurnCompleted(threadID, status, reason string) {
++internal/apiserver/codexadapter/turn_interrupt.go:func (a *Adapter) readRuntimeStatus(threadID string) string {
++internal/apiserver/codexadapter/turn_interrupt.go:func (a *Adapter) ReadThreadRuntimeState(threadID string) string {
++internal/apiserver/codexadapter/turn_interrupt.go:func (a *Adapter) sendInterruptCommand(proc *runner.AgentProcess) (bool, error) {
+ internal/apiserver/codexadapter/turn_interrupt.go:func (a *Adapter) TurnForceComplete(threadID string) (any, error) {
+ internal/apiserver/codexadapter/turn_interrupt.go:func (a *Adapter) TurnInterrupt(threadID string) (any, error) {
+-internal/apiserver/codexadapter/turn_prepare_skills.go:func (a *Adapter) buildForcedOrExplicitMatchedSkillPrompt(agentID, prompt string, input []contracts.TurnInput) (string, int) {
+-internal/apiserver/codexadapter/turn_prepare_skills.go:func (a *Adapter) buildTurnSkillPrompt(
+-internal/apiserver/codexadapter/turn_prepare_skills.go:func (a *Adapter) collectAutoMatchedSkillMatches(agentID, prompt string, input []contracts.TurnInput, options AutoSkillMatchOptions) []AutoMatchedSkillMatch {
+-internal/apiserver/codexadapter/turn_prepare_skills.go:func (a *Adapter) CollectAutoMatchedSkillMatchesForThread(
+-internal/apiserver/codexadapter/turn_prepare_skills.go:func (a *Adapter) renderAutoMatchedSkillPrompt(agentID string, matches []AutoMatchedSkillMatch) (string, int) {
+-internal/apiserver/codexadapter/turn_prepare_timeline.go:func (a *Adapter) appendTurnStartUserTimeline(ctx context.Context, input []contracts.TurnInput, opt contracts.TurnAppendUserTimelineOptions) {
+-internal/apiserver/codexadapter/turn_prepare_timeline.go:func (a *Adapter) threadTimelineAlreadyShowsInjectedPrompt(threadID string) bool {
++internal/apiserver/codexadapter/turn_interrupt.go:func (a *Adapter) WaitInterruptOutcome(threadID string, timeout time.Duration, activeHint bool) (bool, string, int64, bool) {
++internal/apiserver/codexadapter/turn_prepare.go:func (a *Adapter) appendTurnStartUserTimeline(
++internal/apiserver/codexadapter/turn_prepare.go:func (a *Adapter) buildForcedOrExplicitMatchedSkillPrompt(agentID, prompt string, input []contracts.TurnInput) (string, int) {
++internal/apiserver/codexadapter/turn_prepare.go:func (a *Adapter) buildTurnSkillPrompt(
++internal/apiserver/codexadapter/turn_prepare.go:func (a *Adapter) collectAutoMatchedSkillMatches(agentID, prompt string, input []contracts.TurnInput, options AutoSkillMatchOptions) []AutoMatchedSkillMatch {
++internal/apiserver/codexadapter/turn_prepare.go:func (a *Adapter) CollectAutoMatchedSkillMatchesForThread(
+ internal/apiserver/codexadapter/turn_prepare.go:func (a *Adapter) prepareTurnStartSubmission(
+ internal/apiserver/codexadapter/turn_prepare.go:func (a *Adapter) prepareTurnSteerSubmission(
++internal/apiserver/codexadapter/turn_prepare.go:func (a *Adapter) renderAutoMatchedSkillPrompt(agentID string, matches []AutoMatchedSkillMatch) (string, int) {
++internal/apiserver/codexadapter/turn_prepare.go:func (a *Adapter) threadTimelineAlreadyShowsInjectedPrompt(threadID string) bool {
+ internal/apiserver/codexadapter/turn_prompt_lsp.go:func (a *Adapter) PrependLSPAvailabilityWarning(hint string, dynamicTools []agentcore.DynamicTool, mergePromptText func(string, string) string) (string, []string) {
+ internal/apiserver/codexadapter/turn_prompt_lsp.go:func (a *Adapter) ResolveLSPUsagePromptHint(ctx context.Context, defaultHint string, maxHintLen int) string {
+ internal/apiserver/codexadapter/turn_prompt.go:func (a *Adapter) BuildSelectedSkillPrompt(selectedSkills []string) (string, int) {
++internal/apiserver/codexadapter/turn_resume.go:func (a *Adapter) FuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern string) bool) []map[string]any {
+ internal/apiserver/codexadapter/turn_runtime_ensure_helpers.go:func (a *Adapter) ensureReadyLaunchProcess(
+ internal/apiserver/codexadapter/turn_runtime_ensure_helpers.go:func (a *Adapter) ensureReadyNoHistoricalRollout(
+ internal/apiserver/codexadapter/turn_runtime_ensure_helpers.go:func (a *Adapter) ensureReadyNoResumeCandidates(
+@@ -106,37 +107,37 @@
+ internal/apiserver/codexadapter/turn_runtime_notify.go:func (a *Adapter) registerBinding(ctx context.Context, agentID string, proc *runner.AgentProcess) {
+ internal/apiserver/codexadapter/turn_runtime_resume_helpers.go:func (a *Adapter) collectResumeCandidates(ctx context.Context, agentID string) []string {
+ internal/apiserver/codexadapter/turn_runtime_resume_helpers.go:func (a *Adapter) tryResumeHistoricalCandidates(
++internal/apiserver/codexadapter/turn_runtime_start.go:func (a *Adapter) startTurnSubmissionAndTrack(
++internal/apiserver/codexadapter/turn_runtime_start.go:func (a *Adapter) TurnStart(ctx context.Context, req TurnStartRequest) (TurnStartEntryResult, error) {
++internal/apiserver/codexadapter/turn_runtime_start.go:func (a *Adapter) TurnSteerFromInput(req TurnSteerRequest) (map[string]any, error) {
++internal/apiserver/codexadapter/turn_runtime_with_thread.go:func (a *Adapter) resolveProcess(caller, threadID string) (*runner.AgentProcess, error) {
+ internal/apiserver/codexadapter/turn_runtime.go:func (a *Adapter) EnsureThreadReadyForTurn(ctx context.Context, threadID, cwd string) (*runner.AgentProcess, error) {
+-internal/apiserver/codexadapter/turn_search.go:func (a *Adapter) FuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern string) bool) []map[string]any {
+ internal/apiserver/codexadapter/turn_skill_match.go:func (a *Adapter) CollectAutoMatchedSkillMatches(
+ internal/apiserver/codexadapter/turn_skill_render.go:func (a *Adapter) RenderAutoMatchedSkillPrompt(agentID string, matches []AutoMatchedSkillMatch) (string, int) {
+-internal/apiserver/codexadapter/turn_start_entry.go:func (a *Adapter) TurnStart(ctx context.Context, req TurnStartRequest) (TurnStartEntryResult, error) {
+-internal/apiserver/codexadapter/turn_start_submit.go:func (a *Adapter) startTurnSubmissionAndTrack(
+-internal/apiserver/codexadapter/turn_steer_entry.go:func (a *Adapter) TurnSteerFromInput(req TurnSteerRequest) (map[string]any, error) {
+-internal/apiserver/codexadapter/turn_tracker_capture.go:func (a *Adapter) FinalizeTrackedTurnEvent(
+-internal/apiserver/codexadapter/turn_tracker_finalize.go:func (a *Adapter) CaptureAndInjectTurnSummary(threadID, eventType, method string, payload map[string]any) {
+-internal/apiserver/codexadapter/turn_tracker_finalize.go:func (a *Adapter) MaybeFinalizeTrackedTurn(threadID, eventType, method string, payload map[string]any) {
+-internal/apiserver/codexadapter/turn_tracker_finalize.go:func (a *Adapter) RememberTrackedTurnSummary(threadID, turnID, summary string) {
+-internal/apiserver/codexadapter/turn_tracker_helpers_access.go:func (a *Adapter) EnsureTurnTrackerStateLocked() {
+-internal/apiserver/codexadapter/turn_tracker_helpers_access.go:func (a *Adapter) LookupTrackedTurnSummary(threadID, turnID string) string {
+-internal/apiserver/codexadapter/turn_tracker_helpers_access.go:func (a *Adapter) MarkTrackedTurnStallHint(threadID, turnID string) bool {
+-internal/apiserver/codexadapter/turn_tracker_helpers_access.go:func (a *Adapter) PeekTrackedTurnMeta(threadID string) (string, time.Time, bool, bool) {
+-internal/apiserver/codexadapter/turn_tracker_helpers_heartbeat.go:func (a *Adapter) SetStallHeartbeat(interval time.Duration) {
+-internal/apiserver/codexadapter/turn_tracker_helpers_heartbeat.go:func (a *Adapter) SetStallThreshold(threshold time.Duration) {
+-internal/apiserver/codexadapter/turn_tracker_helpers_heartbeat.go:func (a *Adapter) StallHeartbeat() time.Duration {
+-internal/apiserver/codexadapter/turn_tracker_helpers_heartbeat.go:func (a *Adapter) StallThreshold() time.Duration {
+-internal/apiserver/codexadapter/turn_tracker_helpers_heartbeat.go:func (a *Adapter) StartApprovalStallHeartbeat(threadID string) func() {
+-internal/apiserver/codexadapter/turn_tracker_helpers_heartbeat.go:func (a *Adapter) StartDynamicToolStallHeartbeat(threadID string) func() {
+-internal/apiserver/codexadapter/turn_tracker_helpers_heartbeat.go:func (a *Adapter) TouchTrackedTurnLastEvent(threadID string) {
+-internal/apiserver/codexadapter/turn_tracker_helpers.go:func (a *Adapter) trackerHelperState() TurnTrackerState {
+-internal/apiserver/codexadapter/turn_tracker_lifecycle.go:func (a *Adapter) BeginTrackedTurn(threadID, turnID string) string {
++internal/apiserver/codexadapter/turn_tracker_event_terminal.go:func (a *Adapter) CaptureAndInjectTurnSummary(threadID, eventType, method string, payload map[string]any) {
++internal/apiserver/codexadapter/turn_tracker_event_terminal.go:func (a *Adapter) FinalizeTrackedTurnEvent(
++internal/apiserver/codexadapter/turn_tracker_event_terminal.go:func (a *Adapter) LookupTrackedTurnSummary(threadID, turnID string) string {
++internal/apiserver/codexadapter/turn_tracker_event_terminal.go:func (a *Adapter) MaybeFinalizeTrackedTurn(threadID, eventType, method string, payload map[string]any) {
++internal/apiserver/codexadapter/turn_tracker_event_terminal.go:func (a *Adapter) RememberTrackedTurnSummary(threadID, turnID, summary string) {
+ internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:func (a *Adapter) CheckTurnStall(threadID string, turnID string) {
+ internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:func (a *Adapter) ExecuteStallAutoInterrupt(
+ internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:func (a *Adapter) handleStallGracePeriod(threadID, turnID string, silent, threshold time.Duration) {
+-internal/apiserver/codexadapter/turn_tracker_terminal.go:func (a *Adapter) CompleteTrackedTurnByID(threadID, turnID, status, reason string) (map[string]any, bool) {
+-internal/apiserver/codexadapter/turn_tracker_terminal.go:func (a *Adapter) HasActiveTrackedTurn(threadID string) bool {
+-internal/apiserver/codexadapter/turn_tracker_terminal.go:func (a *Adapter) MarkTrackedTurnInterruptRequested(threadID string) bool {
+-internal/apiserver/codexadapter/turn_tracker_terminal.go:func (a *Adapter) WaitTrackedTurnTerminal(threadID string, timeout time.Duration) (string, bool) {
++internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:func (a *Adapter) MarkTrackedTurnStallHint(threadID, turnID string) bool {
++internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:func (a *Adapter) PeekTrackedTurnMeta(threadID string) (string, time.Time, bool, bool) {
++internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:func (a *Adapter) SetStallHeartbeat(interval time.Duration) {
++internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:func (a *Adapter) SetStallThreshold(threshold time.Duration) {
++internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:func (a *Adapter) StallHeartbeat() time.Duration {
++internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:func (a *Adapter) StallThreshold() time.Duration {
++internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:func (a *Adapter) StartApprovalStallHeartbeat(threadID string) func() {
++internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:func (a *Adapter) StartDynamicToolStallHeartbeat(threadID string) func() {
++internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:func (a *Adapter) TouchTrackedTurnLastEvent(threadID string) {
++internal/apiserver/codexadapter/turn_tracker.go:func (a *Adapter) BeginTrackedTurn(threadID, turnID string) string {
++internal/apiserver/codexadapter/turn_tracker.go:func (a *Adapter) CompleteTrackedTurnByID(threadID, turnID, status, reason string) (map[string]any, bool) {
++internal/apiserver/codexadapter/turn_tracker.go:func (a *Adapter) EnsureTurnTrackerStateLocked() {
++internal/apiserver/codexadapter/turn_tracker.go:func (a *Adapter) HasActiveTrackedTurn(threadID string) bool {
++internal/apiserver/codexadapter/turn_tracker.go:func (a *Adapter) MarkTrackedTurnInterruptRequested(threadID string) bool {
++internal/apiserver/codexadapter/turn_tracker.go:func (a *Adapter) trackerHelperState() TurnTrackerState {
+ internal/apiserver/codexadapter/turn_tracker.go:func (a *Adapter) trackerNotify() func(string, any) {
+ internal/apiserver/codexadapter/turn_tracker.go:func (a *Adapter) trackerState() (map[string]*TrackedTurn, *sync.Mutex, time.Duration, time.Duration) {
+-internal/apiserver/codexadapter/with_thread.go:func (a *Adapter) resolveProcess(caller, threadID string) (*runner.AgentProcess, error) {
++internal/apiserver/codexadapter/turn_tracker.go:func (a *Adapter) WaitTrackedTurnTerminal(threadID string, timeout time.Duration) (string, bool) {
++internal/apiserver/codexadapter/turn_tracker.go:func (a *Adapter) withActiveTurn(threadID string, fn func(threadID string, turn *TrackedTurn, activeTurns map[string]*TrackedTurn) bool) bool {

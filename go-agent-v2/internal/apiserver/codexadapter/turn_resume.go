@@ -2,6 +2,8 @@ package codexadapter
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
@@ -47,8 +49,9 @@ func TryResumeCandidates(
 ) (string, error) {
 	if len(candidates) == 0 {
 		logger.Warn("thread/resume: no resume candidates available",
-			logger.FieldAgentID, fallbackID, logger.FieldThreadID, fallbackID,
-			"reason", "no codex thread ID resolved from history",
+			append(threadLogFields(fallbackID),
+				"reason", "no codex thread ID resolved from history",
+			)...,
 		)
 		return "", apperrors.Newf("tryResumeCandidates", "no resume candidates available for thread %s", fallbackID)
 	}
@@ -65,9 +68,10 @@ func TryResumeCandidates(
 		lastErr = err
 		if isCandidateError(err) {
 			logger.Warn("thread/resume: candidate unavailable, trying next",
-				logger.FieldAgentID, fallbackID, logger.FieldThreadID, fallbackID,
-				"resume_thread_id", id,
-				logger.FieldError, err,
+				append(threadLogFields(fallbackID),
+					"resume_thread_id", id,
+					logger.FieldError, err,
+				)...,
 			)
 			continue
 		}
@@ -75,10 +79,11 @@ func TryResumeCandidates(
 	}
 
 	logger.Warn("thread/resume: all resume candidates exhausted",
-		logger.FieldAgentID, fallbackID, logger.FieldThreadID, fallbackID,
-		"candidate_count", len(candidates),
-		"last_error", lastErr,
-		"reason", "all historical rollouts unavailable",
+		append(threadLogFields(fallbackID),
+			"candidate_count", len(candidates),
+			"last_error", lastErr,
+			"reason", "all historical rollouts unavailable",
+		)...,
 	)
 	if lastErr != nil {
 		return "", apperrors.Wrapf(lastErr, "tryResumeCandidates", "all resume candidates unavailable for thread %s after %d attempts", fallbackID, len(candidates))
@@ -141,4 +146,42 @@ func PreviewResumeCandidates(candidates []string, limit int) []string {
 	out := append([]string(nil), candidates[:limit]...)
 	out = append(out, fmt.Sprintf("...+%d more", len(candidates)-limit))
 	return out
+}
+
+// FuzzyFileSearch walks directories and returns fuzzy-matched file paths.
+func (a *Adapter) FuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern string) bool) []map[string]any {
+	query = strings.ToLower(query)
+	results := make([]map[string]any, 0)
+	if fuzzyMatch == nil {
+		return results
+	}
+
+	for _, root := range roots {
+		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				base := filepath.Base(path)
+				if strings.HasPrefix(base, ".") || base == "node_modules" || base == "vendor" || base == "__pycache__" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			rel, _ := filepath.Rel(root, path)
+			if fuzzyMatch(strings.ToLower(rel), query) {
+				results = append(results, map[string]any{
+					"root":     root,
+					"path":     rel,
+					"fileName": info.Name(),
+				})
+				if len(results) >= 100 {
+					return filepath.SkipAll
+				}
+			}
+			return nil
+		})
+	}
+
+	return results
 }

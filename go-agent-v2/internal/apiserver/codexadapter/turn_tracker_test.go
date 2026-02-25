@@ -4,7 +4,7 @@ package codexadapter
 import "testing"
 
 // ========================================
-// NormalizeTrackedTurnStatus
+// normalizeTrackedTurnStatus
 // ========================================
 
 func TestNormalizeTrackedTurnStatus(t *testing.T) {
@@ -30,16 +30,16 @@ func TestNormalizeTrackedTurnStatus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := NormalizeTrackedTurnStatus(tt.status)
+			got := normalizeTrackedTurnStatus(tt.status)
 			if got != tt.want {
-				t.Errorf("NormalizeTrackedTurnStatus(%q) = %q, want %q", tt.status, got, tt.want)
+				t.Errorf("normalizeTrackedTurnStatus(%q) = %q, want %q", tt.status, got, tt.want)
 			}
 		})
 	}
 }
 
 // ========================================
-// ThreadStatusTerminalFromPayload
+// threadStatusTerminalFromPayload
 // ========================================
 
 func TestThreadStatusTerminalFromPayload(t *testing.T) {
@@ -62,7 +62,7 @@ func TestThreadStatusTerminalFromPayload(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			status, reason, terminal := ThreadStatusTerminalFromPayload(tt.payload)
+			status, reason, terminal := threadStatusTerminalFromPayload(tt.payload)
 			if status != tt.wStatus || reason != tt.wReason || terminal != tt.terminal {
 				t.Errorf("got (%q, %q, %v), want (%q, %q, %v)",
 					status, reason, terminal, tt.wStatus, tt.wReason, tt.terminal)
@@ -72,98 +72,98 @@ func TestThreadStatusTerminalFromPayload(t *testing.T) {
 }
 
 // ========================================
-// TrackedTurnSummaryFromPayload
+// trackedTurnSummaryFromPayload
 // ========================================
 
 func TestTrackedTurnSummaryFromPayload(t *testing.T) {
-	if got := TrackedTurnSummaryFromPayload(nil); got != "" {
+	if got := trackedTurnSummaryFromPayload(nil); got != "" {
 		t.Errorf("nil: got %q", got)
 	}
 	p := map[string]any{"lastAgentMessage": "hello"}
-	if got := TrackedTurnSummaryFromPayload(p); got != "hello" {
+	if got := trackedTurnSummaryFromPayload(p); got != "hello" {
 		t.Errorf("top-level: got %q, want 'hello'", got)
 	}
 	p = map[string]any{"turn": map[string]any{"last_agent_message": "nested"}}
-	if got := TrackedTurnSummaryFromPayload(p); got != "nested" {
+	if got := trackedTurnSummaryFromPayload(p); got != "nested" {
 		t.Errorf("nested turn: got %q, want 'nested'", got)
 	}
 	p = map[string]any{"msg": map[string]any{"lastAgentMessage": "msg_nested"}}
-	if got := TrackedTurnSummaryFromPayload(p); got != "msg_nested" {
+	if got := trackedTurnSummaryFromPayload(p); got != "msg_nested" {
 		t.Errorf("nested msg: got %q, want 'msg_nested'", got)
 	}
 }
 
 // ========================================
-// ExtractTrackedTurnID / Status / Reason
+// extractTrackedTurnID / Status / Reason
 // ========================================
 
 func TestExtractTrackedTurnID(t *testing.T) {
-	if got := ExtractTrackedTurnID(nil); got != "" {
+	if got := extractTrackedTurnID(nil); got != "" {
 		t.Errorf("nil: got %q", got)
 	}
 	p := map[string]any{"turn": map[string]any{"id": "turn-123"}}
-	if got := ExtractTrackedTurnID(p); got != "turn-123" {
+	if got := extractTrackedTurnID(p); got != "turn-123" {
 		t.Errorf("turn.id: got %q, want 'turn-123'", got)
 	}
 	p = map[string]any{"turnId": "turn-456"}
-	if got := ExtractTrackedTurnID(p); got != "turn-456" {
+	if got := extractTrackedTurnID(p); got != "turn-456" {
 		t.Errorf("turnId: got %q, want 'turn-456'", got)
 	}
 }
 
 func TestExtractTrackedTurnStatus(t *testing.T) {
 	p := map[string]any{"turn": map[string]any{"status": "completed"}}
-	if got := ExtractTrackedTurnStatus(p); got != "completed" {
+	if got := extractTrackedTurnStatus(p); got != "completed" {
 		t.Errorf("turn.status: got %q", got)
 	}
 	p = map[string]any{"status": "failed"}
-	if got := ExtractTrackedTurnStatus(p); got != "failed" {
+	if got := extractTrackedTurnStatus(p); got != "failed" {
 		t.Errorf("status: got %q", got)
 	}
 }
 
 func TestExtractTrackedTurnReason(t *testing.T) {
 	p := map[string]any{"turn": map[string]any{"reason": "timeout"}}
-	if got := ExtractTrackedTurnReason(p); got != "timeout" {
+	if got := extractTrackedTurnReason(p); got != "timeout" {
 		t.Errorf("turn.reason: got %q", got)
 	}
 	p = map[string]any{"message": "some error"}
-	if got := ExtractTrackedTurnReason(p); got != "some error" {
+	if got := extractTrackedTurnReason(p); got != "some error" {
 		t.Errorf("message: got %q", got)
 	}
 }
 
 // ========================================
-// ExtractTrackedString
+// extractTrackedString
 // ========================================
 
 func TestExtractTrackedString(t *testing.T) {
-	if got := ExtractTrackedString(nil, "a"); got != "" {
+	if got := extractTrackedString(nil, "a"); got != "" {
 		t.Errorf("nil: got %q", got)
 	}
 	p := map[string]any{"a": "hello", "b": 123}
-	if got := ExtractTrackedString(p, "a"); got != "hello" {
+	if got := extractTrackedString(p, "a"); got != "hello" {
 		t.Errorf("a: got %q", got)
 	}
-	if got := ExtractTrackedString(p, "b"); got != "" {
+	if got := extractTrackedString(p, "b"); got != "" {
 		t.Errorf("non-string: got %q", got)
 	}
-	if got := ExtractTrackedString(p, "x", "a"); got != "hello" {
+	if got := extractTrackedString(p, "x", "a"); got != "hello" {
 		t.Errorf("fallback: got %q", got)
 	}
 }
 
 // ========================================
-// MergeTrackedTurnCompletionPayload
+// mergeTrackedTurnCompletionPayload
 // ========================================
 
 func TestMergeTrackedTurnCompletionPayload(t *testing.T) {
-	MergeTrackedTurnCompletionPayload(nil, map[string]any{"a": 1})
-	MergeTrackedTurnCompletionPayload(map[string]any{}, nil)
+	mergeTrackedTurnCompletionPayload(nil, map[string]any{"a": 1})
+	mergeTrackedTurnCompletionPayload(map[string]any{}, nil)
 
 	payload := map[string]any{"status": "running"}
 	completion := map[string]any{"status": "completed", "reason": "done"}
-	MergeTrackedTurnCompletionPayload(payload, completion)
+	mergeTrackedTurnCompletionPayload(payload, completion)
 	if payload["status"] != "completed" {
 		t.Errorf("status: got %v, want 'completed'", payload["status"])
 	}
@@ -177,7 +177,7 @@ func TestMergeTrackedTurnCompletionPayload(t *testing.T) {
 	completion = map[string]any{
 		"turn": map[string]any{"status": "completed", "reason": "done"},
 	}
-	MergeTrackedTurnCompletionPayload(payload, completion)
+	mergeTrackedTurnCompletionPayload(payload, completion)
 	turnObj := payload["turn"].(map[string]any)
 	if turnObj["id"] != "t1" {
 		t.Errorf("turn.id preserved: got %v", turnObj["id"])
@@ -191,20 +191,20 @@ func TestMergeTrackedTurnCompletionPayload(t *testing.T) {
 }
 
 // ========================================
-// InjectTrackedTurnSummary
+// injectTrackedTurnSummary
 // ========================================
 
 func TestInjectTrackedTurnSummary(t *testing.T) {
-	InjectTrackedTurnSummary(nil, "msg")
+	injectTrackedTurnSummary(nil, "msg")
 
 	p := map[string]any{}
-	InjectTrackedTurnSummary(p, "")
+	injectTrackedTurnSummary(p, "")
 	if _, ok := p["lastAgentMessage"]; ok {
 		t.Error("empty summary should not inject")
 	}
 
 	p = map[string]any{}
-	InjectTrackedTurnSummary(p, "hello")
+	injectTrackedTurnSummary(p, "hello")
 	if p["lastAgentMessage"] != "hello" {
 		t.Errorf("top-level: got %v", p["lastAgentMessage"])
 	}
@@ -215,15 +215,15 @@ func TestInjectTrackedTurnSummary(t *testing.T) {
 }
 
 // ========================================
-// TrackedTurnSummaryCacheKey
+// trackedTurnSummaryCacheKey
 // ========================================
 
 func TestTrackedTurnSummaryCacheKey(t *testing.T) {
-	key := TrackedTurnSummaryCacheKey("thread-1", "turn-1")
+	key := trackedTurnSummaryCacheKey("thread-1", "turn-1")
 	if key != "thread-1\x00turn-1" {
 		t.Errorf("got %q", key)
 	}
-	key = TrackedTurnSummaryCacheKey("  thread-1  ", "  ")
+	key = trackedTurnSummaryCacheKey("  thread-1  ", "  ")
 	if key != "thread-1\x00" {
 		t.Errorf("trimmed: got %q", key)
 	}

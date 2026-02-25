@@ -115,7 +115,54 @@ func resolveCodeReferenceFilePath(rawPath, project string, projects []string) (s
 			return abs, nil
 		}
 	}
-	return "", apperrors.Newf("Server.uiCodeOpen", "file not found: %s", path)
+
+	// Fallback: bare-filename recursive search under project roots.
+	// Only triggers for simple filenames (no path separator) to avoid
+	// expensive walks for paths that already include directory components.
+	if !strings.Contains(path, "/") && !strings.Contains(path, string(filepath.Separator)) {
+		if found := findFileRecursive(path, roots); found != "" {
+			return found, nil
+		}
+	}
+
+	// Build an actionable error message so the calling agent can self-correct.
+	hint := fmt.Sprintf(
+		"file not found: %s — use a project-relative path (e.g. internal/apiserver/%s) instead of a bare filename",
+		path, path,
+	)
+	if len(roots) > 0 {
+		hint += fmt.Sprintf("; searched roots: %s", strings.Join(roots, ", "))
+	}
+	return "", apperrors.New("Server.uiCodeOpen", hint)
+}
+
+// findFileRecursive walks the given roots to locate a file by basename.
+// It skips hidden directories, vendor, and node_modules to limit scope.
+func findFileRecursive(basename string, roots []string) string {
+	for _, root := range roots {
+		var found string
+		_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil // skip inaccessible entries
+			}
+			if d.IsDir() {
+				name := d.Name()
+				if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.Name() == basename {
+				found = path
+				return filepath.SkipAll // stop walking
+			}
+			return nil
+		})
+		if found != "" {
+			return found
+		}
+	}
+	return ""
 }
 
 func clampCodeContextLines(value int) int {

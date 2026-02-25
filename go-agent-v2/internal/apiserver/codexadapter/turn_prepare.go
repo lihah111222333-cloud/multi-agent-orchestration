@@ -91,7 +91,7 @@ func parseTurnInputs(inputs []contracts.TurnInput) parsedTurnInputs {
 				continue
 			}
 			images = append(images, image)
-			attachments = appendImageTimelineAttachment(attachments, BuildAttachmentName(image), image, image)
+			attachments = appendImageTimelineAttachment(attachments, buildAttachmentName(image), image, image)
 		case "localimage":
 			imagePath := strings.TrimSpace(inp.Path)
 			preview := strings.TrimSpace(inp.URL)
@@ -110,12 +110,12 @@ func parseTurnInputs(inputs []contracts.TurnInput) parsedTurnInputs {
 			if nameSource == "" {
 				nameSource = preview
 			}
-			attachments = appendImageTimelineAttachment(attachments, BuildAttachmentName(nameSource), imagePath, preview)
+			attachments = appendImageTimelineAttachment(attachments, buildAttachmentName(nameSource), imagePath, preview)
 		case "filecontent":
 			path := strings.TrimSpace(inp.Path)
 			if path != "" {
 				files = append(files, path)
-				attachments = appendFileTimelineAttachment(attachments, BuildAttachmentName(path), path)
+				attachments = appendFileTimelineAttachment(attachments, buildAttachmentName(path), path)
 				continue
 			}
 			if inline := commonadapter.FileContentInputText(inp.Name, inp.Content); inline != "" {
@@ -135,7 +135,7 @@ func parseTurnInputs(inputs []contracts.TurnInput) parsedTurnInputs {
 				continue
 			}
 			files = append(files, path)
-			attachments = appendFileTimelineAttachment(attachments, BuildAttachmentName(path), path)
+			attachments = appendFileTimelineAttachment(attachments, buildAttachmentName(path), path)
 		case "skill":
 			// 技能注入统一由 selectedSkills 处理，避免透传输入中的摘要内容。
 		}
@@ -176,12 +176,12 @@ func appendFileTimelineAttachment(
 	})
 }
 
-func ExtractTurnInputs(inputs []contracts.TurnInput) (prompt string, images, files []string) {
+func extractTurnInputs(inputs []contracts.TurnInput) (prompt string, images, files []string) {
 	parsed := parseTurnInputs(inputs)
 	return parsed.Prompt, parsed.Images, parsed.Files
 }
 
-func BuildAttachmentName(path string) string {
+func buildAttachmentName(path string) string {
 	value := strings.TrimSpace(path)
 	if value == "" {
 		return ""
@@ -214,31 +214,31 @@ func BuildAttachmentName(path string) string {
 	return base
 }
 
-// BuildAttachmentPreviewURL preserves compatibility for apiserver helper call sites.
-func BuildAttachmentPreviewURL(path string) string {
+// buildAttachmentPreviewURL preserves compatibility for apiserver helper call sites.
+func buildAttachmentPreviewURL(path string) string {
 	return util.BuildAttachmentPreviewURL(path)
 }
 
-func BuildUserTimelineAttachments(images, files []string) []uistate.TimelineAttachment {
+func buildUserTimelineAttachments(images, files []string) []uistate.TimelineAttachment {
 	attachments := make([]uistate.TimelineAttachment, 0, len(images)+len(files))
 	for _, raw := range images {
 		path := strings.TrimSpace(raw)
 		if path == "" {
 			continue
 		}
-		attachments = appendImageTimelineAttachment(attachments, BuildAttachmentName(path), path, path)
+		attachments = appendImageTimelineAttachment(attachments, buildAttachmentName(path), path, path)
 	}
 	for _, raw := range files {
 		path := strings.TrimSpace(raw)
 		if path == "" {
 			continue
 		}
-		attachments = appendFileTimelineAttachment(attachments, BuildAttachmentName(path), path)
+		attachments = appendFileTimelineAttachment(attachments, buildAttachmentName(path), path)
 	}
 	return attachments
 }
 
-func BuildUserTimelineAttachmentsFromInputs(inputs []contracts.TurnInput) []uistate.TimelineAttachment {
+func buildUserTimelineAttachmentsFromInputs(inputs []contracts.TurnInput) []uistate.TimelineAttachment {
 	parsed := parseTurnInputs(inputs)
 	if len(parsed.TimelineAttachments) == 0 {
 		return nil
@@ -256,7 +256,7 @@ func (a *Adapter) appendTurnStartUserTimeline(
 		return
 	}
 	if len(attachments) == 0 {
-		attachments = BuildUserTimelineAttachments(opt.Images, opt.Files)
+		attachments = buildUserTimelineAttachments(opt.Images, opt.Files)
 	}
 	showInjected := a.showInjectedPromptInChat(ctx)
 	appendInjectedHint := showInjected && !a.threadTimelineAlreadyShowsInjectedPrompt(opt.ThreadID)

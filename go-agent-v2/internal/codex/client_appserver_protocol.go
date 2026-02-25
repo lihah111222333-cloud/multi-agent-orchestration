@@ -279,12 +279,7 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 		}
 		turnID := strings.TrimSpace(c.getActiveTurnID())
 		tryTurnInterrupt := func(turnScope string) error {
-			params := map[string]any{
-				"threadId": threadID,
-			}
-			if turnScope == "with_turn_id" {
-				params["turnId"] = turnID
-			}
+			params := buildTurnInterruptParams(threadID, turnID, turnScope)
 			_, err := c.call("turn/interrupt", params, appServerInterruptTimeout)
 			return err
 		}
@@ -370,19 +365,25 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 			)
 			return nil
 		}
-		if !isMethodNotFoundRPCError(err) {
-			logger.Warn("codex: interruptConversation FAILED",
+		if isMethodNotFoundRPCError(err) {
+			logger.Warn("codex: interruptConversation unsupported, fallback to slash command",
 				logger.FieldAgentID, c.AgentID,
 				logger.FieldThreadID, threadID,
 				logger.FieldError, err,
 			)
-			return err
+		} else if isRPCTimeoutError(err) {
+			logger.Warn("codex: interruptConversation timed out, fallback to slash command",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldThreadID, threadID,
+				logger.FieldError, err,
+			)
+		} else {
+			logger.Warn("codex: interruptConversation FAILED, fallback to slash command",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldThreadID, threadID,
+				logger.FieldError, err,
+			)
 		}
-		logger.Warn("codex: interruptConversation unsupported, fallback to slash command",
-			logger.FieldAgentID, c.AgentID,
-			logger.FieldThreadID, threadID,
-			logger.FieldError, err,
-		)
 	}
 	threadID := strings.TrimSpace(c.ThreadID)
 	command := strings.TrimSpace(cmd)
@@ -427,6 +428,25 @@ func isInvalidParamsRPCError(err error) bool {
 	}
 	text := strings.ToLower(err.Error())
 	return strings.Contains(text, "invalid params") || strings.Contains(text, "code -32602")
+}
+
+func isRPCTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(text, " timeout") || strings.HasSuffix(text, "timeout")
+}
+
+func buildTurnInterruptParams(threadID, turnID, turnScope string) map[string]any {
+	interruptTurnID := strings.TrimSpace(turnID)
+	if strings.EqualFold(strings.TrimSpace(turnScope), "thread_scoped") {
+		interruptTurnID = ""
+	}
+	return map[string]any{
+		"threadId": strings.TrimSpace(threadID),
+		"turnId":   interruptTurnID,
+	}
 }
 
 func isInterruptTurnIDMismatchError(err error) bool {

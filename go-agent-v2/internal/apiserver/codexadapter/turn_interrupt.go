@@ -48,6 +48,14 @@ func isInterruptNoActiveTurnError(err error) bool {
 		strings.Contains(message, "not interruptible")
 }
 
+func isInterruptTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(message, "timeout") || strings.Contains(message, "deadline exceeded")
+}
+
 // isInterruptActiveState reports whether current state is still active.
 func isInterruptActiveState(state string) bool {
 	s := normalizeInterruptState(state)
@@ -210,6 +218,22 @@ func (a *Adapter) TurnInterrupt(threadID string) (any, error) {
 	return withProcess(a, "Server.turnInterrupt", threadID, func(proc *runner.AgentProcess) (any, error) {
 		noActiveTurn, err := a.sendInterruptCommand(proc)
 		if err != nil {
+			if !activeBefore && !activeTrackedBefore && isInterruptTimeoutError(err) {
+				logger.Info("turn/interrupt: timeout with no active state, treating as no active turn",
+					append(threadLogFields(threadID),
+						"state_before", beforeState,
+						logger.FieldError, err,
+						logger.FieldDurationMS, time.Since(start).Milliseconds(),
+					)...,
+				)
+				return map[string]any{
+					"confirmed":     false,
+					"mode":          "no_active_turn",
+					"interruptSent": false,
+					"stateBefore":   beforeState,
+					"stateAfter":    beforeState,
+				}, nil
+			}
 			logger.Warn("turn/interrupt: send command failed",
 				append(threadLogFields(threadID),
 					logger.FieldError, err,

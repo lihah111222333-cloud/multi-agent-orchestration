@@ -163,11 +163,12 @@ func (c *AppServerClient) handleRPCResponse(msg jsonRPCMessage) bool {
 	if msg.ID == nil || msg.Method != "" {
 		return false
 	}
-	value, ok := c.pending.Load(*msg.ID)
+	reqID := msg.ID.clone()
+	value, ok := c.pending.Load(reqID.pendingKey())
 	if !ok {
 		logger.Warn("codex: orphan RPC response (no pending call)",
 			logger.FieldAgentID, c.AgentID,
-			logger.FieldID, *msg.ID,
+			logger.FieldID, reqID.logValue(),
 			"result_len", len(msg.Result),
 		)
 		return true
@@ -177,7 +178,7 @@ func (c *AppServerClient) handleRPCResponse(msg jsonRPCMessage) bool {
 		pc.resolve(nil, apperrors.Newf("AppServerClient.readLoop", "rpc error: %s (code %d)", msg.Error.Message, msg.Error.Code))
 		logger.Warn("codex: RPC error response",
 			logger.FieldAgentID, c.AgentID,
-			logger.FieldID, *msg.ID,
+			logger.FieldID, reqID.logValue(),
 			"code", msg.Error.Code,
 			"message", msg.Error.Message,
 		)
@@ -201,21 +202,26 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 		return false
 	}
 	if msg.ID != nil && msg.Method != "" {
-		event.RequestID = msg.ID
-		reqID := *msg.ID
+		reqID := msg.ID.clone()
+		event.RequestID = reqID.int64Ptr()
+		event.RequestIDRaw = reqID.rawCopy()
 		event.RespondFunc = func(code int, message string) error {
-			return c.RespondError(reqID, code, message)
+			return c.respondErrorWithID(reqID, code, message)
+		}
+		event.RespondResultFunc = func(result any) error {
+			return c.respondWithID(reqID, result)
 		}
 		logger.Debug("codex: server request received",
 			logger.FieldAgentID, c.AgentID,
-			logger.FieldID, *msg.ID,
+			logger.FieldID, reqID.logValue(),
 			logger.FieldMethod, msg.Method,
 			logger.FieldEventType, event.Type,
 		)
 	}
 	conversationID := extractConversationIDFromEventParams(msg.Params)
 	boundThreadID := strings.TrimSpace(c.ThreadID)
-	if conversationID != "" && boundThreadID != "" && !strings.EqualFold(conversationID, boundThreadID) {
+	mismatch := conversationID != "" && boundThreadID != "" && !strings.EqualFold(conversationID, boundThreadID)
+	if mismatch {
 		// MCP startup events are global (not bound to a specific conversation),
 		// so mismatch is expected — log at DEBUG to reduce noise.
 		logFn := logger.Warn
@@ -230,6 +236,16 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 			"conversation_id", conversationID,
 			logger.FieldTurnID, c.getActiveTurnID(),
 		)
+		if !isMCPStartupMethod(msg.Method) {
+			logger.Warn("codex: dropping mismatched thread-scoped event",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldMethod, msg.Method,
+				logger.FieldEventType, event.Type,
+				logger.FieldThreadID, boundThreadID,
+				"conversation_id", conversationID,
+			)
+			return false
+		}
 	}
 	// 跟踪活跃 turn 生命周期
 	c.trackTurnLifecycle(event, msg.Method)
@@ -303,6 +319,19 @@ func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 				"prev_turn_id", activeTurnID,
 			)
 		}
+	case "thread/status/changed":
+		if activeTurnID == "" {
+			return
+		}
+		if status, terminal := threadStatusChangedTerminalState(event.Data); terminal {
+			c.clearActiveTurnID()
+			logger.Debug("codex: active turn cleared by thread/status/changed terminal state",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldMethod, method,
+				"thread_status", status,
+				"prev_turn_id", activeTurnID,
+			)
+		}
 	default:
 		if activeTurnID != "" && isTurnTailProgressEvent(event.Type, method) {
 			logger.Debug("codex: active turn observed progress event without terminal yet",
@@ -329,6 +358,35 @@ func isTurnTailProgressEvent(eventType, method string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func threadStatusChangedTerminalState(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+		return "", false
+	}
+
+	var statusType string
+	switch status := payload["status"].(type) {
+	case string:
+		statusType = strings.ToLower(strings.TrimSpace(status))
+	case map[string]any:
+		statusType = strings.ToLower(strings.TrimSpace(trimmedStringValue(status["type"])))
+	}
+
+	if statusType == "" {
+		return "", false
+	}
+
+	switch statusType {
+	case "idle", "systemerror", "system_error", "error", "notloaded", "not_loaded":
+		return statusType, true
+	default:
+		return statusType, false
 	}
 }
 
@@ -757,8 +815,20 @@ func extractConversationIDFromEventParams(raw json.RawMessage) string {
 	if value := trimmedStringValue(payload["conversation_id"]); value != "" {
 		return value
 	}
+	if value := trimmedStringValue(payload["threadId"]); value != "" {
+		return value
+	}
+	if value := trimmedStringValue(payload["thread_id"]); value != "" {
+		return value
+	}
 	if thread, ok := payload["thread"].(map[string]any); ok {
 		if value := trimmedStringValue(thread["id"]); value != "" {
+			return value
+		}
+		if value := trimmedStringValue(thread["threadId"]); value != "" {
+			return value
+		}
+		if value := trimmedStringValue(thread["thread_id"]); value != "" {
 			return value
 		}
 	}

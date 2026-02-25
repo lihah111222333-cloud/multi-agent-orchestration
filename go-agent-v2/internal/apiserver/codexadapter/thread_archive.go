@@ -49,7 +49,7 @@ type threadArchiveRestoreNotice struct {
 
 const prefThreadArchivesChat = "threadArchives.chat"
 
-func (a *Adapter) loadThreadArchiveMap(ctx context.Context) (map[string]int64, error) {
+func (a *Adapter) loadThreadArchiveMapFromStore(ctx context.Context) (map[string]int64, error) {
 	archivedMap := map[string]int64{}
 	store := a.store()
 	if store != nil {
@@ -59,15 +59,41 @@ func (a *Adapter) loadThreadArchiveMap(ctx context.Context) (map[string]int64, e
 		}
 		archivedMap = NormalizeThreadArchiveMap(value)
 	}
-	if len(archivedMap) > 0 {
-		return archivedMap, nil
+	return archivedMap, nil
+}
+
+func mergeThreadArchiveMaps(dst map[string]int64, src map[string]int64) map[string]int64 {
+	if dst == nil {
+		dst = map[string]int64{}
+	}
+	for id, at := range src {
+		trimmedID := strings.TrimSpace(id)
+		if trimmedID == "" || at <= 0 {
+			continue
+		}
+		if current, ok := dst[trimmedID]; !ok || at > current {
+			dst[trimmedID] = at
+		}
+	}
+	return dst
+}
+
+func (a *Adapter) loadThreadArchiveMap(ctx context.Context) (map[string]int64, error) {
+	archivedMap, err := a.loadThreadArchiveMapFromStore(ctx)
+	if err != nil {
+		return nil, err
 	}
 	fromDisk, err := loadThreadArchiveMapFromDisk()
 	if err != nil {
 		logger.Warn("thread/archive: scan archive root failed", logger.FieldError, err)
 		return archivedMap, nil
 	}
-	return fromDisk, nil
+	return mergeThreadArchiveMaps(archivedMap, fromDisk), nil
+}
+
+// ThreadArchiveMap returns merged archived thread mapping from preference and archive dir.
+func (a *Adapter) ThreadArchiveMap(ctx context.Context) (map[string]int64, error) {
+	return a.loadThreadArchiveMap(ctx)
 }
 
 func loadThreadArchiveMapFromDisk() (map[string]int64, error) {
@@ -203,7 +229,7 @@ func (a *Adapter) updateThreadArchiveMap(ctx context.Context, update func(map[st
 	if store == nil {
 		return nil
 	}
-	archivedMap, err := a.loadThreadArchiveMap(ctx)
+	archivedMap, err := a.loadThreadArchiveMapFromStore(ctx)
 	if err != nil {
 		return err
 	}

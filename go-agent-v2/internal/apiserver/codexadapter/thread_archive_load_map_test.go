@@ -69,3 +69,24 @@ func TestParseArchiveTimestamp(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeThreadArchiveMaps(t *testing.T) {
+	base := map[string]int64{
+		"thread-a": 100,
+	}
+	disk := map[string]int64{
+		"thread-a": 120,
+		"thread-b": 80,
+		"":         999,
+	}
+	got := mergeThreadArchiveMaps(base, disk)
+	if got["thread-a"] != 120 {
+		t.Fatalf("thread-a merged=%d, want %d", got["thread-a"], int64(120))
+	}
+	if got["thread-b"] != 80 {
+		t.Fatalf("thread-b merged=%d, want %d", got["thread-b"], int64(80))
+	}
+	if _, ok := got[""]; ok {
+		t.Fatalf("unexpected empty-thread entry in merged map: %v", got)
+	}
+}

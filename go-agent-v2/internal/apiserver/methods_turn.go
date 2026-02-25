@@ -79,14 +79,16 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 
 type turnSteerParams struct {
 	ThreadID             string      `json:"threadId"`
+	ExpectedTurnID       string      `json:"expectedTurnId"`
 	Input                []UserInput `json:"input"`
 	SelectedSkills       []string    `json:"selectedSkills,omitempty"`
 	ManualSkillSelection bool        `json:"manualSkillSelection,omitempty"`
 }
 
 func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, error) {
-	return s.codexAdapter.TurnSteerFromInput(contracts.TurnSteerRequest{
+	return s.codexAdapter.TurnSteerFromInputAligned(contracts.TurnSteerRequest{
 		ThreadID:             p.ThreadID,
+		ExpectedTurnID:       p.ExpectedTurnID,
 		Input:                toCodexTurnInputs(p.Input),
 		SelectedSkills:       p.SelectedSkills,
 		ManualSkillSelection: p.ManualSkillSelection,

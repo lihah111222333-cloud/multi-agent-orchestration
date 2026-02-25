@@ -525,6 +525,7 @@ export const UnifiedChatPage = {
     const threadRailDragging = ref(false);
     const activityPanelDragging = ref(false);
     const copyState = ref('idle');
+    const recoveringSelected = ref(false);
     let scrollTimer = 0;
     let copyStateTimer = 0;
     let offFilesDropped = () => { };
@@ -1608,6 +1609,37 @@ export const UnifiedChatPage = {
       }
     }
 
+    async function recoverSelected() {
+      const threadId = (selectedThreadId.value || '').toString().trim();
+      if (!threadId || recoveringSelected.value) return;
+      recoveringSelected.value = true;
+      logInfo('ui', 'chat.recover.request', { thread_id: threadId });
+      try {
+        if (typeof props.threadStore.recoverThread === 'function') {
+          await props.threadStore.recoverThread(threadId);
+        } else {
+          await callAPI('thread/recover', { threadId });
+        }
+        logInfo('ui', 'chat.recover.done', { thread_id: threadId });
+        if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+          window.alert('已触发进程恢复，请等待连接重建。');
+        }
+      } catch (error) {
+        logWarn('ui', 'chat.recover.failed', {
+          thread_id: threadId,
+          error,
+        });
+        if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+          const detail = (error && typeof error === 'object' && error.message)
+            ? error.message
+            : String(error || 'unknown error');
+          window.alert(`进程恢复失败: ${detail}`);
+        }
+      } finally {
+        recoveringSelected.value = false;
+      }
+    }
+
     function selectThread(threadId) {
       selectedThreadId.value = threadId;
     }
@@ -2408,6 +2440,7 @@ export const UnifiedChatPage = {
       compactResultText,
       compactResultTone,
       canInterrupt,
+      recoveringSelected,
       displayStatusText,
       noActiveThread,
       copyButtonLabel,
@@ -2446,6 +2479,7 @@ export const UnifiedChatPage = {
       interruptCurrent,
       compactCurrent,
       forceCompleteCurrent,
+      recoverSelected,
       setCmdLayout,
       setCmdCardCols,
       copySelectedThreadId,
@@ -2581,6 +2615,22 @@ export const UnifiedChatPage = {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M4 20h4l10-10a2.2 2.2 0 0 0-3.1-3.1L4.9 16.8 4 20z"></path>
             <path d="M13.8 7.2l3 3"></path>
+          </svg>
+        </button>
+        <button
+          v-if="!isCmd"
+          class="btn btn-ghost btn-xs btn-warning chat-toolbar-icon-btn"
+          data-testid="recover-agent-button"
+          :disabled="recoveringSelected || !selectedThreadId"
+          :aria-label="recoveringSelected ? '恢复中' : (selectedThreadId ? '进程恢复' : '请先选择会话')"
+          :title="recoveringSelected ? '进程恢复中…' : (selectedThreadId ? '手动杀进程并恢复连接' : '请先选择会话')"
+          @click="recoverSelected"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 12a8 8 0 1 1-2.3-5.6"></path>
+            <path d="M20 4v5h-5"></path>
+            <path d="M12 9v6"></path>
+            <path d="M9 12h6"></path>
           </svg>
         </button>
         <div v-if="!isCmd" class="chat-status" :title="selectedThreadId || '未选择会话'">

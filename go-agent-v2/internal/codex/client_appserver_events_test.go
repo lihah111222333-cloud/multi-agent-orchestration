@@ -94,7 +94,7 @@ func TestHandleRPCEventDropsMismatchedThreadScopedEvent(t *testing.T) {
 	handled := 0
 	c.SetEventHandler(func(Event) { handled++ })
 
-	data, err := json.Marshal(map[string]any{"threadId": "thread-b", "status": "idle"})
+	data, err := json.Marshal(map[string]any{"threadId": "thread-b", "status": "active"})
 	if err != nil {
 		t.Fatalf("marshal failed: %v", err)
 	}
@@ -105,6 +105,29 @@ func TestHandleRPCEventDropsMismatchedThreadScopedEvent(t *testing.T) {
 	}
 	if got := c.getActiveTurnID(); got != "turn-a" {
 		t.Fatalf("expected active turn unchanged, got %q", got)
+	}
+	if handled != 0 {
+		t.Fatalf("expected handler not called on mismatch, got %d", handled)
+	}
+}
+
+func TestHandleRPCEventMismatchedTerminalRecoversTurnLifecycle(t *testing.T) {
+	c := &AppServerClient{AgentID: "agent-1", ThreadID: "thread-a"}
+	c.setActiveTurnID("turn-a")
+	handled := 0
+	c.SetEventHandler(func(Event) { handled++ })
+
+	data, err := json.Marshal(map[string]any{"threadId": "thread-b", "status": "idle"})
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	shutdown := c.handleRPCEvent(jsonRPCMessage{Method: "thread/status/changed", Params: data})
+	if shutdown {
+		t.Fatalf("unexpected shutdown=true")
+	}
+	if got := c.getActiveTurnID(); got != "" {
+		t.Fatalf("expected active turn cleared by mismatched terminal event, got %q", got)
 	}
 	if handled != 0 {
 		t.Fatalf("expected handler not called on mismatch, got %d", handled)

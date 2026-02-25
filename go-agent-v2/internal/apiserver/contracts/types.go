@@ -79,6 +79,7 @@ type TurnSteerEntryPrepareResult struct {
 // TurnSteerRequest carries protocol params for turn/steer.
 type TurnSteerRequest struct {
 	ThreadID             string
+	ExpectedTurnID       string
 	Input                []TurnInput
 	SelectedSkills       []string
 	ManualSkillSelection bool

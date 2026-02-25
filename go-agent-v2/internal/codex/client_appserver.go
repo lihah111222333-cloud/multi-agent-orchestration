@@ -114,6 +114,12 @@ type AppServerClient struct {
 
 	// legacy mirror 丢弃计数: 用于采样日志输出。
 	legacyMirrorDropCount atomic.Int64
+
+	// 连接健康状态: 用于重连观测、熔断、升级恢复策略。
+	healthMu sync.Mutex
+	health   appServerConnectionHealth
+	// 防止并发执行多次 respawn recovery。
+	respawnRecoverInFlight atomic.Bool
 }
 
 const (
@@ -127,10 +133,21 @@ const (
 	defaultAppServerReadIdleTimeout  = 600 * time.Second
 	defaultAppServerStreamMaxRetries = 5
 	maxAppServerStreamMaxRetries     = 100
+
+	appServerCircuitBreakerWindow    = 30 * time.Second
+	appServerCircuitBreakerCooldown  = 8 * time.Second
+	appServerCircuitBreakerThreshold = 4
+
+	appServerRespawnEscalationWindow    = 20 * time.Second
+	appServerRespawnEscalationThreshold = 3
 )
 
-var appServerReadIdleTimeout = appServerReadIdleTimeoutFromEnv()
+var appServerReadIdleTimeoutMs atomic.Int64
 var appServerStreamMaxRetries = appServerStreamMaxRetriesFromEnv()
+
+func init() {
+	setAppServerReadIdleTimeout(appServerReadIdleTimeoutFromEnv())
+}
 
 func appServerReadIdleTimeoutFromEnv() time.Duration {
 	raw := strings.TrimSpace(os.Getenv("GO_AGENT_APP_SERVER_STREAM_IDLE_TIMEOUT_MS"))
@@ -146,6 +163,37 @@ func appServerReadIdleTimeoutFromEnv() time.Duration {
 		return defaultAppServerReadIdleTimeout
 	}
 	return time.Duration(ms) * time.Millisecond
+}
+
+func currentAppServerReadIdleTimeout() time.Duration {
+	ms := appServerReadIdleTimeoutMs.Load()
+	if ms <= 0 {
+		return defaultAppServerReadIdleTimeout
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func setAppServerReadIdleTimeout(timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+	appServerReadIdleTimeoutMs.Store(timeout.Milliseconds())
+}
+
+// SetAppServerReadIdleTimeout updates stream read-idle timeout for all app-server clients.
+func SetAppServerReadIdleTimeout(timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+	setAppServerReadIdleTimeout(timeout)
+	logger.Info("codex: stream read idle timeout updated",
+		"timeout_ms", timeout.Milliseconds(),
+	)
+}
+
+// GetAppServerReadIdleTimeout returns current stream read-idle timeout.
+func GetAppServerReadIdleTimeout() time.Duration {
+	return currentAppServerReadIdleTimeout()
 }
 
 func appServerStreamMaxRetriesFromEnv() int {

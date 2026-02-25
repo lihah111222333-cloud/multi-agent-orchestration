@@ -122,6 +122,27 @@ func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (a
 	}, nil
 }
 
+type threadRecoverResponse struct {
+	Thread    threadInfo `json:"thread"`
+	Recovered bool       `json:"recovered"`
+	Mode      string     `json:"mode"`
+}
+
+func (s *Server) threadRecoverTyped(ctx context.Context, p threadIDParams) (any, error) {
+	result, err := s.codexAdapter.ThreadRecover(ctx, p.ThreadID)
+	if err != nil {
+		return nil, err
+	}
+	return threadRecoverResponse{
+		Thread: threadInfo{
+			ID:     result.ThreadID,
+			Status: result.Status,
+		},
+		Recovered: result.Recovered,
+		Mode:      result.Mode,
+	}, nil
+}
+
 func (s *Server) threadArchiveTyped(ctx context.Context, p threadIDParams) (any, error) {
 	return s.codexAdapter.ThreadArchive(ctx, p.ThreadID)
 }
@@ -160,7 +181,8 @@ func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams
 
 // threadListResponse thread/list 响应。
 type threadListResponse struct {
-	Threads []contracts.ThreadListItem `json:"threads"`
+	Data       []contracts.ThreadListItem `json:"data"`
+	NextCursor *string                    `json:"nextCursor"`
 }
 
 func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error) {
@@ -168,12 +190,13 @@ func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	return threadListResponse{Threads: threads}, nil
+	return threadListResponse{Data: threads, NextCursor: nil}, nil
 }
 
 // threadLoadedListResponse thread/loaded/list 响应。
 type threadLoadedListResponse struct {
-	Threads []contracts.ThreadListItem `json:"threads"`
+	Data       []string `json:"data"`
+	NextCursor *string  `json:"nextCursor"`
 }
 
 func (s *Server) threadLoadedList(ctx context.Context, _ json.RawMessage) (any, error) {
@@ -181,7 +204,18 @@ func (s *Server) threadLoadedList(ctx context.Context, _ json.RawMessage) (any, 
 	if err != nil {
 		return nil, err
 	}
-	return threadLoadedListResponse{Threads: threads}, nil
+	return threadLoadedListResponse{Data: threadIDsFromListItems(threads), NextCursor: nil}, nil
+}
+
+func threadIDsFromListItems(items []contracts.ThreadListItem) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	return ids
 }
 
 func (s *Server) threadReadTyped(ctx context.Context, p threadIDParams) (any, error) {

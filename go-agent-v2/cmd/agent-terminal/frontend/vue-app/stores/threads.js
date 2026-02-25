@@ -1223,6 +1223,38 @@ async function stopThread(threadId) {
   };
 }
 
+async function recoverThread(threadId) {
+  const id = (threadId || '').toString().trim();
+  if (!id) {
+    return {
+      recovered: false,
+      mode: 'no_thread',
+    };
+  }
+  const start = perfNow();
+  logInfo('thread', 'recover.start', {
+    thread_id: id,
+  });
+  try {
+    const result = await callAPI('thread/recover', { threadId: id });
+    await syncRuntimeState();
+    logInfo('thread', 'recover.done', {
+      thread_id: id,
+      recovered: Boolean(result?.recovered),
+      mode: (result?.mode || '').toString(),
+      duration_ms: Math.round(perfNow() - start),
+    });
+    return result;
+  } catch (error) {
+    logWarn('thread', 'recover.failed', {
+      thread_id: id,
+      error,
+      duration_ms: Math.round(perfNow() - start),
+    });
+    throw error;
+  }
+}
+
 async function loadMessages(threadId, limit = 300) {
   if (!threadId) return;
   const start = perfNow();
@@ -1627,6 +1659,7 @@ export function useThreadStore() {
     startThread,
 
     stopThread,
+    recoverThread,
     compactThread,
     forceCompleteThread,
     loadMessages,

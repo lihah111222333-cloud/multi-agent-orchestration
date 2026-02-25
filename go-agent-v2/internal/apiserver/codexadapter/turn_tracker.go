@@ -267,6 +267,19 @@ func (a *Adapter) hasActiveTrackedTurn(threadID string) bool {
 	})
 }
 
+// activeTrackedTurnID returns current tracked turn id for a thread.
+func (a *Adapter) activeTrackedTurnID(threadID string) (string, bool) {
+	turnID := ""
+	ok := a.withActiveTurn(threadID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
+		turnID = strings.TrimSpace(turn.ID)
+		return turnID != ""
+	})
+	if !ok || turnID == "" {
+		return "", false
+	}
+	return turnID, true
+}
+
 // markTrackedTurnInterruptRequested marks interrupt intent on current tracked turn.
 func (a *Adapter) markTrackedTurnInterruptRequested(threadID string) bool {
 	return a.withActiveTurn(threadID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {

@@ -165,6 +165,7 @@ func TestP4ThreadTurnRegisteredRoutesDelegateToCodexAdapter(t *testing.T) {
 	checks := []string{
 		"threadStartTyped",
 		"threadResumeTyped",
+		"threadRecoverTyped",
 		"threadForkTyped",
 		"threadArchiveTyped",
 		"threadUnarchiveTyped",
@@ -260,6 +261,7 @@ func TestP4ThreadTurnRouteSetRemainsStable(t *testing.T) {
 		"thread/name/set",
 		"thread/personality/set",
 		"thread/read",
+		"thread/recover",
 		"thread/resolve",
 		"thread/resume",
 		"thread/rollback",
@@ -285,6 +287,7 @@ func TestP4ThreadTurnRouteBindingsRemainDelegates(t *testing.T) {
 	want := map[string]string{
 		"thread/start":                     "threadStartTyped",
 		"thread/resume":                    "threadResumeTyped",
+		"thread/recover":                   "threadRecoverTyped",
 		"thread/fork":                      "threadForkTyped",
 		"thread/archive":                   "threadArchiveTyped",
 		"thread/unarchive":                 "threadUnarchiveTyped",

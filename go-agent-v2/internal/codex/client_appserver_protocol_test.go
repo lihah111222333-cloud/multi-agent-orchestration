@@ -1,6 +1,11 @@
 package codex
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestBuildTurnInterruptParams(t *testing.T) {
 	t.Run("with_turn_id", func(t *testing.T) {
@@ -47,6 +52,158 @@ func TestIsRPCTimeoutError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEnsureListenerWithAutoInitializeRetriesAfterNotInitialized(t *testing.T) {
+	calls := 0
+	initCalls := 0
+	rpcCall := func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+		_ = method
+		_ = params
+		_ = timeout
+		calls++
+		if calls == 1 {
+			return nil, testError("rpc error: Not initialized (code -32600)")
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+	}
+	initFn := func() error {
+		initCalls++
+		return nil
+	}
+
+	resolvedID, retriedAfterInit, err := ensureListenerWithAutoInitialize("thread-1", rpcCall, initFn)
+	if err != nil {
+		t.Fatalf("ensureListenerWithAutoInitialize() err = %v", err)
+	}
+	if resolvedID != "thread-1" {
+		t.Fatalf("resolvedID = %q, want thread-1", resolvedID)
+	}
+	if !retriedAfterInit {
+		t.Fatal("retriedAfterInit = false, want true")
+	}
+	if calls != 2 {
+		t.Fatalf("rpc calls = %d, want 2", calls)
+	}
+	if initCalls != 1 {
+		t.Fatalf("initialize calls = %d, want 1", initCalls)
+	}
+}
+
+func TestEnsureListenerWithAutoInitializeInitFailure(t *testing.T) {
+	calls := 0
+	rpcCall := func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+		_ = method
+		_ = params
+		_ = timeout
+		calls++
+		return nil, testError("rpc error: Not initialized (code -32600)")
+	}
+	initFn := func() error { return testError("init failed") }
+
+	_, retriedAfterInit, err := ensureListenerWithAutoInitialize("thread-1", rpcCall, initFn)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !retriedAfterInit {
+		t.Fatal("retriedAfterInit = false, want true")
+	}
+	if !strings.Contains(err.Error(), "initialize") {
+		t.Fatalf("error = %q, want contains initialize", err.Error())
+	}
+	if calls != 1 {
+		t.Fatalf("rpc calls = %d, want 1", calls)
+	}
+}
+
+func TestCallWithNotInitializedRecovery(t *testing.T) {
+	t.Run("retry_after_initialize", func(t *testing.T) {
+		calls := 0
+		initCalls := 0
+		rpcCall := func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+			_ = method
+			_ = params
+			_ = timeout
+			calls++
+			if calls == 1 {
+				return nil, testError("rpc error: Not initialized (code -32600)")
+			}
+			return json.RawMessage(`{"ok":true}`), nil
+		}
+		initializeFn := func() error {
+			initCalls++
+			return nil
+		}
+
+		result, recovered, err := callWithNotInitializedRecovery(rpcCall, initializeFn, "turn/interrupt", nil, time.Second)
+		if err != nil {
+			t.Fatalf("callWithNotInitializedRecovery() err = %v", err)
+		}
+		if !recovered {
+			t.Fatal("recovered = false, want true")
+		}
+		if string(result) != `{"ok":true}` {
+			t.Fatalf("unexpected result: %s", string(result))
+		}
+		if calls != 2 {
+			t.Fatalf("rpc calls = %d, want 2", calls)
+		}
+		if initCalls != 1 {
+			t.Fatalf("initialize calls = %d, want 1", initCalls)
+		}
+	})
+
+	t.Run("initialize_failure", func(t *testing.T) {
+		calls := 0
+		rpcCall := func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+			_ = method
+			_ = params
+			_ = timeout
+			calls++
+			return nil, testError("rpc error: Not initialized (code -32600)")
+		}
+		initializeFn := func() error { return testError("init failed") }
+
+		_, recovered, err := callWithNotInitializedRecovery(rpcCall, initializeFn, "turn/interrupt", nil, time.Second)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !recovered {
+			t.Fatal("recovered = false, want true")
+		}
+		if !strings.Contains(err.Error(), "initialize") {
+			t.Fatalf("error = %q, want contains initialize", err.Error())
+		}
+		if calls != 1 {
+			t.Fatalf("rpc calls = %d, want 1", calls)
+		}
+	})
+
+	t.Run("non_not_initialized_no_retry", func(t *testing.T) {
+		calls := 0
+		rpcCall := func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+			_ = method
+			_ = params
+			_ = timeout
+			calls++
+			return nil, testError("rpc error: code -32601 method not found")
+		}
+		initializeFn := func() error {
+			t.Fatal("initialize should not be called")
+			return nil
+		}
+
+		_, recovered, err := callWithNotInitializedRecovery(rpcCall, initializeFn, "turn/interrupt", nil, time.Second)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if recovered {
+			t.Fatal("recovered = true, want false")
+		}
+		if calls != 1 {
+			t.Fatalf("rpc calls = %d, want 1", calls)
+		}
+	})
 }
 
 type testError string

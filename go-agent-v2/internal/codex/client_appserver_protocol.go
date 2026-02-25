@@ -178,6 +178,63 @@ func ensureListenerViaThreadResume(
 	return resolvedID, nil
 }
 
+func isNotInitializedRPCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "not initialized")
+}
+
+func ensureListenerWithAutoInitialize(
+	threadID string,
+	rpcCall func(method string, params any, timeout time.Duration) (json.RawMessage, error),
+	initializeFn func() error,
+) (resolvedID string, retriedAfterInit bool, err error) {
+	resolvedID, err = ensureListenerViaThreadResume(threadID, rpcCall)
+	if err == nil {
+		return resolvedID, false, nil
+	}
+	if !isNotInitializedRPCError(err) || initializeFn == nil {
+		return "", false, err
+	}
+	if initErr := initializeFn(); initErr != nil {
+		return "", true, apperrors.Wrap(initErr, "ensureListenerWithAutoInitialize", "initialize")
+	}
+	resolvedID, err = ensureListenerViaThreadResume(threadID, rpcCall)
+	if err != nil {
+		return "", true, err
+	}
+	return resolvedID, true, nil
+}
+
+func callWithNotInitializedRecovery(
+	rpcCall func(method string, params any, timeout time.Duration) (json.RawMessage, error),
+	initializeFn func() error,
+	method string,
+	params any,
+	timeout time.Duration,
+) (json.RawMessage, bool, error) {
+	if rpcCall == nil {
+		return nil, false, apperrors.New("callWithNotInitializedRecovery", "rpc call func is nil")
+	}
+	result, err := rpcCall(method, params, timeout)
+	if err == nil || !isNotInitializedRPCError(err) {
+		return result, false, err
+	}
+	if initializeFn == nil {
+		return nil, false, err
+	}
+	if initErr := initializeFn(); initErr != nil {
+		return nil, true, apperrors.Wrap(initErr, "callWithNotInitializedRecovery", "initialize")
+	}
+	retryResult, retryErr := rpcCall(method, params, timeout)
+	if retryErr != nil {
+		return nil, true, retryErr
+	}
+	return retryResult, true, nil
+}
+
 func (c *AppServerClient) ensureListenerIfNeeded(
 	trigger string,
 	rpcCall func(method string, params any, timeout time.Duration) (json.RawMessage, error),
@@ -198,7 +255,7 @@ func (c *AppServerClient) ensureListenerIfNeeded(
 	if callFn == nil {
 		callFn = c.call
 	}
-	resolvedID, err := ensureListenerViaThreadResume(threadID, callFn)
+	resolvedID, retriedAfterInit, err := ensureListenerWithAutoInitialize(threadID, callFn, c.Initialize)
 	if err != nil {
 		if isMethodNotFoundRPCError(err) || isInvalidParamsRPCError(err) {
 			c.listenerEnsureNeeded.Store(false)
@@ -217,6 +274,13 @@ func (c *AppServerClient) ensureListenerIfNeeded(
 			logger.FieldError, err,
 		)
 		return
+	}
+	if retriedAfterInit {
+		logger.Info("codex: listener ensure recovered via initialize",
+			logger.FieldAgentID, c.AgentID,
+			logger.FieldThreadID, threadID,
+			"trigger", strings.TrimSpace(trigger),
+		)
 	}
 
 	if strings.EqualFold(strings.TrimSpace(c.ThreadID), threadID) {
@@ -280,7 +344,15 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 		turnID := strings.TrimSpace(c.getActiveTurnID())
 		tryTurnInterrupt := func(turnScope string) error {
 			params := buildTurnInterruptParams(threadID, turnID, turnScope)
-			_, err := c.call("turn/interrupt", params, appServerInterruptTimeout)
+			_, recovered, err := callWithNotInitializedRecovery(c.call, c.Initialize, "turn/interrupt", params, appServerInterruptTimeout)
+			if recovered {
+				logger.Info("codex: turn/interrupt recovered via initialize",
+					logger.FieldAgentID, c.AgentID,
+					logger.FieldThreadID, threadID,
+					logger.FieldTurnID, turnID,
+					"turn_scope", strings.TrimSpace(turnScope),
+				)
+			}
 			return err
 		}
 
@@ -355,9 +427,15 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 			}
 		}
 
-		_, err := c.call("interruptConversation", map[string]any{
+		_, recovered, err := callWithNotInitializedRecovery(c.call, c.Initialize, "interruptConversation", map[string]any{
 			"conversationId": threadID,
 		}, appServerInterruptTimeout)
+		if recovered {
+			logger.Info("codex: interruptConversation recovered via initialize",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldThreadID, threadID,
+			)
+		}
 		if err == nil {
 			logger.Info("codex: interruptConversation OK",
 				logger.FieldAgentID, c.AgentID,

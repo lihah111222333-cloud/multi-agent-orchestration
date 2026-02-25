@@ -32,13 +32,17 @@ func initRuntimeWiring(s *Server) {
 }
 
 func applyStallConfig(s *Server, cfg *appconfig.Config) {
-	if s == nil || s.codexAdapter == nil || cfg == nil {
+	if s == nil || cfg == nil {
 		return
 	}
 	if cfg.StallThresholdSec > 0 {
-		s.codexAdapter.SetStallThreshold(time.Duration(cfg.StallThresholdSec) * time.Second)
+		threshold := time.Duration(cfg.StallThresholdSec) * time.Second
+		if s.codexAdapter != nil {
+			s.codexAdapter.SetStallThreshold(threshold)
+			s.codexAdapter.SetStreamReadIdleTimeout(threshold)
+		}
 	}
-	if cfg.StallHeartbeatSec > 0 {
+	if s.codexAdapter != nil && cfg.StallHeartbeatSec > 0 {
 		s.codexAdapter.SetStallHeartbeat(time.Duration(cfg.StallHeartbeatSec) * time.Second)
 	}
 }

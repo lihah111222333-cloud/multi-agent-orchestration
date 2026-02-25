@@ -91,9 +91,9 @@ func (c *AppServerClient) dialWS(ctx context.Context) (*websocket.Conn, error) {
 	if conn == nil {
 		return nil, apperrors.New("AppServerClient.dialWS", "dial returned nil websocket connection")
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(appServerReadIdleTimeout))
+	_ = conn.SetReadDeadline(time.Now().Add(currentAppServerReadIdleTimeout()))
 	conn.SetPongHandler(func(string) error {
-		_ = conn.SetReadDeadline(time.Now().Add(appServerReadIdleTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(currentAppServerReadIdleTimeout()))
 		return nil
 	})
 	return conn, nil
@@ -181,6 +181,33 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 	if maxRetries <= 0 {
 		maxRetries = 0
 	}
+	now := time.Now()
+	if remaining, health := c.circuitRemaining(now); remaining > 0 {
+		c.emitBackgroundEvent("Reconnect paused (circuit breaker)", "reconnecting", true, false, map[string]any{
+			"phase":               "reconnect",
+			"trigger":             trigger,
+			"activeTurnId":        activeTurnID,
+			"circuit_remaining":   remaining.Milliseconds(),
+			"read_failure_streak": health.ReadFailureStreak,
+			"read_errors_window":  health.ReadErrorsWindow,
+		})
+		logger.Warn("codex: reconnect paused by circuit breaker",
+			logger.FieldAgentID, c.AgentID,
+			"trigger", trigger,
+			"circuit_remaining_ms", remaining.Milliseconds(),
+			"read_failure_streak", health.ReadFailureStreak,
+			"read_errors_window", health.ReadErrorsWindow,
+		)
+		if !c.sleepWithContext(remaining) {
+			return false
+		}
+	}
+	if c.shouldPreferRespawn(time.Now()) {
+		if c.recoverByRespawn(trigger, activeTurnID, "read_error_burst", lastErr) {
+			return true
+		}
+	}
+
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if c.stopped.Load() {
 			return false
@@ -202,6 +229,9 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 		}
 	}
 
+	if c.recoverByRespawn(trigger, activeTurnID, "reconnect_exhausted", lastErr) {
+		return true
+	}
 	c.handleReconnectExhausted(trigger, activeTurnID, maxRetries, lastErr)
 	return false
 }
@@ -209,6 +239,7 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 // attemptSingleReconnect tries a single WebSocket reconnection.
 // Returns true if reconnection succeeded.
 func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, attempt, maxRetries int) bool {
+	c.noteReconnectAttempt(time.Now())
 	c.emitBackgroundEvent(
 		"Reconnecting...",
 		"reconnecting",
@@ -226,23 +257,31 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 	conn, err := c.dialWS(c.ctx)
 	if err != nil {
 		retryErr := apperrors.Wrap(err, "AppServerClient.reconnectWS", "dial reconnect")
+		health := c.noteReconnectFailure(time.Now())
 		willRetry := attempt < maxRetries
 		reconnectMessage := fmt.Sprintf("Reconnecting... %d/%d", attempt, maxRetries)
 		if !willRetry {
 			reconnectMessage = fmt.Sprintf("Reconnect failed %d/%d", attempt, maxRetries)
 		}
-		c.emitStreamError(retryErr, "reconnect", false, willRetry, map[string]any{
+		details := map[string]any{
 			"message":      reconnectMessage,
 			"attempt":      attempt,
 			"max_retries":  maxRetries,
 			"trigger":      trigger,
 			"activeTurnId": activeTurnID,
-		})
+		}
+		for key, value := range health.asDetailsMap() {
+			details[key] = value
+		}
+		c.emitStreamError(retryErr, "reconnect", false, willRetry, details)
 		logger.Warn("codex: ws reconnect attempt failed",
 			logger.FieldAgentID, c.AgentID,
 			"trigger", trigger,
 			"attempt", attempt,
 			"max_retries", maxRetries,
+			"reconnect_failure_streak", health.ReconnectFailureStreak,
+			"circuit_open", health.CircuitOpen,
+			"circuit_remaining_ms", health.CircuitRemainingMs,
 			logger.FieldTurnID, activeTurnID,
 			logger.FieldError, retryErr,
 		)
@@ -253,17 +292,19 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 	c.listenerEnsureNeeded.Store(true)
 	c.ensureListenerIfNeededAsync("reconnect", c.call)
 	util.SafeGo(func() { c.pingLoop(conn) })
+	health := c.noteReconnectSuccess(time.Now())
 	c.emitBackgroundEvent(
 		"Reconnected",
 		"completed",
 		false,
 		true,
 		map[string]any{
-			"phase":        "reconnect",
-			"trigger":      trigger,
-			"attempt":      attempt,
-			"max_retries":  maxRetries,
-			"activeTurnId": activeTurnID,
+			"phase":                     "reconnect",
+			"trigger":                   trigger,
+			"attempt":                   attempt,
+			"max_retries":               maxRetries,
+			"activeTurnId":              activeTurnID,
+			"total_reconnect_successes": health.TotalReconnectSuccess,
 		},
 	)
 	logger.Info("codex: ws reconnected",
@@ -271,13 +312,161 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 		"trigger", trigger,
 		"attempt", attempt,
 		"max_retries", maxRetries,
+		"reconnect_failure_streak", health.ReconnectFailureStreak,
+		"total_reconnect_successes", health.TotalReconnectSuccess,
 		logger.FieldTurnID, activeTurnID,
 	)
 	return true
 }
 
+func (c *AppServerClient) restartProcessAndReconnect() error {
+	if err := c.Kill(); err != nil {
+		logger.Warn("codex: restart recovery kill failed",
+			logger.FieldAgentID, c.AgentID,
+			logger.FieldError, err,
+		)
+	}
+	if c.stderrCollector != nil {
+		_ = c.stderrCollector.Close()
+		c.stderrCollector = nil
+	}
+
+	spawnCtx, cancel := context.WithTimeout(c.ctx, appServerStartupProbeTimeout)
+	defer cancel()
+	if err := c.Spawn(spawnCtx); err != nil {
+		return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "spawn")
+	}
+	conn, err := c.dialWS(c.ctx)
+	if err != nil {
+		return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "dial ws")
+	}
+	c.replaceWSConn(conn)
+	util.SafeGo(func() { c.pingLoop(conn) })
+	return nil
+}
+
+func (c *AppServerClient) recoverByRespawn(trigger, activeTurnID, reason string, lastErr error) bool {
+	if !c.respawnRecoverInFlight.CompareAndSwap(false, true) {
+		logger.Debug("codex: respawn recovery skipped (already in-flight)",
+			logger.FieldAgentID, c.AgentID,
+			"trigger", trigger,
+			"reason", strings.TrimSpace(reason),
+		)
+		return false
+	}
+	defer c.respawnRecoverInFlight.Store(false)
+
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "reconnect_recovery"
+	}
+	c.emitBackgroundEvent("Recovering connection (restart app-server)...", "reconnecting", true, false, map[string]any{
+		"phase":        "reconnect",
+		"reason":       reason,
+		"trigger":      trigger,
+		"activeTurnId": activeTurnID,
+	})
+	logger.Warn("codex: reconnect escalation to process restart",
+		logger.FieldAgentID, c.AgentID,
+		"trigger", trigger,
+		"reason", reason,
+		logger.FieldTurnID, activeTurnID,
+		logger.FieldError, lastErr,
+	)
+	threadID := strings.TrimSpace(c.ThreadID)
+
+	if err := c.restartProcessAndReconnect(); err != nil {
+		health := c.noteRespawnResult(time.Now(), false)
+		c.emitStreamError(err, "reconnect", false, false, map[string]any{
+			"message":                "Reconnect recovery failed",
+			"trigger":                trigger,
+			"reason":                 reason,
+			"activeTurnId":           activeTurnID,
+			"total_respawn_failures": health.TotalRespawnFailure,
+		})
+		logger.Warn("codex: process restart recovery failed",
+			logger.FieldAgentID, c.AgentID,
+			"trigger", trigger,
+			"reason", reason,
+			"total_respawn_failures", health.TotalRespawnFailure,
+			logger.FieldError, err,
+		)
+		return false
+	}
+
+	health := c.noteRespawnResult(time.Now(), true)
+	c.listenerEnsureNeeded.Store(threadID != "")
+	util.SafeGo(func() {
+		if err := c.Initialize(); err != nil {
+			logger.Warn("codex: restart recovery initialize failed",
+				logger.FieldAgentID, c.AgentID,
+				"trigger", trigger,
+				"reason", reason,
+				logger.FieldError, err,
+			)
+			return
+		}
+		if threadID == "" {
+			return
+		}
+		if err := c.ResumeThread(ResumeThreadRequest{ThreadID: threadID}); err != nil {
+			logger.Warn("codex: restart recovery resume failed",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldThreadID, threadID,
+				"trigger", trigger,
+				"reason", reason,
+				logger.FieldError, err,
+			)
+			return
+		}
+		logger.Info("codex: restart recovery initialize/resume completed",
+			logger.FieldAgentID, c.AgentID,
+			logger.FieldThreadID, threadID,
+			"trigger", trigger,
+			"reason", reason,
+		)
+	})
+	c.emitBackgroundEvent("Reconnected after restart", "completed", false, true, map[string]any{
+		"phase":                   "reconnect",
+		"reason":                  reason,
+		"trigger":                 trigger,
+		"activeTurnId":            activeTurnID,
+		"total_respawn_successes": health.TotalRespawnSuccess,
+	})
+	logger.Info("codex: reconnected via process restart",
+		logger.FieldAgentID, c.AgentID,
+		"trigger", trigger,
+		"reason", reason,
+		"total_respawn_successes", health.TotalRespawnSuccess,
+		logger.FieldTurnID, activeTurnID,
+	)
+	return true
+}
+
+// RecoverConnection forces a process restart recovery flow for manual UI recovery.
+func (c *AppServerClient) RecoverConnection(reason string) error {
+	if c == nil {
+		return apperrors.New("AppServerClient.RecoverConnection", "client is nil")
+	}
+	if c.stopped.Load() {
+		return apperrors.New("AppServerClient.RecoverConnection", "client is stopped")
+	}
+	if c.respawnRecoverInFlight.Load() {
+		return apperrors.New("AppServerClient.RecoverConnection", "recovery already in progress")
+	}
+	recoveryReason := strings.TrimSpace(reason)
+	if recoveryReason == "" {
+		recoveryReason = "manual_recover"
+	}
+	if ok := c.recoverByRespawn("manual", c.getActiveTurnID(), recoveryReason, nil); !ok {
+		return apperrors.New("AppServerClient.RecoverConnection", "manual recovery failed")
+	}
+	return nil
+}
+
 // handleReconnectExhausted emits failure events after all reconnection attempts are exhausted.
 func (c *AppServerClient) handleReconnectExhausted(trigger, activeTurnID string, maxRetries int, lastErr error) {
+	_, health := c.circuitRemaining(time.Now())
 	exhausted := map[string]any{
 		"phase":       "reconnect",
 		"trigger":     trigger,
@@ -290,11 +479,17 @@ func (c *AppServerClient) handleReconnectExhausted(trigger, activeTurnID string,
 	if activeTurnID != "" {
 		exhausted["activeTurnId"] = activeTurnID
 	}
+	for key, value := range health.asDetailsMap() {
+		exhausted[key] = value
+	}
 	c.emitBackgroundEvent("Reconnect failed", "failed", false, true, exhausted)
 	logger.Warn("codex: ws reconnect exhausted",
 		logger.FieldAgentID, c.AgentID,
 		"trigger", trigger,
 		"max_retries", maxRetries,
+		"reconnect_failure_streak", health.ReconnectFailureStreak,
+		"circuit_open", health.CircuitOpen,
+		"circuit_remaining_ms", health.CircuitRemainingMs,
 		logger.FieldTurnID, activeTurnID,
 		logger.FieldError, lastErr,
 	)

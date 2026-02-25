@@ -54,6 +54,7 @@ func uiPreferencesSet(s *Server, ctx context.Context, p uiPrefSetParams) (any, e
 		if sec := asPositiveInt(p.Value, 30); sec > 0 {
 			if s.codexAdapter != nil {
 				s.codexAdapter.SetStallThreshold(time.Duration(sec) * time.Second)
+				s.codexAdapter.SetStreamReadIdleTimeout(time.Duration(sec) * time.Second)
 			}
 			logger.Info("stall threshold updated via ui/preferences/set", "seconds", sec)
 		}

@@ -39,6 +39,7 @@ func (s *Server) registerMethods() {
 
 	s.methods["thread/start"] = typedHandler(s.threadStartTyped)
 	s.methods["thread/resume"] = typedHandler(s.threadResumeTyped)
+	s.methods["thread/recover"] = typedHandler(s.threadRecoverTyped)
 	s.methods["thread/fork"] = typedHandler(s.threadForkTyped)
 	s.methods["thread/archive"] = typedHandler(s.threadArchiveTyped)
 	s.methods["thread/unarchive"] = typedHandler(s.threadUnarchiveTyped)

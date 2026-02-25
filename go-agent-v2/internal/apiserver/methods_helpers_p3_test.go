@@ -62,6 +62,7 @@ func TestP3CodexEntryMethodsDelegateToCodexAdapter(t *testing.T) {
 		"turnForceComplete",
 		"reviewStartTyped",
 		"threadResumeTyped",
+		"threadRecoverTyped",
 		"threadNameSetTyped",
 		"threadRollbackTyped",
 		"threadMessagesTyped",

@@ -49,10 +49,11 @@ func (c *AppServerClient) readLoop() {
 			// 收到有效消息 = 连接活跃, 重置 idle deadline。
 			// 注意: 必须用循环内的 conn 局部变量, 不能用 c.currentWSConn(),
 			// 因为 reconnect 后 c.ws 已指向新 conn。
-			_ = conn.SetReadDeadline(time.Now().Add(appServerReadIdleTimeout))
+			_ = conn.SetReadDeadline(time.Now().Add(currentAppServerReadIdleTimeout()))
 		}
 		if err != nil {
 			readErr := apperrors.Wrap(err, "AppServerClient.readLoop", "read message")
+			health, shouldRespawn, openedCircuit := c.noteReadFailure(time.Now())
 			c.failPendingCalls(readErr)
 			if !c.stopped.Load() {
 				willRetry := appServerStreamMaxRetries > 0
@@ -60,12 +61,16 @@ func (c *AppServerClient) readLoop() {
 				if !willRetry {
 					reconnectingMessage = "Stream disconnected"
 				}
-				c.emitStreamError(readErr, "read", isIdleTimeoutError(err), willRetry, map[string]any{
+				details := map[string]any{
 					"message":     reconnectingMessage,
 					"attempt":     0,
 					"max_retries": appServerStreamMaxRetries,
 					"trigger":     "read_error",
-				})
+				}
+				for key, value := range health.asDetailsMap() {
+					details[key] = value
+				}
+				c.emitStreamError(readErr, "read", isIdleTimeoutError(err), willRetry, details)
 			}
 			if c.stopped.Load() && isShutdownReadError(err) {
 				logger.Debug("codex: readLoop read failed (shutdown)",
@@ -77,13 +82,24 @@ func (c *AppServerClient) readLoop() {
 					logger.FieldAgentID, c.AgentID,
 					logger.FieldTurnID, c.getActiveTurnID(),
 					"idle_timeout", isIdleTimeoutError(err),
+					"read_failure_streak", health.ReadFailureStreak,
+					"read_errors_window", health.ReadErrorsWindow,
+					"reconnect_failure_streak", health.ReconnectFailureStreak,
+					"circuit_open", health.CircuitOpen,
+					"circuit_remaining_ms", health.CircuitRemainingMs,
+					"should_respawn", shouldRespawn,
+					"opened_circuit", openedCircuit,
 					logger.FieldError, readErr,
 				)
 			}
 			if c.stopped.Load() {
 				return
 			}
-			if c.reconnectWS("read_error", readErr) {
+			trigger := "read_error"
+			if shouldRespawn {
+				trigger = "read_error_burst"
+			}
+			if c.reconnectWS(trigger, readErr) {
 				continue
 			}
 			return
@@ -176,6 +192,25 @@ func (c *AppServerClient) handleRPCResponse(msg jsonRPCMessage) bool {
 	pc := value.(*pendingCall)
 	if msg.Error != nil {
 		pc.resolve(nil, apperrors.Newf("AppServerClient.readLoop", "rpc error: %s (code %d)", msg.Error.Message, msg.Error.Code))
+		notInitialized := msg.Error.Code == -32600 && strings.Contains(strings.ToLower(strings.TrimSpace(msg.Error.Message)), "not initialized")
+		if notInitialized {
+			health, shouldRecover := c.noteNotInitializedRPC(time.Now())
+			logger.Warn("codex: RPC not initialized",
+				logger.FieldAgentID, c.AgentID,
+				logger.FieldID, reqID.logValue(),
+				"not_initialized_streak", health.NotInitializedStreak,
+				"total_not_initialized", health.TotalNotInitialized,
+				"should_recover", shouldRecover,
+			)
+			if shouldRecover && !c.stopped.Load() {
+				recoverErr := apperrors.Newf("AppServerClient.readLoop", "rpc not initialized (code %d)", msg.Error.Code)
+				if c.reconnectWS("rpc_not_initialized", recoverErr) {
+					logger.Info("codex: recovered after repeated not initialized rpc",
+						logger.FieldAgentID, c.AgentID,
+					)
+				}
+			}
+		}
 		logger.Warn("codex: RPC error response",
 			logger.FieldAgentID, c.AgentID,
 			logger.FieldID, reqID.logValue(),
@@ -237,6 +272,16 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 			logger.FieldTurnID, c.getActiveTurnID(),
 		)
 		if !isMCPStartupMethod(msg.Method) {
+			if shouldRecoverLifecycleOnMismatchedConversation(event, msg.Method, c.getActiveTurnID()) {
+				c.trackTurnLifecycle(event, msg.Method)
+				logger.Warn("codex: recovered turn lifecycle from mismatched event",
+					logger.FieldAgentID, c.AgentID,
+					logger.FieldMethod, msg.Method,
+					logger.FieldEventType, event.Type,
+					logger.FieldThreadID, boundThreadID,
+					"conversation_id", conversationID,
+				)
+			}
 			logger.Warn("codex: dropping mismatched thread-scoped event",
 				logger.FieldAgentID, c.AgentID,
 				logger.FieldMethod, msg.Method,
@@ -343,6 +388,23 @@ func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 			)
 		}
 	}
+}
+
+func shouldRecoverLifecycleOnMismatchedConversation(event Event, method, activeTurnID string) bool {
+	if strings.TrimSpace(activeTurnID) == "" {
+		return false
+	}
+	switch event.Type {
+	case EventTurnComplete, "turn_aborted", EventIdle, EventError, EventShutdownComplete:
+		return true
+	case EventStreamError:
+		return !streamErrorWillRetry(event.Data)
+	}
+	if strings.EqualFold(strings.TrimSpace(method), "thread/status/changed") {
+		_, terminal := threadStatusChangedTerminalState(event.Data)
+		return terminal
+	}
+	return false
 }
 
 func isTurnTailProgressEvent(eventType, method string) bool {

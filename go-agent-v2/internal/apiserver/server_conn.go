@@ -20,6 +20,12 @@ type wsOutbound struct {
 	data    []byte
 }
 
+const (
+	connWriteTimeout    = 10 * time.Second
+	connPingInterval    = 20 * time.Second
+	connReadIdleTimeout = 75 * time.Second
+)
+
 // connEntry WebSocket 连接 + 写锁 (gorilla/websocket 不安全并发写)。
 type connEntry struct {
 	ws        *websocket.Conn
@@ -41,7 +47,7 @@ func newConnEntry(ws *websocket.Conn) *connEntry {
 func (c *connEntry) writeMsg(msgType int, data []byte) error {
 	c.wrMu.Lock()
 	defer c.wrMu.Unlock()
-	_ = c.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = c.ws.SetWriteDeadline(time.Now().Add(connWriteTimeout))
 	return c.ws.WriteMessage(msgType, data)
 }
 
@@ -83,6 +89,14 @@ func (c *connEntry) writeLoop() error {
 			}
 		}
 	}
+}
+
+func (c *connEntry) writePing() error {
+	c.wrMu.Lock()
+	defer c.wrMu.Unlock()
+	deadline := time.Now().Add(connWriteTimeout)
+	_ = c.ws.SetWriteDeadline(deadline)
+	return c.ws.WriteControl(websocket.PingMessage, []byte("ping"), deadline)
 }
 
 // checkLocalOrigin 仅允许 localhost 来源的 WebSocket 连接。
@@ -334,6 +348,11 @@ func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
 
 	// 消息大小限制
 	ws.SetReadLimit(maxMessageSize)
+	_ = ws.SetReadDeadline(time.Now().Add(connReadIdleTimeout))
+	ws.SetPongHandler(func(string) error {
+		_ = ws.SetReadDeadline(time.Now().Add(connReadIdleTimeout))
+		return nil
+	})
 
 	connID := allocConnIDState(s)
 	entry := newConnEntry(ws)
@@ -344,6 +363,7 @@ func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
 			disconnectConn(s, connID)
 		}
 	})
+	util.SafeGo(func() { pingConnLoop(s, entry, connID) })
 
 	logger.Info("app-server: client connected", logger.FieldConn, connID, logger.FieldRemote, r.RemoteAddr)
 
@@ -354,6 +374,29 @@ func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
 	}()
 
 	readLoop(s, r.Context(), entry, connID)
+}
+
+func pingConnLoop(s *Server, entry *connEntry, connID string) {
+	if s == nil || entry == nil {
+		return
+	}
+	ticker := time.NewTicker(connPingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-entry.closeCh:
+			return
+		case <-ticker.C:
+			if err := entry.writePing(); err != nil {
+				logger.Warn("app-server: ping failed, disconnecting client",
+					logger.FieldConn, connID,
+					logger.FieldError, err,
+				)
+				disconnectConn(s, connID)
+				return
+			}
+		}
+	}
 }
 
 // rpcEnvelope 统一信封: 一次 Unmarshal 路由所有消息类型。
@@ -445,6 +488,7 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 			}
 			return
 		}
+		_ = entry.ws.SetReadDeadline(time.Now().Add(connReadIdleTimeout))
 
 		// 单次 Unmarshal: 路由 + 延迟解析
 		var env rpcEnvelope

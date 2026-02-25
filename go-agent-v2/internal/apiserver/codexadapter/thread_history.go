@@ -10,31 +10,29 @@ import (
 
 const defaultHistoryLookupTimeout = 3 * time.Second
 
-// ThreadExistsInHistoryOptions configures history-existence checks.
-type ThreadExistsInHistoryOptions struct {
-	ThreadID              string
-	Timeout               time.Duration
-	IsLikelyCodexThreadID func(string) bool
-	FindBindingByAgentID  func(context.Context, string) (bool, error)
-	GetAgentStatusByID    func(context.Context, string) (bool, error)
-	LoadThreadArchiveMap  func(context.Context) (map[string]int64, error)
-}
-
 // ThreadExistsInHistory checks whether a thread exists in runtime history sources.
-func ThreadExistsInHistory(ctx context.Context, opt ThreadExistsInHistoryOptions) bool {
-	id := strings.TrimSpace(opt.ThreadID)
+func ThreadExistsInHistory(
+	ctx context.Context,
+	threadID string,
+	timeout time.Duration,
+	isLikelyCodexThreadID func(string) bool,
+	findBindingByAgentID func(context.Context, string) (bool, error),
+	getAgentStatusByID func(context.Context, string) (bool, error),
+	loadThreadArchiveMap func(context.Context) (map[string]int64, error),
+) bool {
+	id := strings.TrimSpace(threadID)
 	if id == "" {
 		return false
 	}
-	if opt.IsLikelyCodexThreadID != nil && opt.IsLikelyCodexThreadID(id) {
+	if isLikelyCodexThreadID != nil && isLikelyCodexThreadID(id) {
 		return true
 	}
 	ctx = ensureContext(ctx)
-	timeout := normalizeHistoryTimeout(opt.Timeout)
+	timeout = normalizeHistoryTimeout(timeout)
 
-	if opt.FindBindingByAgentID != nil {
+	if findBindingByAgentID != nil {
 		dbCtx, cancel := context.WithTimeout(ctx, timeout)
-		found, err := opt.FindBindingByAgentID(dbCtx, id)
+		found, err := findBindingByAgentID(dbCtx, id)
 		cancel()
 		if err != nil {
 			logger.Warn("turn/start: check thread history from agent_codex_binding failed",
@@ -46,9 +44,9 @@ func ThreadExistsInHistory(ctx context.Context, opt ThreadExistsInHistoryOptions
 		}
 	}
 
-	if opt.GetAgentStatusByID != nil {
+	if getAgentStatusByID != nil {
 		dbCtx, cancel := context.WithTimeout(ctx, timeout)
-		found, err := opt.GetAgentStatusByID(dbCtx, id)
+		found, err := getAgentStatusByID(dbCtx, id)
 		cancel()
 		if err != nil {
 			logger.Warn("turn/start: check thread history from agent_status failed",
@@ -60,9 +58,9 @@ func ThreadExistsInHistory(ctx context.Context, opt ThreadExistsInHistoryOptions
 		}
 	}
 
-	if opt.LoadThreadArchiveMap != nil {
+	if loadThreadArchiveMap != nil {
 		dbCtx, cancel := context.WithTimeout(ctx, timeout)
-		archivedMap, err := opt.LoadThreadArchiveMap(dbCtx)
+		archivedMap, err := loadThreadArchiveMap(dbCtx)
 		cancel()
 		if err != nil {
 			logger.Warn("turn/start: check thread history from threadArchives.chat failed",
@@ -78,12 +76,7 @@ func ThreadExistsInHistory(ctx context.Context, opt ThreadExistsInHistoryOptions
 }
 
 // ThreadExistsInHistory checks whether a thread exists in historical sources via adapter context stores.
-func (a *Adapter) ThreadExistsInHistory(
-	ctx context.Context,
-	threadID string,
-	isLikelyCodexThreadID func(string) bool,
-	loadThreadArchiveMap func(context.Context) (map[string]int64, error),
-) bool {
+func (a *Adapter) ThreadExistsInHistory(ctx context.Context, threadID string) bool {
 	var findBindingByAgentID func(context.Context, string) (bool, error)
 	var getAgentStatusByID func(context.Context, string) (bool, error)
 	if a != nil && a.ctx != nil {
@@ -106,39 +99,41 @@ func (a *Adapter) ThreadExistsInHistory(
 			}
 		}
 	}
-	return ThreadExistsInHistory(ctx, ThreadExistsInHistoryOptions{
-		ThreadID:              threadID,
-		IsLikelyCodexThreadID: isLikelyCodexThreadID,
-		FindBindingByAgentID:  findBindingByAgentID,
-		GetAgentStatusByID:    getAgentStatusByID,
-		LoadThreadArchiveMap:  loadThreadArchiveMap,
-	})
-}
-
-// ResolveCodexThreadCandidatesOptions configures codex-thread candidate resolution.
-type ResolveCodexThreadCandidatesOptions struct {
-	AgentID                  string
-	Timeout                  time.Duration
-	AppendUniqueThreadID     func(dst []string, seen map[string]struct{}, candidate string) []string
-	FindBindingCodexThreadID func(context.Context, string) (string, error)
-	FindStatusSessionID      func(context.Context, string) (string, error)
-	PreviewCandidates        func([]string, int) []string
+	isLikelyCodexThreadID := a.isLikelyCodexThreadID
+	loadThreadArchiveMap := a.loadThreadArchiveMap
+	return ThreadExistsInHistory(
+		ctx,
+		threadID,
+		0,
+		isLikelyCodexThreadID,
+		findBindingByAgentID,
+		getAgentStatusByID,
+		loadThreadArchiveMap,
+	)
 }
 
 // ResolveCodexThreadCandidates resolves ordered codex thread candidates from stores.
-func ResolveCodexThreadCandidates(ctx context.Context, opt ResolveCodexThreadCandidatesOptions) []string {
-	id := strings.TrimSpace(opt.AgentID)
+func ResolveCodexThreadCandidates(
+	ctx context.Context,
+	agentID string,
+	timeout time.Duration,
+	appendUniqueThreadID func(dst []string, seen map[string]struct{}, candidate string) []string,
+	findBindingCodexThreadID func(context.Context, string) (string, error),
+	findStatusSessionID func(context.Context, string) (string, error),
+	previewCandidates func([]string, int) []string,
+) []string {
+	id := strings.TrimSpace(agentID)
 	if id == "" {
 		return nil
 	}
 	ctx = ensureContext(ctx)
-	timeout := normalizeHistoryTimeout(opt.Timeout)
+	timeout = normalizeHistoryTimeout(timeout)
 
-	appendUnique := opt.AppendUniqueThreadID
+	appendUnique := appendUniqueThreadID
 	if appendUnique == nil {
 		appendUnique = appendUniqueThreadIDFallback
 	}
-	preview := opt.PreviewCandidates
+	preview := previewCandidates
 	if preview == nil {
 		preview = PreviewResumeCandidates
 	}
@@ -147,9 +142,9 @@ func ResolveCodexThreadCandidates(ctx context.Context, opt ResolveCodexThreadCan
 	seen := map[string]struct{}{}
 	ids = appendUnique(ids, seen, id)
 
-	if opt.FindBindingCodexThreadID != nil {
+	if findBindingCodexThreadID != nil {
 		dbCtx, cancel := context.WithTimeout(ctx, timeout)
-		boundID, err := opt.FindBindingCodexThreadID(dbCtx, id)
+		boundID, err := findBindingCodexThreadID(dbCtx, id)
 		cancel()
 		if err != nil {
 			logger.Warn("turn/start: resolve codex thread id from binding failed",
@@ -161,9 +156,9 @@ func ResolveCodexThreadCandidates(ctx context.Context, opt ResolveCodexThreadCan
 		}
 	}
 
-	if opt.FindStatusSessionID != nil {
+	if findStatusSessionID != nil {
 		dbCtx, cancel := context.WithTimeout(ctx, timeout)
-		sessionID, err := opt.FindStatusSessionID(dbCtx, id)
+		sessionID, err := findStatusSessionID(dbCtx, id)
 		cancel()
 		if err != nil {
 			logger.Warn("turn/start: resolve codex thread id from agent_status failed",
@@ -218,13 +213,15 @@ func (a *Adapter) ResolveCodexThreadCandidates(
 			}
 		}
 	}
-	return ResolveCodexThreadCandidates(ctx, ResolveCodexThreadCandidatesOptions{
-		AgentID:                  agentID,
-		AppendUniqueThreadID:     appendUniqueThreadID,
-		FindBindingCodexThreadID: findBindingCodexThreadID,
-		FindStatusSessionID:      findStatusSessionID,
-		PreviewCandidates:        previewCandidates,
-	})
+	return ResolveCodexThreadCandidates(
+		ctx,
+		agentID,
+		0,
+		appendUniqueThreadID,
+		findBindingCodexThreadID,
+		findStatusSessionID,
+		previewCandidates,
+	)
 }
 
 func ensureContext(ctx context.Context) context.Context {

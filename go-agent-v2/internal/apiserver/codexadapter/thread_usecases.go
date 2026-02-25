@@ -37,10 +37,30 @@ type ThreadMessagesOptions struct {
 	Stats           func(threadID string) (diffLen int, timelineLen int)
 }
 
+// ThreadMessagesByID loads and paginates thread messages using constructor-time dependencies.
+func (a *Adapter) ThreadMessagesByID(ctx context.Context, threadID string, limit int, before int64) (map[string]any, error) {
+	return a.ThreadMessages(ctx, ThreadMessagesOptions{
+		ThreadID:        threadID,
+		Limit:           limit,
+		Before:          before,
+		LoadAllMessages: a.LoadAllThreadMessagesFromRollout,
+		Paginate:        PaginateRolloutMessages,
+		HandleHydration: a.handleThreadMessagesHydration,
+		Stats:           a.threadMessagesStats,
+	})
+}
+
 // ThreadMessages 负责消息分页主流程；具体 hydration 细节由回调实现。
 func (a *Adapter) ThreadMessages(ctx context.Context, opt ThreadMessagesOptions) (map[string]any, error) {
 	if strings.TrimSpace(opt.ThreadID) == "" {
 		return nil, apperrors.New("Server.threadMessages", "threadId is required")
+	}
+	if opt.LoadAllMessages == nil {
+		return nil, apperrors.New("Server.threadMessages", "message loader is not configured")
+	}
+	paginate := opt.Paginate
+	if paginate == nil {
+		paginate = PaginateRolloutMessages
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -50,7 +70,7 @@ func (a *Adapter) ThreadMessages(ctx context.Context, opt ThreadMessagesOptions)
 		return nil, apperrors.Wrap(err, "Server.threadMessages", "load codex rollout messages")
 	}
 	total := int64(len(allMsgs))
-	msgs := opt.Paginate(allMsgs, opt.Limit, opt.Before)
+	msgs := paginate(allMsgs, opt.Limit, opt.Before)
 	logger.Info("thread/messages: page selected",
 		logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
 		"before", opt.Before,
@@ -81,44 +101,22 @@ func (a *Adapter) ThreadMessages(ctx context.Context, opt ThreadMessagesOptions)
 	}, nil
 }
 
-// ThreadArchiveOptions carries dependencies for thread archive orchestration.
-type ThreadArchiveOptions struct {
-	ThreadID string
-
-	ThreadExistsForArchive   func(context.Context, string) bool
-	ArchiveThreadArtifacts   func(context.Context, string) (ThreadArchiveManifest, error)
-	PersistThreadArchiveFlag func(context.Context, string, int64) error
-	NowUnixMilli             func() int64
-}
-
 // ThreadArchive validates archive eligibility, archives artifacts, and persists archive state.
-func (a *Adapter) ThreadArchive(ctx context.Context, opt ThreadArchiveOptions) (map[string]any, error) {
-	threadID := strings.TrimSpace(opt.ThreadID)
+func (a *Adapter) ThreadArchive(ctx context.Context, threadID string) (map[string]any, error) {
+	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
 		return nil, apperrors.New("Server.threadArchive", "threadId is required")
 	}
-	if opt.ThreadExistsForArchive == nil {
-		return nil, apperrors.New("Server.threadArchive", "thread existence checker is not configured")
-	}
-	if !opt.ThreadExistsForArchive(ctx, threadID) {
+	if !a.ThreadExistsForArchiveByID(ctx, threadID) {
 		return nil, apperrors.Newf("Server.threadArchive", "thread %s not found", threadID)
 	}
-	if opt.ArchiveThreadArtifacts == nil {
-		return nil, apperrors.New("Server.threadArchive", "archive artifact handler is not configured")
-	}
-
-	manifest, err := opt.ArchiveThreadArtifacts(ctx, threadID)
+	manifest, err := a.archiveThreadArtifacts(ctx, threadID)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.threadArchive", "archive codex artifacts")
 	}
 	archivedAt := time.Now().UnixMilli()
-	if opt.NowUnixMilli != nil {
-		archivedAt = opt.NowUnixMilli()
-	}
-	if opt.PersistThreadArchiveFlag != nil {
-		if err := opt.PersistThreadArchiveFlag(ctx, threadID, archivedAt); err != nil {
-			return nil, apperrors.Wrap(err, "Server.threadArchive", "persist archive state")
-		}
+	if err := a.PersistThreadArchivedStateByID(ctx, threadID, archivedAt); err != nil {
+		return nil, apperrors.Wrap(err, "Server.threadArchive", "persist archive state")
 	}
 
 	return map[string]any{
@@ -130,6 +128,62 @@ func (a *Adapter) ThreadArchive(ctx context.Context, opt ThreadArchiveOptions) (
 		"rolloutPath":   manifest.RolloutPath,
 		"files":         manifest.Files,
 	}, nil
+}
+
+func (a *Adapter) threadExistsInHistory(ctx context.Context, threadID string) bool {
+	return a.ThreadExistsInHistory(ctx, threadID)
+}
+
+func (a *Adapter) loadThreadArchiveMap(ctx context.Context) (map[string]int64, error) {
+	if a == nil || a.ctx == nil || a.ctx.Store() == nil {
+		return map[string]int64{}, nil
+	}
+	value, err := a.ctx.Store().Get(ctx, prefThreadArchivesChat)
+	if err != nil {
+		return nil, err
+	}
+	return NormalizeThreadArchiveMap(value), nil
+}
+
+func (a *Adapter) archiveThreadArtifacts(ctx context.Context, threadID string) (ThreadArchiveManifest, error) {
+	return a.ArchiveThreadArtifacts(ctx, ArchiveThreadArtifactsOptions{
+		ThreadID:                        threadID,
+		ResolveThreadArchiveRootDir:     ResolveThreadArchiveRootDir,
+		ResolveThreadArchiveSnapshotDir: ResolveThreadArchiveSnapshotDir,
+		ResolveRolloutHistorySource: func(resolveCtx context.Context, id string) (string, string) {
+			return a.ResolveRolloutHistorySource(resolveCtx, id, a.normalizeCodexThreadID)
+		},
+		NormalizeCodexThreadID:          a.normalizeCodexThreadID,
+		CollectThreadArtifactCandidates: CollectThreadArtifactCandidates,
+		NextArchiveFilePath:             NextArchiveFilePath,
+		CopyFile:                        CopyFile,
+		FileSHA256:                      FileSHA256,
+		WriteThreadArchiveManifest:      WriteThreadArchiveManifest,
+		BindRolloutPath: func(bindCtx context.Context, agentID, codexThreadID, rolloutPath string) error {
+			if a == nil || a.ctx == nil || a.ctx.BindingStore() == nil {
+				return nil
+			}
+			dbCtx, cancel := context.WithTimeout(bindCtx, 5*time.Second)
+			defer cancel()
+			return a.ctx.BindingStore().Bind(dbCtx, agentID, codexThreadID, rolloutPath)
+		},
+		PruneArchivedCodexSourceFiles: func(id string, files []ThreadArchiveFile, archiveDir string) {
+			PruneArchivedCodexSourceFiles(PruneArchivedCodexSourceFilesOptions{
+				ThreadID:                  id,
+				Files:                     files,
+				ArchiveDir:                archiveDir,
+				ResolveCodexRootDir:       ResolveCodexRootDir,
+				PathWithinRoot:            PathWithinRoot,
+				FileSHA256:                FileSHA256,
+				RemoveEmptyCodexParentDir: RemoveEmptyCodexParentDirs,
+			})
+		},
+	})
+}
+
+// ArchiveThreadArtifactsByID archives thread artifacts using constructor-time dependencies.
+func (a *Adapter) ArchiveThreadArtifactsByID(ctx context.Context, threadID string) (ThreadArchiveManifest, error) {
+	return a.archiveThreadArtifacts(ctx, threadID)
 }
 
 // ThreadExistsForArchive checks whether a thread can be archived.
@@ -151,6 +205,11 @@ func (a *Adapter) ThreadExistsForArchive(ctx context.Context, threadID string, t
 		}
 	}
 	return threadExistsInHistory != nil && threadExistsInHistory(ctx, id)
+}
+
+// ThreadExistsForArchiveByID checks whether a thread can be archived using constructor-time dependencies.
+func (a *Adapter) ThreadExistsForArchiveByID(ctx context.Context, threadID string) bool {
+	return a.ThreadExistsForArchive(ctx, threadID, a.threadExistsInHistory)
 }
 
 // PersistThreadArchivedState writes thread archive marker to preference storage.
@@ -184,6 +243,11 @@ func (a *Adapter) PersistThreadArchivedState(
 	return a.ctx.Store().Set(ctx, prefThreadArchivesChat, archivedMap)
 }
 
+// PersistThreadArchivedStateByID writes archive marker using constructor-time dependencies.
+func (a *Adapter) PersistThreadArchivedStateByID(ctx context.Context, threadID string, archivedAt int64) error {
+	return a.PersistThreadArchivedState(ctx, threadID, archivedAt, a.loadThreadArchiveMap)
+}
+
 // RemoveThreadArchivedState clears thread archive marker from preference storage.
 func (a *Adapter) RemoveThreadArchivedState(
 	ctx context.Context,
@@ -209,6 +273,11 @@ func (a *Adapter) RemoveThreadArchivedState(
 	}
 	delete(archivedMap, id)
 	return a.ctx.Store().Set(ctx, prefThreadArchivesChat, archivedMap)
+}
+
+// RemoveThreadArchivedStateByID clears archive marker using constructor-time dependencies.
+func (a *Adapter) RemoveThreadArchivedStateByID(ctx context.Context, threadID string) error {
+	return a.RemoveThreadArchivedState(ctx, threadID, a.loadThreadArchiveMap)
 }
 
 type ThreadArchiveFile struct {

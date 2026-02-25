@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
@@ -21,11 +22,7 @@ const (
 )
 
 // TrackedTurnSummaryCacheEntry caches the latest summary for one tracked turn.
-type TrackedTurnSummaryCacheEntry struct {
-	TurnID    string
-	Summary   string
-	UpdatedAt time.Time
-}
+type TrackedTurnSummaryCacheEntry = contracts.TrackedTurnSummaryCacheEntry
 
 // TurnTrackerState carries mutable turn-tracker state owned by the caller.
 type TurnTrackerState struct {
@@ -59,6 +56,79 @@ func EnsureTurnTrackerStateLocked(state TurnTrackerState) {
 	}
 }
 
+func (a *Adapter) trackerHelperState() TurnTrackerState {
+	if a == nil {
+		return TurnTrackerState{}
+	}
+	return TurnTrackerState{
+		ActiveTurns:         &a.deps.TrackerActiveTurns,
+		TurnWatchdogTimeout: a.deps.TrackerWatchdogTimeout,
+		TurnSummaryCache:    a.deps.TrackerSummaryCache,
+		TurnSummaryTTL:      a.deps.TrackerSummaryTTL,
+		StallThreshold:      a.deps.TrackerStallThreshold,
+	}
+}
+
+// EnsureTurnTrackerStateLocked initializes tracker defaults using adapter-owned state.
+func (a *Adapter) EnsureTurnTrackerStateLocked() {
+	if a == nil {
+		return
+	}
+	EnsureTurnTrackerStateLocked(a.trackerHelperState())
+}
+
+// LookupTrackedTurnSummary reads tracked-turn summary from adapter-owned cache state.
+func (a *Adapter) LookupTrackedTurnSummary(threadID, turnID string) string {
+	if a == nil {
+		return ""
+	}
+	return LookupTrackedTurnSummary(a.trackerHelperState(), a.deps.TrackerMu, threadID, turnID)
+}
+
+// TouchTrackedTurnLastEvent updates turn heartbeat using adapter-owned tracker state.
+func (a *Adapter) TouchTrackedTurnLastEvent(threadID string) {
+	activeTurns, turnMu, _, _ := a.trackerState()
+	TouchTrackedTurnLastEvent(activeTurns, turnMu, threadID)
+}
+
+// RescheduleStallCheck schedules next stall check via adapter entry.
+func (a *Adapter) RescheduleStallCheck(turn *TrackedTurn, threadID, turnID string, silent, threshold time.Duration, checkTurnStall func(threadID, turnID string)) {
+	RescheduleStallCheck(turn, threadID, turnID, silent, threshold, checkTurnStall)
+}
+
+// HandleStallGracePeriod starts stall grace period via adapter entry.
+func (a *Adapter) HandleStallGracePeriod(
+	activeTurns map[string]*TrackedTurn,
+	turnMu *sync.Mutex,
+	threadID,
+	turnID string,
+	silent,
+	threshold,
+	stallGracePeriod time.Duration,
+	pushAlert func(threadID, category, message string),
+	checkTurnStall func(threadID, turnID string),
+) {
+	HandleStallGracePeriod(activeTurns, turnMu, threadID, turnID, silent, threshold, stallGracePeriod, pushAlert, checkTurnStall)
+}
+
+// StartApprovalStallHeartbeat starts approval heartbeat with adapter-owned tracker state.
+func (a *Adapter) StartApprovalStallHeartbeat(threadID string) func() {
+	_, _, _, stallThreshold := a.trackerState()
+	return StartApprovalStallHeartbeat(threadID, stallThreshold, DefaultStallThreshold, a.TouchTrackedTurnLastEvent)
+}
+
+// PeekTrackedTurnMeta reads active-turn metadata from adapter-owned tracker state.
+func (a *Adapter) PeekTrackedTurnMeta(threadID string) (string, time.Time, bool, bool) {
+	activeTurns, turnMu, _, _ := a.trackerState()
+	return PeekTrackedTurnMeta(activeTurns, turnMu, threadID)
+}
+
+// MarkTrackedTurnStallHint marks one-shot stall hint from adapter-owned tracker state.
+func (a *Adapter) MarkTrackedTurnStallHint(threadID, turnID string) bool {
+	activeTurns, turnMu, _, _ := a.trackerState()
+	return MarkTrackedTurnStallHint(activeTurns, turnMu, threadID, turnID)
+}
+
 // TrackedTurnSummaryFromPayload extracts last agent summary from event payload.
 func TrackedTurnSummaryFromPayload(payload map[string]any) string {
 	if payload == nil {
@@ -78,6 +148,21 @@ func TrackedTurnSummaryFromPayload(payload map[string]any) string {
 		}
 	}
 	return ""
+}
+
+// TrackedTurnSummaryFromPayload extracts summary via adapter entry.
+func (a *Adapter) TrackedTurnSummaryFromPayload(payload map[string]any) string {
+	return TrackedTurnSummaryFromPayload(payload)
+}
+
+// ExtractTrackedString extracts first non-empty string via adapter entry.
+func (a *Adapter) ExtractTrackedString(payload map[string]any, keys ...string) string {
+	return ExtractTrackedString(payload, keys...)
+}
+
+// TrackedTurnTerminalFromEvent classifies terminal event via adapter entry.
+func (a *Adapter) TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]any) (turnID, status, reason string, terminal bool, synthetic bool) {
+	return TrackedTurnTerminalFromEvent(eventType, method, payload)
 }
 
 // TrackedTurnSummaryCacheKey returns summary cache key for thread + optional turn.
@@ -453,76 +538,72 @@ func TrackedTurnPayloadDiagKV(payload map[string]any) []any {
 	}
 }
 
-// CaptureAndInjectTurnSummaryOptions carries dependencies for summary capture/injection.
-type CaptureAndInjectTurnSummaryOptions struct {
-	ThreadID  string
-	EventType string
-	Method    string
-	Payload   map[string]any
-
-	PeekTrackedTurnMeta           func(threadID string) (turnID string, startedAt time.Time, interruptRequested bool, ok bool)
-	TrackedTurnTerminalFromEvent  func(eventType, method string, payload map[string]any) (turnID, status, reason string, terminal bool, synthetic bool)
-	ExtractTrackedTurnID          func(payload map[string]any) string
-	TrackedTurnSummaryFromPayload func(payload map[string]any) string
-	RememberTrackedTurnSummary    func(threadID, turnID, summary string)
-	LookupTrackedTurnSummary      func(threadID, turnID string) string
-	InjectTrackedTurnSummary      func(payload map[string]any, summary string)
-}
-
 // CaptureAndInjectTurnSummary captures summary at terminal events and injects it into turn/completed.
-func CaptureAndInjectTurnSummary(opt CaptureAndInjectTurnSummaryOptions) {
-	if opt.Payload == nil {
+func CaptureAndInjectTurnSummary(
+	threadID string,
+	eventType string,
+	method string,
+	payload map[string]any,
+	peekTrackedTurnMeta func(threadID string) (turnID string, startedAt time.Time, interruptRequested bool, ok bool),
+	trackedTurnTerminalFromEvent func(eventType, method string, payload map[string]any) (turnID, status, reason string, terminal bool, synthetic bool),
+	extractTrackedTurnID func(payload map[string]any) string,
+	trackedTurnSummaryFromPayload func(payload map[string]any) string,
+	rememberTrackedTurnSummary func(threadID, turnID, summary string),
+	lookupTrackedTurnSummary func(threadID, turnID string) string,
+	injectTrackedTurnSummary func(payload map[string]any, summary string),
+) {
+	if payload == nil {
 		return
 	}
-	id := strings.TrimSpace(opt.ThreadID)
+	id := strings.TrimSpace(threadID)
 	if id == "" {
 		return
 	}
 
-	terminalFromEvent := opt.TrackedTurnTerminalFromEvent
+	terminalFromEvent := trackedTurnTerminalFromEvent
 	if terminalFromEvent == nil {
 		terminalFromEvent = TrackedTurnTerminalFromEvent
 	}
-	extractTurnID := opt.ExtractTrackedTurnID
+	extractTurnID := extractTrackedTurnID
 	if extractTurnID == nil {
 		extractTurnID = ExtractTrackedTurnID
 	}
-	summaryFromPayload := opt.TrackedTurnSummaryFromPayload
+	summaryFromPayload := trackedTurnSummaryFromPayload
 	if summaryFromPayload == nil {
 		summaryFromPayload = TrackedTurnSummaryFromPayload
 	}
-	rememberSummary := opt.RememberTrackedTurnSummary
+	rememberSummary := rememberTrackedTurnSummary
 	if rememberSummary == nil {
 		rememberSummary = func(string, string, string) {}
 	}
-	lookupSummary := opt.LookupTrackedTurnSummary
+	lookupSummary := lookupTrackedTurnSummary
 	if lookupSummary == nil {
 		lookupSummary = func(string, string) string { return "" }
 	}
-	injectSummary := opt.InjectTrackedTurnSummary
+	injectSummary := injectTrackedTurnSummary
 	if injectSummary == nil {
 		injectSummary = InjectTrackedTurnSummary
 	}
 
-	turnID := extractTurnID(opt.Payload)
+	turnID := extractTurnID(payload)
 	resolvedTurnID := turnID
-	if resolvedTurnID == "" && opt.PeekTrackedTurnMeta != nil {
-		if activeTurnID, _, _, ok := opt.PeekTrackedTurnMeta(id); ok {
+	if resolvedTurnID == "" && peekTrackedTurnMeta != nil {
+		if activeTurnID, _, _, ok := peekTrackedTurnMeta(id); ok {
 			resolvedTurnID = activeTurnID
 		}
 	}
 
-	summary := summaryFromPayload(opt.Payload)
+	summary := summaryFromPayload(payload)
 	if summary != "" {
-		_, _, _, terminal, _ := terminalFromEvent(opt.EventType, opt.Method, opt.Payload)
-		methodKey := strings.ToLower(strings.TrimSpace(opt.Method))
-		eventKey := strings.ToLower(strings.TrimSpace(opt.EventType))
+		_, _, _, terminal, _ := terminalFromEvent(eventType, method, payload)
+		methodKey := strings.ToLower(strings.TrimSpace(method))
+		eventKey := strings.ToLower(strings.TrimSpace(eventType))
 		if terminal || methodKey == "codex/event/task_complete" || eventKey == "codex/event/task_complete" {
 			rememberSummary(id, resolvedTurnID, summary)
 		}
 	}
 
-	if !strings.EqualFold(strings.TrimSpace(opt.Method), "turn/completed") {
+	if !strings.EqualFold(strings.TrimSpace(method), "turn/completed") {
 		return
 	}
 	if summary == "" {
@@ -531,7 +612,7 @@ func CaptureAndInjectTurnSummary(opt CaptureAndInjectTurnSummaryOptions) {
 	if summary == "" {
 		return
 	}
-	injectSummary(opt.Payload, summary)
+	injectSummary(payload, summary)
 	rememberSummary(id, resolvedTurnID, summary)
 }
 
@@ -728,37 +809,48 @@ func HandleStallGracePeriod(
 	turnMu.Unlock()
 }
 
-// FinalizeTrackedTurnEventOptions carries dependencies to finalize tracked turn from one event.
-type FinalizeTrackedTurnEventOptions struct {
-	ThreadID  string
-	EventType string
-	Method    string
-	Payload   map[string]any
-
-	TouchTrackedTurnLastEvent func(string)
-	IsTerminalEventType       func(string, string) bool
-	HasActiveTrackedTurn      func(string) bool
-	MaybeFinalizeTrackedTurn  func(string, string, string, map[string]any)
+// IsTerminalEventType reports whether event type or method indicates a turn terminal event.
+func IsTerminalEventType(eventType, method string) bool {
+	eventKey := strings.ToLower(strings.TrimSpace(eventType))
+	methodKey := strings.ToLower(strings.TrimSpace(method))
+	switch {
+	case eventKey == "turn_complete" || eventKey == "turn/completed" || eventKey == "idle" ||
+		eventKey == "turn_aborted" || eventKey == "codex/event/task_complete" ||
+		eventKey == "shutdown_complete":
+		return true
+	case methodKey == "turn/completed" || methodKey == "turn/aborted" ||
+		methodKey == "codex/event/task_complete" || methodKey == "thread/status/changed":
+		return true
+	case eventKey == "error" || eventKey == "stream_error" ||
+		methodKey == "error" || methodKey == "codex/event/stream_error":
+		return true
+	default:
+		return false
+	}
 }
 
 // FinalizeTrackedTurnEvent updates heartbeat and finalizes turn state from an incoming event.
-func (a *Adapter) FinalizeTrackedTurnEvent(opt FinalizeTrackedTurnEventOptions) {
-	if opt.TouchTrackedTurnLastEvent != nil {
-		opt.TouchTrackedTurnLastEvent(opt.ThreadID)
+func (a *Adapter) FinalizeTrackedTurnEvent(
+	threadID string,
+	eventType string,
+	method string,
+	payload map[string]any,
+) {
+	if a == nil {
+		return
 	}
-	if opt.IsTerminalEventType != nil && opt.IsTerminalEventType(opt.EventType, opt.Method) {
+
+	a.TouchTrackedTurnLastEvent(threadID)
+
+	if IsTerminalEventType(eventType, method) {
 		hasActive := false
-		if opt.HasActiveTrackedTurn != nil {
-			hasActive = opt.HasActiveTrackedTurn(opt.ThreadID)
-		}
+		hasActive = a.HasActiveTrackedTurn(threadID)
 		logger.Warn("DIAG: AgentEventHandler received terminal event",
-			logger.FieldThreadID, opt.ThreadID,
-			logger.FieldEventType, opt.EventType,
-			logger.FieldMethod, opt.Method,
+			logger.FieldThreadID, threadID,
+			logger.FieldEventType, eventType,
+			logger.FieldMethod, method,
 			"has_active_tracked_turn", hasActive,
 		)
 	}
-	if opt.MaybeFinalizeTrackedTurn != nil {
-		opt.MaybeFinalizeTrackedTurn(opt.ThreadID, opt.EventType, opt.Method, opt.Payload)
-	}
+	a.MaybeFinalizeTrackedTurn(threadID, eventType, method, payload)
 }

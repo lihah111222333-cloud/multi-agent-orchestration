@@ -10,75 +10,66 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-type EnsureThreadReadyOptions struct {
-	ThreadID string
-	Cwd      string
-
-	Manager      *runner.AgentManager
-	BindingStore *store.AgentCodexBindingStore
-
-	ThreadExistsInHistory             func(context.Context, string) bool
-	ResolveCodexThreadCandidates      func(context.Context, string) []string
-	BuildAllDynamicTools              func() []agentcore.DynamicTool
-	ResolveStartInstructionsForLaunch func(context.Context, []agentcore.DynamicTool) string
-	SetAgentWorkDir                   func(string, string)
-	RegisterBinding                   func(context.Context, string, *runner.AgentProcess)
-	CancelCodeRuns                    func(string) int
-	BroadcastNotification             func(string, map[string]any)
-	BuildSessionLostNotification      func(string, error) (string, map[string]any)
-}
-
 // EnsureThreadReadyForTurn 负责拉起/恢复线程进程，并处理历史会话丢失降级。
-func (a *Adapter) EnsureThreadReadyForTurn(ctx context.Context, opt EnsureThreadReadyOptions) (*runner.AgentProcess, error) {
+func (a *Adapter) EnsureThreadReadyForTurn(ctx context.Context, threadID, cwd string) (*runner.AgentProcess, error) {
 	// D11: 总超时 45s，避免 Launch(30s)+Resume(30s) 串行导致前端 turn/start 永不回。
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
-	id := strings.TrimSpace(opt.ThreadID)
+	var manager *runner.AgentManager
+	var bindingStore *store.AgentCodexBindingStore
+	if a != nil && a.ctx != nil {
+		manager = a.ctx.Manager()
+		bindingStore = a.ctx.BindingStore()
+	}
+	if manager == nil {
+		return nil, apperrors.New("Server.ensureThreadReady", "thread manager is not initialized")
+	}
+	id := strings.TrimSpace(threadID)
 	if id == "" {
 		return nil, apperrors.New("Server.ensureThreadReady", "threadId is required")
 	}
-	if opt.Manager == nil {
-		return nil, apperrors.New("Server.ensureThreadReady", "thread manager is not initialized")
-	}
-	launchCwd := strings.TrimSpace(opt.Cwd)
+	launchCwd := strings.TrimSpace(cwd)
 	if launchCwd == "" {
 		launchCwd = "."
 	}
 
-	if proc := opt.Manager.Get(id); proc != nil {
+	resolveCandidates := func(resolveCtx context.Context, id string) []string {
+		return a.ResolveCodexThreadCandidates(resolveCtx, id, appendUniqueThreadIDFallback, PreviewResumeCandidates)
+	}
+	buildAllDynamicTools := a.allDynamicToolSchemas
+	resolveStartInstructionsForLaunch := a.resolveStartInstructionsForLaunch
+	setAgentWorkDir := a.setAgentWorkDir
+	cancelCodeRuns := a.cancelCodeRuns
+
+	if proc := manager.Get(id); proc != nil {
 		logger.Info("turn/start: using running process",
 			logger.FieldAgentID, id, logger.FieldThreadID, id,
 			logger.FieldPort, proc.Client.GetPort(),
 			"codex_thread_id", a.GetThreadID(proc),
 		)
-		if opt.SetAgentWorkDir != nil {
-			opt.SetAgentWorkDir(id, launchCwd)
-		}
-		if opt.RegisterBinding != nil {
-			opt.RegisterBinding(ctx, id, proc)
-		}
+		setAgentWorkDir(id, launchCwd)
+		a.registerBinding(ctx, id, proc)
 		return proc, nil
 	}
 
-	hasHistory := false
-	if opt.ThreadExistsInHistory != nil {
-		hasHistory = opt.ThreadExistsInHistory(ctx, id)
-	}
+	hasHistory := a.threadExistsInHistory(ctx, id)
 	if !hasHistory {
 		return nil, apperrors.Newf("Server.ensureThreadReady", "thread %s not found", id)
 	}
 	resumeCandidates := make([]string, 0, 4)
 
 	// 优先从 agent_codex_binding 表获取绑定的 codexThreadId。
-	if opt.BindingStore != nil {
-		if binding, err := opt.BindingStore.FindByAgentID(ctx, id); err == nil && binding != nil {
+	if bindingStore != nil {
+		if binding, err := bindingStore.FindByAgentID(ctx, id); err == nil && binding != nil {
 			resumeCandidates = append(resumeCandidates, binding.CodexThreadID)
 			logger.Info("turn/start: found DB binding",
 				logger.FieldAgentID, id,
@@ -87,8 +78,8 @@ func (a *Adapter) EnsureThreadReadyForTurn(ctx context.Context, opt EnsureThread
 		}
 	}
 
-	if len(resumeCandidates) == 0 && opt.ResolveCodexThreadCandidates != nil {
-		resumeCandidates = append(resumeCandidates, opt.ResolveCodexThreadCandidates(ctx, id)...)
+	if len(resumeCandidates) == 0 && resolveCandidates != nil {
+		resumeCandidates = append(resumeCandidates, resolveCandidates(ctx, id)...)
 	}
 
 	logger.Info("turn/start: restoring historical thread",
@@ -99,33 +90,23 @@ func (a *Adapter) EnsureThreadReadyForTurn(ctx context.Context, opt EnsureThread
 		"candidates", PreviewResumeCandidates(resumeCandidates, 4),
 	)
 
-	dynamicTools := make([]agentcore.DynamicTool, 0)
-	if opt.BuildAllDynamicTools != nil {
-		dynamicTools = opt.BuildAllDynamicTools()
-	}
-	startInstructions := ""
-	if opt.ResolveStartInstructionsForLaunch != nil {
-		startInstructions = opt.ResolveStartInstructionsForLaunch(ctx, dynamicTools)
-	}
+	dynamicTools := buildAllDynamicTools()
+	startInstructions := resolveStartInstructionsForLaunch(ctx, dynamicTools)
 
-	if err := opt.Manager.Launch(ctx, id, id, "", launchCwd, startInstructions, dynamicTools); err != nil {
+	if err := manager.Launch(ctx, id, id, "", launchCwd, startInstructions, dynamicTools); err != nil {
 		// 并发补加载时可能已被其他请求拉起，二次确认后再报错。
-		if proc := opt.Manager.Get(id); proc != nil {
-			if opt.SetAgentWorkDir != nil {
-				opt.SetAgentWorkDir(id, launchCwd)
-			}
+		if proc := manager.Get(id); proc != nil {
+			setAgentWorkDir(id, launchCwd)
 			return proc, nil
 		}
 		return nil, apperrors.Wrapf(err, "Server.ensureThreadReady", "auto-load thread %s", id)
 	}
 
-	proc := opt.Manager.Get(id)
+	proc := manager.Get(id)
 	if proc == nil {
 		return nil, apperrors.Newf("Server.ensureThreadReady", "thread %s loaded but not found", id)
 	}
-	if opt.SetAgentWorkDir != nil {
-		opt.SetAgentWorkDir(id, launchCwd)
-	}
+	setAgentWorkDir(id, launchCwd)
 	logger.Info("turn/start: process launched for restore",
 		logger.FieldAgentID, id, logger.FieldThreadID, id,
 		logger.FieldPort, proc.Client.GetPort(),
@@ -152,9 +133,7 @@ func (a *Adapter) EnsureThreadReadyForTurn(ctx context.Context, opt EnsureThread
 				"codex_thread_id_after_resume", a.GetThreadID(proc),
 				logger.FieldCwd, launchCwd,
 			)
-			if opt.RegisterBinding != nil {
-				opt.RegisterBinding(ctx, id, proc)
-			}
+			a.registerBinding(ctx, id, proc)
 			return proc, nil
 		}
 
@@ -165,14 +144,9 @@ func (a *Adapter) EnsureThreadReadyForTurn(ctx context.Context, opt EnsureThread
 				"resume_thread_id", resumeThreadID,
 				logger.FieldError, err,
 			)
-			if opt.CancelCodeRuns != nil {
-				_ = opt.CancelCodeRuns(id)
-			}
-			_ = opt.Manager.Stop(id)
-			if opt.BuildSessionLostNotification != nil && opt.BroadcastNotification != nil {
-				method, payload := opt.BuildSessionLostNotification(id, err)
-				opt.BroadcastNotification(method, payload)
-			}
+			_ = cancelCodeRuns(id)
+			_ = manager.Stop(id)
+			a.notifySessionLost(id, err)
 			return nil, apperrors.Wrapf(err, "Server.ensureThreadReady",
 				"codex crashed while resuming thread %s (rollout=%s)", id, resumeThreadID)
 		}
@@ -204,27 +178,20 @@ func (a *Adapter) EnsureThreadReadyForTurn(ctx context.Context, opt EnsureThread
 			logger.FieldCwd, launchCwd,
 		)
 		// proc 在 non-crash 路径中仍然存活，但可能被 mgr 移除。
-		if opt.Manager.Get(id) == nil {
-			if opt.CancelCodeRuns != nil {
-				_ = opt.CancelCodeRuns(id)
-			}
-			_ = opt.Manager.Stop(id)
-			if launchErr := opt.Manager.Launch(ctx, id, id, "", launchCwd, startInstructions, dynamicTools); launchErr != nil {
+		if manager.Get(id) == nil {
+			_ = cancelCodeRuns(id)
+			_ = manager.Stop(id)
+			if launchErr := manager.Launch(ctx, id, id, "", launchCwd, startInstructions, dynamicTools); launchErr != nil {
 				return nil, apperrors.Wrapf(launchErr, "Server.ensureThreadReady", "final re-spawn thread %s", id)
 			}
-			proc = opt.Manager.Get(id)
+			proc = manager.Get(id)
 			if proc == nil {
 				return nil, apperrors.Newf("Server.ensureThreadReady", "thread %s final re-spawn failed", id)
 			}
 		}
 		proc.MarkSessionLost()
-		if opt.BuildSessionLostNotification != nil && opt.BroadcastNotification != nil {
-			method, payload := opt.BuildSessionLostNotification(id, lastResumeErr)
-			opt.BroadcastNotification(method, payload)
-		}
-		if opt.RegisterBinding != nil {
-			opt.RegisterBinding(ctx, id, proc)
-		}
+		a.notifySessionLost(id, lastResumeErr)
+		a.registerBinding(ctx, id, proc)
 		return proc, nil
 	}
 
@@ -234,10 +201,47 @@ func (a *Adapter) EnsureThreadReadyForTurn(ctx context.Context, opt EnsureThread
 		logger.FieldCwd, launchCwd,
 	)
 	proc.MarkSessionLost()
-	if opt.RegisterBinding != nil {
-		opt.RegisterBinding(ctx, id, proc)
-	}
+	a.registerBinding(ctx, id, proc)
 	return proc, nil
+}
+
+func (a *Adapter) registerBinding(ctx context.Context, agentID string, proc *runner.AgentProcess) {
+	if a == nil || a.ctx == nil || a.ctx.BindingStore() == nil || proc == nil || proc.Client == nil {
+		return
+	}
+	codexThreadID := a.GetThreadID(proc)
+	if codexThreadID == "" {
+		return
+	}
+	if err := a.ctx.BindingStore().Bind(ctx, agentID, codexThreadID, ""); err != nil {
+		logger.Warn("turn/start: failed to register binding",
+			logger.FieldAgentID, agentID,
+			"codex_thread_id", codexThreadID,
+			logger.FieldError, err,
+		)
+	}
+}
+
+func (a *Adapter) notifySessionLost(agentID string, lastErr error) {
+	if a == nil || a.ctx == nil {
+		return
+	}
+	method, payload := BuildSessionLostNotification(agentID, lastErr)
+	a.ctx.Notify(method, payload)
+}
+
+// BuildSessionLostNotification builds "session lost" fallback notification payload.
+func BuildSessionLostNotification(agentID string, lastErr error) (string, map[string]any) {
+	detail := ""
+	if lastErr != nil {
+		detail = lastErr.Error()
+	}
+	return "ui/state/changed", map[string]any{
+		"source":   "session_lost_warning",
+		"agent_id": agentID,
+		"warning":  "会话历史已丢失 (codex session 文件不存在)，已自动回退到全新会话",
+		"detail":   detail,
+	}
 }
 
 type StartTurnSubmissionOptions struct {
@@ -286,7 +290,11 @@ func (a *Adapter) StartTurnSubmissionAndTrack(ctx context.Context, opt StartTurn
 		"has_active_tracked_turn", opt.HasActiveTrackedTurn(opt.ThreadID),
 	)
 
-	resolvedTurnID := opt.ResolveActiveTurnID(proc.Client)
+	resolveActiveTurnID := opt.ResolveActiveTurnID
+	if resolveActiveTurnID == nil {
+		resolveActiveTurnID = ResolveClientActiveTurnID
+	}
+	resolvedTurnID := resolveActiveTurnID(proc.Client)
 	if resolvedTurnID == "" {
 		logger.Warn("turn/start: active turn id unavailable after submit; tracker will use synthetic id",
 			logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
@@ -307,22 +315,15 @@ func (a *Adapter) StartTurnSubmissionAndTrack(ctx context.Context, opt StartTurn
 	return StartTurnSubmissionResult{Process: proc, TurnID: turnID}, nil
 }
 
-type TurnStartEntryPrepareResult struct {
-	Prompt                string
-	SubmitPrompt          string
-	Images                []string
-	Files                 []string
-	SelectedSkillCount    int
-	AutoMatchedSkillCount int
-}
+type TurnStartEntryPrepareResult = contracts.TurnStartEntryPrepareResult
 
-type TurnAppendUserTimelineOptions struct {
-	ThreadID     string
-	Prompt       string
-	SubmitPrompt string
-	Images       []string
-	Files        []string
-}
+// TurnInput is a protocol-level user input item for turn/start and turn/steer.
+type TurnInput = contracts.TurnInput
+
+// TurnStartRequest carries protocol params for turn/start.
+type TurnStartRequest = contracts.TurnStartRequest
+
+type TurnAppendUserTimelineOptions = contracts.TurnAppendUserTimelineOptions
 
 type TurnStartEntryOptions struct {
 	ThreadID             string
@@ -345,6 +346,36 @@ type TurnStartEntryOptions struct {
 
 type TurnStartEntryResult struct {
 	TurnID string
+}
+
+// TurnStart handles turn/start with constructor-time dependencies.
+func (a *Adapter) TurnStart(ctx context.Context, req TurnStartRequest) (TurnStartEntryResult, error) {
+	prepareSubmission := a.prepareTurnStartSubmission
+	ensureThreadReady := a.EnsureThreadReadyForTurn
+	beginTrackedTurn := a.BeginTrackedTurn
+	resolveActiveTurnID := ResolveClientActiveTurnID
+	hasActiveTrackedTurn := a.HasActiveTrackedTurn
+	appendUserTimeline := a.appendTurnStartUserTimeline
+
+	return a.TurnStartEntry(ctx, TurnStartEntryOptions{
+		ThreadID:             req.ThreadID,
+		Cwd:                  req.Cwd,
+		InputCount:           len(req.Input),
+		SelectedSkills:       req.SelectedSkills,
+		ManualSkillSelection: req.ManualSkillSelection,
+		OutputSchema:         req.OutputSchema,
+		NormalizeSkillNames:  commonadapter.NormalizeSkillNames,
+		PrepareSubmission: func(threadID string, selectedSkills []string, manualSkillSelection bool) (TurnStartEntryPrepareResult, error) {
+			return prepareSubmission(threadID, req.Input, selectedSkills, manualSkillSelection)
+		},
+		EnsureThreadReady:    ensureThreadReady,
+		HasActiveTrackedTurn: hasActiveTrackedTurn,
+		ResolveActiveTurnID:  resolveActiveTurnID,
+		BeginTrackedTurn:     beginTrackedTurn,
+		AppendUserTimeline: func(timelineCtx context.Context, opt TurnAppendUserTimelineOptions) {
+			appendUserTimeline(timelineCtx, req.Input, opt)
+		},
+	})
 }
 
 // TurnStartEntry handles turn/start orchestration from apiserver thin boundary.
@@ -409,11 +440,7 @@ func (a *Adapter) TurnStartEntry(ctx context.Context, opt TurnStartEntryOptions)
 	return TurnStartEntryResult{TurnID: startResult.TurnID}, nil
 }
 
-type TurnSteerEntryPrepareResult struct {
-	SubmitPrompt string
-	Images       []string
-	Files        []string
-}
+type TurnSteerEntryPrepareResult = contracts.TurnSteerEntryPrepareResult
 
 type TurnSteerEntryOptions struct {
 	ThreadID             string
@@ -422,7 +449,23 @@ type TurnSteerEntryOptions struct {
 
 	NormalizeSkillNames func([]string) ([]string, error)
 	PrepareSubmission   func(threadID string, selectedSkills []string, manualSkillSelection bool) (TurnSteerEntryPrepareResult, error)
-	WithThread          func(string, func(*runner.AgentProcess) (any, error)) (any, error)
+}
+
+// TurnSteerRequest carries protocol params for turn/steer.
+type TurnSteerRequest = contracts.TurnSteerRequest
+
+// TurnSteerFromInput handles turn/steer with constructor-time dependencies.
+func (a *Adapter) TurnSteerFromInput(req TurnSteerRequest) (map[string]any, error) {
+	prepareSubmission := a.prepareTurnSteerSubmission
+	return a.TurnSteerEntry(TurnSteerEntryOptions{
+		ThreadID:             req.ThreadID,
+		SelectedSkills:       req.SelectedSkills,
+		ManualSkillSelection: req.ManualSkillSelection,
+		NormalizeSkillNames:  commonadapter.NormalizeSkillNames,
+		PrepareSubmission: func(threadID string, selectedSkills []string, manualSkillSelection bool) (TurnSteerEntryPrepareResult, error) {
+			return prepareSubmission(threadID, req.Input, selectedSkills, manualSkillSelection)
+		},
+	})
 }
 
 // TurnSteerEntry handles turn/steer orchestration from apiserver thin boundary.
@@ -447,7 +490,6 @@ func (a *Adapter) TurnSteerEntry(opt TurnSteerEntryOptions) (map[string]any, err
 		SubmitPrompt: prepared.SubmitPrompt,
 		Images:       prepared.Images,
 		Files:        prepared.Files,
-		WithThread:   opt.WithThread,
 	})
 }
 
@@ -529,6 +571,22 @@ func ReadThreadRuntimeState(threadID string, readRuntimeStatus func(string) stri
 	return state
 }
 
+// ReadThreadRuntimeState reads normalized runtime state using adapter-owned tracker/runtime state.
+func (a *Adapter) ReadThreadRuntimeState(threadID string) string {
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return "idle"
+	}
+	readRuntimeStatus := func(threadID string) string {
+		if a == nil || a.ctx == nil || a.ctx.UIRuntime() == nil {
+			return ""
+		}
+		snapshot := a.ctx.UIRuntime().Snapshot()
+		return snapshot.Statuses[threadID]
+	}
+	return ReadThreadRuntimeState(id, readRuntimeStatus, a.HasActiveTrackedTurn)
+}
+
 // WaitInterruptOutcome waits until interrupt settles based on tracker/runtime state.
 func WaitInterruptOutcome(
 	threadID string,
@@ -574,57 +632,69 @@ func WaitInterruptOutcome(
 	}
 }
 
-type TurnInterruptOptions struct {
-	ThreadID  string
-	ParamsLen int
-
-	ReadThreadRuntimeState            func(string) string
-	HasActiveTrackedTurn              func(string) bool
-	CancelCodeRuns                    func(string) int
-	WithThread                        func(string, func(*runner.AgentProcess) (any, error)) (any, error)
-	CompleteTrackedTurn               func(string, string, string) (map[string]any, bool)
-	Notify                            func(string, any)
-	MarkTrackedTurnInterruptRequested func(string) bool
-	WaitInterruptOutcome              func(string, time.Duration, bool) (bool, string, int64, bool)
-	IsInterruptNoActiveTurnError      func(error) bool
-	InterruptSettleMode               func(bool, string) string
+// WaitInterruptOutcome waits for terminal state using adapter-owned tracker/runtime state.
+func (a *Adapter) WaitInterruptOutcome(threadID string, timeout time.Duration, activeHint bool) (bool, string, int64, bool) {
+	return WaitInterruptOutcome(threadID, timeout, activeHint, a.WaitTrackedTurnTerminal, a.ReadThreadRuntimeState)
 }
 
-// TurnInterrupt 执行 /interrupt 并等待状态收敛。
-func (a *Adapter) TurnInterrupt(opt TurnInterruptOptions) (any, error) {
+// TurnInterruptFromParams parses threadId and executes /interrupt flow.
+func (a *Adapter) TurnInterruptFromParams(params json.RawMessage) (any, error) {
+	var raw struct {
+		ThreadID string `json:"threadId"`
+	}
+	if err := json.Unmarshal(params, &raw); err != nil {
+		return nil, apperrors.Wrap(err, "Server.turnInterrupt", "unmarshal params")
+	}
+	return a.TurnInterrupt(raw.ThreadID, len(params))
+}
+
+// TurnInterrupt executes /interrupt using constructor-injected dependencies.
+func (a *Adapter) TurnInterrupt(threadID string, paramsLen int) (any, error) {
+	readThreadRuntimeState := a.ReadThreadRuntimeState
+	hasActiveTrackedTurn := a.HasActiveTrackedTurn
+	cancelCodeRuns := a.cancelCodeRuns
+	completeTrackedTurn := func(threadID, status, reason string) (map[string]any, bool) {
+		return a.CompleteTrackedTurnByID(threadID, "", status, reason)
+	}
+	notify := func(string, any) {}
+	if a != nil && a.ctx != nil {
+		notify = a.ctx.Notify
+	}
+	markInterruptRequested := a.MarkTrackedTurnInterruptRequested
+	waitInterruptOutcome := a.WaitInterruptOutcome
 	start := time.Now()
-	beforeState := opt.ReadThreadRuntimeState(opt.ThreadID)
-	activeTrackedBefore := opt.HasActiveTrackedTurn(opt.ThreadID)
+	beforeState := readThreadRuntimeState(threadID)
+	activeTrackedBefore := hasActiveTrackedTurn(threadID)
 	activeBefore := isInterruptActiveState(beforeState)
 	logger.Info("turn/interrupt: request",
-		logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
-		logger.FieldParamsLen, opt.ParamsLen,
+		logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
+		logger.FieldParamsLen, paramsLen,
 		"state_before", beforeState,
 		"active_before", activeBefore,
 		"active_tracked_before", activeTrackedBefore,
 	)
-	if cancelled := opt.CancelCodeRuns(opt.ThreadID); cancelled > 0 {
+	if cancelled := cancelCodeRuns(threadID); cancelled > 0 {
 		logger.Info("turn/interrupt: cancelled running code_run executions",
-			logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+			logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 			"cancelled_runs", cancelled,
 		)
 	}
-	return opt.WithThread(opt.ThreadID, func(proc *runner.AgentProcess) (any, error) {
+	return withProcess(a, "Server.turnInterrupt", threadID, func(proc *runner.AgentProcess) (any, error) {
 		if err := a.SendCommand(proc, "/interrupt", ""); err != nil {
-			if opt.IsInterruptNoActiveTurnError(err) {
+			if IsInterruptNoActiveTurnError(err) {
 				if activeBefore || activeTrackedBefore {
-					if completion, ok := opt.CompleteTrackedTurn(opt.ThreadID, "completed", "interrupt_no_active_turn"); ok {
-						opt.Notify("turn/completed", completion)
+					if completion, ok := completeTrackedTurn(threadID, "completed", "interrupt_no_active_turn"); ok {
+						notify("turn/completed", completion)
 					} else {
-						opt.Notify("turn/completed", map[string]any{
-							"threadId": opt.ThreadID,
+						notify("turn/completed", map[string]any{
+							"threadId": threadID,
 							"status":   "completed",
 							"reason":   "interrupt_no_active_turn",
 						})
 					}
 				}
 				logger.Info("turn/interrupt: no active turn",
-					logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+					logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 					"state_before", beforeState,
 					logger.FieldDurationMS, time.Since(start).Milliseconds(),
 				)
@@ -637,29 +707,29 @@ func (a *Adapter) TurnInterrupt(opt TurnInterruptOptions) (any, error) {
 				}, nil
 			}
 			logger.Warn("turn/interrupt: send command failed",
-				logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+				logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 				logger.FieldError, err,
 				logger.FieldDurationMS, time.Since(start).Milliseconds(),
 			)
 			return nil, err
 		}
 		logger.Info("turn/interrupt: command sent",
-			logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+			logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 			logger.FieldDurationMS, time.Since(start).Milliseconds(),
 		)
-		opt.MarkTrackedTurnInterruptRequested(opt.ThreadID)
-		confirmed, afterState, waitedMS, observedActive := opt.WaitInterruptOutcome(
-			opt.ThreadID,
+		markInterruptRequested(threadID)
+		confirmed, afterState, waitedMS, observedActive := waitInterruptOutcome(
+			threadID,
 			6*time.Second,
 			activeBefore || activeTrackedBefore,
 		)
-		mode := opt.InterruptSettleMode(confirmed, afterState)
+		mode := InterruptSettleMode(confirmed, afterState)
 		if !observedActive {
 			confirmed = false
 			mode = "no_active_turn"
 		}
 		logger.Info("turn/interrupt: settle",
-			logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+			logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 			"confirmed", confirmed,
 			"mode", mode,
 			"active_observed", observedActive,
@@ -680,58 +750,56 @@ func (a *Adapter) TurnInterrupt(opt TurnInterruptOptions) (any, error) {
 	})
 }
 
-// TurnForceCompleteOptions carries forced completion dependencies.
-type TurnForceCompleteOptions struct {
-	ThreadID string
-
-	CancelCodeRuns               func(string) int
-	WithThread                   func(string, func(*runner.AgentProcess) (any, error)) (any, error)
-	IsInterruptNoActiveTurnError func(error) bool
-	CompleteTrackedTurn          func(string, string, string) (map[string]any, bool)
-	Notify                       func(string, any)
+// TurnForceCompleteFromParams parses threadId and executes forced completion flow.
+func (a *Adapter) TurnForceCompleteFromParams(params json.RawMessage) (any, error) {
+	var raw struct {
+		ThreadID string `json:"threadId"`
+	}
+	if err := json.Unmarshal(params, &raw); err != nil {
+		return nil, apperrors.Wrap(err, "Server.turnForceComplete", "unmarshal params")
+	}
+	return a.TurnForceComplete(raw.ThreadID)
 }
 
-// TurnForceComplete forcibly finalizes current turn state (best effort interrupt + tracker cleanup).
-func (a *Adapter) TurnForceComplete(opt TurnForceCompleteOptions) (any, error) {
+// TurnForceComplete forcibly finalizes current turn state using constructor-injected dependencies.
+func (a *Adapter) TurnForceComplete(threadID string) (any, error) {
+	cancelCodeRuns := a.cancelCodeRuns
+	completeTrackedTurn := func(threadID, status, reason string) (map[string]any, bool) {
+		return a.CompleteTrackedTurnByID(threadID, "", status, reason)
+	}
+	notify := func(string, any) {}
+	if a != nil && a.ctx != nil {
+		notify = a.ctx.Notify
+	}
 	logger.Info("turn/forceComplete: request",
-		logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
+		logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
 	)
-	if opt.CancelCodeRuns != nil {
-		if cancelled := opt.CancelCodeRuns(opt.ThreadID); cancelled > 0 {
-			logger.Info("turn/forceComplete: cancelled running code_run executions",
-				logger.FieldAgentID, opt.ThreadID, logger.FieldThreadID, opt.ThreadID,
-				"cancelled_runs", cancelled,
-			)
-		}
+	if cancelled := cancelCodeRuns(threadID); cancelled > 0 {
+		logger.Info("turn/forceComplete: cancelled running code_run executions",
+			logger.FieldAgentID, threadID, logger.FieldThreadID, threadID,
+			"cancelled_runs", cancelled,
+		)
 	}
-	if opt.WithThread == nil {
-		return nil, apperrors.New("Server.turnForceComplete", "thread resolver is not configured")
-	}
-	return opt.WithThread(opt.ThreadID, func(proc *runner.AgentProcess) (any, error) {
+	return withProcess(a, "Server.turnForceComplete", threadID, func(proc *runner.AgentProcess) (any, error) {
 		if err := a.SendCommand(proc, "/interrupt", ""); err != nil {
 			noActiveTurn := IsInterruptNoActiveTurnError(err)
-			if opt.IsInterruptNoActiveTurnError != nil {
-				noActiveTurn = opt.IsInterruptNoActiveTurnError(err)
-			}
 			if noActiveTurn {
 				logger.Info("turn/forceComplete: no active turn (best-effort)",
-					logger.FieldAgentID, opt.ThreadID)
+					logger.FieldAgentID, threadID)
 			} else {
 				logger.Warn("turn/forceComplete: interrupt failed (best-effort)",
-					logger.FieldAgentID, opt.ThreadID, logger.FieldError, err)
+					logger.FieldAgentID, threadID, logger.FieldError, err)
 			}
 		}
 
-		if opt.CompleteTrackedTurn != nil && opt.Notify != nil {
-			if completion, ok := opt.CompleteTrackedTurn(opt.ThreadID, "completed", "force_complete"); ok {
-				opt.Notify("turn/completed", completion)
-			} else {
-				opt.Notify("turn/completed", map[string]any{
-					"threadId": opt.ThreadID,
-					"status":   "completed",
-					"reason":   "force_complete",
-				})
-			}
+		if completion, ok := completeTrackedTurn(threadID, "completed", "force_complete"); ok {
+			notify("turn/completed", completion)
+		} else {
+			notify("turn/completed", map[string]any{
+				"threadId": threadID,
+				"status":   "completed",
+				"reason":   "force_complete",
+			})
 		}
 
 		return map[string]any{
@@ -940,6 +1008,18 @@ func BuildSelectedSkillPrompt(opt BuildSelectedSkillPromptOptions) (string, int)
 	return strings.Join(texts, "\n"), len(texts)
 }
 
+// BuildSelectedSkillPrompt reads selected-skill prompt using adapter-owned dependencies.
+func (a *Adapter) BuildSelectedSkillPrompt(selectedSkills []string) (string, int) {
+	if a == nil {
+		return "", 0
+	}
+	return BuildSelectedSkillPrompt(BuildSelectedSkillPromptOptions{
+		SelectedSkills:   selectedSkills,
+		ReadSkillContent: a.readSkillContent,
+		SkillInputText:   commonadapter.SkillInputText,
+	})
+}
+
 // ResolveLSPUsagePromptHintOptions carries dependencies for LSP hint resolution.
 type ResolveLSPUsagePromptHintOptions struct {
 	DefaultHint string
@@ -973,12 +1053,41 @@ func ResolveLSPUsagePromptHint(ctx context.Context, opt ResolveLSPUsagePromptHin
 	return hint
 }
 
+// ResolveLSPUsagePromptHint resolves LSP hint using adapter-owned preference store.
+func (a *Adapter) ResolveLSPUsagePromptHint(ctx context.Context, defaultHint string, maxHintLen int) string {
+	var getPref func(context.Context, string) (any, error)
+	if a != nil && a.ctx != nil && a.ctx.Store() != nil {
+		getPref = a.ctx.Store().Get
+	}
+	return ResolveLSPUsagePromptHint(ctx, ResolveLSPUsagePromptHintOptions{
+		DefaultHint: defaultHint,
+		MaxHintLen:  maxHintLen,
+		GetPref:     getPref,
+	})
+}
+
 // PrependLSPAvailabilityWarningOptions carries dependencies for LSP warning.
 type PrependLSPAvailabilityWarningOptions struct {
 	Hint                       string
 	DynamicToolNames           map[string]struct{}
 	CollectReferencedToolNames func(string) []string
 	MergePromptText            func(string, string) string
+}
+
+// CollectDynamicToolNames builds a set of dynamic tool names.
+func CollectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]struct{} {
+	if len(dynamicTools) == 0 {
+		return nil
+	}
+	toolNames := make(map[string]struct{}, len(dynamicTools))
+	for _, tool := range dynamicTools {
+		name := strings.TrimSpace(tool.Name)
+		if name == "" {
+			continue
+		}
+		toolNames[name] = struct{}{}
+	}
+	return toolNames
 }
 
 // PrependLSPAvailabilityWarning adds a warning when referenced LSP tools are unavailable.
@@ -1009,6 +1118,16 @@ func PrependLSPAvailabilityWarning(opt PrependLSPAvailabilityWarningOptions) (st
 		return warning + "\n" + opt.Hint, missing
 	}
 	return merge(warning, opt.Hint), missing
+}
+
+// PrependLSPAvailabilityWarning resolves warning content with adapter-owned defaults.
+func (a *Adapter) PrependLSPAvailabilityWarning(hint string, dynamicTools []agentcore.DynamicTool, mergePromptText func(string, string) string) (string, []string) {
+	return PrependLSPAvailabilityWarning(PrependLSPAvailabilityWarningOptions{
+		Hint:                       hint,
+		DynamicToolNames:           CollectDynamicToolNames(dynamicTools),
+		CollectReferencedToolNames: commonadapter.CollectReferencedLSPToolNames,
+		MergePromptText:            mergePromptText,
+	})
 }
 
 // FuzzyFileSearchOptions carries dependencies for fuzzy file search.
@@ -1055,4 +1174,13 @@ func FuzzyFileSearch(opt FuzzyFileSearchOptions) []map[string]any {
 	}
 
 	return results
+}
+
+// FuzzyFileSearch walks roots using adapter entry.
+func (a *Adapter) FuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern string) bool) []map[string]any {
+	return FuzzyFileSearch(FuzzyFileSearchOptions{
+		Query:      query,
+		Roots:      roots,
+		FuzzyMatch: fuzzyMatch,
+	})
 }

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
+	"github.com/multi-agent/go-agent-v2/internal/skillutil"
 )
 
 var inlineCodeTokenPattern = regexp.MustCompile("`([^`\\n]+)`")
@@ -161,11 +161,7 @@ func (a *Adapter) NormalizeSkillName(raw string) (string, error) {
 
 // NormalizeSkillName validates skill name.
 func NormalizeSkillName(raw string) (string, error) {
-	name := strings.TrimSpace(raw)
-	if name == "" {
-		return "", apperrors.New("normalizeSkillName", "skill name is required")
-	}
-	return name, nil
+	return skillutil.NormalizeName(raw)
 }
 
 // NormalizeSkillNames deduplicates and validates skill name list.

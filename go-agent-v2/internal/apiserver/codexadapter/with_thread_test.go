@@ -1,128 +1,153 @@
 package codexadapter
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/internal/store"
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 
-// ========================================
-// E1: withThreadTyped — 泛型 WithThread 包装器
-// ========================================
-
-type fakeResult struct {
-	Value string
+type fakeClient struct {
+	port     int
+	threadID string
+	running  bool
 }
 
-func TestWithThreadTyped_Success(t *testing.T) {
-	mockWithThread := func(id string, fn func(*runner.AgentProcess) (any, error)) (any, error) {
-		return fn(nil) // proc not needed for test
+func (c *fakeClient) GetPort() int { return c.port }
+func (c *fakeClient) GetThreadID() string {
+	return c.threadID
+}
+func (c *fakeClient) SetEventHandler(agentcore.EventHandler) {}
+func (c *fakeClient) SpawnAndConnect(context.Context, string, string, string, string, []agentcore.DynamicTool) error {
+	c.running = true
+	return nil
+}
+func (c *fakeClient) Submit(string, []string, []string, json.RawMessage) error { return nil }
+func (c *fakeClient) SendCommand(string, string) error                         { return nil }
+func (c *fakeClient) SendDynamicToolResult(string, string, *int64) error       { return nil }
+func (c *fakeClient) RespondError(int64, int, string) error                    { return nil }
+func (c *fakeClient) ListThreads() ([]agentcore.ThreadInfo, error)             { return nil, nil }
+func (c *fakeClient) ResumeThread(agentcore.ResumeThreadRequest) error         { return nil }
+func (c *fakeClient) ForkThread(agentcore.ForkThreadRequest) (*agentcore.ForkThreadResponse, error) {
+	return &agentcore.ForkThreadResponse{ThreadID: c.threadID}, nil
+}
+func (c *fakeClient) Shutdown() error {
+	c.running = false
+	return nil
+}
+func (c *fakeClient) Kill() error {
+	c.running = false
+	return nil
+}
+func (c *fakeClient) Running() bool { return c.running }
+
+type testServerContext struct {
+	mgr *runner.AgentManager
+}
+
+func (c testServerContext) Manager() *runner.AgentManager             { return c.mgr }
+func (testServerContext) Store() *uistate.PreferenceManager           { return nil }
+func (testServerContext) BindingStore() *store.AgentCodexBindingStore { return nil }
+func (testServerContext) AgentStatusStore() *store.AgentStatusStore   { return nil }
+func (testServerContext) UIRuntime() *uistate.RuntimeManager          { return nil }
+func (testServerContext) Notify(string, any)                          {}
+
+func newTestManager(t *testing.T) *runner.AgentManager {
+	t.Helper()
+	factory := func(port int, agentID string) agentcore.Client {
+		return &fakeClient{port: port, threadID: agentID, running: true}
 	}
-	result, err := withThreadTyped("thread-1", mockWithThread, "Test.success",
-		func(proc *runner.AgentProcess) (fakeResult, error) {
-			return fakeResult{Value: "ok"}, nil
-		})
+	mgr, err := runner.NewAgentManager(factory, factory)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("NewAgentManager() error = %v", err)
 	}
-	if result.Value != "ok" {
-		t.Errorf("got %q, want %q", result.Value, "ok")
+	return mgr
+}
+
+func TestResolveProcess_EmptyThreadID(t *testing.T) {
+	a := &Adapter{}
+	_, err := a.resolveProcess("Test.resolveProcess", "   ")
+	if err == nil || !strings.Contains(err.Error(), "threadId is required") {
+		t.Fatalf("resolveProcess() err = %v, want threadId is required", err)
 	}
 }
 
-func TestWithThreadTyped_EmptyThreadID(t *testing.T) {
-	mockWithThread := func(id string, fn func(*runner.AgentProcess) (any, error)) (any, error) {
-		t.Fatal("should not be called")
-		return nil, nil
-	}
-	_, err := withThreadTyped("", mockWithThread, "Test.empty",
-		func(proc *runner.AgentProcess) (fakeResult, error) {
-			return fakeResult{}, nil
-		})
-	if err == nil {
-		t.Fatal("expected error for empty threadID")
-	}
-	if got := err.Error(); !containsSubstr(got, "threadId is required") {
-		t.Errorf("error should mention 'threadId is required', got: %s", got)
+func TestResolveProcess_ResolverNotConfigured(t *testing.T) {
+	var a *Adapter
+	_, err := a.resolveProcess("Test.resolveProcess", "thread-1")
+	if err == nil || !strings.Contains(err.Error(), "thread resolver is not configured") {
+		t.Fatalf("resolveProcess() err = %v, want resolver not configured", err)
 	}
 }
 
-func TestWithThreadTyped_WhitespaceThreadID(t *testing.T) {
-	_, err := withThreadTyped("   ", nil, "Test.ws",
-		func(proc *runner.AgentProcess) (fakeResult, error) {
-			return fakeResult{}, nil
-		})
-	if err == nil {
-		t.Fatal("expected error for whitespace-only threadID")
+func TestResolveProcess_NotFound(t *testing.T) {
+	mgr := newTestManager(t)
+	a := &Adapter{ctx: testServerContext{mgr: mgr}}
+	_, err := a.resolveProcess("Test.resolveProcess", "thread-404")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("resolveProcess() err = %v, want not found", err)
 	}
 }
 
-func TestWithThreadTyped_NilWithThread(t *testing.T) {
-	_, err := withThreadTyped("thread-1", nil, "Test.nil",
-		func(proc *runner.AgentProcess) (fakeResult, error) {
-			return fakeResult{}, nil
-		})
-	if err == nil {
-		t.Fatal("expected error for nil WithThread")
+func TestWithProcess_Success(t *testing.T) {
+	mgr := newTestManager(t)
+	if err := mgr.Launch(context.Background(), "thread-1", "thread-1", "", ".", "", nil); err != nil {
+		t.Fatalf("Launch() error = %v", err)
 	}
-	if got := err.Error(); !containsSubstr(got, "thread resolver is not configured") {
-		t.Errorf("error should mention 'thread resolver is not configured', got: %s", got)
-	}
-}
+	t.Cleanup(func() { _ = mgr.Stop("thread-1") })
 
-func TestWithThreadTyped_FnError(t *testing.T) {
-	mockWithThread := func(id string, fn func(*runner.AgentProcess) (any, error)) (any, error) {
-		return fn(nil)
-	}
-	_, err := withThreadTyped("thread-1", mockWithThread, "Test.fnErr",
-		func(proc *runner.AgentProcess) (fakeResult, error) {
-			return fakeResult{}, errors.New("inner error")
-		})
-	if err == nil {
-		t.Fatal("expected error from inner function")
-	}
-	if got := err.Error(); !containsSubstr(got, "inner error") {
-		t.Errorf("error should propagate, got: %s", got)
-	}
-}
-
-func TestWithThreadTyped_MapResult(t *testing.T) {
-	mockWithThread := func(id string, fn func(*runner.AgentProcess) (any, error)) (any, error) {
-		return fn(nil)
-	}
-	result, err := withThreadTyped("thread-1", mockWithThread, "Test.map",
-		func(proc *runner.AgentProcess) (map[string]any, error) {
-			return map[string]any{"ok": true}, nil
-		})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result["ok"] != true {
-		t.Errorf("got %v, want map with ok=true", result)
-	}
-}
-
-func TestWithThreadTyped_TrimsThreadID(t *testing.T) {
-	var receivedID string
-	mockWithThread := func(id string, fn func(*runner.AgentProcess) (any, error)) (any, error) {
-		receivedID = id
-		return fn(nil)
-	}
-	_, _ = withThreadTyped("  thread-1  ", mockWithThread, "Test.trim",
-		func(proc *runner.AgentProcess) (fakeResult, error) {
-			return fakeResult{}, nil
-		})
-	if receivedID != "thread-1" {
-		t.Errorf("threadID not trimmed: got %q, want %q", receivedID, "thread-1")
-	}
-}
-
-func containsSubstr(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
+	a := &Adapter{ctx: testServerContext{mgr: mgr}}
+	got, err := withProcess(a, "Test.withProcess", "thread-1", func(proc *runner.AgentProcess) (string, error) {
+		if proc == nil {
+			t.Fatal("proc is nil")
 		}
+		return "ok", nil
+	})
+	if err != nil {
+		t.Fatalf("withProcess() error = %v", err)
 	}
-	return false
+	if got != "ok" {
+		t.Fatalf("withProcess() = %q, want %q", got, "ok")
+	}
+}
+
+func TestWithProcess_TrimmedThreadID(t *testing.T) {
+	mgr := newTestManager(t)
+	if err := mgr.Launch(context.Background(), "thread-1", "thread-1", "", ".", "", nil); err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop("thread-1") })
+
+	a := &Adapter{ctx: testServerContext{mgr: mgr}}
+	_, err := withProcess(a, "Test.withProcess", "  thread-1  ", func(proc *runner.AgentProcess) (int, error) {
+		if proc == nil {
+			t.Fatal("proc is nil")
+		}
+		return 1, nil
+	})
+	if err != nil {
+		t.Fatalf("withProcess() error = %v", err)
+	}
+}
+
+func TestWithProcess_PropagatesFnError(t *testing.T) {
+	mgr := newTestManager(t)
+	if err := mgr.Launch(context.Background(), "thread-1", "thread-1", "", ".", "", nil); err != nil {
+		t.Fatalf("Launch() error = %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop("thread-1") })
+
+	a := &Adapter{ctx: testServerContext{mgr: mgr}}
+	_, err := withProcess(a, "Test.withProcess", "thread-1", func(*runner.AgentProcess) (int, error) {
+		return 0, errors.New("inner error")
+	})
+	if err == nil || !strings.Contains(err.Error(), "inner error") {
+		t.Fatalf("withProcess() err = %v, want inner error", err)
+	}
 }

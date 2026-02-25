@@ -4,47 +4,14 @@ import (
 	"strings"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
+	"github.com/multi-agent/go-agent-v2/internal/skillutil"
 )
 
-type AutoMatchInput struct {
-	Type string
-	Name string
-}
-
-type SkillMatchCandidate struct {
-	Name         string
-	ForceWords   []string
-	TriggerWords []string
-}
-
-type AutoMatchedSkillMatch struct {
-	Name         string
-	MatchedBy    string
-	MatchedTerms []string
-}
-
-type AutoSkillMatchOptions struct {
-	IncludeConfiguredExplicit bool
-	IncludeConfiguredForce    bool
-}
-
-func collectInputSkillNames(inputs []AutoMatchInput) map[string]struct{} {
-	if len(inputs) == 0 {
-		return nil
-	}
-	set := make(map[string]struct{}, len(inputs))
-	for _, input := range inputs {
-		if !strings.EqualFold(strings.TrimSpace(input.Type), "skill") {
-			continue
-		}
-		name := strings.ToLower(strings.TrimSpace(input.Name))
-		if name == "" {
-			continue
-		}
-		set[name] = struct{}{}
-	}
-	return set
-}
+type AutoMatchInput = contracts.AutoMatchInput
+type SkillMatchCandidate = contracts.SkillMatchCandidate
+type AutoMatchedSkillMatch = contracts.AutoMatchedSkillMatch
+type AutoSkillMatchOptions = contracts.AutoSkillMatchOptions
 
 // CollectAutoMatchedSkillMatches classifies force/explicit matched skills for turn prompt injection.
 func CollectAutoMatchedSkillMatches(
@@ -58,7 +25,11 @@ func CollectAutoMatchedSkillMatches(
 	if normalizedPrompt == "" || len(candidates) == 0 {
 		return nil
 	}
-	inputSkillSet := collectInputSkillNames(inputs)
+	inputSkillSet := skillutil.CollectInputSkillNames(
+		inputs,
+		func(input AutoMatchInput) string { return input.Type },
+		func(input AutoMatchInput) string { return input.Name },
+	)
 	configuredSet := commonadapter.CollectSkillNameSet(configuredSkillNames)
 
 	matches := make([]AutoMatchedSkillMatch, 0, len(candidates))
@@ -94,6 +65,17 @@ func CollectAutoMatchedSkillMatches(
 		})
 	}
 	return matches
+}
+
+// CollectAutoMatchedSkillMatches evaluates auto-match candidates with adapter entry.
+func (a *Adapter) CollectAutoMatchedSkillMatches(
+	prompt string,
+	inputs []AutoMatchInput,
+	configuredSkillNames []string,
+	candidates []SkillMatchCandidate,
+	options AutoSkillMatchOptions,
+) []AutoMatchedSkillMatch {
+	return CollectAutoMatchedSkillMatches(prompt, inputs, configuredSkillNames, candidates, options)
 }
 
 type RenderAutoMatchedSkillPromptOptions struct {
@@ -139,4 +121,18 @@ func RenderAutoMatchedSkillPrompt(opt RenderAutoMatchedSkillPromptOptions) (stri
 		return "", 0
 	}
 	return strings.Join(texts, "\n"), len(texts)
+}
+
+// RenderAutoMatchedSkillPrompt renders matched-skill prompt using adapter-owned dependencies.
+func (a *Adapter) RenderAutoMatchedSkillPrompt(matches []AutoMatchedSkillMatch, onReadSkillError func(skillName, matchedBy string, err error)) (string, int) {
+	if a == nil {
+		return "", 0
+	}
+	return RenderAutoMatchedSkillPrompt(RenderAutoMatchedSkillPromptOptions{
+		Matches:          matches,
+		ReadSkillContent: a.readSkillContent,
+		MergePromptText:  commonadapter.MergePromptText,
+		SkillInputText:   commonadapter.SkillInputText,
+		OnReadSkillError: onReadSkillError,
+	})
 }

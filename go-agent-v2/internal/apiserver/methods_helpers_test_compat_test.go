@@ -2,16 +2,17 @@ package apiserver
 
 import (
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 
-func toCodexTurnInputsForTest(inputs []UserInput) []codexadapter.TurnInput {
+func toCodexTurnInputsForTest(inputs []UserInput) []contracts.TurnInput {
 	if len(inputs) == 0 {
 		return nil
 	}
-	out := make([]codexadapter.TurnInput, 0, len(inputs))
+	out := make([]contracts.TurnInput, 0, len(inputs))
 	for _, inp := range inputs {
-		out = append(out, codexadapter.TurnInput{
+		out = append(out, contracts.TurnInput{
 			Type:    inp.Type,
 			Text:    inp.Text,
 			URL:     inp.URL,

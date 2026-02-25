@@ -45,17 +45,11 @@ type codeRunTrackerProvider struct {
 }
 
 func (p codeRunTrackerProvider) RegisterCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string {
-	if p.s == nil {
-		return ""
-	}
-	return p.s.codeRunState.registerCodeRunCancel(agentID, callID, cancel)
+	return registerCodeRunCancelState(p.s, agentID, callID, cancel)
 }
 
 func (p codeRunTrackerProvider) UnregisterCodeRunCancel(agentID, runKey string) {
-	if p.s == nil {
-		return
-	}
-	p.s.codeRunState.unregisterCodeRunCancel(agentID, runKey)
+	unregisterCodeRunCancelState(p.s, agentID, runKey)
 }
 
 type codeRunProvider struct {
@@ -157,31 +151,19 @@ type agentRuntimeProvider struct {
 }
 
 func (p agentRuntimeProvider) CancelCodeRuns(agentID string) int {
-	if p.s == nil {
-		return 0
-	}
-	return p.s.codeRunState.cancelCodeRuns(agentID)
+	return cancelCodeRunsState(p.s, agentID)
 }
 
 func (p agentRuntimeProvider) SetAgentWorkDir(agentID, cwd string) {
-	if p.s == nil {
-		return
-	}
-	p.s.codeRunState.setAgentWorkDir(agentID, cwd)
+	setAgentWorkDirState(p.s, agentID, cwd)
 }
 
 func (p agentRuntimeProvider) ClearAgentWorkDir(agentID string) {
-	if p.s == nil {
-		return
-	}
-	p.s.codeRunState.clearAgentWorkDir(agentID)
+	clearAgentWorkDirState(p.s, agentID)
 }
 
 func (p agentRuntimeProvider) GetAgentWorkDir(agentID string) string {
-	if p.s == nil {
-		return ""
-	}
-	return p.s.codeRunState.getAgentWorkDir(agentID)
+	return getAgentWorkDirState(p.s, agentID)
 }
 
 type schemaProvider struct {

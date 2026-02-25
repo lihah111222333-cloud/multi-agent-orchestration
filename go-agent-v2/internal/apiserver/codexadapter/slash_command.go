@@ -13,12 +13,9 @@ import (
 
 // sendSlashCommand executes slash command and emits diagnostic logs.
 func (a *Adapter) sendSlashCommand(ctx context.Context, threadID string, command string, paramsLen int) (map[string]any, error) {
-	readThreadRuntimeState := a.ReadThreadRuntimeState
-	hasActiveTrackedTurn := a.HasActiveTrackedTurn
-
 	start := time.Now()
-	stateBefore := readThreadRuntimeState(threadID)
-	activeTrackedBefore := hasActiveTrackedTurn(threadID)
+	stateBefore := a.ReadThreadRuntimeState(threadID)
+	activeTrackedBefore := a.HasActiveTrackedTurn(threadID)
 	activeBefore := IsInterruptActiveState(stateBefore)
 
 	logger.Info("slash/command: request",
@@ -80,14 +77,14 @@ func (a *Adapter) sendSlashCommand(ctx context.Context, threadID string, command
 }
 
 func (a *Adapter) resolveThreadForSlashCommand(ctx context.Context, threadID string) (*runner.AgentProcess, error) {
-	if a == nil || a.ctx == nil || a.ctx.Manager() == nil {
+	if a == nil || a.ctx == nil || a.ctx.Manager == nil {
 		return nil, apperrors.New("Server.sendSlashCommand", "thread manager is not initialized")
 	}
 	id := strings.TrimSpace(threadID)
 	if id == "" {
 		return nil, apperrors.New("Server.sendSlashCommand", "threadId is required")
 	}
-	if proc := a.ctx.Manager().Get(id); proc != nil {
+	if proc := a.ctx.Manager.Get(id); proc != nil {
 		return proc, nil
 	}
 	proc, err := a.EnsureThreadReadyForTurn(ctx, id, "")
@@ -117,12 +114,7 @@ func (a *Adapter) SendSlashCommandWithArgs(params json.RawMessage, command strin
 	if err != nil {
 		return nil, err
 	}
-	return withProcess(a, "Server.sendSlashCommandWithArgs", threadID, func(proc *runner.AgentProcess) (map[string]any, error) {
-		if sendErr := a.SendCommand(proc, command, args); sendErr != nil {
-			return nil, sendErr
-		}
-		return map[string]any{}, nil
-	})
+	return a.sendThreadCommand("Server.sendSlashCommandWithArgs", threadID, command, args, "send slash command")
 }
 
 // ThreadSkillsList normalizes thread/skills/list payload.

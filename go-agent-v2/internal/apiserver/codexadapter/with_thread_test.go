@@ -47,7 +47,7 @@ func (c *fakeClient) Running() bool { return c.running }
 
 func testDeps(mgr *runner.AgentManager) *Deps {
 	return normalizeDeps(Deps{
-		Manager: func() *runner.AgentManager { return mgr },
+		Manager: mgr,
 	})
 }
 

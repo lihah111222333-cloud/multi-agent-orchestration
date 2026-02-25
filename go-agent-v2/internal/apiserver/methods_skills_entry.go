@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	skillsruntime "github.com/multi-agent/go-agent-v2/internal/skills"
 )
@@ -37,9 +38,9 @@ func newSkillsManager(s *Server) *skillsruntime.Manager {
 		if s == nil || s.codexAdapter == nil {
 			return nil
 		}
-		turnInput := make([]codexadapter.TurnInput, 0, len(input))
+		turnInput := make([]contracts.TurnInput, 0, len(input))
 		for _, item := range input {
-			turnInput = append(turnInput, codexadapter.TurnInput{
+			turnInput = append(turnInput, contracts.TurnInput{
 				Type:    item.Type,
 				Text:    item.Text,
 				URL:     item.URL,

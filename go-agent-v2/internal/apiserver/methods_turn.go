@@ -93,13 +93,21 @@ func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, erro
 	})
 }
 
-func (s *Server) turnInterrupt(_ context.Context, params json.RawMessage) (any, error) {
-	return s.codexAdapter.TurnInterruptFromParams(params)
+type turnInterruptParams struct {
+	ThreadID string `json:"threadId"`
+}
+
+func (s *Server) turnInterrupt(_ context.Context, p turnInterruptParams) (any, error) {
+	return s.codexAdapter.TurnInterrupt(p.ThreadID)
+}
+
+type turnForceCompleteParams struct {
+	ThreadID string `json:"threadId"`
 }
 
 // turnForceComplete 强制完成当前 turn (中断 + 清理跟踪状态)。
-func (s *Server) turnForceComplete(_ context.Context, params json.RawMessage) (any, error) {
-	return s.codexAdapter.TurnForceCompleteFromParams(params)
+func (s *Server) turnForceComplete(_ context.Context, p turnForceCompleteParams) (any, error) {
+	return s.codexAdapter.TurnForceComplete(p.ThreadID)
 }
 
 // reviewStartParams review/start 请求参数。

@@ -36,7 +36,7 @@ type threadStartResponse struct {
 }
 
 func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any, error) {
-	result, err := s.codexAdapter.ThreadStartFromParams(
+	result, err := s.codexAdapter.ThreadStart(
 		ctx,
 		fmt.Sprintf("thread-%d-%d", time.Now().UnixMilli(), nextThreadSeq(s)),
 		p.Cwd,
@@ -79,7 +79,7 @@ type threadForkResponse struct {
 }
 
 func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, error) {
-	result, err := s.codexAdapter.ThreadForkByID(p.ThreadID)
+	result, err := s.codexAdapter.ThreadFork(p.ThreadID)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ type threadMessagesParams struct {
 }
 
 func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams) (any, error) {
-	return s.codexAdapter.ThreadMessagesByID(ctx, p.ThreadID, p.Limit, p.Before)
+	return s.codexAdapter.ThreadMessages(ctx, p.ThreadID, p.Limit, p.Before)
 }
 
 // threadListResponse thread/list 响应。
@@ -164,7 +164,7 @@ type threadListResponse struct {
 }
 
 func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error) {
-	threads, err := s.codexAdapter.ThreadListDefault(ctx)
+	threads, err := s.codexAdapter.ThreadList(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +177,7 @@ type threadLoadedListResponse struct {
 }
 
 func (s *Server) threadLoadedList(ctx context.Context, _ json.RawMessage) (any, error) {
-	threads, err := s.codexAdapter.ThreadLoadedListDefault(ctx)
+	threads, err := s.codexAdapter.ThreadLoadedList(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -185,9 +185,9 @@ func (s *Server) threadLoadedList(ctx context.Context, _ json.RawMessage) (any, 
 }
 
 func (s *Server) threadReadTyped(ctx context.Context, p threadIDParams) (any, error) {
-	return s.codexAdapter.ThreadReadByID(ctx, p.ThreadID)
+	return s.codexAdapter.ThreadRead(ctx, p.ThreadID)
 }
 
 func (s *Server) threadResolveTyped(ctx context.Context, p threadIDParams) (any, error) {
-	return s.codexAdapter.ThreadResolveByID(ctx, p.ThreadID)
+	return s.codexAdapter.ThreadResolve(ctx, p.ThreadID)
 }

@@ -3,6 +3,7 @@ package codexadapter
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
@@ -43,6 +44,13 @@ func (a *Adapter) cancelCodeRuns(agentID string) int {
 		return 0
 	}
 	return a.ctx.CancelCodeRuns(agentID)
+}
+
+func (a *Adapter) nowUnixMilli() int64 {
+	if a == nil || a.ctx == nil || a.ctx.NowUnixMilli == nil {
+		return time.Now().UnixMilli()
+	}
+	return a.ctx.NowUnixMilli()
 }
 
 func (a *Adapter) readSkillContent(skillName string) (string, error) {

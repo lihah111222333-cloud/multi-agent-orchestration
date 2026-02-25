@@ -61,17 +61,15 @@ func TestP2GroupedStateFieldAccessBoundaries(t *testing.T) {
 		"threadAliasState":      {},
 	}
 
-	allowedRawFieldOutsideStateGroups := map[string]map[string]struct{}{
-		"diagMu":    allowFileSet("server_diagnostics.go"),
-		"diagCache": allowFileSet("server_diagnostics.go"),
-	}
+	allowedRawFieldOutsideStateGroups := map[string]map[string]struct{}{}
 
 	allowedStateGroupSelectorFiles := allowFileSet(
-		"server.go",
 		"server_state_groups.go",
-		"server_conn.go",
 		"server_context_accessors.go",
-		"server_diagnostics.go",
+		"server_context_turn_ui_runtime.go",
+		"server_context_conn_accessors.go",
+		"server_context_diag_accessors.go",
+		"server_context_codex.go",
 	)
 
 	fset := token.NewFileSet()
@@ -100,8 +98,7 @@ func TestP2GroupedStateFieldAccessBoundaries(t *testing.T) {
 			if !ok || sel.Sel == nil {
 				return true
 			}
-			owner, ok := sel.X.(*ast.Ident)
-			if !ok || owner.Name != "s" {
+			if !isServerStateOwner(sel.X) {
 				return true
 			}
 
@@ -149,4 +146,22 @@ func allowFileSet(names ...string) map[string]struct{} {
 		out[trimmed] = struct{}{}
 	}
 	return out
+}
+
+func isServerStateOwner(expr ast.Expr) bool {
+	switch typed := expr.(type) {
+	case *ast.Ident:
+		return typed.Name == "s"
+	case *ast.SelectorExpr:
+		if typed.Sel != nil && typed.Sel.Name == "s" {
+			return true
+		}
+		return isServerStateOwner(typed.X)
+	case *ast.ParenExpr:
+		return isServerStateOwner(typed.X)
+	case *ast.StarExpr:
+		return isServerStateOwner(typed.X)
+	default:
+		return false
+	}
 }

@@ -44,24 +44,28 @@ func normalizeCodeReferencePath(raw string) string {
 	return strings.TrimSpace(value)
 }
 
+func appendNormalizedProjectRoot(roots *[]string, seen map[string]struct{}, raw string) {
+	if roots == nil {
+		return
+	}
+	normalized := normalizeProjectPath(raw)
+	if normalized == "" || normalized == "." {
+		return
+	}
+	key := strings.ToLower(filepath.Clean(normalized))
+	if _, exists := seen[key]; exists {
+		return
+	}
+	seen[key] = struct{}{}
+	*roots = append(*roots, normalized)
+}
+
 func normalizeProjectRoots(project string, projects []string) []string {
 	seen := map[string]struct{}{}
 	roots := make([]string, 0, len(projects)+2)
-	appendRoot := func(raw string) {
-		normalized := normalizeProjectPath(raw)
-		if normalized == "" || normalized == "." {
-			return
-		}
-		key := strings.ToLower(filepath.Clean(normalized))
-		if _, exists := seen[key]; exists {
-			return
-		}
-		seen[key] = struct{}{}
-		roots = append(roots, normalized)
-	}
-	appendRoot(project)
+	appendNormalizedProjectRoot(&roots, seen, project)
 	for _, item := range projects {
-		appendRoot(item)
+		appendNormalizedProjectRoot(&roots, seen, item)
 	}
 	return roots
 }

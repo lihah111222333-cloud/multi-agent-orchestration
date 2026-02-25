@@ -14,15 +14,12 @@ import (
 )
 
 // Deps defines codex adapter runtime dependencies.
-//
-// Function fields keep wiring explicit and avoid hard-coupling Adapter to
-// apiserver.Server method sets.
 type Deps struct {
-	Manager                  func() *runner.AgentManager
-	Store                    func() *uistate.PreferenceManager
-	BindingStore             func() *store.AgentCodexBindingStore
-	AgentStatusStore         func() *store.AgentStatusStore
-	UIRuntime                func() *uistate.RuntimeManager
+	Manager                  *runner.AgentManager
+	Store                    *uistate.PreferenceManager
+	BindingStore             *store.AgentCodexBindingStore
+	AgentStatusStore         *store.AgentStatusStore
+	UIRuntime                *uistate.RuntimeManager
 	AllSchemas               func() []agentcore.DynamicTool
 	NowUnixMilli             func() int64
 	SetAgentWorkDir          func(agentID, cwd string)
@@ -34,40 +31,37 @@ type Deps struct {
 	Notify                   func(method string, params any)
 }
 
+func defaultAllSchemaProvider() []agentcore.DynamicTool { return nil }
+
+func defaultNowUnixMilliProvider() int64 { return time.Now().UnixMilli() }
+
+func defaultSetAgentWorkDirProvider(string, string) {}
+
+func defaultCancelCodeRunsProvider(string) int { return 0 }
+
+func defaultGetAgentSkillsProvider(string) []string { return nil }
+
+func defaultNotifyProvider(string, any) {}
+
 func normalizeDeps(deps Deps) *Deps {
 	d := deps
-	if d.Manager == nil {
-		d.Manager = func() *runner.AgentManager { return nil }
-	}
-	if d.Store == nil {
-		d.Store = func() *uistate.PreferenceManager { return nil }
-	}
-	if d.BindingStore == nil {
-		d.BindingStore = func() *store.AgentCodexBindingStore { return nil }
-	}
-	if d.AgentStatusStore == nil {
-		d.AgentStatusStore = func() *store.AgentStatusStore { return nil }
-	}
-	if d.UIRuntime == nil {
-		d.UIRuntime = func() *uistate.RuntimeManager { return nil }
-	}
 	if d.AllSchemas == nil {
-		d.AllSchemas = func() []agentcore.DynamicTool { return nil }
+		d.AllSchemas = defaultAllSchemaProvider
 	}
 	if d.NowUnixMilli == nil {
-		d.NowUnixMilli = func() int64 { return time.Now().UnixMilli() }
+		d.NowUnixMilli = defaultNowUnixMilliProvider
 	}
 	if d.SetAgentWorkDir == nil {
-		d.SetAgentWorkDir = func(string, string) {}
+		d.SetAgentWorkDir = defaultSetAgentWorkDirProvider
 	}
 	if d.CancelCodeRuns == nil {
-		d.CancelCodeRuns = func(string) int { return 0 }
+		d.CancelCodeRuns = defaultCancelCodeRunsProvider
 	}
 	if d.GetAgentSkills == nil {
-		d.GetAgentSkills = func(string) []string { return nil }
+		d.GetAgentSkills = defaultGetAgentSkillsProvider
 	}
 	if d.Notify == nil {
-		d.Notify = func(string, any) {}
+		d.Notify = defaultNotifyProvider
 	}
 	return &d
 }

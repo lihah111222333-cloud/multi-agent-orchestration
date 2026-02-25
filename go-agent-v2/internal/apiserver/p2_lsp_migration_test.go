@@ -142,7 +142,7 @@ func TestP2DiagCacheNotAccessedOutsideServerAccessors(t *testing.T) {
 			continue
 		}
 		name := entry.Name()
-		if filepath.Ext(name) != ".go" || isTestGoFile(name) || name == "server.go" || name == "server_diagnostics.go" {
+		if filepath.Ext(name) != ".go" || isTestGoFile(name) || name == "server.go" || name == "server_diagnostics.go" || name == "server_state_groups.go" {
 			continue
 		}
 		file, parseErr := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)

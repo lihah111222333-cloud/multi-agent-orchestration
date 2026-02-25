@@ -13,10 +13,10 @@ func (a *Adapter) resolveProcess(caller, threadID string) (*runner.AgentProcess,
 	if id == "" {
 		return nil, apperrors.New(caller, "threadId is required")
 	}
-	if a == nil || a.ctx == nil || a.ctx.Manager() == nil {
+	if a == nil || a.ctx == nil || a.ctx.Manager == nil {
 		return nil, apperrors.New(caller, "thread resolver is not configured")
 	}
-	proc := a.ctx.Manager().Get(id)
+	proc := a.ctx.Manager.Get(id)
 	if proc == nil {
 		return nil, apperrors.Newf(caller, "thread %s not found", id)
 	}

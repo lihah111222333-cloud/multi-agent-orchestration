@@ -57,8 +57,8 @@ func (s *Server) registerMethods() {
 	// § 3. 对话控制 (4 methods)
 	s.methods["turn/start"] = typedHandler(s.turnStartTyped)
 	s.methods["turn/steer"] = typedHandler(s.turnSteerTyped)
-	s.methods["turn/interrupt"] = s.turnInterrupt
-	s.methods["turn/forceComplete"] = s.turnForceComplete
+	s.methods["turn/interrupt"] = typedHandler(s.turnInterrupt)
+	s.methods["turn/forceComplete"] = typedHandler(s.turnForceComplete)
 	s.methods["review/start"] = typedHandler(s.reviewStartTyped)
 
 	// § 4. 文件搜索 (4 methods)

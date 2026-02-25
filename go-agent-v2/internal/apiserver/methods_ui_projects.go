@@ -57,27 +57,31 @@ func containsProject(projects []string, target string) bool {
 	return false
 }
 
+func appendUniqueNormalizedProject(projects *[]string, path string) {
+	if projects == nil {
+		return
+	}
+	normalized := normalizeProjectPath(path)
+	if normalized == "" || normalized == "." {
+		return
+	}
+	if containsProject(*projects, normalized) {
+		return
+	}
+	*projects = append(*projects, normalized)
+}
+
 func parseProjectsList(value any) []string {
 	projects := []string{}
-	appendProject := func(path string) {
-		normalized := normalizeProjectPath(path)
-		if normalized == "" || normalized == "." {
-			return
-		}
-		if containsProject(projects, normalized) {
-			return
-		}
-		projects = append(projects, normalized)
-	}
 
 	switch list := value.(type) {
 	case []string:
 		for _, item := range list {
-			appendProject(item)
+			appendUniqueNormalizedProject(&projects, item)
 		}
 	case []any:
 		for _, item := range list {
-			appendProject(asString(item))
+			appendUniqueNormalizedProject(&projects, asString(item))
 		}
 	}
 

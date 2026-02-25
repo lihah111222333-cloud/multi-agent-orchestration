@@ -28,12 +28,12 @@ func (p approvalProvider) AwaitApproval(agentID, callID, mode, command string, i
 	}
 
 	inflightKey := agentID + ":" + method + ":" + approvalID
-	if !p.s.runtimeGuardState.tryBeginApproval(inflightKey) {
+	if !tryBeginApprovalState(p.s, inflightKey) {
 		logger.Debug("code-run: approval dedup — skipping",
 			logger.FieldAgentID, agentID, logger.FieldCallID, callID)
 		return false
 	}
-	defer p.s.runtimeGuardState.endApproval(inflightKey)
+	defer endApprovalState(p.s, inflightKey)
 
 	payload := map[string]any{
 		"type":         "code_run_approval",
@@ -56,7 +56,7 @@ func (p approvalProvider) waitForFrontendDecision(method string, payload map[str
 		}
 	}
 
-	hasHook := p.s.notifyHookState.hasHook()
+	hasHook := hasNotifyHookState(p.s)
 
 	if !hasHook {
 		logger.Warn("code-run: approval auto-denied — no frontend", "method", method)

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -339,9 +338,61 @@ func loadThreadAliasesFromPrefs(prefs map[string]any) map[string]string {
 	return normalizeThreadAliases(prefs[prefThreadAliases])
 }
 
-// normalizeThreadAliases delegates to codexadapter.NormalizeThreadAliases (single canonical impl).
+// normalizeThreadAliases parses supported preference encodings into alias map.
 func normalizeThreadAliases(value any) map[string]string {
-	return codexadapter.NormalizeThreadAliases(value)
+	aliases := map[string]string{}
+
+	switch typed := value.(type) {
+	case map[string]string:
+		for threadID, alias := range typed {
+			addNormalizedThreadAlias(aliases, threadID, alias)
+		}
+	case map[string]any:
+		for threadID, alias := range typed {
+			addNormalizedThreadAlias(aliases, threadID, alias)
+		}
+	case string:
+		decoded := map[string]any{}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(typed)), &decoded); err == nil {
+			for threadID, alias := range decoded {
+				addNormalizedThreadAlias(aliases, threadID, alias)
+			}
+		}
+	case json.RawMessage:
+		decoded := map[string]any{}
+		if err := json.Unmarshal(typed, &decoded); err == nil {
+			for threadID, alias := range decoded {
+				addNormalizedThreadAlias(aliases, threadID, alias)
+			}
+		}
+	}
+	return aliases
+}
+
+func addNormalizedThreadAlias(aliases map[string]string, threadID string, alias any) {
+	if aliases == nil {
+		return
+	}
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return
+	}
+	name := strings.TrimSpace(threadAliasStringValue(alias))
+	if name == "" || name == id {
+		return
+	}
+	aliases[id] = name
+}
+
+func threadAliasStringValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	default:
+		return ""
+	}
 }
 
 func applyThreadAliases(threads []contracts.ThreadListItem, aliases map[string]string) {

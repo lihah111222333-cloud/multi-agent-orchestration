@@ -79,6 +79,9 @@ type Config struct {
 	OrchestrationWorkspaceMaxFiles      int    `env:"ORCHESTRATION_WORKSPACE_MAX_FILES" default:"5000" min:"1"`
 	OrchestrationWorkspaceMaxFileBytes  int    `env:"ORCHESTRATION_WORKSPACE_MAX_FILE_BYTES" default:"8388608" min:"1024"`     // 8MB
 	OrchestrationWorkspaceMaxTotalBytes int    `env:"ORCHESTRATION_WORKSPACE_MAX_TOTAL_BYTES" default:"268435456" min:"10240"` // 256MB
+
+	// 数据库迁移
+	MigrationsDir string `env:"MIGRATIONS_DIR"` // 为空时使用默认路径探测逻辑
 }
 
 // Load 从环境变量加载配置 (通过反射读取 struct tag)。

@@ -554,18 +554,10 @@ func dispatchRequest(s *Server, ctx context.Context, id any, method string, para
 			)
 			return nil
 		}
-		if method == "ui/code/open" {
-			logger.Warn("app-server: request for unregistered method",
-				logger.FieldMethod, method,
-				logger.FieldID, id,
-				"hint", "backend binary is outdated; rebuild agent-terminal/app-server with ui/code/open registration",
-			)
-		} else {
-			logger.Warn("app-server: request for unregistered method",
-				logger.FieldMethod, method,
-				logger.FieldID, id,
-			)
-		}
+		logger.Warn("app-server: request for unregistered method",
+			logger.FieldMethod, method,
+			logger.FieldID, id,
+		)
 		return newError(id, CodeMethodNotFound, "method not found: "+method)
 	}
 

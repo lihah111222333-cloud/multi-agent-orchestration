@@ -91,7 +91,7 @@ func TestToThreadSnapshots_FromAgentInfo(t *testing.T) {
 }
 
 func TestToThreadSnapshots_FromListItems(t *testing.T) {
-	items := []ThreadListItem{
+	items := []threadListItem{
 		{ID: "t1", Name: "Thread One", State: "idle"},
 		{ID: "  ", Name: "skip"},
 	}

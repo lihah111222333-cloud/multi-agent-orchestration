@@ -1,8 +1,8 @@
-// methods_command.go — command/exec JSON-RPC 方法实现。
 package apiserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
+	"github.com/multi-agent/go-agent-v2/internal/service"
+	skillsruntime "github.com/multi-agent/go-agent-v2/internal/skills"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
@@ -43,7 +46,7 @@ var commandBlocklist = map[string]bool{
 	"umount":   true,
 	"fdisk":    true,
 	"iptables": true,
-	"curl":     true, // 防止外部请求
+	"curl":     true,
 	"wget":     true,
 }
 
@@ -82,13 +85,11 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 		return nil, apperrors.New("Server.commandExec", "argv is required")
 	}
 
-	// 安全检查: 提取基础命令名 (去掉路径)
 	baseName := filepath.Base(p.Argv[0])
 	if commandBlocklist[baseName] {
 		return nil, apperrors.Newf("Server.commandExec", "command %q is blocked for security", baseName)
 	}
 
-	// 禁止管道/shell 注入: 检查参数中是否有 shell 元字符
 	for _, arg := range p.Argv {
 		if strings.ContainsAny(arg, "|;&$`") {
 			return nil, apperrors.New("Server.commandExec", "shell metacharacters not allowed in arguments")
@@ -112,7 +113,7 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 		cmd.Env = os.Environ()
 		for k, v := range p.Env {
 			if !isAllowedEnvKey(k) {
-				continue // 跳过不允许的环境变量
+				continue
 			}
 			cmd.Env = append(cmd.Env, k+"="+v)
 		}
@@ -150,7 +151,6 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 
 	outStr := stdout.String()
 
-	// 阅读类命令: 注入 LSP 工具优先提示 (不阻止执行)
 	if readCommands[baseName] {
 		logger.Info("command/exec: read command detected, injecting LSP hint",
 			logger.FieldCommand, baseName,
@@ -163,4 +163,139 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 		Stdout:   outStr,
 		Stderr:   stderr.String(),
 	}, nil
+}
+
+type skillsLocalReadParams = skillsruntime.SkillsLocalReadParams
+type skillsLocalImportDirParams = skillsruntime.SkillsLocalImportDirParams
+type skillsLocalDeleteParams = skillsruntime.SkillsLocalDeleteParams
+type skillsConfigWriteParams = skillsruntime.SkillsConfigWriteParams
+type skillsSummaryWriteParams = skillsruntime.SkillsSummaryWriteParams
+type skillsMatchPreviewParams = skillsruntime.SkillsMatchPreviewParams
+type skillsConfigReadParams = skillsruntime.SkillsConfigReadParams
+type skillsRemoteReadParams = skillsruntime.SkillsRemoteReadParams
+type skillsRemoteWriteParams = skillsruntime.SkillsRemoteWriteParams
+
+func newSkillsManager(s *Server) *skillsruntime.Manager {
+	if s == nil {
+		return skillsruntime.NewManager(nil, nil)
+	}
+
+	provider := skillsruntime.SkillServiceProviderFunc(func() *service.SkillService {
+		return s.skillSvc
+	})
+	collector := skillsruntime.AutoMatchCollectorFunc(func(
+		threadID string,
+		prompt string,
+		input []skillsruntime.UserInput,
+		options skillsruntime.AutoSkillMatchOptions,
+	) []skillsruntime.AutoMatchedSkillMatch {
+		if s == nil || s.codexAdapter == nil {
+			return nil
+		}
+		turnInput := make([]contracts.TurnInput, 0, len(input))
+		for _, item := range input {
+			turnInput = append(turnInput, contracts.TurnInput{
+				Type:    item.Type,
+				Text:    item.Text,
+				URL:     item.URL,
+				Path:    item.Path,
+				Name:    item.Name,
+				Content: item.Content,
+			})
+		}
+		matches := s.codexAdapter.CollectAutoMatchedSkillMatchesForThread(threadID, prompt, turnInput, contracts.AutoSkillMatchOptions{
+			IncludeConfiguredExplicit: options.IncludeConfiguredExplicit,
+			IncludeConfiguredForce:    options.IncludeConfiguredForce,
+		})
+		out := make([]skillsruntime.AutoMatchedSkillMatch, 0, len(matches))
+		for _, match := range matches {
+			out = append(out, skillsruntime.AutoMatchedSkillMatch{
+				Name:         match.Name,
+				MatchedBy:    match.MatchedBy,
+				MatchedTerms: append([]string(nil), match.MatchedTerms...),
+			})
+		}
+		return out
+	})
+	return skillsruntime.NewManager(provider, collector)
+}
+
+func skillsManagerDelegate(s *Server) *skillsruntime.Manager {
+	if s != nil && s.skillsMgr != nil {
+		return s.skillsMgr
+	}
+	return newSkillsManager(s)
+}
+
+func skillsList(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
+	return skillsManagerDelegate(s).SkillsList(ctx)
+}
+
+func appList(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
+	return skillsManagerDelegate(s).AppList(ctx)
+}
+
+func skillsLocalReadTyped(s *Server, ctx context.Context, p skillsLocalReadParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsLocalRead(ctx, skillsruntime.SkillsLocalReadParams(p))
+}
+
+func skillsLocalImportDirTyped(s *Server, ctx context.Context, p skillsLocalImportDirParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsLocalImportDir(ctx, skillsruntime.SkillsLocalImportDirParams(p))
+}
+
+func skillsLocalDeleteTyped(s *Server, ctx context.Context, p skillsLocalDeleteParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsLocalDelete(ctx, skillsruntime.SkillsLocalDeleteParams(p))
+}
+
+func skillsMatchPreviewTyped(s *Server, ctx context.Context, p skillsMatchPreviewParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsMatchPreview(ctx, skillsruntime.SkillsMatchPreviewParams(p))
+}
+
+func skillsConfigReadTyped(s *Server, ctx context.Context, p skillsConfigReadParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsConfigRead(ctx, skillsruntime.SkillsConfigReadParams(p))
+}
+
+func skillsConfigWriteTyped(s *Server, ctx context.Context, p skillsConfigWriteParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsConfigWrite(ctx, skillsruntime.SkillsConfigWriteParams(p))
+}
+
+func skillsSummaryWriteTyped(s *Server, ctx context.Context, p skillsSummaryWriteParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsSummaryWrite(ctx, skillsruntime.SkillsSummaryWriteParams(p))
+}
+
+func skillsRemoteReadTyped(s *Server, ctx context.Context, p skillsRemoteReadParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsRemoteRead(ctx, skillsruntime.SkillsRemoteReadParams(p))
+}
+
+func skillsRemoteWriteTyped(s *Server, ctx context.Context, p skillsRemoteWriteParams) (any, error) {
+	return skillsManagerDelegate(s).SkillsRemoteWrite(ctx, skillsruntime.SkillsRemoteWriteParams(p))
+}
+
+// getAgentSkills 返回指定 agent 配置的技能列表。
+func getAgentSkills(s *Server, agentID string) []string {
+	return skillsManagerDelegate(s).GetAgentSkills(agentID)
+}
+
+// listSkillMatchCandidates returns normalized candidates for adapter auto-match.
+func listSkillMatchCandidates(s *Server) ([]contracts.SkillMatchCandidate, error) {
+	if s == nil || s.skillSvc == nil {
+		return nil, nil
+	}
+	allSkills, err := s.skillSvc.ListSkills()
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]contracts.SkillMatchCandidate, 0, len(allSkills))
+	for _, skill := range allSkills {
+		skillName := strings.TrimSpace(skill.Name)
+		if skillName == "" {
+			continue
+		}
+		candidates = append(candidates, contracts.SkillMatchCandidate{
+			Name:         skillName,
+			ForceWords:   append([]string(nil), skill.ForceWords...),
+			TriggerWords: append([]string(nil), skill.TriggerWords...),
+		})
+	}
+	return candidates, nil
 }

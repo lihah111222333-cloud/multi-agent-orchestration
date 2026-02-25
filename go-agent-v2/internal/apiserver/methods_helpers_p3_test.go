@@ -273,9 +273,9 @@ func TestP4NoDirectCodexPackageImportOutsideAdapter(t *testing.T) {
 func TestP4MethodsHelpersContainOnlySlashHandlers(t *testing.T) {
 	t.Helper()
 
-	data, err := os.ReadFile("methods_helpers.go")
+	data, err := os.ReadFile("methods.go")
 	if err != nil {
-		t.Fatalf("read methods_helpers.go: %v", err)
+		t.Fatalf("read methods.go: %v", err)
 	}
 	content := string(data)
 
@@ -291,7 +291,7 @@ func TestP4MethodsHelpersContainOnlySlashHandlers(t *testing.T) {
 	}
 	for _, needle := range forbidden {
 		if strings.Contains(content, needle) {
-			t.Fatalf("methods_helpers.go must not contain %q after P4 convergence", needle)
+			t.Fatalf("methods.go must not contain %q after P4 convergence", needle)
 		}
 	}
 
@@ -307,7 +307,7 @@ func TestP4MethodsHelpersContainOnlySlashHandlers(t *testing.T) {
 	}
 	for _, needle := range required {
 		if !strings.Contains(content, needle) {
-			t.Fatalf("methods_helpers.go missing required slash handler %q", needle)
+			t.Fatalf("methods.go missing required slash handler %q", needle)
 		}
 	}
 }

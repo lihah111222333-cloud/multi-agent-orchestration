@@ -6,19 +6,15 @@
 //	Agent 事件 → Notification 广播给所有连接
 //
 // 拆分说明:
-//   - server_conn.go:          连接管理、类型定义 (connEntry)、广播、SendRequest
-//   - server_payload.go:       事件提取、通知、节流、UI 状态同步、HTTP-RPC 兼容层
-//   - server_approval.go:      审批事件处理
-//   - server_dynamic_tools.go: LSP/编排/资源 动态工具注册与调用
+//   - server_conn.go / server_transport.go: 连接管理与 WS/HTTP/SSE 传输
+//   - server_event_handler.go / server_payload*.go: 事件转发与 payload 增强
+//   - server_bootstrap_*.go: stores/skills/runtime 初始化装配
+//   - server_lifecycle.go: 服务启动与运行时清理
 package apiserver
 
 import (
 	"context"
 	"encoding/json"
-	"net"
-	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -34,9 +30,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/tooladapter"
 	"github.com/multi-agent/go-agent-v2/internal/tools"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
-	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
-	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // Handler JSON-RPC 方法处理器。
@@ -158,110 +151,16 @@ func New(deps Deps) *Server {
 			CheckOrigin: checkLocalOrigin,
 		},
 	}
-	if s.mgr != nil {
-		s.submitAgentMessage = s.mgr.Submit
-	}
-	s.codexAdapter = newCodexAdapter(s)
-	s.lspTools = lsp.NewToolHandlers(s.lsp, diagnosticsAccessor(s))
-	s.lspDiagnosticsQueryTyped = func(_ context.Context, p lspDiagnosticsQueryParams) (any, error) {
-		return s.lspTools.DiagnosticsQuery(p.FilePath), nil
-	}
+	initRuntimeWiring(s)
 
 	initStores(s, deps.DB)
 	initSkills(s, deps.SkillsDir)
 	s.registerMethods()
 
-	// 从 Config 加载 stall 参数
-	if deps.Config != nil {
-		if deps.Config.StallThresholdSec > 0 {
-			s.codexAdapter.SetStallThreshold(time.Duration(deps.Config.StallThresholdSec) * time.Second)
-		}
-		if deps.Config.StallHeartbeatSec > 0 {
-			s.codexAdapter.SetStallHeartbeat(time.Duration(deps.Config.StallHeartbeatSec) * time.Second)
-		}
-	}
-
-	// 代码执行引擎 (无外部依赖, 仅需 workDir)
-	workDir, wdErr := os.Getwd()
-	if wdErr != nil {
-		logger.Warn("app-server: resolve working directory failed; fallback to current path", logger.FieldError, wdErr)
-		workDir = "."
-	}
-	if cr, crErr := executor.NewCodeRunner(workDir); crErr != nil {
-		logger.Warn("app-server: code runner unavailable", logger.FieldError, crErr)
-	} else {
-		s.codeRunner = cr
-	}
+	applyStallConfig(s, deps.Config)
+	initCodeRunner(s)
 
 	applyInjectedPromptVisibilityPreference(s, context.Background())
 	registerDynamicTools(s)
 	return s
-}
-
-// ListenAndServe 启动 WebSocket 服务器。
-//
-// addr 格式: "ws://127.0.0.1:4500" 或 "127.0.0.1:4500"。
-func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
-	defer s.cleanupRuntimeResources()
-
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// 解析地址: 去掉 ws:// 前缀
-	host := strings.TrimPrefix(addr, "ws://")
-	host = strings.TrimPrefix(host, "wss://")
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { handleUpgrade(s, w, r) })    // WebSocket
-	mux.HandleFunc("/rpc", func(w http.ResponseWriter, r *http.Request) { handleHTTPRPC(s, w, r) }) // HTTP JSON-RPC (调试模式)
-	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) { handleSSE(s, w, r) })  // SSE 事件流 (调试模式)
-
-	srv := &http.Server{
-		Addr:              host,
-		Handler:           recoveryMiddleware(corsMiddleware(mux)),
-		BaseContext:       func(_ net.Listener) context.Context { return runCtx },
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	ln, err := net.Listen("tcp", host)
-	if err != nil {
-		return pkgerr.Wrap(err, "Server.ListenAndServe", "listen")
-	}
-	defer func() { _ = ln.Close() }()
-
-	// 优雅关闭: 给活跃连接 5 秒完成处理
-	util.SafeGo(func() {
-		<-runCtx.Done()
-		if ctx.Err() == nil {
-			return
-		}
-		logger.Info("app-server: shutdown trigger", "ctx_err", ctx.Err())
-		logger.Info("app-server: shutting down")
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		if shutdownErr := srv.Shutdown(shutdownCtx); shutdownErr != nil && shutdownErr != http.ErrServerClosed {
-			logger.Warn("app-server: shutdown error", logger.FieldError, shutdownErr)
-			return
-		}
-		logger.Info("app-server: shutdown completed")
-	})
-
-	logger.Info("app-server: listening", logger.FieldAddr, host)
-	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		return pkgerr.Wrap(err, "Server.ListenAndServe", "listen")
-	}
-	return nil
-}
-
-func (s *Server) cleanupRuntimeResources() {
-	if s == nil {
-		return
-	}
-	doRuntimeCleanupState(s, func() {
-		cancelAllCodeRuns(s)
-		if s.codeRunner != nil {
-			s.codeRunner.Cleanup()
-		}
-		clearAllAgentWorkDirsState(s)
-	})
 }

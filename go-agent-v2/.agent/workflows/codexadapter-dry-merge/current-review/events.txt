@@ -1,0 +1,12 @@
+internal/apiserver/codexadapter/thread_messages.go:105:			a.ctx.Notify("thread/messages/page", map[string]any{
+internal/apiserver/codexadapter/turn_interrupt.go:177:			a.ctx.Notify("turn/completed", completion)
+internal/apiserver/codexadapter/turn_interrupt.go:182:		a.ctx.Notify("turn/completed", map[string]any{
+internal/apiserver/codexadapter/turn_tracker_event_terminal.go:158:	case methodKey == "turn/completed",
+internal/apiserver/codexadapter/turn_tracker_event_terminal.go:160:		eventKey == "turn/completed",
+internal/apiserver/codexadapter/turn_tracker_event_terminal.go:210:	case eventKey == "turn_complete" || eventKey == "turn/completed" || eventKey == "idle" ||
+internal/apiserver/codexadapter/turn_tracker_event_terminal.go:214:	case methodKey == "turn/completed" || methodKey == "turn/aborted" ||
+internal/apiserver/codexadapter/turn_tracker_event_terminal.go:483:	if !strings.EqualFold(strings.TrimSpace(method), "turn/completed") {
+internal/apiserver/codexadapter/turn_tracker_event_terminal.go:622:			notify("turn/completed", completion)
+internal/apiserver/codexadapter/turn_tracker_stall_runtime.go:265:				notify("turn/completed", completion)
+internal/apiserver/codexadapter/turn_tracker.go:241:			notify("turn/completed", completion)
+internal/apiserver/codexadapter/turn_tracker.go:261:		notify("turn/completed", superseded)

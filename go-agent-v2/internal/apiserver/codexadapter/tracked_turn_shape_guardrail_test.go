@@ -9,7 +9,7 @@ import (
 func TestTrackedTurnContractShape(t *testing.T) {
 	t.Parallel()
 
-	got := reflect.TypeOf(TrackedTurn{})
+	got := reflect.TypeOf(trackedTurn{})
 	want := []struct {
 		name string
 		typ  reflect.Type
@@ -29,7 +29,7 @@ func TestTrackedTurnContractShape(t *testing.T) {
 	}
 
 	if got.NumField() != len(want) {
-		t.Fatalf("TrackedTurn field count = %d, want %d", got.NumField(), len(want))
+		t.Fatalf("trackedTurn field count = %d, want %d", got.NumField(), len(want))
 	}
 	for i, expected := range want {
 		field := got.Field(i)

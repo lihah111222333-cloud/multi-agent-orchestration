@@ -563,7 +563,7 @@ func (s *uiThrottleState) flushUIStateChanged(key string, now time.Time) (map[st
 
 // toolCallState 聚合动态工具调用计数(可观测性)。
 type toolCallState struct {
-	toolCallMu    sync.Mutex
+	toolCallMu    sync.RWMutex
 	toolCallCount map[string]int64 // toolName -> count
 }
 
@@ -592,8 +592,8 @@ func (s *toolCallState) get(name string) int64 {
 	if toolName == "" {
 		return 0
 	}
-	s.toolCallMu.Lock()
-	defer s.toolCallMu.Unlock()
+	s.toolCallMu.RLock()
+	defer s.toolCallMu.RUnlock()
 	return s.toolCallCount[toolName]
 }
 

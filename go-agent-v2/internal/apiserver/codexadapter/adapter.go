@@ -1,6 +1,7 @@
 package codexadapter
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -8,9 +9,18 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
+	appErrors "github.com/multi-agent/go-agent-v2/pkg/errors"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
+)
+
+const (
+	defaultLSPUsagePromptHint = ""
+	maxLSPUsagePromptHintLen  = 16000
 )
 
 // Deps defines codex adapter runtime dependencies.
@@ -26,7 +36,7 @@ type Deps struct {
 	CancelCodeRuns           func(agentID string) int
 	ReadSkillContent         func(skillName string) (string, error)
 	ListSkillNames           func() ([]string, error)
-	ListSkillMatchCandidates func() ([]SkillMatchCandidate, error)
+	ListSkillMatchCandidates func() ([]contracts.SkillMatchCandidate, error)
 	GetAgentSkills           func(agentID string) []string
 	Notify                   func(method string, params any)
 }
@@ -38,6 +48,18 @@ func defaultNowUnixMilliProvider() int64 { return time.Now().UnixMilli() }
 func defaultSetAgentWorkDirProvider(string, string) {}
 
 func defaultCancelCodeRunsProvider(string) int { return 0 }
+
+func defaultReadSkillContentProvider(string) (string, error) {
+	return "", appErrors.New("codexadapter.readSkillContent", "server context is not configured")
+}
+
+func defaultListSkillNamesProvider() ([]string, error) {
+	return nil, appErrors.New("codexadapter.listSkillNames", "server context is not configured")
+}
+
+func defaultListSkillMatchCandidatesProvider() ([]contracts.SkillMatchCandidate, error) {
+	return nil, appErrors.New("codexadapter.listSkillMatchCandidates", "server context is not configured")
+}
 
 func defaultGetAgentSkillsProvider(string) []string { return nil }
 
@@ -57,6 +79,15 @@ func normalizeDeps(deps Deps) *Deps {
 	if d.CancelCodeRuns == nil {
 		d.CancelCodeRuns = defaultCancelCodeRunsProvider
 	}
+	if d.ReadSkillContent == nil {
+		d.ReadSkillContent = defaultReadSkillContentProvider
+	}
+	if d.ListSkillNames == nil {
+		d.ListSkillNames = defaultListSkillNamesProvider
+	}
+	if d.ListSkillMatchCandidates == nil {
+		d.ListSkillMatchCandidates = defaultListSkillMatchCandidatesProvider
+	}
 	if d.GetAgentSkills == nil {
 		d.GetAgentSkills = defaultGetAgentSkillsProvider
 	}
@@ -70,11 +101,11 @@ func normalizeDeps(deps Deps) *Deps {
 type Adapter struct {
 	ctx *Deps
 
-	tracker                TurnTrackerState
+	tracker                turnTrackerState
 	trackerMu              sync.Mutex
-	trackerActiveTurns     map[string]*TrackedTurn
+	trackerActiveTurns     map[string]*trackedTurn
 	trackerWatchdogTimeout time.Duration
-	trackerSummaryCache    map[string]TrackedTurnSummaryCacheEntry
+	trackerSummaryCache    map[string]trackedTurnSummaryCacheEntry
 	trackerSummaryTTL      time.Duration
 	trackerStallThreshold  time.Duration
 	trackerStallHeartbeat  time.Duration
@@ -91,21 +122,21 @@ func (a *Adapter) initTrackerState() {
 	if a == nil {
 		return
 	}
-	a.trackerActiveTurns = make(map[string]*TrackedTurn)
+	a.trackerActiveTurns = make(map[string]*trackedTurn)
 	a.trackerWatchdogTimeout = DefaultTurnWatchdogTimeout
-	a.trackerSummaryCache = make(map[string]TrackedTurnSummaryCacheEntry)
+	a.trackerSummaryCache = make(map[string]trackedTurnSummaryCacheEntry)
 	a.trackerSummaryTTL = DefaultTrackedTurnSummaryTTL
-	a.trackerStallThreshold = DefaultStallThreshold
-	a.trackerStallHeartbeat = DefaultStallHeartbeat
+	a.trackerStallThreshold = defaultStallThreshold
+	a.trackerStallHeartbeat = defaultStallHeartbeat
 
-	a.tracker = TurnTrackerState{
+	a.tracker = turnTrackerState{
 		Mu:                  &a.trackerMu,
 		ActiveTurns:         &a.trackerActiveTurns,
 		TurnWatchdogTimeout: &a.trackerWatchdogTimeout,
 		TurnSummaryCache:    &a.trackerSummaryCache,
 		TurnSummaryTTL:      &a.trackerSummaryTTL,
-		StallThreshold:      &a.trackerStallThreshold,
-		StallHeartbeat:      &a.trackerStallHeartbeat,
+		stallThreshold:      &a.trackerStallThreshold,
+		stallHeartbeat:      &a.trackerStallHeartbeat,
 	}
 }
 
@@ -117,36 +148,90 @@ func (a *Adapter) Context() *Deps {
 	return a.ctx
 }
 
-// ErrNoProcess is returned when the agent process or its client is nil.
-var ErrNoProcess = errors.New("codexadapter: agent process not found")
+func (a *Adapter) store() *uistate.PreferenceManager {
+	if a == nil || a.ctx == nil {
+		return nil
+	}
+	return a.ctx.Store
+}
 
-// requireClient returns the underlying client or ErrNoProcess.
-func requireClient(proc *runner.AgentProcess) (agentcore.Client, error) {
+func (a *Adapter) manager() *runner.AgentManager {
+	if a == nil || a.ctx == nil {
+		return nil
+	}
+	return a.ctx.Manager
+}
+
+func (a *Adapter) bindingStore() *store.AgentCodexBindingStore {
+	if a == nil || a.ctx == nil {
+		return nil
+	}
+	return a.ctx.BindingStore
+}
+
+func (a *Adapter) statusStore() *store.AgentStatusStore {
+	if a == nil || a.ctx == nil {
+		return nil
+	}
+	return a.ctx.AgentStatusStore
+}
+
+func (a *Adapter) uiRuntime() *uistate.RuntimeManager {
+	if a == nil || a.ctx == nil {
+		return nil
+	}
+	return a.ctx.UIRuntime
+}
+
+func requireThreadID(caller, threadID string) (string, error) {
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return "", appErrors.New(caller, "threadId is required")
+	}
+	return id, nil
+}
+
+func threadLogFields(threadID string) []any {
+	id := strings.TrimSpace(threadID)
+	return []any{
+		logger.FieldAgentID, id,
+		logger.FieldThreadID, id,
+	}
+}
+
+// errNoProcess is returned when the agent process or its client is nil.
+var errNoProcess = errors.New("codexadapter: agent process not found")
+
+func withClientE[T any](proc *runner.AgentProcess, fn func(agentcore.Client) (T, error)) (T, error) {
+	var zero T
 	if proc == nil || proc.Client == nil {
-		return nil, ErrNoProcess
+		return zero, errNoProcess
 	}
-	return proc.Client, nil
+	return fn(proc.Client)
 }
 
-// Submit 发送用户输入到 codex。
+func withClient(proc *runner.AgentProcess, fn func(agentcore.Client) error) error {
+	_, err := withClientE(proc, func(c agentcore.Client) (struct{}, error) {
+		return struct{}{}, fn(c)
+	})
+	return err
+}
+
+// Submit sends user input to codex.
 func (a *Adapter) Submit(proc *runner.AgentProcess, prompt string, images, files []string, outputSchema json.RawMessage) error {
-	c, err := requireClient(proc)
-	if err != nil {
-		return err
-	}
-	return c.Submit(prompt, images, files, outputSchema)
+	return withClient(proc, func(c agentcore.Client) error {
+		return c.Submit(prompt, images, files, outputSchema)
+	})
 }
 
-// SendCommand 发送 slash 命令到 codex。
+// SendCommand sends slash command to codex.
 func (a *Adapter) SendCommand(proc *runner.AgentProcess, command string, args string) error {
-	c, err := requireClient(proc)
-	if err != nil {
-		return err
-	}
-	return c.SendCommand(command, args)
+	return withClient(proc, func(c agentcore.Client) error {
+		return c.SendCommand(command, args)
+	})
 }
 
-// GetThreadID 读取当前 codex thread id。
+// GetThreadID returns the current codex thread id.
 func (a *Adapter) GetThreadID(proc *runner.AgentProcess) string {
 	if proc == nil || proc.Client == nil {
 		return ""
@@ -154,47 +239,121 @@ func (a *Adapter) GetThreadID(proc *runner.AgentProcess) string {
 	return strings.TrimSpace(proc.Client.GetThreadID())
 }
 
-// ResumeThread 恢复历史 codex thread。
+// ResumeThread resumes historical codex thread.
 func (a *Adapter) ResumeThread(proc *runner.AgentProcess, req agentcore.ResumeThreadRequest) error {
-	c, err := requireClient(proc)
-	if err != nil {
-		return err
-	}
-	return c.ResumeThread(req)
+	return withClient(proc, func(c agentcore.Client) error {
+		return c.ResumeThread(req)
+	})
 }
 
-// ListThreads 查询 codex 线程列表。
+// ListThreads returns codex threads.
 func (a *Adapter) ListThreads(proc *runner.AgentProcess) ([]agentcore.ThreadInfo, error) {
-	c, err := requireClient(proc)
-	if err != nil {
-		return nil, err
-	}
-	return c.ListThreads()
+	return withClientE(proc, func(c agentcore.Client) ([]agentcore.ThreadInfo, error) {
+		return c.ListThreads()
+	})
 }
 
-// ForkThread 基于指定源线程创建分叉线程。
+// ForkThread creates a forked thread from source thread.
 func (a *Adapter) ForkThread(proc *runner.AgentProcess, req agentcore.ForkThreadRequest) (*agentcore.ForkThreadResponse, error) {
-	c, err := requireClient(proc)
-	if err != nil {
-		return nil, err
-	}
-	return c.ForkThread(req)
+	return withClientE(proc, func(c agentcore.Client) (*agentcore.ForkThreadResponse, error) {
+		return c.ForkThread(req)
+	})
 }
 
-// RespondError 回传 dynamic tool 调用错误。
+// RespondError returns dynamic tool call error to codex.
 func (a *Adapter) RespondError(proc *runner.AgentProcess, id int64, code int, message string) error {
-	c, err := requireClient(proc)
-	if err != nil {
-		return err
-	}
-	return c.RespondError(id, code, message)
+	return withClient(proc, func(c agentcore.Client) error {
+		return c.RespondError(id, code, message)
+	})
 }
 
-// SendDynamicToolResult 回传 dynamic tool 调用结果。
+// SendDynamicToolResult returns dynamic tool call result to codex.
 func (a *Adapter) SendDynamicToolResult(proc *runner.AgentProcess, callID, output string, requestID *int64) error {
-	c, err := requireClient(proc)
-	if err != nil {
-		return err
+	return withClient(proc, func(c agentcore.Client) error {
+		return c.SendDynamicToolResult(callID, output, requestID)
+	})
+}
+
+func (a *Adapter) allDynamicToolSchemas() []agentcore.DynamicTool {
+	if a == nil || a.ctx == nil {
+		return nil
 	}
-	return c.SendDynamicToolResult(callID, output, requestID)
+	return a.ctx.AllSchemas()
+}
+
+func (a *Adapter) resolveStartInstructionsForLaunch(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
+	hint := a.ResolveLSPUsagePromptHint(ctx, defaultLSPUsagePromptHint, maxLSPUsagePromptHintLen)
+	startInstructions, warnings := a.PrependLSPAvailabilityWarning(hint, dynamicTools, commonadapter.MergePromptText)
+	if len(warnings) > 0 {
+		logger.Warn("codexadapter: start instructions warnings: " + strings.Join(warnings, "; "))
+	}
+	return startInstructions
+}
+
+func (a *Adapter) setAgentWorkDir(agentID string, cwd string) {
+	if a == nil || a.ctx == nil {
+		return
+	}
+	a.ctx.SetAgentWorkDir(agentID, cwd)
+}
+
+func (a *Adapter) cancelCodeRuns(agentID string) int {
+	if a == nil || a.ctx == nil {
+		return 0
+	}
+	return a.ctx.CancelCodeRuns(agentID)
+}
+
+func (a *Adapter) nowUnixMilli() int64 {
+	if a == nil || a.ctx == nil {
+		return time.Now().UnixMilli()
+	}
+	return a.ctx.NowUnixMilli()
+}
+
+func (a *Adapter) readSkillContent(skillName string) (string, error) {
+	if strings.TrimSpace(skillName) == "" {
+		return "", appErrors.New("codexadapter.readSkillContent", "skill name is required")
+	}
+	if a == nil || a.ctx == nil {
+		return "", appErrors.New("codexadapter.readSkillContent", "server context is not configured")
+	}
+	return a.ctx.ReadSkillContent(skillName)
+}
+
+func (a *Adapter) listSkillNames() ([]string, error) {
+	if a == nil || a.ctx == nil {
+		return nil, appErrors.New("codexadapter.listSkillNames", "server context is not configured")
+	}
+	return a.ctx.ListSkillNames()
+}
+
+func (a *Adapter) listSkillMatchCandidates() ([]contracts.SkillMatchCandidate, error) {
+	if a == nil || a.ctx == nil {
+		return nil, appErrors.New("codexadapter.listSkillMatchCandidates", "server context is not configured")
+	}
+	return a.ctx.ListSkillMatchCandidates()
+}
+
+func (a *Adapter) listAgentSkills(agentID string) []string {
+	if a == nil || a.ctx == nil {
+		return nil
+	}
+	return a.ctx.GetAgentSkills(agentID)
+}
+
+func (a *Adapter) notifier() func(string, any) {
+	if a == nil || a.ctx == nil || a.ctx.Notify == nil {
+		return nil
+	}
+	return a.ctx.Notify
+}
+
+func (a *Adapter) notify(method string, payload any) {
+	if strings.TrimSpace(method) == "" {
+		return
+	}
+	if notify := a.notifier(); notify != nil {
+		notify(method, payload)
+	}
 }

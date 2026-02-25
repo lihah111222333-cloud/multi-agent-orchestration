@@ -20,47 +20,47 @@ func TestBuildSelectedSkillPrompt(t *testing.T) {
 			}
 		}
 
-		prompt, count := BuildSelectedSkillPrompt(
+		prompt, count := buildSelectedSkillPrompt(
 			[]string{"skill-a", "SKILL-A", "skill-b"},
 			readSkill,
 			nil,
 		)
 		if count != 1 {
-			t.Fatalf("BuildSelectedSkillPrompt() count = %d, want 1", count)
+			t.Fatalf("buildSelectedSkillPrompt() count = %d, want 1", count)
 		}
 		if !strings.Contains(prompt, "content-a") {
-			t.Fatalf("BuildSelectedSkillPrompt() prompt = %q, want contains content-a", prompt)
+			t.Fatalf("buildSelectedSkillPrompt() prompt = %q, want contains content-a", prompt)
 		}
 		if strings.Contains(prompt, "skill-b") {
-			t.Fatalf("BuildSelectedSkillPrompt() prompt = %q, want no missing skill content", prompt)
+			t.Fatalf("buildSelectedSkillPrompt() prompt = %q, want no missing skill content", prompt)
 		}
 	})
 
 	t.Run("custom skillInputText", func(t *testing.T) {
-		prompt, count := BuildSelectedSkillPrompt(
+		prompt, count := buildSelectedSkillPrompt(
 			[]string{"skill-a"},
 			func(skillName string) (string, error) { return "raw", nil },
 			func(name, content string) string { return name + ":" + content },
 		)
 		if count != 1 {
-			t.Fatalf("BuildSelectedSkillPrompt() count = %d, want 1", count)
+			t.Fatalf("buildSelectedSkillPrompt() count = %d, want 1", count)
 		}
 		if prompt != "skill-a:raw" {
-			t.Fatalf("BuildSelectedSkillPrompt() prompt = %q, want skill-a:raw", prompt)
+			t.Fatalf("buildSelectedSkillPrompt() prompt = %q, want skill-a:raw", prompt)
 		}
 	})
 }
 
 func TestResolveLSPUsagePromptHint(t *testing.T) {
 	t.Run("nil getter uses default", func(t *testing.T) {
-		got := ResolveLSPUsagePromptHint(context.Background(), "default-hint", 100, nil)
+		got := resolveLSPUsagePromptHint(context.Background(), "default-hint", 100, nil)
 		if got != "default-hint" {
-			t.Fatalf("ResolveLSPUsagePromptHint() = %q, want default-hint", got)
+			t.Fatalf("resolveLSPUsagePromptHint() = %q, want default-hint", got)
 		}
 	})
 
 	t.Run("too long hint fallback", func(t *testing.T) {
-		got := ResolveLSPUsagePromptHint(
+		got := resolveLSPUsagePromptHint(
 			context.Background(),
 			"default-hint",
 			8,
@@ -69,12 +69,12 @@ func TestResolveLSPUsagePromptHint(t *testing.T) {
 			},
 		)
 		if got != "default-hint" {
-			t.Fatalf("ResolveLSPUsagePromptHint() = %q, want default-hint", got)
+			t.Fatalf("resolveLSPUsagePromptHint() = %q, want default-hint", got)
 		}
 	})
 
 	t.Run("valid hint returned", func(t *testing.T) {
-		got := ResolveLSPUsagePromptHint(
+		got := resolveLSPUsagePromptHint(
 			context.Background(),
 			"default-hint",
 			64,
@@ -83,7 +83,7 @@ func TestResolveLSPUsagePromptHint(t *testing.T) {
 			},
 		)
 		if got != "real-hint" {
-			t.Fatalf("ResolveLSPUsagePromptHint() = %q, want real-hint", got)
+			t.Fatalf("resolveLSPUsagePromptHint() = %q, want real-hint", got)
 		}
 	})
 }

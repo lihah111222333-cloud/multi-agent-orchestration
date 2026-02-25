@@ -82,10 +82,10 @@ func (a *Adapter) ThreadUnarchive(ctx context.Context, threadID string) (map[str
 	inspect := func(id string) (ThreadArchiveRestoreNotice, error) {
 		return InspectThreadArchiveForRestore(InspectThreadArchiveForRestoreOptions{
 			ThreadID:                            id,
-			ResolveThreadArchiveRoot:            ResolveThreadArchiveRootDir,
+			ResolveThreadArchiveRoot:            resolveThreadArchiveRootDir,
 			SanitizeArchiveNameStrict:           SanitizeArchiveNameStrict,
 			PathWithinRoot:                      PathWithinRoot,
-			FileSHA256:                          FileSHA256,
+			FileSHA256:                          fileSHA256,
 			FindLatestThreadArchiveManifestPath: FindLatestThreadArchiveManifestPath,
 			ReadThreadArchiveManifest:           ReadThreadArchiveManifest,
 		})
@@ -93,12 +93,12 @@ func (a *Adapter) ThreadUnarchive(ctx context.Context, threadID string) (map[str
 	restore := func(id string) ([]string, []string, error) {
 		return RestoreThreadArchiveSources(RestoreThreadArchiveSourcesOptions{
 			ThreadID:                            id,
-			ResolveThreadArchiveRoot:            ResolveThreadArchiveRootDir,
+			ResolveThreadArchiveRoot:            resolveThreadArchiveRootDir,
 			SanitizeArchiveNameStrict:           SanitizeArchiveNameStrict,
-			ResolveCodexRootDir:                 ResolveCodexRootDir,
+			ResolveCodexRootDir:                 resolveCodexRootDir,
 			PathWithinRoot:                      PathWithinRoot,
-			CopyFileOverwrite:                   CopyFileOverwrite,
-			FileSHA256:                          FileSHA256,
+			CopyFileOverwrite:                   copyFileOverwrite,
+			FileSHA256:                          fileSHA256,
 			FindLatestThreadArchiveManifestPath: FindLatestThreadArchiveManifestPath,
 			ReadThreadArchiveManifest:           ReadThreadArchiveManifest,
 		})

@@ -148,16 +148,16 @@ func (a *Adapter) loadThreadArchiveMap(ctx context.Context) (map[string]int64, e
 func (a *Adapter) archiveThreadArtifacts(ctx context.Context, threadID string) (ThreadArchiveManifest, error) {
 	return a.ArchiveThreadArtifacts(ctx, ArchiveThreadArtifactsOptions{
 		ThreadID:                        threadID,
-		ResolveThreadArchiveRootDir:     ResolveThreadArchiveRootDir,
-		ResolveThreadArchiveSnapshotDir: ResolveThreadArchiveSnapshotDir,
+		ResolveThreadArchiveRootDir:     resolveThreadArchiveRootDir,
+		ResolveThreadArchiveSnapshotDir: resolveThreadArchiveSnapshotDir,
 		ResolveRolloutHistorySource: func(resolveCtx context.Context, id string) (string, string) {
 			return a.ResolveRolloutHistorySource(resolveCtx, id, a.normalizeCodexThreadID)
 		},
 		NormalizeCodexThreadID:          a.normalizeCodexThreadID,
 		CollectThreadArtifactCandidates: CollectThreadArtifactCandidates,
-		NextArchiveFilePath:             NextArchiveFilePath,
-		CopyFile:                        CopyFile,
-		FileSHA256:                      FileSHA256,
+		NextArchiveFilePath:             nextArchiveFilePath,
+		CopyFile:                        copyFile,
+		FileSHA256:                      fileSHA256,
 		WriteThreadArchiveManifest:      WriteThreadArchiveManifest,
 		BindRolloutPath: func(bindCtx context.Context, agentID, codexThreadID, rolloutPath string) error {
 			if a == nil || a.ctx == nil || a.ctx.BindingStore() == nil {
@@ -172,10 +172,10 @@ func (a *Adapter) archiveThreadArtifacts(ctx context.Context, threadID string) (
 				ThreadID:                  id,
 				Files:                     files,
 				ArchiveDir:                archiveDir,
-				ResolveCodexRootDir:       ResolveCodexRootDir,
+				ResolveCodexRootDir:       resolveCodexRootDir,
 				PathWithinRoot:            PathWithinRoot,
-				FileSHA256:                FileSHA256,
-				RemoveEmptyCodexParentDir: RemoveEmptyCodexParentDirs,
+				FileSHA256:                fileSHA256,
+				RemoveEmptyCodexParentDir: removeEmptyCodexParentDirs,
 			})
 		},
 	})

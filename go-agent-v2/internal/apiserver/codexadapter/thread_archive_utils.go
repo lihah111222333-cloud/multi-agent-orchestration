@@ -75,8 +75,8 @@ func NormalizeThreadArchiveMap(value any) map[string]int64 {
 	return result
 }
 
-// ResolveThreadArchiveRootDir resolves and ensures ~/.multi-agent/thread-archives.
-func ResolveThreadArchiveRootDir() (string, error) {
+// resolveThreadArchiveRootDir resolves and ensures ~/.multi-agent/thread-archives.
+func resolveThreadArchiveRootDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", apperrors.Wrap(err, "resolveThreadArchiveRootDir", "resolve user home")
@@ -96,8 +96,8 @@ func ResolveThreadArchiveRootDir() (string, error) {
 	return archiveRoot, nil
 }
 
-// ResolveThreadArchiveSnapshotDir resolves unique snapshot dir for archived thread.
-func ResolveThreadArchiveSnapshotDir(rootDir string, threadID string, archivedAt string) (string, error) {
+// resolveThreadArchiveSnapshotDir resolves unique snapshot dir for archived thread.
+func resolveThreadArchiveSnapshotDir(rootDir string, threadID string, archivedAt string) (string, error) {
 	safeThreadID, err := SanitizeArchiveNameStrict(threadID)
 	if err != nil {
 		return "", apperrors.Wrap(err, "resolveThreadArchiveSnapshotDir", "sanitize thread id")
@@ -161,8 +161,8 @@ func SanitizeArchiveNameStrict(raw string) (string, error) {
 	return sanitized, nil
 }
 
-// NextArchiveFilePath allocates a unique archive file path in target dir.
-func NextArchiveFilePath(dir, filename string) (string, error) {
+// nextArchiveFilePath allocates a unique archive file path in target dir.
+func nextArchiveFilePath(dir, filename string) (string, error) {
 	base, err := SanitizeArchiveNameStrict(filepath.Base(filename))
 	if err != nil {
 		return "", apperrors.Wrap(err, "nextArchiveFilePath", "sanitize filename")
@@ -186,8 +186,8 @@ func NextArchiveFilePath(dir, filename string) (string, error) {
 	return "", apperrors.New("nextArchiveFilePath", "unable to allocate unique archive filename")
 }
 
-// CopyFile copies src to target and fails if target exists.
-func CopyFile(srcPath, targetPath string) error {
+// copyFile copies src to target and fails if target exists.
+func copyFile(srcPath, targetPath string) error {
 	if _, err := os.Stat(targetPath); err == nil {
 		return apperrors.Newf("copyFile", "target already exists: %s", targetPath)
 	} else if !os.IsNotExist(err) {
@@ -226,8 +226,8 @@ func CopyFile(srcPath, targetPath string) error {
 	return os.Rename(tmpPath, targetPath)
 }
 
-// CopyFileOverwrite copies src to target with atomic overwrite semantics.
-func CopyFileOverwrite(srcPath, targetPath string) error {
+// copyFileOverwrite copies src to target with atomic overwrite semantics.
+func copyFileOverwrite(srcPath, targetPath string) error {
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return err
@@ -272,8 +272,8 @@ func CopyFileOverwrite(srcPath, targetPath string) error {
 	return nil
 }
 
-// FileSHA256 computes file SHA256 checksum in hex.
-func FileSHA256(path string) (string, error) {
+// fileSHA256 computes file SHA256 checksum in hex.
+func fileSHA256(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -287,8 +287,8 @@ func FileSHA256(path string) (string, error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// ResolveCodexRootDir resolves ~/.codex root directory path.
-func ResolveCodexRootDir() (string, error) {
+// resolveCodexRootDir resolves ~/.codex root directory path.
+func resolveCodexRootDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", apperrors.Wrap(err, "resolveCodexRootDir", "resolve user home")
@@ -300,8 +300,8 @@ func ResolveCodexRootDir() (string, error) {
 	return filepath.Join(homeDir, ".codex"), nil
 }
 
-// RemoveEmptyCodexParentDirs removes empty parent dirs until codex root boundary.
-func RemoveEmptyCodexParentDirs(startDir string, codexRoot string) {
+// removeEmptyCodexParentDirs removes empty parent dirs until codex root boundary.
+func removeEmptyCodexParentDirs(startDir string, codexRoot string) {
 	current := strings.TrimSpace(startDir)
 	root := strings.TrimSpace(codexRoot)
 	if current == "" || root == "" {

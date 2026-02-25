@@ -56,7 +56,16 @@ func (testServerContext) Store() *uistate.PreferenceManager           { return n
 func (testServerContext) BindingStore() *store.AgentCodexBindingStore { return nil }
 func (testServerContext) AgentStatusStore() *store.AgentStatusStore   { return nil }
 func (testServerContext) UIRuntime() *uistate.RuntimeManager          { return nil }
-func (testServerContext) Notify(string, any)                          {}
+func (testServerContext) AllSchemas() []agentcore.DynamicTool         { return nil }
+func (testServerContext) SetAgentWorkDir(string, string)              {}
+func (testServerContext) CancelCodeRuns(string) int                   { return 0 }
+func (testServerContext) ReadSkillContent(string) (string, error)     { return "", nil }
+func (testServerContext) ListSkillNames() ([]string, error)           { return nil, nil }
+func (testServerContext) ListSkillMatchCandidates() ([]SkillMatchCandidate, error) {
+	return nil, nil
+}
+func (testServerContext) GetAgentSkills(string) []string { return nil }
+func (testServerContext) Notify(string, any)             {}
 
 func newTestManager(t *testing.T) *runner.AgentManager {
 	t.Helper()

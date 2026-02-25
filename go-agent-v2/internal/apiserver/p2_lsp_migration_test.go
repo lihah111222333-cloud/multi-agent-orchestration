@@ -142,7 +142,7 @@ func TestP2DiagCacheNotAccessedOutsideServerAccessors(t *testing.T) {
 			continue
 		}
 		name := entry.Name()
-		if filepath.Ext(name) != ".go" || isTestGoFile(name) || name == "server.go" {
+		if filepath.Ext(name) != ".go" || isTestGoFile(name) || name == "server.go" || name == "server_diagnostics.go" {
 			continue
 		}
 		file, parseErr := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
@@ -166,7 +166,7 @@ func TestP2DiagCacheNotAccessedOutsideServerAccessors(t *testing.T) {
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf("diagCache direct access must stay inside server.go accessors:\n%s", strings.Join(violations, "\n"))
+		t.Fatalf("diagCache direct access must stay inside server accessors (server.go/server_diagnostics.go):\n%s", strings.Join(violations, "\n"))
 	}
 }
 

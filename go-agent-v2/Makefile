@@ -1,11 +1,18 @@
-.PHONY: build run test vet clean protocol-sync-check ui-cover-build ui-cover-run ui-cover-report app-cover-build app-cover-run app-cover-report
+.PHONY: build run test vet clean protocol-sync-check setup-cgo ui-cover-build ui-cover-run ui-cover-report app-cover-build app-cover-run app-cover-report
 
 MIN_MACOS_VERSION ?= 11.0
 
+# NOTE: Do NOT use 'export CGO_*FLAGS' here — it causes cache thrashing between
+#       make and IDE/terminal builds (Go caches key on CGO flags).
+#       Run 'make setup-cgo' once to persist flags via 'go env -w'.
+setup-cgo:
 ifeq ($(shell uname -s),Darwin)
-export CGO_CFLAGS := $(strip $(CGO_CFLAGS) -mmacosx-version-min=$(MIN_MACOS_VERSION))
-export CGO_CXXFLAGS := $(strip $(CGO_CXXFLAGS) -mmacosx-version-min=$(MIN_MACOS_VERSION))
-export CGO_LDFLAGS := $(strip $(CGO_LDFLAGS) -mmacosx-version-min=$(MIN_MACOS_VERSION))
+	go env -w CGO_CFLAGS="-mmacosx-version-min=$(MIN_MACOS_VERSION)"
+	go env -w CGO_CXXFLAGS="-mmacosx-version-min=$(MIN_MACOS_VERSION)"
+	go env -w CGO_LDFLAGS="-mmacosx-version-min=$(MIN_MACOS_VERSION)"
+	@echo "✅ CGO flags persisted to go env (version-min=$(MIN_MACOS_VERSION))"
+else
+	@echo "ℹ️  Not Darwin, skipping CGO macOS flags"
 endif
 
 build:

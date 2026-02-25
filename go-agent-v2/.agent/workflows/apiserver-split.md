@@ -377,7 +377,8 @@ fi
 3. `P2 Agent`：Dashboard JSON-RPC 下沉至 `dashrpc`
 4. `P3 Agent`：Skills 下沉至 `skills`
 5. `P4 Agent`：Thread/Turn 下沉至 `codexadapter`
-6. `P5 Agent`（可选，P4 验收后）：统一 `RegisterFn` 内链注册，消除 apiserver 中全部薄委派 wrapper 文件
+
+> **P5 RegisterFn 评估结论**：经审查不可行。Thread/Turn wrapper 文件包含 Go receiver 方法绑定、params/response 类型定义和 Server 字段注入，不是纯路由注册，无法用 RegisterFn 消除。Dashboard 的 RegisterFn 模式之所以可行，是因为 dashrpc 定义了完整的 DashboardProvider 接口。P0-P4 已完成全部职责拆分目标。
 
 执行纪律：
 

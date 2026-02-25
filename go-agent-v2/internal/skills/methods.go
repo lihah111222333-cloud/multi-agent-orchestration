@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/service"
+	"github.com/multi-agent/go-agent-v2/internal/skillutil"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -285,7 +286,7 @@ func (m *Manager) SkillsLocalDelete(_ context.Context, p SkillsLocalDeleteParams
 	if skillSvc == nil {
 		return nil, apperrors.New("Server.skillsLocalDelete", "skill service unavailable")
 	}
-	skillName, err := normalizeSkillName(p.Name)
+	skillName, err := skillutil.NormalizeName(p.Name)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsLocalDelete", "normalize skill name")
 	}
@@ -365,7 +366,7 @@ func (m *Manager) SkillsConfigWrite(_ context.Context, p SkillsConfigWriteParams
 	if strings.TrimSpace(p.Name) == "" {
 		return nil, apperrors.New("Server.skillsConfigWrite", "name is required")
 	}
-	skillName, err := normalizeSkillName(p.Name)
+	skillName, err := skillutil.NormalizeName(p.Name)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "normalize skill name")
 	}
@@ -386,7 +387,7 @@ func (m *Manager) SkillsSummaryWrite(_ context.Context, p SkillsSummaryWritePara
 	if strings.TrimSpace(p.Name) == "" {
 		return nil, apperrors.New("Server.skillsSummaryWrite", "name is required")
 	}
-	skillName, err := normalizeSkillName(p.Name)
+	skillName, err := skillutil.NormalizeName(p.Name)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsSummaryWrite", "normalize skill name")
 	}
@@ -438,7 +439,7 @@ func (m *Manager) SkillsRemoteWrite(_ context.Context, p SkillsRemoteWriteParams
 	if skillSvc == nil {
 		return nil, apperrors.New("Server.skillsRemoteWrite", "skill service unavailable")
 	}
-	skillName, err := normalizeSkillName(p.Name)
+	skillName, err := skillutil.NormalizeName(p.Name)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "normalize skill name")
 	}

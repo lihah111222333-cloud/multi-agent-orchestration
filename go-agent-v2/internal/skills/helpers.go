@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/multi-agent/go-agent-v2/internal/skillutil"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
@@ -23,25 +24,17 @@ type skillImportResult struct {
 	Bytes     int64  `json:"bytes"`
 }
 
-func normalizeSkillName(raw string) (string, error) {
-	name := strings.TrimSpace(raw)
-	if name == "" {
-		return "", apperrors.New("normalizeSkillName", "skill name is required")
-	}
-	return name, nil
-}
-
 func skillImportDirName(rawName, sourceDir string) (string, error) {
 	name := strings.TrimSpace(rawName)
 	if name != "" {
-		return normalizeSkillName(name)
+		return skillutil.NormalizeName(name)
 	}
 	candidate := strings.TrimSpace(strings.TrimRight(sourceDir, `/\`))
 	if candidate == "" {
 		return "", apperrors.New("skillImportDirName", "source directory is required")
 	}
 	base := filepath.Base(candidate)
-	return normalizeSkillName(base)
+	return skillutil.NormalizeName(base)
 }
 
 func collectSkillImportSources(path string, paths []string) []string {

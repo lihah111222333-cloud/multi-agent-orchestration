@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // RuntimeManager stores UI business runtime state in Go.
@@ -39,7 +41,7 @@ func NewRuntimeManager() *RuntimeManager {
 			ActivityStatsByThread: map[string]ActivityStats{},
 			AlertsByThread:        map[string][]AlertEntry{},
 		},
-		runtime:                   map[string]*threadRuntime{},
+		runtime:                     map[string]*threadRuntime{},
 		sanitizeInjectedUserMessage: true,
 	}
 }
@@ -459,7 +461,7 @@ func extractUserAttachmentsFromPayload(payload map[string]any) []TimelineAttachm
 				Kind:       "image",
 				Name:       attachmentName(path),
 				Path:       path,
-				PreviewURL: attachmentPreview(path),
+				PreviewURL: util.BuildAttachmentPreviewURL(path),
 			})
 		case "localimage":
 			path := strings.TrimSpace(extractFirstString(item, "path"))
@@ -478,7 +480,7 @@ func extractUserAttachmentsFromPayload(payload map[string]any) []TimelineAttachm
 				Kind:       "image",
 				Name:       attachmentName(nameSource),
 				Path:       path,
-				PreviewURL: attachmentPreview(preview),
+				PreviewURL: util.BuildAttachmentPreviewURL(preview),
 			})
 		case "mention", "filecontent":
 			path := extractFirstString(item, "path")
@@ -542,21 +544,6 @@ func attachmentName(path string) string {
 		return value
 	}
 	return base
-}
-
-func attachmentPreview(path string) string {
-	value := strings.TrimSpace(path)
-	if value == "" {
-		return ""
-	}
-	lower := strings.ToLower(value)
-	if strings.HasPrefix(lower, "http://") ||
-		strings.HasPrefix(lower, "https://") ||
-		strings.HasPrefix(lower, "data:image/") ||
-		strings.HasPrefix(lower, "file://") {
-		return value
-	}
-	return (&url.URL{Scheme: "file", Path: value}).String()
 }
 
 // ReplaceWorkspaceRuns replaces workspace run cache.

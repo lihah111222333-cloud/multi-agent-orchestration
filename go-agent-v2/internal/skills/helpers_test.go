@@ -3,12 +3,14 @@ package skills
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/multi-agent/go-agent-v2/internal/skillutil"
 )
 
 func TestNormalizeSkillName(t *testing.T) {
 	t.Parallel()
 
-	name, err := normalizeSkillName("  DemoSkill  ")
+	name, err := skillutil.NormalizeName("  DemoSkill  ")
 	if err != nil {
 		t.Fatalf("normalizeSkillName returned error: %v", err)
 	}
@@ -16,11 +18,11 @@ func TestNormalizeSkillName(t *testing.T) {
 		t.Fatalf("normalizeSkillName mismatch: got %q", name)
 	}
 
-	if _, err := normalizeSkillName(""); err == nil {
-		t.Fatal("normalizeSkillName(\"\") expected error")
+	if _, err := skillutil.NormalizeName(""); err == nil {
+		t.Fatal("skillutil.NormalizeName(\"\") expected error")
 	}
-	if _, err := normalizeSkillName("   "); err == nil {
-		t.Fatal("normalizeSkillName(whitespace) expected error")
+	if _, err := skillutil.NormalizeName("   "); err == nil {
+		t.Fatal("skillutil.NormalizeName(whitespace) expected error")
 	}
 }
 

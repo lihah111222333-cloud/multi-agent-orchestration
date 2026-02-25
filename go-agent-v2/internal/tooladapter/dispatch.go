@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 // DynamicToolCall carries dispatch input and runtime context.
@@ -52,7 +53,7 @@ func Dispatch(call DynamicToolCall, deps Providers) (string, error) {
 
 	callCtx := BuildToolCallContext(call)
 	if isCodeRunTool(toolName) && deps.CodeRunTracker != nil {
-		resolvedCallID := resolveCodeRunCallID(callCtx.CallID, callCtx.RequestID)
+		resolvedCallID := util.ResolveCodeRunCallID(callCtx.CallID, callCtx.RequestID)
 		execCtx, execCancel := context.WithCancel(callCtx.Ctx)
 		runKey := deps.CodeRunTracker.RegisterCodeRunCancel(callCtx.AgentID, resolvedCallID, execCancel)
 		defer func() {
@@ -75,15 +76,4 @@ func isCodeRunTool(name string) bool {
 	default:
 		return false
 	}
-}
-
-func resolveCodeRunCallID(callID string, requestID *int64) string {
-	trimmed := strings.TrimSpace(callID)
-	if trimmed != "" {
-		return trimmed
-	}
-	if requestID != nil {
-		return fmt.Sprintf("req-%d", *requestID)
-	}
-	return ""
 }

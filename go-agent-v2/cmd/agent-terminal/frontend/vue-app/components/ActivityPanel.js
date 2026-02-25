@@ -39,7 +39,18 @@ const STAT_ICON_PATHS = {
  * @returns {string}
  */
 function normalizeToolName(name) {
-  return (name || '').toString().trim().toLowerCase().replace(/[/-]+/g, '_');
+  const normalized = (name || '')
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/[./:-]+/g, '_')
+    .replace(/^functions_+/, '')
+    .replace(/^function_+/, '')
+    .replace(/^tools_+/, '')
+    .replace(/^tool_+/, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized;
 }
 
 /**

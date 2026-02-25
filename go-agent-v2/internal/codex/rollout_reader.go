@@ -94,8 +94,8 @@ func ReadRolloutMessagesWithTrim(rolloutPath string, trimInjectedUserContent boo
 				continue
 			}
 			if trimInjectedUserContent {
-				text = trimSkillInjection(text)
-				text = trimLSPInjection(text)
+				text = util.TrimInjectedSkillBlock(text)
+				text = util.TrimInjectedLSPHint(text)
 			}
 			if strings.TrimSpace(text) == "" {
 				continue
@@ -174,56 +174,4 @@ func extractRolloutText(content []rolloutContentItem) string {
 
 func isSystemNoise(text string) bool {
 	return util.IsSystemNoiseText(text)
-}
-
-func trimLSPInjection(text string) string {
-	const marker = "\n已注入"
-	if idx := strings.Index(text, marker); idx >= 0 {
-		return text[:idx]
-	}
-	return text
-}
-
-func trimSkillInjection(text string) string {
-	lines := strings.Split(text, "\n")
-	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(line, "[skill:") || !strings.Contains(line, "]") {
-			continue
-		}
-		if !looksLikeInjectedSkillBlock(lines, i) {
-			continue
-		}
-		return strings.TrimRight(strings.Join(lines[:i], "\n"), "\n")
-	}
-	return text
-}
-
-func looksLikeInjectedSkillBlock(lines []string, start int) bool {
-	if start < 0 || start >= len(lines) {
-		return false
-	}
-	current := strings.TrimSpace(lines[start])
-	hasSummary := strings.Contains(current, "摘要:")
-	hasUsage := strings.Contains(current, "使用方式: ")
-
-	const lookahead = 8
-	for i := start + 1; i < len(lines) && i <= start+lookahead; i++ {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "[skill:") {
-			break
-		}
-		if strings.HasPrefix(line, "摘要:") {
-			hasSummary = true
-			continue
-		}
-		if strings.HasPrefix(line, "使用方式: ") {
-			hasUsage = true
-			continue
-		}
-	}
-	return hasSummary && hasUsage
 }

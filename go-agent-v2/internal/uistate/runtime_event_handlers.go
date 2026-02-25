@@ -327,6 +327,33 @@ func (m *RuntimeManager) clearTurnLifecycleLocked(threadID string) {
 	rt.reasoningHeaderBuf = ""
 }
 
+func normalizeActivityToolName(name string) string {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if normalized == "" {
+		return ""
+	}
+	normalized = strings.NewReplacer(
+		"/", "_",
+		".", "_",
+		":", "_",
+		"-", "_",
+	).Replace(normalized)
+	normalized = strings.Trim(normalized, "_")
+	for _, prefix := range []string{
+		"functions_",
+		"function_",
+		"tools_",
+		"tool_",
+	} {
+		normalized = strings.TrimPrefix(normalized, prefix)
+	}
+	return normalized
+}
+
+func isLSPActivityToolName(name string) bool {
+	return strings.HasPrefix(normalizeActivityToolName(name), "lsp_")
+}
+
 // incrActivityStatLocked increments a per-thread activity counter.
 // Must be called with m.mu held.
 func (m *RuntimeManager) incrActivityStatLocked(threadID, kind, toolName string) {
@@ -348,7 +375,7 @@ func (m *RuntimeManager) incrActivityStatLocked(threadID, kind, toolName string)
 			stats.ToolCalls = map[string]int64{}
 		}
 		stats.ToolCalls[name]++
-		if strings.HasPrefix(name, "lsp_") || strings.HasPrefix(name, "lsp/") {
+		if isLSPActivityToolName(name) {
 			stats.LSPCalls++
 		}
 	}
@@ -979,61 +1006,9 @@ func sanitizeUserMessageTextWithMode(text string, trimInjected bool) string {
 	if !trimInjected {
 		return text
 	}
-	trimmed := trimInjectedSkillBlock(text)
-	trimmed = trimInjectedLSPHint(trimmed)
+	trimmed := util.TrimInjectedSkillBlock(text)
+	trimmed = util.TrimInjectedLSPHint(trimmed)
 	return trimmed
-}
-
-func trimInjectedLSPHint(text string) string {
-	const marker = "\n已注入"
-	if idx := strings.Index(text, marker); idx >= 0 {
-		return text[:idx]
-	}
-	return text
-}
-
-func trimInjectedSkillBlock(text string) string {
-	lines := strings.Split(text, "\n")
-	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(line, "[skill:") || !strings.Contains(line, "]") {
-			continue
-		}
-		if !looksLikeInjectedSkillBlock(lines, i) {
-			continue
-		}
-		return strings.TrimRight(strings.Join(lines[:i], "\n"), "\n")
-	}
-	return text
-}
-
-func looksLikeInjectedSkillBlock(lines []string, start int) bool {
-	if start < 0 || start >= len(lines) {
-		return false
-	}
-	current := strings.TrimSpace(lines[start])
-	hasSummary := strings.Contains(current, "摘要:")
-	hasUsage := strings.Contains(current, "使用方式: ")
-
-	const lookahead = 8
-	for i := start + 1; i < len(lines) && i <= start+lookahead; i++ {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "[skill:") {
-			break
-		}
-		if strings.HasPrefix(line, "摘要:") {
-			hasSummary = true
-			continue
-		}
-		if strings.HasPrefix(line, "使用方式: ") {
-			hasUsage = true
-			continue
-		}
-	}
-	return hasSummary && hasUsage
 }
 
 func (m *RuntimeManager) ensureThreadLocked(threadID string) {

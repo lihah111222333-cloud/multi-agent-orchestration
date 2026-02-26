@@ -53,7 +53,7 @@ func TestAstSearchMissingSG(t *testing.T) {
 		return oldLookPath(name)
 	}
 
-	raw, err := json.Marshal(map[string]any{"pattern": "$A", "language": "go"})
+	raw, err := json.Marshal(map[string]any{"symbol": "$A", "language": "go"})
 	if err != nil {
 		t.Fatalf("marshal args: %v", err)
 	}

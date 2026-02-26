@@ -66,7 +66,7 @@ func (m *Manager) bootstrapDocumentLocked(filePath, uri string) (*Client, *Serve
 
 	state := m.documentState(uri)
 	m.restoreDocumentStateFromCache(filePath, uri, cfg.Language, state)
-	// 最新内容来自 lsp_did_change（未落盘）时，不可用磁盘快照回写旧内容。
+	// 最新内容来自 lsp_file(action=did_change)（未落盘）时，不可用磁盘快照回写旧内容。
 	// 若磁盘已追平内存哈希，则切回 disk-backed。
 	if state.Open && !state.DiskBacked {
 		if content, stat, hash, readErr := loadDocumentSnapshot(filePath); readErr == nil && hash == state.ContentHash {
@@ -136,7 +136,7 @@ func (m *Manager) bootstrapDocumentWithoutClientLocked(filePath, uri, language s
 	state := m.documentState(uri)
 	m.restoreDocumentStateFromCache(filePath, uri, language, state)
 
-	// 最新内容来自 lsp_did_change（未落盘）时，不可用磁盘快照回写旧内容。
+	// 最新内容来自 lsp_file(action=did_change)（未落盘）时，不可用磁盘快照回写旧内容。
 	// 若磁盘已追平内存哈希，则切回 disk-backed。
 	if state.Open && !state.DiskBacked {
 		if content, stat, hash, readErr := loadDocumentSnapshot(filePath); readErr == nil && hash == state.ContentHash {
@@ -523,7 +523,7 @@ func loadDocumentSnapshot(filePath string) (content string, stat os.FileInfo, ha
 	if readErr != nil {
 		return "", nil, "", apperrors.Newf(
 			"LSP.BootstrapDocument",
-			"failed to read file %s: %v; provide file_path or open explicitly via lsp_open_file",
+			"failed to read file %s: %v; provide file_path or open explicitly via lsp_file(action=open_file)",
 			filePath, readErr,
 		)
 	}

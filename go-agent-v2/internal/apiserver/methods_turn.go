@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	goruntime "runtime"
+	"strings"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
+	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 // UserInput 用户输入 (支持多种类型)。
@@ -112,14 +114,162 @@ func (s *Server) turnForceComplete(_ context.Context, p turnForceCompleteParams)
 	return s.codexAdapter.TurnForceComplete(p.ThreadID)
 }
 
-// reviewStartParams review/start 请求参数。
-type reviewStartParams struct {
+type threadRealtimeStartParams struct {
+	ThreadID  string  `json:"threadId"`
+	Prompt    string  `json:"prompt"`
+	SessionID *string `json:"sessionId,omitempty"`
+}
+
+type threadRealtimeAppendAudioParams struct {
 	ThreadID string `json:"threadId"`
-	Delivery string `json:"delivery,omitempty"`
+	Audio    any    `json:"audio"`
+}
+
+type threadRealtimeAppendTextParams struct {
+	ThreadID string `json:"threadId"`
+	Text     string `json:"text"`
+}
+
+type threadRealtimeStopParams struct {
+	ThreadID string `json:"threadId"`
+}
+
+func (s *Server) threadRealtimeStartTyped(_ context.Context, p threadRealtimeStartParams) (any, error) {
+	if strings.TrimSpace(p.ThreadID) == "" {
+		return nil, pkgerr.New("Server.threadRealtimeStart", "threadId is required")
+	}
+	if strings.TrimSpace(p.Prompt) == "" {
+		return nil, pkgerr.New("Server.threadRealtimeStart", "prompt is required")
+	}
+	return map[string]any{}, nil
+}
+
+func (s *Server) threadRealtimeAppendAudioTyped(_ context.Context, p threadRealtimeAppendAudioParams) (any, error) {
+	if strings.TrimSpace(p.ThreadID) == "" {
+		return nil, pkgerr.New("Server.threadRealtimeAppendAudio", "threadId is required")
+	}
+	if p.Audio == nil {
+		return nil, pkgerr.New("Server.threadRealtimeAppendAudio", "audio is required")
+	}
+	return map[string]any{}, nil
+}
+
+func (s *Server) threadRealtimeAppendTextTyped(_ context.Context, p threadRealtimeAppendTextParams) (any, error) {
+	if strings.TrimSpace(p.ThreadID) == "" {
+		return nil, pkgerr.New("Server.threadRealtimeAppendText", "threadId is required")
+	}
+	if strings.TrimSpace(p.Text) == "" {
+		return nil, pkgerr.New("Server.threadRealtimeAppendText", "text is required")
+	}
+	return map[string]any{}, nil
+}
+
+func (s *Server) threadRealtimeStopTyped(_ context.Context, p threadRealtimeStopParams) (any, error) {
+	if strings.TrimSpace(p.ThreadID) == "" {
+		return nil, pkgerr.New("Server.threadRealtimeStop", "threadId is required")
+	}
+	return map[string]any{}, nil
+}
+
+// reviewStartParams review/start 请求参数。
+type reviewTarget struct {
+	Type         string `json:"type"`
+	Instructions string `json:"instructions,omitempty"`
+	Branch       string `json:"branch,omitempty"`
+	Sha          string `json:"sha,omitempty"`
+}
+
+type reviewStartParams struct {
+	ThreadID string       `json:"threadId"`
+	Target   reviewTarget `json:"target"`
+	Delivery string       `json:"delivery,omitempty"`
+}
+
+type reviewStartTurn struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Items  []any  `json:"items"`
+}
+
+type reviewStartResponse struct {
+	Turn           reviewStartTurn `json:"turn"`
+	ReviewThreadID string          `json:"reviewThreadId"`
+}
+
+func buildReviewStartArgs(p reviewStartParams) (string, error) {
+	targetType := strings.TrimSpace(p.Target.Type)
+	if targetType == "" {
+		return "", pkgerr.New("Server.reviewStart", "target.type is required")
+	}
+	switch targetType {
+	case "custom":
+		instructions := strings.TrimSpace(p.Target.Instructions)
+		if instructions == "" {
+			return "", pkgerr.New("Server.reviewStart", "target.instructions is required when target.type is custom")
+		}
+		return instructions, nil
+	case "baseBranch":
+		branch := strings.TrimSpace(p.Target.Branch)
+		if branch == "" {
+			return "", pkgerr.New("Server.reviewStart", "target.branch is required when target.type is baseBranch")
+		}
+		return branch, nil
+	case "commit":
+		sha := strings.TrimSpace(p.Target.Sha)
+		if sha == "" {
+			return "", pkgerr.New("Server.reviewStart", "target.sha is required when target.type is commit")
+		}
+		return sha, nil
+	case "uncommittedChanges":
+		return strings.TrimSpace(p.Delivery), nil
+	default:
+		return "", pkgerr.New("Server.reviewStart", "target.type must be one of: uncommittedChanges, baseBranch, commit, custom")
+	}
 }
 
 func (s *Server) reviewStartTyped(_ context.Context, p reviewStartParams) (any, error) {
-	return s.codexAdapter.ReviewStart(p.ThreadID, p.Delivery)
+	if strings.TrimSpace(p.ThreadID) == "" {
+		return nil, pkgerr.New("Server.reviewStart", "threadId is required")
+	}
+	args, err := buildReviewStartArgs(p)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.codexAdapter.ReviewStart(p.ThreadID, args)
+	if err != nil {
+		return nil, err
+	}
+	response := reviewStartResponse{
+		Turn: reviewStartTurn{
+			ID:     "",
+			Status: "inProgress",
+			Items:  []any{},
+		},
+		ReviewThreadID: p.ThreadID,
+	}
+	if result != nil {
+		if reviewThreadID, ok := result["reviewThreadId"].(string); ok {
+			reviewThreadID = strings.TrimSpace(reviewThreadID)
+			if reviewThreadID != "" {
+				response.ReviewThreadID = reviewThreadID
+			}
+		}
+		if turnMap, ok := result["turn"].(map[string]any); ok {
+			if id, ok := turnMap["id"].(string); ok {
+				response.Turn.ID = id
+			}
+			if status, ok := turnMap["status"].(string); ok {
+				status = strings.TrimSpace(status)
+				if status != "" {
+					response.Turn.Status = status
+				}
+			}
+			if items, ok := turnMap["items"].([]any); ok {
+				response.Turn.Items = items
+			}
+		}
+	}
+	return response, nil
 }
 
 type fuzzySearchParams struct {

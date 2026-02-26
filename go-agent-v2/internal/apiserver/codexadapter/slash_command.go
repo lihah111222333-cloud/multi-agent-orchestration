@@ -21,7 +21,17 @@ func (a *Adapter) SendSlashCommandFromRawParams(ctx context.Context, params json
 	if err != nil {
 		return nil, err
 	}
-	return a.sendSlashCommand(ctx, "Server.sendSlashCommand", parsed.ThreadID, command, parsed.Args)
+	return a.sendSlashCommand(ctx, "Server.sendSlashCommand", parsed.ThreadID, command, parsed.Args, false)
+}
+
+// SendSlashCommandFromRawParamsRequireThreadID parses raw params and sends slash command.
+// The threadId field must be provided and non-empty.
+func (a *Adapter) SendSlashCommandFromRawParamsRequireThreadID(ctx context.Context, params json.RawMessage, command string) (any, error) {
+	parsed, err := parseSlashCommandWithArgsParams(params)
+	if err != nil {
+		return nil, err
+	}
+	return a.sendSlashCommand(ctx, "Server.sendSlashCommand", parsed.ThreadID, command, parsed.Args, true)
 }
 
 // SendSlashCommandWithArgs parses key-based argument from raw params and sends slash command.
@@ -30,12 +40,12 @@ func (a *Adapter) SendSlashCommandWithArgs(params json.RawMessage, command, argK
 	if err != nil {
 		return nil, err
 	}
-	return a.sendSlashCommand(context.Background(), "Server.sendSlashCommand", parsed.ThreadID, command, parsed.Args)
+	return a.sendSlashCommand(context.Background(), "Server.sendSlashCommand", parsed.ThreadID, command, parsed.Args, false)
 }
 
 // ThreadSkillsList sends /skills command to thread and returns placeholder payload.
 func (a *Adapter) ThreadSkillsList() (any, error) {
-	result, err := a.sendSlashCommand(context.Background(), "Server.threadSkillsList", "", "/skills", "")
+	result, err := a.sendSlashCommand(context.Background(), "Server.threadSkillsList", "", "/skills", "", false)
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +79,8 @@ func parseSlashCommandArgParams(params json.RawMessage, argKey string) (slashCom
 	return parsed, nil
 }
 
-func (a *Adapter) sendSlashCommand(ctx context.Context, methodName, threadID, command, args string) (map[string]any, error) {
-	id, err := a.resolveThreadForSlashCommand(ctx, threadID)
+func (a *Adapter) sendSlashCommand(ctx context.Context, methodName, threadID, command, args string, requireThreadID bool) (map[string]any, error) {
+	id, err := a.resolveThreadForSlashCommand(ctx, threadID, requireThreadID)
 	if err != nil {
 		return nil, err
 	}
@@ -93,10 +103,13 @@ func (a *Adapter) sendSlashCommand(ctx context.Context, methodName, threadID, co
 	})
 }
 
-func (a *Adapter) resolveThreadForSlashCommand(ctx context.Context, threadID string) (string, error) {
+func (a *Adapter) resolveThreadForSlashCommand(ctx context.Context, threadID string, requireThreadID bool) (string, error) {
 	id := strings.TrimSpace(threadID)
 	if id != "" {
 		return id, nil
+	}
+	if requireThreadID {
+		return "", apperrors.New("Server.sendSlashCommand", "threadId is required")
 	}
 	threads, err := a.ThreadList(ctx)
 	if err != nil {

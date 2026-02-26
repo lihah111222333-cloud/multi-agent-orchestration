@@ -17,6 +17,8 @@ func TestSkillsContractsStable(t *testing.T) {
 		"skills/local/read",
 		"skills/local/importDir",
 		"skills/local/delete",
+		"skills/remote/list",
+		"skills/remote/export",
 		"skills/remote/read",
 		"skills/remote/write",
 		"skills/config/read",

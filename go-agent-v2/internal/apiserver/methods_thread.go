@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
+	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 type threadStartParams struct {
@@ -94,7 +95,7 @@ func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, er
 // threadNameSetParams thread/name/set 请求参数。
 
 func (s *Server) threadCompact(ctx context.Context, params json.RawMessage) (any, error) {
-	return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/compact")
+	return s.codexAdapter.SendSlashCommandFromRawParamsRequireThreadID(ctx, params, "/compact")
 }
 
 // threadRollbackParams thread/rollback 请求参数。
@@ -162,11 +163,21 @@ func (s *Server) threadNameSetTyped(ctx context.Context, p threadNameSetParams) 
 
 type threadRollbackParams struct {
 	ThreadID  string `json:"threadId"`
-	TurnIndex int    `json:"turnIndex"`
+	NumTurns  *int   `json:"numTurns,omitempty"`
+	TurnIndex *int   `json:"turnIndex,omitempty"` // legacy alias
 }
 
 func (s *Server) threadRollbackTyped(_ context.Context, p threadRollbackParams) (any, error) {
-	return s.codexAdapter.ThreadRollback(p.ThreadID, p.TurnIndex)
+	numTurns := 0
+	if p.NumTurns != nil {
+		numTurns = *p.NumTurns
+	} else if p.TurnIndex != nil {
+		numTurns = *p.TurnIndex
+	}
+	if numTurns <= 0 {
+		return nil, pkgerr.New("Server.threadRollback", "numTurns must be >= 1")
+	}
+	return s.codexAdapter.ThreadRollback(p.ThreadID, numTurns)
 }
 
 type threadMessagesParams struct {
@@ -199,23 +210,32 @@ type threadLoadedListResponse struct {
 	NextCursor *string  `json:"nextCursor"`
 }
 
-func (s *Server) threadLoadedList(ctx context.Context, _ json.RawMessage) (any, error) {
-	threads, err := s.codexAdapter.ThreadLoadedList(ctx)
+type threadLoadedListParams struct {
+	Cursor *string `json:"cursor,omitempty"`
+	Limit  *uint32 `json:"limit,omitempty"`
+}
+
+func decodeThreadLoadedListParams(raw json.RawMessage) (threadLoadedListParams, error) {
+	var p threadLoadedListParams
+	if raw == nil {
+		return p, nil
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return p, pkgerr.Wrap(err, "Server.threadLoadedList", "invalid params")
+	}
+	return p, nil
+}
+
+func (s *Server) threadLoadedList(ctx context.Context, params json.RawMessage) (any, error) {
+	p, err := decodeThreadLoadedListParams(params)
 	if err != nil {
 		return nil, err
 	}
-	return threadLoadedListResponse{Data: threadIDsFromListItems(threads), NextCursor: nil}, nil
-}
-
-func threadIDsFromListItems(items []contracts.ThreadListItem) []string {
-	if len(items) == 0 {
-		return nil
+	data, nextCursor, err := s.codexAdapter.ThreadLoadedList(ctx, p.Cursor, p.Limit)
+	if err != nil {
+		return nil, err
 	}
-	ids := make([]string, 0, len(items))
-	for _, item := range items {
-		ids = append(ids, item.ID)
-	}
-	return ids
+	return threadLoadedListResponse{Data: data, NextCursor: nextCursor}, nil
 }
 
 func (s *Server) threadReadTyped(ctx context.Context, p threadIDParams) (any, error) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"runtime"
+	"strings"
 
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -57,6 +58,10 @@ func (s *Server) registerMethods() {
 	s.methods["turn/steer"] = typedHandler(s.turnSteerTyped)
 	s.methods["turn/interrupt"] = typedHandler(s.turnInterrupt)
 	s.methods["turn/forceComplete"] = typedHandler(s.turnForceComplete)
+	s.methods["thread/realtime/start"] = typedHandler(s.threadRealtimeStartTyped)
+	s.methods["thread/realtime/appendAudio"] = typedHandler(s.threadRealtimeAppendAudioTyped)
+	s.methods["thread/realtime/appendText"] = typedHandler(s.threadRealtimeAppendTextTyped)
+	s.methods["thread/realtime/stop"] = typedHandler(s.threadRealtimeStopTyped)
 	s.methods["review/start"] = typedHandler(s.reviewStartTyped)
 
 	s.methods["fuzzyFileSearch"] = bindTyped(s, fuzzyFileSearchTyped)
@@ -68,6 +73,9 @@ func (s *Server) registerMethods() {
 	s.methods["skills/local/read"] = bindTyped(s, skillsLocalReadTyped)
 	s.methods["skills/local/importDir"] = bindTyped(s, skillsLocalImportDirTyped)
 	s.methods["skills/local/delete"] = bindTyped(s, skillsLocalDeleteTyped)
+	s.methods["skills/remote/list"] = bindTyped(s, skillsRemoteReadTyped)
+	s.methods["skills/remote/export"] = bindTyped(s, skillsRemoteWriteTyped)
+	// Legacy aliases for compatibility with older clients.
 	s.methods["skills/remote/read"] = bindTyped(s, skillsRemoteReadTyped)
 	s.methods["skills/remote/write"] = bindTyped(s, skillsRemoteWriteTyped)
 	s.methods["skills/config/read"] = bindTyped(s, skillsConfigReadTyped)
@@ -80,6 +88,8 @@ func (s *Server) registerMethods() {
 	s.methods["collaborationMode/list"] = bindRaw(s, collaborationModeList)
 	s.methods["experimentalFeature/list"] = bindRaw(s, experimentalFeatureList)
 	s.methods["config/read"] = bindRaw(s, configRead)
+	s.methods["externalAgentConfig/detect"] = stubHandler(map[string]any{})
+	s.methods["externalAgentConfig/import"] = stubHandler(map[string]any{})
 	s.methods["config/value/write"] = bindTyped(s, configValueWriteTyped)
 	s.methods["config/batchWrite"] = bindTyped(s, configBatchWriteTyped)
 	s.methods["config/lspPromptHint/read"] = bindRaw(s, configLSPPromptHintRead)
@@ -95,6 +105,7 @@ func (s *Server) registerMethods() {
 	s.methods["mcpServer/oauth/login"] = noop
 	s.methods["config/mcpServer/reload"] = bindRaw(s, mcpServerReload)
 	s.methods["mcpServerStatus/list"] = bindRaw(s, mcpServerStatusList)
+	s.methods["windowsSandbox/setupStart"] = stubHandler(map[string]any{})
 	s.methods["lsp_diagnostics_query"] = typedHandler(s.lspDiagnosticsQueryTyped)
 
 	s.methods["command/exec"] = bindTyped(s, commandExecTyped)
@@ -108,6 +119,7 @@ func (s *Server) registerMethods() {
 	s.methods["thread/mcp/list"] = s.threadMCPList
 	s.methods["thread/skills/list"] = s.threadSkillsList
 	s.methods["thread/debugMemory"] = s.threadDebugMemory
+	s.methods["mock/experimentalMethod"] = stubHandler(map[string]any{})
 
 	s.methods["log/list"] = bindTyped(s, logListTyped)
 	s.methods["log/filters"] = bindRaw(s, logFilters)
@@ -244,11 +256,17 @@ func offline52MethodList() []string {
 		"thread/read",
 		"thread/resolve",
 		"thread/backgroundTerminals/clean",
+		"thread/realtime/start",
+		"thread/realtime/appendAudio",
+		"thread/realtime/appendText",
+		"thread/realtime/stop",
 		"turn/steer",
 		"turn/forceComplete",
 		"review/start",
 		"fuzzyFileSearch",
 		"skills/list",
+		"skills/remote/list",
+		"skills/remote/export",
 		"skills/remote/read",
 		"skills/remote/write",
 		"app/list",
@@ -256,6 +274,8 @@ func offline52MethodList() []string {
 		"collaborationMode/list",
 		"experimentalFeature/list",
 		"config/read",
+		"externalAgentConfig/detect",
+		"externalAgentConfig/import",
 		"config/value/write",
 		"config/batchWrite",
 		"configRequirements/read",
@@ -266,6 +286,7 @@ func offline52MethodList() []string {
 		"account/rateLimits/read",
 		"config/mcpServer/reload",
 		"mcpServerStatus/list",
+		"windowsSandbox/setupStart",
 		"lsp_diagnostics_query",
 		"command/exec",
 		"thread/undo",
@@ -275,6 +296,7 @@ func offline52MethodList() []string {
 		"thread/mcp/list",
 		"thread/skills/list",
 		"thread/debugMemory",
+		"mock/experimentalMethod",
 		"log/list",
 		"log/filters",
 		"workspace/run/create",
@@ -290,9 +312,9 @@ func offline52MethodList() []string {
 	}
 }
 
-// threadBgTerminalsClean 清理后台终端 (experimental)。
+// threadBgTerminalsClean 清理后台终端 (experimental, threadId 必填)。
 func (s *Server) threadBgTerminalsClean(ctx context.Context, params json.RawMessage) (any, error) {
-	return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/clean")
+	return s.codexAdapter.SendSlashCommandFromRawParamsRequireThreadID(ctx, params, "/clean")
 }
 
 // threadUndo 撤销上一步 (/undo)。
@@ -320,12 +342,31 @@ func (s *Server) threadMCPList(ctx context.Context, params json.RawMessage) (any
 	return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/mcp")
 }
 
-// threadSkillsList 列出 Skills（统一走本地 SkillService 缓存，不透传外部 /skills）。
+// threadSkillsList 列出 Skills（透传 /skills）。
 func (s *Server) threadSkillsList(_ context.Context, _ json.RawMessage) (any, error) {
 	return s.codexAdapter.ThreadSkillsList()
 }
 
+type threadDebugMemoryParams struct {
+	Action string `json:"action,omitempty"`
+}
+
 // threadDebugMemory 调试记忆 (/debug-m-drop 或 /debug-m-update)。
-func (s *Server) threadDebugMemory(_ context.Context, params json.RawMessage) (any, error) {
-	return s.codexAdapter.SendSlashCommandWithArgs(params, "/debug-m-drop", "action")
+func (s *Server) threadDebugMemory(ctx context.Context, params json.RawMessage) (any, error) {
+	command := "/debug-m-drop"
+	if len(params) > 0 && string(params) != "null" {
+		var p threadDebugMemoryParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, apperrors.Wrap(err, "Server.threadDebugMemory", "invalid params")
+		}
+		switch strings.ToLower(strings.TrimSpace(p.Action)) {
+		case "", "drop":
+			command = "/debug-m-drop"
+		case "update":
+			command = "/debug-m-update"
+		default:
+			return nil, apperrors.New("Server.threadDebugMemory", "action must be one of: drop, update")
+		}
+	}
+	return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, command)
 }

@@ -25,9 +25,11 @@ func (a *Adapter) ThreadList(ctx context.Context) ([]threadListItem, error) {
 	return a.threadList(ctx, "thread/list", true)
 }
 
-// ThreadLoadedList returns thread/loaded/list payload.
-func (a *Adapter) ThreadLoadedList(ctx context.Context) ([]threadListItem, error) {
-	return a.threadList(ctx, "thread/loaded/list", false)
+// ThreadLoadedList returns paginated thread IDs for sessions currently loaded in memory.
+func (a *Adapter) ThreadLoadedList(_ context.Context, cursor *string, limit *uint32) ([]string, *string, error) {
+	ids := loadedThreadIDsFromAgents(a.runningAgents())
+	data, nextCursor := paginateLoadedThreadIDs(ids, cursor, limit)
+	return data, nextCursor, nil
 }
 
 func (a *Adapter) threadList(ctx context.Context, methodName string, syncRuntime bool) ([]threadListItem, error) {
@@ -67,6 +69,67 @@ func (a *Adapter) runningAgents() []runner.AgentInfo {
 		return nil
 	}
 	return manager.List()
+}
+
+func loadedThreadIDsFromAgents(agents []runner.AgentInfo) []string {
+	if len(agents) == 0 {
+		return []string{}
+	}
+	ids := make([]string, 0, len(agents))
+	seen := make(map[string]struct{}, len(agents))
+	for _, item := range agents {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func paginateLoadedThreadIDs(ids []string, cursor *string, limit *uint32) ([]string, *string) {
+	if len(ids) == 0 {
+		return []string{}, nil
+	}
+
+	start := 0
+	if cursor != nil {
+		cursorID := strings.TrimSpace(*cursor)
+		if cursorID != "" {
+			start = sort.SearchStrings(ids, cursorID)
+			if start < len(ids) && ids[start] == cursorID {
+				start++
+			}
+		}
+	}
+	if start >= len(ids) {
+		return []string{}, nil
+	}
+
+	pageSize := len(ids)
+	if limit != nil {
+		pageSize = int(*limit)
+		if pageSize < 1 {
+			pageSize = 1
+		}
+	}
+
+	end := start + pageSize
+	if end > len(ids) {
+		end = len(ids)
+	}
+
+	page := append([]string(nil), ids[start:end]...)
+	if end >= len(ids) {
+		return page, nil
+	}
+	nextCursor := page[len(page)-1]
+	return page, &nextCursor
 }
 
 func appendArchivedThreads(threads []threadListItem, seen map[string]struct{}, archived map[string]int64) []threadListItem {

@@ -1,4 +1,4 @@
-package codexadapter
+package tracker
 
 import (
 	"fmt"
@@ -7,28 +7,186 @@ import (
 	"sync"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
+const (
+	DefaultTurnWatchdogTimeout        = 10 * time.Minute
+	DefaultTrackedTurnSummaryTTL      = 30 * time.Minute
+	TrackedTurnSummaryCacheMaxEntries = 512
+	DefaultStallThreshold             = 480 * time.Second
+	DefaultStallHeartbeat             = 300 * time.Second
+)
 
-// trackedTurnSummaryCacheEntry caches the latest summary for one tracked turn.
-type trackedTurnSummaryCacheEntry struct {
+const (
+	defaultStallThreshold = DefaultStallThreshold
+	defaultStallHeartbeat = DefaultStallHeartbeat
+)
+
+// TrackedTurn is the turn lifecycle tracking state.
+type TrackedTurn struct {
+	ID                   string
+	ThreadID             string
+	StartedAt            time.Time
+	LastEventAt          time.Time
+	InterruptRequested   bool
+	InterruptRequestedAt time.Time
+	StallHintLogged      bool
+	StallGraceStarted    bool
+	StallAutoInterrupted bool
+	Done                 chan string
+	Timer                *time.Timer
+	StallTimer           *time.Timer
+}
+
+type trackedTurn = TrackedTurn
+
+type TrackedTurnFinalizeRequest struct {
+	TurnID string
+	Status string
+	Reason string
+}
+
+type trackedTurnFinalizeRequest = TrackedTurnFinalizeRequest
+
+type TrackedTurnTransitionRequest struct {
+	TouchHeartbeat         bool
+	MarkInterruptRequested bool
+	MarkStallHint          bool
+	MarkStallHintForTurnID string
+	Finalize               *TrackedTurnFinalizeRequest
+}
+
+type trackedTurnTransitionRequest = TrackedTurnTransitionRequest
+
+type TrackedTurnTransitionResult struct {
+	Found              bool
+	ThreadID           string
+	TurnID             string
+	StartedAt          time.Time
+	LastEventAt        time.Time
+	InterruptRequested bool
+	StallHintLogged    bool
+	StallHintApplied   bool
+
+	Finalized      bool
+	FinalStatus    string
+	FinalReason    string
+	Completion     map[string]any
+	ExpectedTurnID string
+	TurnIDMismatch bool
+}
+
+type trackedTurnTransitionResult = TrackedTurnTransitionResult
+
+type TrackedTurnStallAction int
+
+const (
+	TrackedTurnStallNoop TrackedTurnStallAction = iota
+	TrackedTurnStallRescheduled
+	TrackedTurnStallEnterGrace
+	TrackedTurnStallAutoInterrupt
+)
+
+type trackedTurnStallAction = TrackedTurnStallAction
+
+const (
+	trackedTurnStallNoop          trackedTurnStallAction = TrackedTurnStallNoop
+	trackedTurnStallRescheduled   trackedTurnStallAction = TrackedTurnStallRescheduled
+	trackedTurnStallEnterGrace    trackedTurnStallAction = TrackedTurnStallEnterGrace
+	trackedTurnStallAutoInterrupt trackedTurnStallAction = TrackedTurnStallAutoInterrupt
+)
+
+type TrackedTurnStallDecision struct {
+	Action    TrackedTurnStallAction
+	ThreadID  string
+	TurnID    string
+	Silent    time.Duration
+	Threshold time.Duration
+}
+
+type trackedTurnStallDecision = TrackedTurnStallDecision
+
+// TrackedTurnSummaryCacheEntry caches the latest summary for one tracked turn.
+type TrackedTurnSummaryCacheEntry struct {
 	TurnID    string
 	Summary   string
 	UpdatedAt time.Time
 }
 
-// turnTrackerState carries mutable turn-tracker state owned by the caller.
-type turnTrackerState struct {
+type trackedTurnSummaryCacheEntry = TrackedTurnSummaryCacheEntry
+
+// TurnTrackerState carries mutable turn-tracker state owned by the caller.
+type TurnTrackerState struct {
 	Mu                  *sync.Mutex
 	ActiveTurns         *map[string]*trackedTurn
 	TurnWatchdogTimeout *time.Duration
 	TurnSummaryCache    *map[string]trackedTurnSummaryCacheEntry
 	TurnSummaryTTL      *time.Duration
-	stallThreshold      *time.Duration
-	stallHeartbeat      *time.Duration
+	StallThreshold      *time.Duration
+	StallHeartbeat      *time.Duration
+}
+
+type turnTrackerState = TurnTrackerState
+
+// ensureTurnTrackerStateLocked initializes turn-tracker state and defaults.
+func ensureTurnTrackerStateLocked(state turnTrackerState) {
+	if state.ActiveTurns != nil && *state.ActiveTurns == nil {
+		*state.ActiveTurns = make(map[string]*trackedTurn)
+	}
+	if state.TurnWatchdogTimeout != nil && *state.TurnWatchdogTimeout <= 0 {
+		*state.TurnWatchdogTimeout = DefaultTurnWatchdogTimeout
+	}
+	if state.TurnSummaryCache != nil && *state.TurnSummaryCache == nil {
+		*state.TurnSummaryCache = make(map[string]trackedTurnSummaryCacheEntry)
+	}
+	if state.TurnSummaryTTL != nil && *state.TurnSummaryTTL <= 0 {
+		*state.TurnSummaryTTL = DefaultTrackedTurnSummaryTTL
+	}
+	if state.StallThreshold != nil && *state.StallThreshold <= 0 {
+		*state.StallThreshold = defaultStallThreshold
+	}
+	if state.StallHeartbeat != nil && *state.StallHeartbeat <= 0 {
+		*state.StallHeartbeat = defaultStallHeartbeat
+	}
+}
+
+func trackerDurationOrDefault(value *time.Duration, fallback time.Duration) time.Duration {
+	if value != nil && *value > 0 {
+		return *value
+	}
+	return fallback
+}
+
+func threadLogFields(threadID string) []any {
+	id := strings.TrimSpace(threadID)
+	return []any{
+		logger.FieldAgentID, id,
+		logger.FieldThreadID, id,
+	}
+}
+
+func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time) bool {
+	if isTerminalEventType(eventType, method) {
+		return false
+	}
+	if startedAt.IsZero() {
+		return false
+	}
+	return time.Since(startedAt) >= 30*time.Second
+}
+
+func rescheduleStallCheck(turn *trackedTurn, threadID, turnID string, silent, threshold time.Duration, check func(string, string)) {
+	if turn == nil || check == nil {
+		return
+	}
+	remaining := threshold - silent
+	if remaining <= 0 {
+		remaining = 10 * time.Second
+	}
+	next := max(remaining/2, 10*time.Second)
+	turn.StallTimer = time.AfterFunc(next, func() { check(threadID, turnID) })
 }
 
 // normalizeTrackedTurnStatus maps raw turn status strings to canonical values.
@@ -521,7 +679,6 @@ func maybeFinalizeDiagFields(
 	return fields
 }
 
-
 func withTrackerStateLockCore(state turnTrackerState, fn func(turnTrackerState)) {
 	if fn == nil {
 		return
@@ -564,7 +721,7 @@ func trackerStateCore(state turnTrackerState) (map[string]*trackedTurn, *sync.Mu
 	}
 	turnMu := state.Mu
 	watchdogTimeout := trackerDurationOrDefault(state.TurnWatchdogTimeout, DefaultTurnWatchdogTimeout)
-	stallThreshold := trackerDurationOrDefault(state.stallThreshold, defaultStallThreshold)
+	stallThreshold := trackerDurationOrDefault(state.StallThreshold, defaultStallThreshold)
 	return activeTurns, turnMu, watchdogTimeout, stallThreshold
 }
 
@@ -690,6 +847,61 @@ func withActiveTurnByIDCore(state turnTrackerState, threadID, turnID string, fn 
 		}
 		return fn(id, turn, activeTurns)
 	})
+}
+
+func supersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurnID string) (map[string]any, string, bool) {
+	if activeTurns == nil {
+		return nil, "", false
+	}
+	prev, ok := activeTurns[threadID]
+	if !ok || prev == nil {
+		return nil, "", false
+	}
+	delete(activeTurns, threadID)
+	if prev.Timer != nil {
+		prev.Timer.Stop()
+	}
+	if prev.StallTimer != nil {
+		prev.StallTimer.Stop()
+	}
+	doneSent := false
+	if prev.Done != nil {
+		select {
+		case prev.Done <- "failed":
+			doneSent = true
+		default:
+		}
+	}
+
+	prevAge := time.Since(prev.StartedAt)
+	prevLastEventAge := time.Since(prev.LastEventAt)
+	logFn := logger.Warn
+	if prevAge < 5*time.Second && !prev.InterruptRequested {
+		logFn = logger.Info
+	}
+	fields := append(threadLogFields(threadID),
+		"prev_turn_id", prev.ID,
+		"next_turn_id", nextTurnID,
+		"prev_age_ms", prevAge.Milliseconds(),
+		"prev_last_event_age_ms", prevLastEventAge.Milliseconds(),
+		"prev_interrupt_requested", prev.InterruptRequested,
+		"prev_done_sent", doneSent,
+		"prev_stall_hint_logged", prev.StallHintLogged,
+		"prev_stall_grace_started", prev.StallGraceStarted,
+		"prev_stall_auto_interrupted", prev.StallAutoInterrupted,
+	)
+	logFn("turn tracker: superseding active turn", fields...)
+
+	payload := map[string]any{
+		"threadId": threadID,
+		"turn": map[string]any{
+			"id":     prev.ID,
+			"status": "failed",
+		},
+		"status": "failed",
+		"reason": "superseded_by_new_turn",
+	}
+	return payload, prev.ID, true
 }
 
 func beginTrackedTurnCore(
@@ -934,7 +1146,7 @@ func handleStallGracePeriodCore(
 		logger.FieldTurnID, turnID,
 		"silent_ms", silent.Milliseconds(),
 		"threshold_ms", threshold.Milliseconds(),
-		"grace_ms", (30 * time.Second).Milliseconds(),
+		"grace_ms", (30*time.Second).Milliseconds(),
 	)...)
 
 	if pushAlert != nil {
@@ -951,31 +1163,17 @@ func handleStallGracePeriodCore(
 	})
 }
 
-type trackerAlertRuntime interface {
+type TrackerAlertRuntime interface {
 	PushAlert(threadID, category, message string)
 }
+
+type trackerAlertRuntime = TrackerAlertRuntime
 
 func trackerRuntimePushAlert(runtime trackerAlertRuntime) func(threadID, category, message string) {
 	if runtime == nil {
 		return nil
 	}
 	return runtime.PushAlert
-}
-
-func trackerInterruptSender(manager *runner.AgentManager, sendCommand func(*runner.AgentProcess, string, string) error) func(string) (bool, error) {
-	if manager == nil || sendCommand == nil {
-		return nil
-	}
-	return func(threadID string) (bool, error) {
-		proc := manager.Get(threadID)
-		if proc == nil {
-			return false, nil
-		}
-		if err := sendCommand(proc, "/interrupt", ""); err != nil {
-			return true, err
-		}
-		return true, nil
-	}
 }
 
 func executeStallAutoInterruptCore(
@@ -1155,4 +1353,202 @@ func maybeFinalizeTrackedTurnCore(
 func finalizeTrackedTurnEventCore(state turnTrackerState, threadID, eventType, method string, payload map[string]any, notify func(string, any)) {
 	touchTrackedTurnLastEventCore(state, threadID)
 	maybeFinalizeTrackedTurnCore(state, threadID, eventType, method, payload, notify)
+}
+
+func EnsureTurnTrackerStateLocked(state TurnTrackerState) {
+	ensureTurnTrackerStateLocked(state)
+}
+
+func TrackerDurationOrDefault(value *time.Duration, fallback time.Duration) time.Duration {
+	return trackerDurationOrDefault(value, fallback)
+}
+
+func NormalizeTrackedTurnStatus(status string) string {
+	return normalizeTrackedTurnStatus(status)
+}
+
+func ThreadStatusTerminalFromPayload(payload map[string]any) (status string, reason string, terminal bool) {
+	return threadStatusTerminalFromPayload(payload)
+}
+
+func ExtractTrackedString(payload map[string]any, keys ...string) string {
+	return extractTrackedString(payload, keys...)
+}
+
+func ExtractTrackedTurnID(payload map[string]any) string {
+	return extractTrackedTurnID(payload)
+}
+
+func ExtractTrackedTurnStatus(payload map[string]any) string {
+	return extractTrackedTurnStatus(payload)
+}
+
+func ExtractTrackedTurnReason(payload map[string]any) string {
+	return extractTrackedTurnReason(payload)
+}
+
+func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]any) (string, string, string, bool, bool) {
+	return trackedTurnTerminalFromEvent(eventType, method, payload)
+}
+
+func TrackedTurnSummaryFromPayload(payload map[string]any) string {
+	return trackedTurnSummaryFromPayload(payload)
+}
+
+func TrackedTurnSummaryCacheKey(threadID, turnID string) string {
+	return trackedTurnSummaryCacheKey(threadID, turnID)
+}
+
+func InjectTrackedTurnSummary(payload map[string]any, summary string) {
+	injectTrackedTurnSummary(payload, summary)
+}
+
+func MergeTrackedTurnCompletionPayload(target map[string]any, completion map[string]any) {
+	mergeTrackedTurnCompletionPayload(target, completion)
+}
+
+func IsTerminalEventType(eventType, method string) bool {
+	return isTerminalEventType(eventType, method)
+}
+
+func RememberTrackedTurnSummary(state TurnTrackerState, turnMu *sync.Mutex, threadID, turnID, summary string) {
+	rememberTrackedTurnSummary(state, turnMu, threadID, turnID, summary)
+}
+
+func LookupTrackedTurnSummary(state TurnTrackerState, turnMu *sync.Mutex, threadID, turnID string) string {
+	return lookupTrackedTurnSummary(state, turnMu, threadID, turnID)
+}
+
+func WithTrackerStateLockCore(state TurnTrackerState, fn func(TurnTrackerState)) {
+	withTrackerStateLockCore(state, fn)
+}
+
+func TrackerDurationCore(state TurnTrackerState, getter func(TurnTrackerState) *time.Duration, fallback time.Duration) time.Duration {
+	return trackerDurationCore(state, getter, fallback)
+}
+
+func SetTrackerDurationCore(state TurnTrackerState, getter func(TurnTrackerState) *time.Duration, value time.Duration) {
+	setTrackerDurationCore(state, getter, value)
+}
+
+func TrackerStateCore(state TurnTrackerState) (map[string]*TrackedTurn, *sync.Mutex, time.Duration, time.Duration) {
+	return trackerStateCore(state)
+}
+
+func ApplyTrackedTurnTransitionCore(state TurnTrackerState, threadID string, req TrackedTurnTransitionRequest) TrackedTurnTransitionResult {
+	return applyTrackedTurnTransitionCore(state, threadID, req)
+}
+
+func WithActiveTurnCore(state TurnTrackerState, threadID string, fn func(threadID string, turn *TrackedTurn, activeTurns map[string]*TrackedTurn) bool) bool {
+	return withActiveTurnCore(state, threadID, fn)
+}
+
+func WithActiveTurnByIDCore(state TurnTrackerState, threadID, turnID string, fn func(threadID string, turn *TrackedTurn, activeTurns map[string]*TrackedTurn) bool) bool {
+	return withActiveTurnByIDCore(state, threadID, turnID, fn)
+}
+
+func SupersedeActiveTurn(activeTurns map[string]*TrackedTurn, threadID, nextTurnID string) (map[string]any, string, bool) {
+	return supersedeActiveTurn(activeTurns, threadID, nextTurnID)
+}
+
+func BeginTrackedTurnCore(
+	state TurnTrackerState,
+	threadID string,
+	turnID string,
+	completeTrackedTurnByID func(threadID, turnID, status, reason string) (map[string]any, bool),
+	notify func(string, any),
+	checkTurnStall func(string, string),
+) string {
+	return beginTrackedTurnCore(state, threadID, turnID, completeTrackedTurnByID, notify, checkTurnStall)
+}
+
+func WaitTrackedTurnTerminalCore(state TurnTrackerState, threadID string, timeout time.Duration) (string, bool) {
+	return waitTrackedTurnTerminalCore(state, threadID, timeout)
+}
+
+func CompleteTrackedTurnByIDCore(state TurnTrackerState, threadID, turnID, status, reason string) (map[string]any, bool) {
+	return completeTrackedTurnByIDCore(state, threadID, turnID, status, reason)
+}
+
+func PeekTrackedTurnMetaCore(state TurnTrackerState, threadID string) (string, time.Time, bool, bool) {
+	return peekTrackedTurnMetaCore(state, threadID)
+}
+
+func MarkTrackedTurnStallHintCore(state TurnTrackerState, threadID, turnID string) bool {
+	return markTrackedTurnStallHintCore(state, threadID, turnID)
+}
+
+func TouchTrackedTurnLastEventCore(state TurnTrackerState, threadID string) {
+	touchTrackedTurnLastEventCore(state, threadID)
+}
+
+func NextTrackedTurnStallDecisionCore(
+	state TurnTrackerState,
+	threadID string,
+	turnID string,
+	stallThreshold time.Duration,
+	checkTurnStall func(string, string),
+) TrackedTurnStallDecision {
+	return nextTrackedTurnStallDecisionCore(state, threadID, turnID, stallThreshold, checkTurnStall)
+}
+
+func CheckTurnStallCore(
+	state TurnTrackerState,
+	threadID string,
+	turnID string,
+	handleStallGracePeriod func(threadID, turnID string, silent, threshold time.Duration),
+	executeStallAutoInterrupt func(threadID, turnID string, silent, threshold time.Duration),
+	checkTurnStall func(string, string),
+) {
+	checkTurnStallCore(state, threadID, turnID, handleStallGracePeriod, executeStallAutoInterrupt, checkTurnStall)
+}
+
+func HandleStallGracePeriodCore(
+	state TurnTrackerState,
+	threadID string,
+	turnID string,
+	silent time.Duration,
+	threshold time.Duration,
+	pushAlert func(threadID, category, message string),
+	checkTurnStall func(string, string),
+) {
+	handleStallGracePeriodCore(state, threadID, turnID, silent, threshold, pushAlert, checkTurnStall)
+}
+
+func TrackerRuntimePushAlert(runtime TrackerAlertRuntime) func(threadID, category, message string) {
+	return trackerRuntimePushAlert(runtime)
+}
+
+func ExecuteStallAutoInterruptCore(
+	threadID string,
+	turnID string,
+	silent time.Duration,
+	threshold time.Duration,
+	pushAlert func(threadID, category, message string),
+	markTrackedTurnInterruptRequested func(string) bool,
+	cancelCodeRuns func(string) int,
+	sendInterrupt func(string) (bool, error),
+	completeTrackedTurnByID func(threadID, turnID, status, reason string) (map[string]any, bool),
+	notify func(string, any),
+) {
+	executeStallAutoInterruptCore(threadID, turnID, silent, threshold, pushAlert, markTrackedTurnInterruptRequested, cancelCodeRuns, sendInterrupt, completeTrackedTurnByID, notify)
+}
+
+func CaptureAndInjectTurnSummaryCore(state TurnTrackerState, threadID, eventType, method string, payload map[string]any) {
+	captureAndInjectTurnSummaryCore(state, threadID, eventType, method, payload)
+}
+
+func MaybeFinalizeTrackedTurnCore(
+	state TurnTrackerState,
+	threadID string,
+	eventType string,
+	method string,
+	payload map[string]any,
+	notify func(string, any),
+) {
+	maybeFinalizeTrackedTurnCore(state, threadID, eventType, method, payload, notify)
+}
+
+func FinalizeTrackedTurnEventCore(state TurnTrackerState, threadID, eventType, method string, payload map[string]any, notify func(string, any)) {
+	finalizeTrackedTurnEventCore(state, threadID, eventType, method, payload, notify)
 }

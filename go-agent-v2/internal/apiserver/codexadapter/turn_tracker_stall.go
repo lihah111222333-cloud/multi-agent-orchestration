@@ -5,30 +5,11 @@ import (
 	"time"
 )
 
-
-type trackedTurnStallAction int
-
-const (
-	trackedTurnStallNoop trackedTurnStallAction = iota
-	trackedTurnStallRescheduled
-	trackedTurnStallEnterGrace
-	trackedTurnStallAutoInterrupt
-)
-
-type trackedTurnStallDecision struct {
-	Action    trackedTurnStallAction
-	ThreadID  string
-	TurnID    string
-	Silent    time.Duration
-	Threshold time.Duration
-}
-
 // peekTrackedTurnMeta returns current tracked turn metadata for one thread.
 // peekTrackedTurnMeta returns current tracked turn metadata for one thread.
 func (a *Adapter) peekTrackedTurnMeta(threadID string) (string, time.Time, bool, bool) {
 	return peekTrackedTurnMetaCore(a.trackerHelperState(), threadID)
 }
-
 
 // markTrackedTurnStallHint marks one-shot stall hint flag.
 // markTrackedTurnStallHint marks one-shot stall hint flag.
@@ -36,23 +17,11 @@ func (a *Adapter) markTrackedTurnStallHint(threadID, turnID string) bool {
 	return markTrackedTurnStallHintCore(a.trackerHelperState(), threadID, turnID)
 }
 
-
-func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time) bool {
-	if isTerminalEventType(eventType, method) {
-		return false
-	}
-	if startedAt.IsZero() {
-		return false
-	}
-	return time.Since(startedAt) >= 30*time.Second
-}
-
 // touchTrackedTurnLastEvent updates turn heartbeat using adapter-owned tracker state.
 // touchTrackedTurnLastEvent updates turn heartbeat using adapter-owned tracker state.
 func (a *Adapter) touchTrackedTurnLastEvent(threadID string) {
 	touchTrackedTurnLastEventCore(a.trackerHelperState(), threadID)
 }
-
 
 // StartApprovalStallHeartbeat starts approval heartbeat with adapter-owned tracker state.
 func (a *Adapter) StartApprovalStallHeartbeat(threadID string) func() {
@@ -68,28 +37,28 @@ func (a *Adapter) StartDynamicToolStallHeartbeat(threadID string) func() {
 // stallThreshold returns current tracker stall threshold.
 func (a *Adapter) stallThreshold() time.Duration {
 	return a.trackerDuration(func(state turnTrackerState) *time.Duration {
-		return state.stallThreshold
+		return state.StallThreshold
 	}, defaultStallThreshold)
 }
 
 // SetStallThreshold updates tracker stall threshold.
 func (a *Adapter) SetStallThreshold(threshold time.Duration) {
 	a.setTrackerDuration(func(state turnTrackerState) *time.Duration {
-		return state.stallThreshold
+		return state.StallThreshold
 	}, threshold)
 }
 
 // stallHeartbeat returns current configured stall heartbeat interval.
 func (a *Adapter) stallHeartbeat() time.Duration {
 	return a.trackerDuration(func(state turnTrackerState) *time.Duration {
-		return state.stallHeartbeat
+		return state.StallHeartbeat
 	}, defaultStallHeartbeat)
 }
 
 // SetStallHeartbeat updates stall heartbeat interval.
 func (a *Adapter) SetStallHeartbeat(interval time.Duration) {
 	a.setTrackerDuration(func(state turnTrackerState) *time.Duration {
-		return state.stallHeartbeat
+		return state.StallHeartbeat
 	}, interval)
 }
 
@@ -97,18 +66,15 @@ func (a *Adapter) nextTrackedTurnStallDecision(threadID, turnID string, stallThr
 	return nextTrackedTurnStallDecisionCore(a.trackerHelperState(), threadID, turnID, stallThreshold, a.checkTurnStall)
 }
 
-
 // checkTurnStall advances stall detection state machine.
 // checkTurnStall advances stall detection state machine.
 func (a *Adapter) checkTurnStall(threadID string, turnID string) {
 	checkTurnStallCore(a.trackerHelperState(), threadID, turnID, a.handleStallGracePeriod, a.executeStallAutoInterrupt, a.checkTurnStall)
 }
 
-
 func (a *Adapter) handleStallGracePeriod(threadID, turnID string, silent, threshold time.Duration) {
 	handleStallGracePeriodCore(a.trackerHelperState(), threadID, turnID, silent, threshold, trackerRuntimePushAlert(a.uiRuntime()), a.checkTurnStall)
 }
-
 
 // executeStallAutoInterrupt performs /interrupt and fallback completion when stalled.
 // executeStallAutoInterrupt performs /interrupt and fallback completion when stalled.
@@ -120,7 +86,6 @@ func (a *Adapter) executeStallAutoInterrupt(
 ) {
 	executeStallAutoInterruptCore(threadID, turnID, silent, threshold, trackerRuntimePushAlert(a.uiRuntime()), a.markTrackedTurnInterruptRequested, a.cancelCodeRuns, trackerInterruptSender(a.manager(), a.SendCommand), a.completeTrackedTurnByID, a.trackerNotify())
 }
-
 
 func approvalstallHeartbeatInterval(stallThreshold, fallback time.Duration) time.Duration {
 	base := stallThreshold
@@ -162,16 +127,4 @@ func startApprovalStallHeartbeat(threadID string, stallThreshold, fallback time.
 			close(stop)
 		}
 	}
-}
-
-func rescheduleStallCheck(turn *trackedTurn, threadID, turnID string, silent, threshold time.Duration, check func(string, string)) {
-	if turn == nil || check == nil {
-		return
-	}
-	remaining := threshold - silent
-	if remaining <= 0 {
-		remaining = 10 * time.Second
-	}
-	next := max(remaining/2, 10*time.Second)
-	turn.StallTimer = time.AfterFunc(next, func() { check(threadID, turnID) })
 }

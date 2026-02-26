@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
-	"github.com/multi-agent/go-agent-v2/internal/tools"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 
@@ -105,10 +105,10 @@ func TestShouldCaptureDynamicToolDiff(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "lsp edit did_change persist true",
+			name: "lsp edit did_change no longer captures",
 			tool: "lsp_edit",
 			args: map[string]any{"action": "did_change", "persist_to_disk": true},
-			want: true,
+			want: false,
 		},
 		{
 			name: "functions prefix",
@@ -124,7 +124,7 @@ func TestShouldCaptureDynamicToolDiff(t *testing.T) {
 		},
 		{
 			name: "read-only lsp",
-			tool: "lsp_inspect",
+			tool: "lsp_file",
 			args: map[string]any{"action": "diagnostics", "file_path": "main.go"},
 			want: false,
 		},
@@ -292,7 +292,7 @@ func TestMaybeEmitDynamicToolDiffUpdateUpdatesUIRuntimeForCurrentCall(t *testing
 
 	s := New(Deps{})
 	tracker := beginDynamicToolDiffTracker(s, "thread-123", "run", map[string]any{"work_dir": repoRoot})
-	if !tracker.enabled {
+	if !tracker.Enabled() {
 		t.Fatalf("expected dynamic tool diff tracker to be enabled")
 	}
 

@@ -7,12 +7,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
-	"github.com/multi-agent/go-agent-v2/internal/runner"
-	"github.com/multi-agent/go-agent-v2/internal/service"
-	"github.com/multi-agent/go-agent-v2/internal/store"
-	"github.com/multi-agent/go-agent-v2/internal/tooladapter"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tooladapter"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -57,57 +55,57 @@ type codeRunProvider struct {
 	s *Server
 }
 
-func (p codeRunProvider) CodeRunner() *executor.CodeRunner {
+func (p codeRunProvider) CodeRunner() tools.CodeExecRunner {
 	if p.s == nil {
 		return nil
 	}
-	return p.s.codeRunner
+	return tooladapter.AdaptCodeExecRunner(p.s.codeRunner)
 }
 
-func (p codeRunProvider) AuditLogStore() *store.AuditLogStore {
+func (p codeRunProvider) AuditLogger() tools.AuditLogger {
 	if p.s == nil {
 		return nil
 	}
-	return p.s.auditLogStore
+	return tooladapter.AdaptAuditLogger(p.s.auditLogStore)
 }
 
 type resourceProvider struct {
 	s *Server
 }
 
-func (p resourceProvider) DAGStore() *store.TaskDAGStore {
+func (p resourceProvider) DAGManager() tools.DAGManager {
 	if p.s == nil {
 		return nil
 	}
-	return p.s.dagStore
+	return tooladapter.AdaptDAGManager(p.s.dagStore)
 }
 
-func (p resourceProvider) CommandCardStore() *store.CommandCardStore {
+func (p resourceProvider) CommandCardStore() tools.CardStore {
 	if p.s == nil {
 		return nil
 	}
-	return p.s.cmdStore
+	return tooladapter.AdaptCardStore(p.s.cmdStore)
 }
 
-func (p resourceProvider) PromptTemplateStore() *store.PromptTemplateStore {
+func (p resourceProvider) PromptTemplateStore() tools.TemplateStore {
 	if p.s == nil {
 		return nil
 	}
-	return p.s.promptStore
+	return tooladapter.AdaptTemplateStore(p.s.promptStore)
 }
 
-func (p resourceProvider) SharedFileStore() *store.SharedFileStore {
+func (p resourceProvider) SharedFileStore() tools.FileStore {
 	if p.s == nil {
 		return nil
 	}
-	return p.s.fileStore
+	return tooladapter.AdaptFileStore(p.s.fileStore)
 }
 
-func (p resourceProvider) WorkspaceManager() *service.WorkspaceManager {
+func (p resourceProvider) WorkspaceOps() tools.WorkspaceOps {
 	if p.s == nil {
 		return nil
 	}
-	return p.s.workspaceMgr
+	return tooladapter.AdaptWorkspaceOps(p.s.workspaceMgr)
 }
 
 func (p resourceProvider) NotifyEvent(method string, params any) {
@@ -121,18 +119,18 @@ type orchestrationProvider struct {
 	s *Server
 }
 
-func (p orchestrationProvider) Manager() *runner.AgentManager {
+func (p orchestrationProvider) AgentLauncher() tools.AgentLauncher {
 	if p.s == nil {
 		return nil
 	}
-	return p.s.mgr
+	return tooladapter.AdaptAgentLauncher(p.s.mgr)
 }
 
-func (p orchestrationProvider) WorkspaceManager() *service.WorkspaceManager {
+func (p orchestrationProvider) WorkspaceOps() tools.WorkspaceOps {
 	if p.s == nil {
 		return nil
 	}
-	return p.s.workspaceMgr
+	return tooladapter.AdaptWorkspaceOps(p.s.workspaceMgr)
 }
 
 func (p orchestrationProvider) SubmitPrompt(agentID, prompt string, images, files []string) error {
@@ -262,7 +260,6 @@ func (p approvalProvider) waitForFrontendDecision(agentID, method string, payloa
 	}
 
 	hasHook := hasNotifyHookState(p.s)
-
 	if !hasHook {
 		logger.Warn("code-run: approval auto-denied — no frontend", "method", method)
 		return false
@@ -270,7 +267,6 @@ func (p approvalProvider) waitForFrontendDecision(agentID, method string, payloa
 
 	reqID, ch, cleanup := allocPendingRequest(p.s)
 	defer cleanup()
-
 	if payload == nil {
 		payload = make(map[string]any)
 	}

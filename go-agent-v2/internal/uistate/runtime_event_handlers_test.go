@@ -184,3 +184,67 @@ func TestApplyUITypeDepthsToolCallUsesPayloadToolName(t *testing.T) {
 		t.Fatalf("LSPCalls=%d, want 1", got)
 	}
 }
+
+
+func TestApplyAgentEventStartedStreamingTerminalOrder(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-order"
+
+	mgr.ApplyAgentEvent(threadID, NormalizedEvent{
+		UIType:  UITypeTurnStarted,
+		RawType: "turn_started",
+		Method:  "turn/started",
+	}, map[string]any{"turnId": "turn-1"})
+	snap := mgr.Snapshot()
+	if got := snap.Statuses[threadID]; got != "thinking" {
+		t.Fatalf("status after started = %q, want %q", got, "thinking")
+	}
+
+	mgr.ApplyAgentEvent(threadID, NormalizedEvent{
+		UIType:  UITypeAssistantDelta,
+		RawType: "agent_message_delta",
+		Method:  "item/agentMessage/delta",
+		Text:    "hello",
+	}, map[string]any{"delta": "hello"})
+	snap = mgr.Snapshot()
+	if got := snap.Statuses[threadID]; got != "thinking" {
+		t.Fatalf("status during streaming = %q, want %q", got, "thinking")
+	}
+	timeline := snap.TimelinesByThread[threadID]
+	if len(timeline) == 0 {
+		t.Fatalf("expected timeline item during streaming")
+	}
+	last := timeline[len(timeline)-1]
+	if last.Kind != "assistant" {
+		t.Fatalf("last timeline kind = %q, want %q", last.Kind, "assistant")
+	}
+	if last.Text != "hello" {
+		t.Fatalf("assistant text = %q, want %q", last.Text, "hello")
+	}
+
+	mgr.ApplyAgentEvent(threadID, NormalizedEvent{
+		UIType:  UITypeTurnComplete,
+		RawType: "turn_complete",
+		Method:  "turn/completed",
+	}, map[string]any{"turnId": "turn-1"})
+	snap = mgr.Snapshot()
+	if got := snap.Statuses[threadID]; got != "idle" {
+		t.Fatalf("status after terminal = %q, want %q", got, "idle")
+	}
+}
+
+func TestApplyAgentEventUnknownMethodIgnored(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-unknown"
+
+	normalized := NormalizeEvent("unknown_event_type", "unknown/method", nil)
+	mgr.ApplyAgentEvent(threadID, normalized, map[string]any{"foo": "bar"})
+
+	snap := mgr.Snapshot()
+	if got := snap.Statuses[threadID]; got != "idle" {
+		t.Fatalf("status for unknown method = %q, want %q", got, "idle")
+	}
+	if got := len(snap.TimelinesByThread[threadID]); got != 0 {
+		t.Fatalf("timeline entries for unknown method = %d, want 0", got)
+	}
+}

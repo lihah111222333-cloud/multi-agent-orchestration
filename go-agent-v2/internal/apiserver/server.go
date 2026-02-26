@@ -23,12 +23,12 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/config"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
-	"github.com/multi-agent/go-agent-v2/internal/lsp"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	skillsruntime "github.com/multi-agent/go-agent-v2/internal/skills"
-	"github.com/multi-agent/go-agent-v2/internal/tooladapter"
-	"github.com/multi-agent/go-agent-v2/internal/tools"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tooladapter"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 

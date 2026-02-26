@@ -115,11 +115,27 @@ func (m *RuntimeManager) applyAgentEventLocked(threadID string, normalized Norma
 	m.applyLifecycleStateLocked(threadID, normalized, payload, fields, ts)
 	if handler, ok := runtimeEventHandlers[normalized.UIType]; ok {
 		handler(m, threadID, fields, payload, ts)
+	} else {
+		m.logIgnoredRuntimeEvent(threadID, normalized)
 	}
 	nextState := m.deriveThreadStateLocked(threadID)
 	m.setThreadStateLocked(threadID, nextState)
 	m.snapshot.StatusHeadersByThread[threadID] = m.deriveThreadStatusHeaderLocked(threadID, nextState)
 	m.snapshot.StatusDetailsByThread[threadID] = m.deriveThreadStatusDetailsLocked(threadID, nextState)
+}
+
+func (m *RuntimeManager) logIgnoredRuntimeEvent(threadID string, normalized NormalizedEvent) {
+	eventType := strings.TrimSpace(normalized.RawType)
+	method := strings.TrimSpace(normalized.Method)
+	if eventType == "" && method == "" {
+		return
+	}
+	logger.Debug("uistate: ignored runtime event (no UI handler)",
+		logger.FieldThreadID, threadID,
+		"ui_type", normalized.UIType,
+		"event_type", eventType,
+		logger.FieldMethod, method,
+	)
 }
 
 func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized NormalizedEvent, payload map[string]any, fields resolvedFields, ts time.Time) {
@@ -207,6 +223,15 @@ func applyOverlays(rt *threadRuntime, eventType, method string, payload map[stri
 			rt.backgroundDetails = deriveBackgroundDetails(payload)
 		}
 	}
+
+	// Auto-clear stale reconnecting background overlay on normal turn events.
+	// Background overlay is only emitted by reconnection logic; once non-background
+	// events resume flowing, the connection is healthy and the overlay is stale.
+	if rt.backgroundOverlay && !isBackgroundEvent(eventType, method) {
+		rt.backgroundOverlay = false
+		rt.backgroundLabel = ""
+		rt.backgroundDetails = ""
+	}
 }
 
 // applyCollabDepth adjusts the collaboration depth counter.
@@ -220,63 +245,101 @@ func applyCollabDepth(rt *threadRuntime, eventType string) {
 
 // applyUITypeDepthsLocked updates turn/command/edit/approval/tool-call depth
 // counters based on the UIType. Must be called with m.mu held.
+type uiTypeDepthHandler func(*RuntimeManager, string, *threadRuntime, string, string, string, map[string]any)
+
+var uiTypeDepthHandlers = map[UIType]uiTypeDepthHandler{
+	UITypeTurnStarted:     handleTurnStartedDepth,
+	UITypeTurnComplete:    handleTurnCompleteDepth,
+	UITypeReasoningDelta:  handleReasoningDeltaDepth,
+	UITypeCommandStart:    handleCommandStartDepth,
+	UITypeCommandOutput:   handleCommandOutputDepth,
+	UITypeCommandDone:     handleCommandDoneDepth,
+	UITypeFileEditStart:   handleFileEditStartDepth,
+	UITypeFileEditDone:    handleFileEditDoneDepth,
+	UITypeApprovalRequest: handleApprovalRequestDepth,
+	UITypeToolCall:        handleToolCallDepth,
+}
+
 func (m *RuntimeManager) applyUITypeDepthsLocked(threadID string, rt *threadRuntime, uiType UIType, eventType, method, text string, payload map[string]any) {
-	switch uiType {
-	case UITypeTurnStarted:
-		m.clearTurnLifecycleLocked(threadID)
+	handler, ok := uiTypeDepthHandlers[uiType]
+	if !ok {
+		return
+	}
+	handler(m, threadID, rt, eventType, method, text, payload)
+}
+
+func handleTurnStartedDepth(m *RuntimeManager, threadID string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
+	m.clearTurnLifecycleLocked(threadID)
+	rt.turnDepth = 1
+	rt.approvalDepth = 0
+	rt.userInputDepth = 0
+	rt.terminalWaitOverlay = false
+	rt.terminalWaitLabel = ""
+	rt.statusHeader = "工作中"
+}
+
+func handleTurnCompleteDepth(m *RuntimeManager, threadID string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
+	m.clearTurnLifecycleLocked(threadID)
+	// mcp_startup_complete 为主清理信号，但历史/重连链路可能丢失 complete，
+	// turn 收敛时兜底清理，避免 "MCP 启动中" 状态残留。
+	rt.mcpStartupOverlay = false
+	rt.mcpStartupLabel = ""
+}
+
+func handleReasoningDeltaDepth(m *RuntimeManager, threadID string, rt *threadRuntime, eventType, method, text string, _ map[string]any) {
+	if rt.turnDepth == 0 {
 		rt.turnDepth = 1
-		rt.approvalDepth = 0
-		rt.userInputDepth = 0
-		rt.terminalWaitOverlay = false
-		rt.terminalWaitLabel = ""
-		rt.statusHeader = "工作中"
-	case UITypeTurnComplete:
-		m.clearTurnLifecycleLocked(threadID)
-		// mcp_startup_complete 为主清理信号，但历史/重连链路可能丢失 complete，
-		// turn 收敛时兜底清理，避免 "MCP 启动中" 状态残留。
-		rt.mcpStartupOverlay = false
-		rt.mcpStartupLabel = ""
-	case UITypeReasoningDelta:
-		if rt.turnDepth == 0 {
-			rt.turnDepth = 1
-		}
-		if isReasoningSectionBreakEvent(eventType, method) {
-			rt.reasoningHeaderBuf = ""
-		}
-		m.captureReasoningHeaderLocked(threadID, text)
-	case UITypeCommandStart:
-		rt.commandDepth += 1
-		rt.approvalDepth = 0
-		rt.terminalWaitOverlay = false
-		rt.terminalWaitLabel = ""
-		m.incrActivityStatLocked(threadID, "command", "")
-	case UITypeCommandOutput:
-		if rt.commandDepth == 0 {
-			rt.commandDepth = 1
-		}
-		rt.terminalWaitOverlay = false
-		rt.terminalWaitLabel = ""
-	case UITypeCommandDone:
-		rt.commandDepth = max(0, rt.commandDepth-1)
-		rt.terminalWaitOverlay = false
-		rt.terminalWaitLabel = ""
-	case UITypeFileEditStart:
-		rt.fileEditDepth += 1
-		rt.approvalDepth = 0
-		m.incrActivityStatLocked(threadID, "fileEdit", "")
-	case UITypeFileEditDone:
-		rt.fileEditDepth = max(0, rt.fileEditDepth-1)
-	case UITypeApprovalRequest:
-		rt.approvalDepth += 1
-	case UITypeToolCall:
-		if eventType == "mcp_tool_call_begin" {
-			rt.toolCallDepth += 1
-			toolName := resolveActivityToolName(text, payload)
-			m.incrActivityStatLocked(threadID, "toolCall", toolName)
-		}
-		if eventType == "mcp_tool_call_end" {
-			rt.toolCallDepth = max(0, rt.toolCallDepth-1)
-		}
+	}
+	if isReasoningSectionBreakEvent(eventType, method) {
+		rt.reasoningHeaderBuf = ""
+	}
+	m.captureReasoningHeaderLocked(threadID, text)
+}
+
+func handleCommandStartDepth(m *RuntimeManager, threadID string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
+	rt.commandDepth += 1
+	rt.approvalDepth = 0
+	rt.terminalWaitOverlay = false
+	rt.terminalWaitLabel = ""
+	m.incrActivityStatLocked(threadID, "command", "")
+}
+
+func handleCommandOutputDepth(_ *RuntimeManager, _ string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
+	if rt.commandDepth == 0 {
+		rt.commandDepth = 1
+	}
+	rt.terminalWaitOverlay = false
+	rt.terminalWaitLabel = ""
+}
+
+func handleCommandDoneDepth(_ *RuntimeManager, _ string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
+	rt.commandDepth = max(0, rt.commandDepth-1)
+	rt.terminalWaitOverlay = false
+	rt.terminalWaitLabel = ""
+}
+
+func handleFileEditStartDepth(m *RuntimeManager, threadID string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
+	rt.fileEditDepth += 1
+	rt.approvalDepth = 0
+	m.incrActivityStatLocked(threadID, "fileEdit", "")
+}
+
+func handleFileEditDoneDepth(_ *RuntimeManager, _ string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
+	rt.fileEditDepth = max(0, rt.fileEditDepth-1)
+}
+
+func handleApprovalRequestDepth(_ *RuntimeManager, _ string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
+	rt.approvalDepth += 1
+}
+
+func handleToolCallDepth(m *RuntimeManager, threadID string, rt *threadRuntime, eventType, _, text string, payload map[string]any) {
+	if eventType == "mcp_tool_call_begin" {
+		rt.toolCallDepth += 1
+		toolName := resolveActivityToolName(text, payload)
+		m.incrActivityStatLocked(threadID, "toolCall", toolName)
+	}
+	if eventType == "mcp_tool_call_end" {
+		rt.toolCallDepth = max(0, rt.toolCallDepth-1)
 	}
 }
 

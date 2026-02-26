@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
-	"github.com/multi-agent/go-agent-v2/internal/lsp"
-	"github.com/multi-agent/go-agent-v2/internal/tooladapter"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tooladapter"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 

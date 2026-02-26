@@ -3,7 +3,7 @@ package apiserver
 import (
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/internal/lsp"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 )
 
 type serverDiagnosticsAccessor struct {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/multi-agent/go-agent-v2/internal/tooladapter"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tooladapter"
 )
 
 func p0PostModeAPIServerRuntime() string {
@@ -40,8 +40,8 @@ func TestP0PostDynamicToolRuntimeGuard(t *testing.T) {
 	if shouldCaptureDynamicToolDiff("lsp_file", map[string]any{"action": "open_file", "persist_to_disk": true}) {
 		t.Fatalf("p0-post expects lsp_file action=open_file to skip diff")
 	}
-	if !shouldCaptureDynamicToolDiff("lsp_edit", map[string]any{"action": "did_change", "persist_to_disk": true}) {
-		t.Fatalf("p0-post expects lsp_edit action=did_change persist_to_disk=true to capture diff")
+	if shouldCaptureDynamicToolDiff("lsp_edit", map[string]any{"action": "did_change", "persist_to_disk": true}) {
+		t.Fatalf("p0-post expects lsp_edit action=did_change to skip diff after canonical route cleanup")
 	}
 
 	_, err := tooladapter.Dispatch(tooladapter.DynamicToolCall{Tool: "lsp_legacy_removed"}, tooladapter.Providers{

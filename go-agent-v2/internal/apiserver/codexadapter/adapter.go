@@ -139,8 +139,8 @@ func initializeTrackerState(a *Adapter) {
 		TurnWatchdogTimeout: &a.trackerWatchdogTimeout,
 		TurnSummaryCache:    &a.trackerSummaryCache,
 		TurnSummaryTTL:      &a.trackerSummaryTTL,
-		stallThreshold:      &a.trackerStallThreshold,
-		stallHeartbeat:      &a.trackerStallHeartbeat,
+		StallThreshold:      &a.trackerStallThreshold,
+		StallHeartbeat:      &a.trackerStallHeartbeat,
 	}
 }
 

@@ -1,37 +1,49 @@
-# Baseline 2026-02-26
+# Baseline 2026-02-26 (P0v2 审计更新)
 
-> 注：该文件为补记落地（retroactive）。P0 执行时未生成，此处按当前工作树生成快照用于审计追踪。
+> P0v2 审计确认: P1/P1.5/P1.6/P2/P7 均已完成。剩余工作: P3/P4/P5/P6。
 
-## Legacy Path Snapshot
-
-| 包 | 有效行数 |
-|---|---:|
-| internal/tools | 0 |
-| internal/tooladapter | 0 |
-| internal/difftracker | 0 |
-| internal/lsp | 0 |
-| internal/apiserver | 12180 |
-| internal/apiserver/codexadapter | 6287 |
-| internal/codex | 0 |
-| internal/uistate | 3133 |
-
-## SDK Path Snapshot
+## SDK 层 (pkg/) — 已完成迁移
 
 | 包 | 有效行数 |
 |---|---:|
-| pkg/toolsdk/tools | 1763 |
-| pkg/toolsdk/tooladapter | 950 |
-| pkg/diffsdk/difftracker | 404 |
-| pkg/toolsdk/lsp | 5752 |
-| pkg/codexsdk/codex | 3463 |
-| pkg/codexsdk/agentcore | 169 |
-| internal/apiserver | 12180 |
-| internal/apiserver/codexadapter | 6287 |
-| internal/uistate | 3133 |
+| pkg/toolsdk/lsp | 6,094 |
+| pkg/codexsdk/codex | 3,775 |
+| pkg/toolsdk/tools | 1,796 |
+| pkg/toolsdk/tooladapter | 962 |
+| pkg/logger | 581 |
+| pkg/util | 365 |
+| pkg/codexsdk/agentcore | 203 |
+| pkg/errors | 69 |
+| **pkg 合计** | **12,183** |
 
-## Totals
+## 业务层 (internal/) — 待瘦身
+
+| 包 | 有效行数 | 目标 |
+|---|---:|---:|
+| internal/apiserver/codexadapter | 6,480 | ~4,500 (P3) |
+| internal/apiserver (顶层) | 5,939 | ~5,000 (P4) |
+| internal/uistate | 3,271 | ~2,700 (P5) |
+| internal/store | 2,012 | - |
+| internal/service | 1,649 | - |
+| internal/dashboard | 1,549 | +增长 (P4 接收) |
+| internal/executor | 1,084 | - |
+| internal/bus | 846 | - |
+| internal/runner | 659 | - |
+| internal/skills | 625 | - |
+| internal/orchestrator | 545 | - |
+| 其余小包 | 1,965 | - |
+| **internal 合计** | **28,624** | **≤26,000** |
+
+## 入口层 (cmd/)
+
+| 包 | 有效行数 |
+|---|---:|
+| cmd/agent-terminal | 1,844 |
+| 其余 4 cmd | 221 |
+| **cmd 合计** | **2,065** |
+
+## 全仓合计
 
 | 范围 | 有效行数 |
 |---|---:|
-| internal | 24500 |
-| repo total | 40663 |
+| 全仓生产代码 | 42,272 |

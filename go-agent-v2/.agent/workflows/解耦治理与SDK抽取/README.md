@@ -34,16 +34,16 @@ graph LR
 
 ## 任务清单
 
-- [ ] P0: 准备阶段 — 共享接口定义 + 桩文件 (必须先完成)
-- [ ] P1: tools Provider 接口抽象 ⚡ 可并行
-- [ ] P1.5: diff 模块独立 ⚡ 可并行
-- [ ] P1.6: bus 解耦 (router.go 接口注入) ⚡ 可并行
-- [ ] P2: LSP 碎片文件合并 ⚡ 可并行
+- [x] P0: 准备阶段 — 共享接口定义 + 桩文件 ✅ (P0v2 审计确认)
+- [x] P1: tools Provider 接口抽象 ✅ (已迁移至 pkg/toolsdk/tools)
+- [x] P1.5: diff 模块独立 ✅ (已迁移至 pkg/diffsdk/difftracker)
+- [x] P1.6: bus 解耦 ✅ (bus 不再 import internal/codex)
+- [x] P2: LSP 碎片文件合并 ✅ (已迁移至 pkg/toolsdk/lsp)
 - [ ] P3: codexadapter 瘦身 ⚡ 可并行
 - [ ] P4: apiserver 整理 ⚡ 可并行
 - [ ] P5: 事件处理表驱动 ⚡ 可并行
 - [ ] P6: 集成验证 (等待 P3-P5 完成)
-- [ ] P7: SDK 提取 (等待 P6 完成)
+- [x] P7: SDK 提取 ✅ (3 个 SDK 包已在 pkg/)
 
 ## 文件分配矩阵 — 第一波并行 (P1 + P1.5 + P1.6 + P2)
 

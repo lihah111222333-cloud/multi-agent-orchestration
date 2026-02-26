@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -67,9 +68,7 @@ func (c *AppServerClient) readLoop() {
 					"max_retries": appServerStreamMaxRetries,
 					"trigger":     "read_error",
 				}
-				for key, value := range health.asDetailsMap() {
-					details[key] = value
-				}
+				maps.Copy(details, health.asDetailsMap())
 				c.emitStreamError(readErr, "read", isIdleTimeoutError(err), willRetry, details)
 			}
 			if c.stopped.Load() && isShutdownReadError(err) {
@@ -272,7 +271,12 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 			logger.FieldTurnID, c.getActiveTurnID(),
 		)
 		if !isMCPStartupMethod(msg.Method) {
-			if shouldRecoverLifecycleOnMismatchedConversation(event, msg.Method, c.getActiveTurnID()) {
+			if shouldRecoverLifecycleOnMismatchedConversation(
+				event,
+				msg.Method,
+				c.getActiveTurnID(),
+				c.listenerEnsureNeeded.Load(),
+			) {
 				c.trackTurnLifecycle(event, msg.Method)
 				logger.Warn("codex: recovered turn lifecycle from mismatched event",
 					logger.FieldAgentID, c.AgentID,
@@ -390,21 +394,44 @@ func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 	}
 }
 
-func shouldRecoverLifecycleOnMismatchedConversation(event Event, method, activeTurnID string) bool {
+func shouldRecoverLifecycleOnMismatchedConversation(
+	event Event,
+	method,
+	activeTurnID string,
+	allowThreadTerminalWithoutTurnID bool,
+) bool {
 	if strings.TrimSpace(activeTurnID) == "" {
 		return false
 	}
+	targetsActiveTurn := mismatchedLifecycleEventTargetsActiveTurn(event, activeTurnID)
 	switch event.Type {
 	case EventTurnComplete, "turn_aborted", EventIdle, EventError, EventShutdownComplete:
-		return true
+		return targetsActiveTurn
 	case EventStreamError:
-		return !streamErrorWillRetry(event.Data)
+		return targetsActiveTurn && !streamErrorWillRetry(event.Data)
 	}
 	if strings.EqualFold(strings.TrimSpace(method), "thread/status/changed") {
 		_, terminal := threadStatusChangedTerminalState(event.Data)
-		return terminal
+		if !terminal {
+			return false
+		}
+		turnID := strings.TrimSpace(extractTurnIDFromEventData(event.Data))
+		if turnID != "" {
+			return strings.EqualFold(turnID, strings.TrimSpace(activeTurnID))
+		}
+		// Controlled fallback: after reconnect/resume windows, server may emit terminal
+		// thread status without turnId. Prefer clearing stale activeTurnID over getting stuck.
+		return allowThreadTerminalWithoutTurnID
 	}
 	return false
+}
+
+func mismatchedLifecycleEventTargetsActiveTurn(event Event, activeTurnID string) bool {
+	turnID := strings.TrimSpace(extractTurnIDFromEventData(event.Data))
+	if turnID == "" {
+		return false
+	}
+	return strings.EqualFold(turnID, strings.TrimSpace(activeTurnID))
 }
 
 func isTurnTailProgressEvent(eventType, method string) bool {
@@ -1014,9 +1041,7 @@ func (c *AppServerClient) emitStreamError(err error, phase string, idleTimeout b
 		"will_retry":  willRetry,
 	}
 	if details != nil {
-		for key, value := range details {
-			payload[key] = value
-		}
+		maps.Copy(payload, details)
 		if override := strings.TrimSpace(trimmedStringValue(details["message"])); override != "" {
 			payload["message"] = override
 			if message != "" && !strings.EqualFold(message, override) {

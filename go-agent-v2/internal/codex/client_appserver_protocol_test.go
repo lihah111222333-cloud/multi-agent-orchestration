@@ -1,10 +1,18 @@
 package codex
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestBuildTurnInterruptParams(t *testing.T) {
@@ -168,14 +176,47 @@ func TestCallWithNotInitializedRecovery(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
-		if !recovered {
-			t.Fatal("recovered = false, want true")
+		if recovered {
+			t.Fatal("recovered = true, want false")
 		}
 		if !strings.Contains(err.Error(), "initialize") {
 			t.Fatalf("error = %q, want contains initialize", err.Error())
 		}
 		if calls != 1 {
 			t.Fatalf("rpc calls = %d, want 1", calls)
+		}
+	})
+
+	t.Run("retry_failure_not_recovered", func(t *testing.T) {
+		calls := 0
+		initCalls := 0
+		rpcCall := func(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+			_ = method
+			_ = params
+			_ = timeout
+			calls++
+			if calls == 1 {
+				return nil, testError("rpc error: Not initialized (code -32600)")
+			}
+			return nil, testError("rpc error: timeout")
+		}
+		initializeFn := func() error {
+			initCalls++
+			return nil
+		}
+
+		_, recovered, err := callWithNotInitializedRecovery(rpcCall, initializeFn, "turn/interrupt", nil, time.Second)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if recovered {
+			t.Fatal("recovered = true, want false")
+		}
+		if calls != 2 {
+			t.Fatalf("rpc calls = %d, want 2", calls)
+		}
+		if initCalls != 1 {
+			t.Fatalf("initialize calls = %d, want 1", initCalls)
 		}
 	})
 
@@ -204,6 +245,155 @@ func TestCallWithNotInitializedRecovery(t *testing.T) {
 			t.Fatalf("rpc calls = %d, want 1", calls)
 		}
 	})
+}
+
+func TestSubmitTurnStartNotInitializedRecovery(t *testing.T) {
+	var (
+		methodsMu sync.Mutex
+		methods   []string
+	)
+	errCh := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			select {
+			case errCh <- fmt.Errorf("upgrade failed: %w", err):
+			default:
+			}
+			return
+		}
+		defer conn.Close()
+
+		initialized := false
+		writeResponse := func(msg jsonRPCMessage, result any, rpcErr *jsonRPCError) bool {
+			if rpcErr != nil {
+				resp := struct {
+					JSONRPC string        `json:"jsonrpc"`
+					ID      jsonRPCID     `json:"id"`
+					Error   *jsonRPCError `json:"error"`
+				}{
+					JSONRPC: "2.0",
+					ID:      msg.ID.clone(),
+					Error:   rpcErr,
+				}
+				if err := conn.WriteJSON(resp); err != nil {
+					select {
+					case errCh <- fmt.Errorf("write error response failed: %w", err):
+					default:
+					}
+					return false
+				}
+				return true
+			}
+
+			resp := jsonRPCResponse{
+				JSONRPC: "2.0",
+				ID:      msg.ID.clone(),
+				Result:  result,
+			}
+			if err := conn.WriteJSON(resp); err != nil {
+				select {
+				case errCh <- fmt.Errorf("write result response failed: %w", err):
+				default:
+				}
+				return false
+			}
+			return true
+		}
+
+		for {
+			var msg jsonRPCMessage
+			if err := conn.ReadJSON(&msg); err != nil {
+				return
+			}
+			if msg.ID == nil || strings.TrimSpace(msg.Method) == "" {
+				continue
+			}
+			methodsMu.Lock()
+			methods = append(methods, msg.Method)
+			methodsMu.Unlock()
+
+			switch msg.Method {
+			case "turn/start":
+				if !initialized {
+					if !writeResponse(msg, nil, &jsonRPCError{Code: -32600, Message: "Not initialized"}) {
+						return
+					}
+					continue
+				}
+				if !writeResponse(msg, map[string]any{
+					"turn": map[string]any{
+						"id": "turn-submit-1",
+					},
+				}, nil) {
+					return
+				}
+			case "initialize":
+				initialized = true
+				if !writeResponse(msg, map[string]any{}, nil) {
+					return
+				}
+			default:
+				if !writeResponse(msg, map[string]any{}, nil) {
+					return
+				}
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := &AppServerClient{
+		AgentID:  "agent-1",
+		ThreadID: "thread-1",
+		ws:       conn,
+		wsDone:   make(chan struct{}),
+		ctx:      ctx,
+	}
+
+	readDone := make(chan struct{})
+	go func() {
+		c.readLoop()
+		close(readDone)
+	}()
+
+	if err := c.Submit("hello", nil, nil, nil); err != nil {
+		t.Fatalf("Submit() err = %v", err)
+	}
+	if got := c.getActiveTurnID(); got != "turn-submit-1" {
+		t.Fatalf("active turn id = %q, want turn-submit-1", got)
+	}
+
+	methodsMu.Lock()
+	gotMethods := append([]string(nil), methods...)
+	methodsMu.Unlock()
+	wantMethods := []string{"turn/start", "initialize", "turn/start"}
+	if !reflect.DeepEqual(gotMethods, wantMethods) {
+		t.Fatalf("rpc methods = %#v, want %#v", gotMethods, wantMethods)
+	}
+
+	select {
+	case serverErr := <-errCh:
+		t.Fatalf("server error: %v", serverErr)
+	default:
+	}
+
+	c.stopped.Store(true)
+	cancel()
+	_ = conn.Close()
+	select {
+	case <-readDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readLoop did not exit")
+	}
 }
 
 type testError string

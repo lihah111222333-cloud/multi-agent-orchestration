@@ -226,11 +226,11 @@ func callWithNotInitializedRecovery(
 		return nil, false, err
 	}
 	if initErr := initializeFn(); initErr != nil {
-		return nil, true, apperrors.Wrap(initErr, "callWithNotInitializedRecovery", "initialize")
+		return nil, false, apperrors.Wrap(initErr, "callWithNotInitializedRecovery", "initialize")
 	}
 	retryResult, retryErr := rpcCall(method, params, timeout)
 	if retryErr != nil {
-		return nil, true, retryErr
+		return nil, false, retryErr
 	}
 	return retryResult, true, nil
 }
@@ -303,18 +303,25 @@ func (c *AppServerClient) Submit(prompt string, images, files []string, outputSc
 	c.ensureListenerIfNeeded("turn/start", c.call)
 
 	inputs := buildTurnStartInputs(prompt, images, files)
+	threadID := strings.TrimSpace(c.ThreadID)
 
 	params := map[string]any{
-		"threadId": strings.TrimSpace(c.ThreadID),
+		"threadId": threadID,
 		"input":    inputs,
 	}
 	if len(outputSchema) > 0 {
 		params["outputSchema"] = json.RawMessage(outputSchema)
 	}
 
-	result, err := c.call("turn/start", params, 10*time.Second)
+	result, recovered, err := callWithNotInitializedRecovery(c.call, c.Initialize, "turn/start", params, 10*time.Second)
 	if err != nil {
 		return err
+	}
+	if recovered {
+		logger.Info("codex: turn/start recovered via initialize",
+			logger.FieldAgentID, c.AgentID,
+			logger.FieldThreadID, threadID,
+		)
 	}
 	if turnID := extractTurnIDFromEventData(result); turnID != "" {
 		c.setActiveTurnID(turnID)

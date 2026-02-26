@@ -17,24 +17,6 @@ const (
 	defaultStallHeartbeat             = 300 * time.Second
 )
 
-// trackedTurnSummaryCacheEntry caches the latest summary for one tracked turn.
-type trackedTurnSummaryCacheEntry struct {
-	TurnID    string
-	Summary   string
-	UpdatedAt time.Time
-}
-
-// turnTrackerState carries mutable turn-tracker state owned by the caller.
-type turnTrackerState struct {
-	Mu                  *sync.Mutex
-	ActiveTurns         *map[string]*trackedTurn
-	TurnWatchdogTimeout *time.Duration
-	TurnSummaryCache    *map[string]trackedTurnSummaryCacheEntry
-	TurnSummaryTTL      *time.Duration
-	stallThreshold      *time.Duration
-	stallHeartbeat      *time.Duration
-}
-
 // trackedTurn is the turn lifecycle tracking state.
 type trackedTurn struct {
 	ID                   string
@@ -58,22 +40,22 @@ type trackedTurnFinalizeRequest struct {
 }
 
 type trackedTurnTransitionRequest struct {
-	TouchHeartbeat        bool
+	TouchHeartbeat         bool
 	MarkInterruptRequested bool
-	MarkStallHint         bool
+	MarkStallHint          bool
 	MarkStallHintForTurnID string
-	Finalize              *trackedTurnFinalizeRequest
+	Finalize               *trackedTurnFinalizeRequest
 }
 
 type trackedTurnTransitionResult struct {
-	Found             bool
-	ThreadID          string
-	TurnID            string
-	StartedAt         time.Time
-	LastEventAt       time.Time
+	Found              bool
+	ThreadID           string
+	TurnID             string
+	StartedAt          time.Time
+	LastEventAt        time.Time
 	InterruptRequested bool
-	StallHintLogged   bool
-	StallHintApplied  bool
+	StallHintLogged    bool
+	StallHintApplied   bool
 
 	Finalized      bool
 	FinalStatus    string
@@ -291,6 +273,19 @@ func (a *Adapter) withActiveTurn(threadID string, fn func(threadID string, turn 
 		return false
 	}
 	return fn(id, turn, activeTurns)
+}
+
+func (a *Adapter) withActiveTurnByID(threadID, turnID string, fn func(threadID string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool) bool {
+	expectedTurnID := strings.TrimSpace(turnID)
+	if expectedTurnID == "" || fn == nil {
+		return false
+	}
+	return a.withActiveTurn(threadID, func(id string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool {
+		if !strings.EqualFold(strings.TrimSpace(turn.ID), expectedTurnID) {
+			return false
+		}
+		return fn(id, turn, activeTurns)
+	})
 }
 
 func supersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurnID string) (map[string]any, string, bool) {

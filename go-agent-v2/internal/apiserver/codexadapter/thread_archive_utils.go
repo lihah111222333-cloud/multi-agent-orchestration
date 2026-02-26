@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/codex"
+	"github.com/multi-agent/go-agent-v2/internal/codex"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 

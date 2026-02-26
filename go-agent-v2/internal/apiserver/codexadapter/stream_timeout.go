@@ -3,7 +3,7 @@ package codexadapter
 import (
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/codex"
+	"github.com/multi-agent/go-agent-v2/internal/codex"
 )
 
 // SetStreamReadIdleTimeout updates app-server stream read-idle timeout.

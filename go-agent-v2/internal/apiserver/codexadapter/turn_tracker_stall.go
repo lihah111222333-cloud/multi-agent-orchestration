@@ -106,51 +106,38 @@ func (a *Adapter) nextTrackedTurnStallDecision(threadID, turnID string, stallThr
 		return decision
 	}
 
-	activeTurns, turnMu, _, _ := a.trackerState()
-	if turnMu == nil {
-		return decision
-	}
-
-	turnMu.Lock()
-	defer turnMu.Unlock()
-	if activeTurns == nil {
-		return decision
-	}
-	turn, ok := activeTurns[id]
-	if !ok || turn == nil {
-		return decision
-	}
-	currentTurnID := strings.TrimSpace(turn.ID)
-	if !strings.EqualFold(currentTurnID, tid) {
-		return decision
-	}
-
-	silent := time.Since(turn.LastEventAt)
 	threshold := stallThreshold
 	if threshold <= 0 {
 		threshold = defaultStallThreshold
 	}
-	decision.ThreadID = id
-	decision.TurnID = currentTurnID
-	decision.Silent = silent
-	decision.Threshold = threshold
 
-	if silent < threshold {
-		rescheduleStallCheck(turn, id, currentTurnID, silent, threshold, a.checkTurnStall)
-		decision.Action = trackedTurnStallRescheduled
-		return decision
-	}
-	if turn.StallAutoInterrupted {
-		return decision
-	}
-	if !turn.StallGraceStarted {
-		turn.StallGraceStarted = true
-		decision.Action = trackedTurnStallEnterGrace
-		return decision
-	}
+	a.withActiveTurnByID(id, tid, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
+		currentTurnID := strings.TrimSpace(turn.ID)
+		silent := time.Since(turn.LastEventAt)
+		decision.ThreadID = id
+		decision.TurnID = currentTurnID
+		decision.Silent = silent
+		decision.Threshold = threshold
 
-	turn.StallAutoInterrupted = true
-	decision.Action = trackedTurnStallAutoInterrupt
+		if silent < threshold {
+			rescheduleStallCheck(turn, id, currentTurnID, silent, threshold, a.checkTurnStall)
+			decision.Action = trackedTurnStallRescheduled
+			return true
+		}
+		if turn.StallAutoInterrupted {
+			return true
+		}
+		if !turn.StallGraceStarted {
+			turn.StallGraceStarted = true
+			decision.Action = trackedTurnStallEnterGrace
+			return true
+		}
+
+		turn.StallAutoInterrupted = true
+		decision.Action = trackedTurnStallAutoInterrupt
+		return true
+	})
+
 	return decision
 }
 
@@ -184,20 +171,10 @@ func (a *Adapter) handleStallGracePeriod(threadID, turnID string, silent, thresh
 		pushAlert(threadID, "stall_warning", "长时间无事件，若持续将自动中断")
 	}
 
-	activeTurns, turnMu, _, _ := a.trackerState()
-	if turnMu == nil {
-		return
-	}
-	turnMu.Lock()
-	defer turnMu.Unlock()
-	if activeTurns == nil {
-		return
-	}
-	turn, ok := activeTurns[threadID]
-	if !ok || turn == nil || !strings.EqualFold(strings.TrimSpace(turn.ID), strings.TrimSpace(turnID)) {
-		return
-	}
-	turn.StallTimer = time.AfterFunc(30*time.Second, func() { a.checkTurnStall(threadID, turnID) })
+	a.withActiveTurnByID(threadID, turnID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
+		turn.StallTimer = time.AfterFunc(30*time.Second, func() { a.checkTurnStall(threadID, turnID) })
+		return true
+	})
 }
 
 // executeStallAutoInterrupt performs /interrupt and fallback completion when stalled.

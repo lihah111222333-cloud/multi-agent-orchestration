@@ -9,6 +9,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
+	listingsvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/listing"
 )
 
 const prefThreadAliases = "threads.aliases"
@@ -23,21 +24,27 @@ func (a *Adapter) ThreadList(ctx context.Context) ([]threadListItem, error) {
 
 // ThreadLoadedList returns paginated thread IDs for sessions currently loaded in memory.
 func (a *Adapter) ThreadLoadedList(_ context.Context, cursor *string, limit *uint32) ([]string, *string, error) {
-	ids := loadedThreadIDsFromAgents(a.runningAgents())
-	data, nextCursor := paginateLoadedThreadIDs(ids, cursor, limit)
+	ids := listingsvc.LoadedThreadIDsFromAgents(toListingAgentInfos(a.runningAgents()))
+	data, nextCursor := listingsvc.PaginateLoadedThreadIDs(ids, cursor, limit)
 	return data, nextCursor, nil
 }
 
 func (a *Adapter) threadList(ctx context.Context, methodName string, syncRuntime bool) ([]threadListItem, error) {
-	return buildThreadList(
+	items, err := listingsvc.BuildThreadList(
 		ctx,
 		methodName,
 		syncRuntime,
-		a.runningAgents,
-		a.appendThreadHistoryFromStores,
+		func() []listingsvc.AgentInfo { return toListingAgentInfos(a.runningAgents()) },
+		func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
+			return toServiceThreadListItems(a.appendThreadHistoryFromStores(ctx, toThreadListItemsFromService(threads), seen, methodName))
+		},
 		a.loadThreadAliases,
-		a.syncThreadListRuntime,
+		func(threads []listingsvc.ThreadListItem) { a.syncThreadListRuntime(toThreadListItemsFromService(threads)) },
 	)
+	if err != nil {
+		return nil, err
+	}
+	return toThreadListItemsFromService(items), nil
 }
 
 func (a *Adapter) runningAgents() []runner.AgentInfo {
@@ -70,7 +77,23 @@ func loadedThreadIDsFromAgents(agents []runner.AgentInfo) []string {
 }
 
 func (a *Adapter) appendThreadHistoryFromStores(ctx context.Context, threads []threadListItem, seen map[string]struct{}, methodName string) []threadListItem {
-	return appendThreadHistoryFromStores(ctx, threads, seen, methodName, a.appendHistoryFromBindingStore, a.appendHistoryFromStatusStore, a.appendHistoryFromArchiveState)
+	return toThreadListItemsFromService(
+		listingsvc.AppendThreadHistoryFromStores(
+			ctx,
+			toServiceThreadListItems(threads),
+			seen,
+			methodName,
+			func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
+				return toServiceThreadListItems(a.appendHistoryFromBindingStore(ctx, toThreadListItemsFromService(threads), seen, methodName))
+			},
+			func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
+				return toServiceThreadListItems(a.appendHistoryFromStatusStore(ctx, toThreadListItemsFromService(threads), seen, methodName))
+			},
+			func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
+				return toServiceThreadListItems(a.appendHistoryFromArchiveState(ctx, toThreadListItemsFromService(threads), seen, methodName))
+			},
+		),
+	)
 }
 
 
@@ -80,7 +103,29 @@ func (a *Adapter) appendHistoryFromBindingStore(
 	seen map[string]struct{},
 	methodName string,
 ) []threadListItem {
-	return appendHistoryFromBindingStore(ctx, threads, seen, methodName, a.bindingStore())
+	return toThreadListItemsFromService(
+		listingsvc.AppendHistoryFromBindingStore(
+			ctx,
+			toServiceThreadListItems(threads),
+			seen,
+			methodName,
+			func(ctx context.Context) ([]listingsvc.AgentCodexBinding, error) {
+				bindingStore := a.bindingStore()
+				if bindingStore == nil {
+					return nil, nil
+				}
+				items, err := bindingStore.ListAll(ctx)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]listingsvc.AgentCodexBinding, 0, len(items))
+				for _, item := range items {
+					out = append(out, listingsvc.AgentCodexBinding{AgentID: item.AgentID})
+				}
+				return out, nil
+			},
+		),
+	)
 }
 
 func (a *Adapter) appendHistoryFromStatusStore(
@@ -89,7 +134,29 @@ func (a *Adapter) appendHistoryFromStatusStore(
 	seen map[string]struct{},
 	methodName string,
 ) []threadListItem {
-	return appendHistoryFromStatusStore(ctx, threads, seen, methodName, a.statusStore())
+	return toThreadListItemsFromService(
+		listingsvc.AppendHistoryFromStatusStore(
+			ctx,
+			toServiceThreadListItems(threads),
+			seen,
+			methodName,
+			func(ctx context.Context) ([]listingsvc.AgentStatus, error) {
+				statusStore := a.statusStore()
+				if statusStore == nil {
+					return nil, nil
+				}
+				items, err := statusStore.List(ctx, "")
+				if err != nil {
+					return nil, err
+				}
+				out := make([]listingsvc.AgentStatus, 0, len(items))
+				for _, item := range items {
+					out = append(out, listingsvc.AgentStatus{AgentID: item.AgentID, AgentName: item.AgentName})
+				}
+				return out, nil
+			},
+		),
+	)
 }
 
 func (a *Adapter) appendHistoryFromArchiveState(
@@ -98,7 +165,9 @@ func (a *Adapter) appendHistoryFromArchiveState(
 	seen map[string]struct{},
 	methodName string,
 ) []threadListItem {
-	return appendHistoryFromArchiveState(ctx, threads, seen, methodName, a.loadThreadArchiveMap)
+	return toThreadListItemsFromService(
+		listingsvc.AppendHistoryFromArchiveState(ctx, toServiceThreadListItems(threads), seen, methodName, a.loadThreadArchiveMap),
+	)
 }
 
 func (a *Adapter) syncThreadListRuntime(threads []threadListItem) {
@@ -181,12 +250,36 @@ func toThreadSnapshots[T any](items []T) []uistate.ThreadSnapshot {
 	}
 }
 
+func normalizethreadListItem(id, name string) (string, string, bool) {
+	trimmedID := strings.TrimSpace(id)
+	if trimmedID == "" {
+		return "", "", false
+	}
+	trimmedName := strings.TrimSpace(name)
+	if trimmedName == "" {
+		trimmedName = trimmedID
+	}
+	return trimmedID, trimmedName, true
+}
+
+func appendthreadListItem(threads []threadListItem, seen map[string]struct{}, id, name, state string) []threadListItem {
+	trimmedID, trimmedName, ok := normalizethreadListItem(id, name)
+	if !ok {
+		return threads
+	}
+	if _, exists := seen[trimmedID]; exists {
+		return threads
+	}
+	seen[trimmedID] = struct{}{}
+	return append(threads, threadListItem{ID: trimmedID, Name: trimmedName, State: state})
+}
+
 func (a *Adapter) loadThreadAliases(ctx context.Context) map[string]string {
 	store := a.store()
 	if store == nil {
 		return map[string]string{}
 	}
-	return loadThreadAliases(ctx, store.Get)
+	return listingsvc.LoadThreadAliases(ctx, store.Get)
 }
 
 func (a *Adapter) persistThreadAlias(ctx context.Context, threadID, alias string) error {
@@ -194,5 +287,50 @@ func (a *Adapter) persistThreadAlias(ctx context.Context, threadID, alias string
 	if store == nil {
 		return nil
 	}
-	return persistThreadAlias(ctx, threadID, alias, store.Get, store.Set)
+	return listingsvc.PersistThreadAlias(ctx, threadID, alias, store.Get, store.Set)
+}
+
+func toListingAgentInfos(items []runner.AgentInfo) []listingsvc.AgentInfo {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]listingsvc.AgentInfo, 0, len(items))
+	for _, item := range items {
+		out = append(out, listingsvc.AgentInfo{
+			ID:    item.ID,
+			Name:  item.Name,
+			State: string(item.State),
+		})
+	}
+	return out
+}
+
+func toServiceThreadListItems(items []threadListItem) []listingsvc.ThreadListItem {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]listingsvc.ThreadListItem, 0, len(items))
+	for _, item := range items {
+		out = append(out, listingsvc.ThreadListItem{
+			ID:    item.ID,
+			Name:  item.Name,
+			State: item.State,
+		})
+	}
+	return out
+}
+
+func toThreadListItemsFromService(items []listingsvc.ThreadListItem) []threadListItem {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]threadListItem, 0, len(items))
+	for _, item := range items {
+		out = append(out, threadListItem{
+			ID:    item.ID,
+			Name:  item.Name,
+			State: item.State,
+		})
+	}
+	return out
 }

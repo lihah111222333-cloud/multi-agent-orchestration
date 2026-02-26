@@ -6,6 +6,7 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	interruptsvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/interrupt"
 )
 
 // resolveClientActiveTurnID extracts active turn ID if client supports it.
@@ -26,7 +27,7 @@ func (a *Adapter) readThreadRuntimeState(threadID string) string {
 	if id == "" {
 		return "idle"
 	}
-	return readThreadRuntimeStateByHooks(id, a.readRuntimeStatus, a.hasActiveTrackedTurn)
+	return interruptsvc.ReadThreadRuntimeStateByHooks(id, a.readRuntimeStatus, a.hasActiveTrackedTurn)
 }
 
 func (a *Adapter) readRuntimeStatus(threadID string) string {
@@ -40,33 +41,41 @@ func (a *Adapter) readRuntimeStatus(threadID string) string {
 
 // waitInterruptOutcome waits for terminal state using adapter-owned tracker/runtime state.
 func (a *Adapter) waitInterruptOutcome(threadID string, timeout time.Duration, activeHint bool) (bool, string, int64, bool) {
-	return waitInterruptOutcome(threadID, timeout, activeHint, a.waitTrackedTurnTerminal, a.readThreadRuntimeState)
+	return interruptsvc.WaitInterruptOutcome(threadID, timeout, activeHint, a.waitTrackedTurnTerminal, a.readThreadRuntimeState)
 }
 
 func (a *Adapter) sendInterruptCommand(proc *runner.AgentProcess) (bool, error) {
-	return sendInterruptCommand(proc, a.SendCommand)
+	return interruptsvc.SendInterruptCommand(proc, func(proc any, command, args string) error {
+		typed, _ := proc.(*runner.AgentProcess)
+		return a.SendCommand(typed, command, args)
+	})
 }
 
 func (a *Adapter) notifyTurnCompleted(threadID, status, reason string) {
-	notifyTurnCompleted(threadID, status, reason, a.completeTrackedTurnByID, a.notify)
+	interruptsvc.NotifyTurnCompleted(threadID, status, reason, a.completeTrackedTurnByID, a.notify)
 }
 
 func (a *Adapter) withProcessAny(
 	methodName string,
 	threadID string,
-	fn func(*runner.AgentProcess) (any, error),
+	fn func(any) (any, error),
 ) (any, error) {
-	return withProcess(a, methodName, threadID, fn)
+	return withProcess(a, methodName, threadID, func(proc *runner.AgentProcess) (any, error) {
+		return fn(proc)
+	})
 }
 
 // TurnInterrupt executes /interrupt using constructor-injected dependencies.
 func (a *Adapter) TurnInterrupt(threadID string) (any, error) {
-	return turnInterrupt(
+	return interruptsvc.TurnInterrupt(
 		threadID,
 		a.readThreadRuntimeState,
 		a.hasActiveTrackedTurn,
 		a.cancelCodeRuns,
-		a.sendInterruptCommand,
+		func(proc any) (bool, error) {
+			typed, _ := proc.(*runner.AgentProcess)
+			return a.sendInterruptCommand(typed)
+		},
 		a.withProcessAny,
 		a.markTrackedTurnInterruptRequested,
 		a.waitInterruptOutcome,
@@ -76,10 +85,13 @@ func (a *Adapter) TurnInterrupt(threadID string) (any, error) {
 
 // TurnForceComplete forcibly finalizes current turn state using constructor-injected dependencies.
 func (a *Adapter) TurnForceComplete(threadID string) (any, error) {
-	return turnForceComplete(
+	return interruptsvc.TurnForceComplete(
 		threadID,
 		a.cancelCodeRuns,
-		a.sendInterruptCommand,
+		func(proc any) (bool, error) {
+			typed, _ := proc.(*runner.AgentProcess)
+			return a.sendInterruptCommand(typed)
+		},
 		a.notifyTurnCompleted,
 		a.withProcessAny,
 	)

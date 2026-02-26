@@ -2,34 +2,55 @@ package codexadapter
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	lifecycle "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/lifecycle"
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 // threadStartResult is the normalized thread/start payload.
-type threadStartResult struct {
-	ThreadID       string
-	Status         string
-	Model          string
-	ModelProvider  string
-	Cwd            string
-	ApprovalPolicy string
-}
+type threadStartResult = lifecycle.ThreadStartResult
 
 // ThreadStart launches thread runtime and syncs UI snapshots.
 func (a *Adapter) ThreadStart(ctx context.Context, threadID, cwd, model, modelProvider, approvalPolicy string) (threadStartResult, error) {
-	return runThreadStart(ctx, threadID, cwd, model, modelProvider, approvalPolicy, a.manager(), a.allDynamicToolSchemas(), a.resolveStartInstructionsForLaunch, a.registerBinding, a.syncRuntimeThreads)
+	manager := a.manager()
+	return lifecycle.RunThreadStart(
+		ctx,
+		threadID,
+		cwd,
+		model,
+		modelProvider,
+		approvalPolicy,
+		a.allDynamicToolSchemas(),
+		func(ctx context.Context, agentID, name, path, cwd, startInstructions string, dynamicTools []agentcore.DynamicTool) error {
+			if manager == nil {
+				return apperrors.New("Server.threadStart", "thread manager is not initialized")
+			}
+			return manager.Launch(ctx, agentID, name, path, cwd, startInstructions, dynamicTools)
+		},
+		func(threadID string) any {
+			if manager == nil {
+				return nil
+			}
+			return manager.Get(threadID)
+		},
+		func() []lifecycle.AgentInfo { return toLifecycleAgentInfos(a.runningAgents()) },
+		a.resolveStartInstructionsForLaunch,
+		func(ctx context.Context, threadID string, proc any) {
+			if typed, ok := proc.(*runner.AgentProcess); ok {
+				a.registerBinding(ctx, threadID, typed)
+			}
+		},
+		a.syncRuntimeThreads,
+	)
 }
 
 // threadResumeResult is the normalized thread/resume payload.
-type threadResumeResult struct {
-	ThreadID string
-	Status   string
-	Model    string
-}
+type threadResumeResult = lifecycle.ThreadResumeResult
 
 // ThreadResume resumes a historical codex thread by candidate probing.
 func (a *Adapter) ThreadResume(ctx context.Context, threadID, path, cwd, model string) (threadResumeResult, error) {
@@ -38,21 +59,34 @@ func (a *Adapter) ThreadResume(ctx context.Context, threadID, path, cwd, model s
 		return threadResumeResult{}, err
 	}
 	return withProcess(a, "Server.threadResume", id, func(proc *runner.AgentProcess) (threadResumeResult, error) {
-		return runThreadResume(ctx, id, path, cwd, model, proc, a.ResolveCodexThreadCandidates, a.ResumeThread)
+		return lifecycle.RunThreadResume(
+			ctx,
+			id,
+			path,
+			cwd,
+			model,
+			proc,
+			a.ResolveCodexThreadCandidates,
+			lifecycle.NormalizeCodexThreadID,
+			func(proc any, req agentcore.ResumeThreadRequest) error {
+				typed, _ := proc.(*runner.AgentProcess)
+				return a.ResumeThread(typed, req)
+			},
+		)
 	})
 }
 
 // threadForkResult is the normalized thread/fork payload.
-type threadForkResult struct {
-	ThreadID   string
-	ForkedFrom string
-}
+type threadForkResult = lifecycle.ThreadForkResult
 
 // ThreadFork creates a fork from source thread.
 func (a *Adapter) ThreadFork(threadID string) (threadForkResult, error) {
 	sourceThreadID := strings.TrimSpace(threadID)
 	return withProcess(a, "Server.threadFork", sourceThreadID, func(proc *runner.AgentProcess) (threadForkResult, error) {
-		return runThreadFork(sourceThreadID, proc, a.ForkThread, a.nowUnixMilli)
+		return lifecycle.RunThreadFork(sourceThreadID, proc, func(proc any, req agentcore.ForkThreadRequest) (*agentcore.ForkThreadResponse, error) {
+			typed, _ := proc.(*runner.AgentProcess)
+			return a.ForkThread(typed, req)
+		}, a.nowUnixMilli)
 	})
 }
 
@@ -68,47 +102,62 @@ func (a *Adapter) ReviewStart(threadID, reviewArgs string) (map[string]any, erro
 
 // ThreadRealtimeStart validates and starts a realtime thread flow.
 func (a *Adapter) ThreadRealtimeStart(threadID, prompt string, _ *string) (map[string]any, error) {
-	return runThreadRealtimeStart(threadID, prompt)
+	return lifecycle.RunThreadRealtimeStart(threadID, prompt)
 }
 
 // ThreadRealtimeAppendAudio validates realtime audio append payload.
 func (a *Adapter) ThreadRealtimeAppendAudio(threadID string, audio any) (map[string]any, error) {
-	return runThreadRealtimeAppendAudio(threadID, audio)
+	return lifecycle.RunThreadRealtimeAppendAudio(threadID, audio)
 }
 
 // ThreadRealtimeAppendText validates realtime text append payload.
 func (a *Adapter) ThreadRealtimeAppendText(threadID, text string) (map[string]any, error) {
-	return runThreadRealtimeAppendText(threadID, text)
+	return lifecycle.RunThreadRealtimeAppendText(threadID, text)
 }
 
 // ThreadRealtimeStop validates realtime stop payload.
 func (a *Adapter) ThreadRealtimeStop(threadID string) (map[string]any, error) {
-	return runThreadRealtimeStop(threadID)
+	return lifecycle.RunThreadRealtimeStop(threadID)
 }
 
 // TurnSteer submits steering prompt to existing thread.
 func (a *Adapter) TurnSteer(threadID, submitPrompt string, images, files []string) (map[string]any, error) {
 	return withProcess(a, "Server.turnSteer", threadID, func(proc *runner.AgentProcess) (map[string]any, error) {
-		return runTurnSteer(proc, a.Submit, submitPrompt, images, files)
+		return lifecycle.RunTurnSteer(proc, func(proc any, prompt string, images, files []string, outputSchema json.RawMessage) error {
+			typed, _ := proc.(*runner.AgentProcess)
+			return a.Submit(typed, prompt, images, files, outputSchema)
+		}, submitPrompt, images, files)
 	})
 }
 
 func (a *Adapter) sendThreadCommand(methodName, threadID, command, args, wrapMsg string) (map[string]any, error) {
 	return withProcess(a, methodName, threadID, func(proc *runner.AgentProcess) (map[string]any, error) {
-		return runThreadCommand(proc, methodName, command, args, wrapMsg, a.SendCommand)
+		return lifecycle.RunThreadCommand(proc, methodName, command, args, wrapMsg, func(proc any, command, args string) error {
+			typed, _ := proc.(*runner.AgentProcess)
+			return a.SendCommand(typed, command, args)
+		})
 	})
 }
 
 // ThreadNameSet sets codex thread name and persists alias.
 func (a *Adapter) ThreadNameSet(ctx context.Context, threadID, name string) (map[string]any, error) {
-	return runThreadNameSet(
+	return lifecycle.RunThreadNameSet(
 		ctx,
 		threadID,
 		name,
-		a.manager(),
+		func(threadID string) any {
+			manager := a.manager()
+			if manager == nil {
+				return nil
+			}
+			return manager.Get(threadID)
+		},
 		a.threadExistsInRuntime,
 		a.ThreadExistsInHistory,
-		a.SendCommand,
+		func(proc any, command, args string) error {
+			typed, _ := proc.(*runner.AgentProcess)
+			return a.SendCommand(typed, command, args)
+		},
 		a.setRuntimeThreadName,
 		a.persistThreadAlias,
 	)
@@ -117,21 +166,24 @@ func (a *Adapter) ThreadNameSet(ctx context.Context, threadID, name string) (map
 // ThreadRead fetches codex history list for the target thread.
 func (a *Adapter) ThreadRead(_ context.Context, threadID string) (map[string]any, error) {
 	return withProcess(a, "Server.threadRead", threadID, func(proc *runner.AgentProcess) (map[string]any, error) {
-		return runThreadRead(proc, a.ListThreads)
+		return lifecycle.RunThreadRead(proc, func(proc any) ([]agentcore.ThreadInfo, error) {
+			typed, _ := proc.(*runner.AgentProcess)
+			return a.ListThreads(typed)
+		})
 	})
 }
 
 // ThreadResolve resolves thread identity from runtime and history sources.
 func (a *Adapter) ThreadResolve(ctx context.Context, threadID string) (map[string]any, error) {
-	return runThreadResolve(ctx, threadID, a.resolveRunningThreadIdentity, a.firstResolvedCodexThreadID, a.ThreadExistsInHistory)
+	return lifecycle.RunThreadResolve(ctx, threadID, a.resolveRunningThreadIdentity, a.firstResolvedCodexThreadID, a.ThreadExistsInHistory)
 }
 
 func (a *Adapter) firstResolvedCodexThreadID(ctx context.Context, threadID string) string {
-	return firstResolvedCodexThreadIDFromCandidates(ctx, threadID, a.ResolveCodexThreadCandidates)
+	return lifecycle.FirstResolvedCodexThreadIDFromCandidates(ctx, threadID, a.ResolveCodexThreadCandidates)
 }
 
 func (a *Adapter) resolveRunningThreadIdentity(threadID string) (state string, port int, codexThreadID string, found bool) {
-	return resolveRunningThreadIdentityFromAgents(threadID, a.runningAgents())
+	return lifecycle.ResolveRunningThreadIdentityFromAgents(threadID, toLifecycleAgentInfos(a.runningAgents()))
 }
 
 func (a *Adapter) threadExistsInRuntime(threadID string) bool {
@@ -139,13 +191,18 @@ func (a *Adapter) threadExistsInRuntime(threadID string) bool {
 	if runtime == nil {
 		return false
 	}
-	return threadExistsInRuntimeSnapshots(threadID, runtime.SnapshotLight().Threads)
+	snapshots := runtime.SnapshotLight().Threads
+	items := make([]lifecycle.ThreadSnapshot, 0, len(snapshots))
+	for _, item := range snapshots {
+		items = append(items, lifecycle.ThreadSnapshot{ID: item.ID})
+	}
+	return lifecycle.ThreadExistsInRuntimeSnapshots(threadID, items)
 }
 
-func (a *Adapter) syncRuntimeThreads(items []runner.AgentInfo) {
+func (a *Adapter) syncRuntimeThreads(items []lifecycle.AgentInfo) {
 	runtime := a.uiRuntime()
 	if runtime != nil {
-		runtime.ReplaceThreads(toThreadSnapshots(items))
+		runtime.ReplaceThreads(toThreadSnapshots(toRunnerAgentInfos(items)))
 	}
 }
 
@@ -156,24 +213,44 @@ func (a *Adapter) setRuntimeThreadName(threadID, alias string) {
 	}
 }
 
-// codexThreadIDPattern matches a lowercase UUID (codex thread ID format).
-var codexThreadIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-
-// normalizeCodexThreadID trims, lowercases, strips "urn:uuid:" prefix,
-// and validates against UUID pattern. Returns "" if invalid.
 func normalizeCodexThreadID(raw string) string {
-	id := strings.TrimSpace(raw)
-	if id == "" {
-		return ""
-	}
-	id = strings.TrimPrefix(strings.ToLower(id), "urn:uuid:")
-	if !codexThreadIDPattern.MatchString(id) {
-		return ""
-	}
-	return id
+	return lifecycle.NormalizeCodexThreadID(raw)
 }
 
-// isLikelyCodexThreadID reports whether raw looks like a valid codex thread ID.
 func isLikelyCodexThreadID(raw string) bool {
-	return normalizeCodexThreadID(raw) != ""
+	return lifecycle.IsLikelyCodexThreadID(raw)
+}
+
+func toLifecycleAgentInfos(items []runner.AgentInfo) []lifecycle.AgentInfo {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]lifecycle.AgentInfo, 0, len(items))
+	for _, item := range items {
+		out = append(out, lifecycle.AgentInfo{
+			ID:       item.ID,
+			Name:     item.Name,
+			State:    string(item.State),
+			Port:     item.Port,
+			ThreadID: item.ThreadID,
+		})
+	}
+	return out
+}
+
+func toRunnerAgentInfos(items []lifecycle.AgentInfo) []runner.AgentInfo {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]runner.AgentInfo, 0, len(items))
+	for _, item := range items {
+		out = append(out, runner.AgentInfo{
+			ID:       item.ID,
+			Name:     item.Name,
+			State:    runner.AgentState(item.State),
+			Port:     item.Port,
+			ThreadID: item.ThreadID,
+		})
+	}
+	return out
 }

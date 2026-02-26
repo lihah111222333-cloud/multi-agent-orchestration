@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/multi-agent/go-agent-v2/internal/runner"
+	commandsvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/command"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
@@ -45,7 +46,7 @@ func (a *Adapter) SendSlashCommandWithArgs(params json.RawMessage, command, argK
 // ThreadSkillsList sends /skills command to thread and returns placeholder payload.
 func (a *Adapter) ThreadSkillsList() (any, error) {
 	result, err := a.sendSlashCommand(context.Background(), "Server.threadSkillsList", "", "/skills", "", false)
-	return threadSkillsListResult(result, err)
+	return commandsvc.ThreadSkillsListResult(result, err)
 }
 
 // parseSlashCommandWithArgsParams parses threadId + args payload for slash command handlers.
@@ -73,7 +74,7 @@ func parseSlashCommandArgParams(params json.RawMessage, argKey string) (slashCom
 }
 
 func (a *Adapter) sendSlashCommand(ctx context.Context, methodName, threadID, command, args string, requireThreadID bool) (map[string]any, error) {
-	return runSendSlashCommand(
+	return commandsvc.RunSendSlashCommand(
 		ctx,
 		methodName,
 		threadID,
@@ -82,18 +83,42 @@ func (a *Adapter) sendSlashCommand(ctx context.Context, methodName, threadID, co
 		requireThreadID,
 		a.resolveThreadForSlashCommand,
 		a.withProcessMap,
-		a.SendCommand,
+		func(proc any, command, args string) error {
+			typed, _ := proc.(*runner.AgentProcess)
+			return a.SendCommand(typed, command, args)
+		},
 	)
 }
 
 func (a *Adapter) withProcessMap(
 	methodName string,
 	threadID string,
-	fn func(*runner.AgentProcess) (map[string]any, error),
+	fn func(any) (map[string]any, error),
 ) (map[string]any, error) {
-	return withProcess(a, methodName, threadID, fn)
+	return withProcess(a, methodName, threadID, func(proc *runner.AgentProcess) (map[string]any, error) {
+		return fn(proc)
+	})
 }
 
 func (a *Adapter) resolveThreadForSlashCommand(ctx context.Context, threadID string, requireThreadID bool) (string, error) {
-	return resolveThreadForSlashCommandLogic(ctx, threadID, requireThreadID, a.ThreadList)
+	return commandsvc.ResolveThreadForSlashCommandLogic(
+		ctx,
+		threadID,
+		requireThreadID,
+		func(ctx context.Context) ([]commandsvc.ThreadListItem, error) {
+			items, err := a.ThreadList(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]commandsvc.ThreadListItem, 0, len(items))
+			for _, item := range items {
+				out = append(out, commandsvc.ThreadListItem{
+					ID:    item.ID,
+					Name:  item.Name,
+					State: item.State,
+				})
+			}
+			return out, nil
+		},
+	)
 }

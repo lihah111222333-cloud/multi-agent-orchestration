@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	lifecycle "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/lifecycle"
+	historysvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/history"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -24,16 +26,16 @@ func resolveCodexThreadCandidates(
 	if id == "" {
 		return nil
 	}
-	ctx = ensureContext(ctx)
-	timeout = normalizeHistoryTimeout(timeout)
+	ctx = historysvc.EnsureContext(ctx)
+	timeout = historysvc.NormalizeHistoryTimeout(timeout)
 
 	appendUnique := appendUniqueThreadID
 	if appendUnique == nil {
-		appendUnique = appendUniqueThreadIDFallback
+		appendUnique = historysvc.AppendUniqueThreadIDFallback
 	}
 	preview := previewCandidates
 	if preview == nil {
-		preview = PreviewResumeCandidates
+		preview = lifecycle.PreviewResumeCandidates
 	}
 
 	ids := make([]string, 0, 2)
@@ -98,8 +100,8 @@ func threadExistsInHistory(
 	if isLikelyCodexThreadID != nil && isLikelyCodexThreadID(id) {
 		return true
 	}
-	ctx = ensureContext(ctx)
-	timeout = normalizeHistoryTimeout(timeout)
+	ctx = historysvc.EnsureContext(ctx)
+	timeout = historysvc.NormalizeHistoryTimeout(timeout)
 
 	if findBindingByAgentID != nil {
 		dbCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -157,17 +159,55 @@ func (a *Adapter) ThreadExistsInHistory(ctx context.Context, threadID string) bo
 }
 
 func (a *Adapter) bindingExistsByAgentID(ctx context.Context, agentID string) (bool, error) {
-	return bindingExistsByAgentID(ctx, a.bindingStore(), agentID)
+	bindingStore := a.bindingStore()
+	if bindingStore == nil {
+		return false, nil
+	}
+	binding, err := bindingStore.FindByAgentID(ctx, agentID)
+	if err != nil {
+		return false, err
+	}
+	return binding != nil, nil
 }
 
 func (a *Adapter) agentStatusExistsByID(ctx context.Context, agentID string) (bool, error) {
-	return agentStatusExistsByID(ctx, a.statusStore(), agentID)
+	statusStore := a.statusStore()
+	if statusStore == nil {
+		return false, nil
+	}
+	status, err := statusStore.Get(ctx, agentID)
+	if err != nil {
+		return false, err
+	}
+	return status != nil, nil
 }
 
 func (a *Adapter) bindingCodexThreadIDByAgentID(ctx context.Context, agentID string) (string, error) {
-	return bindingCodexThreadIDByAgentID(ctx, a.bindingStore(), agentID)
+	bindingStore := a.bindingStore()
+	if bindingStore == nil {
+		return "", nil
+	}
+	binding, err := bindingStore.FindByAgentID(ctx, agentID)
+	if err != nil {
+		return "", err
+	}
+	if binding == nil {
+		return "", nil
+	}
+	return binding.CodexThreadID, nil
 }
 
 func (a *Adapter) statusSessionIDByAgentID(ctx context.Context, agentID string) (string, error) {
-	return statusSessionIDByAgentID(ctx, a.statusStore(), agentID)
+	statusStore := a.statusStore()
+	if statusStore == nil {
+		return "", nil
+	}
+	status, err := statusStore.Get(ctx, agentID)
+	if err != nil {
+		return "", err
+	}
+	if status == nil {
+		return "", nil
+	}
+	return status.SessionID, nil
 }

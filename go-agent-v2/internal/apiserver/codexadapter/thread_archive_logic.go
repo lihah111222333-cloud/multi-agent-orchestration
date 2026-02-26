@@ -2,7 +2,8 @@ package codexadapter
 
 import (
 	"context"
-	archive "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/archive"
+	consumerarchive "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/archive"
+	servicearchive "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/archive"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"os"
@@ -20,7 +21,7 @@ func loadThreadArchiveMapFromStoreLogic(a *Adapter, ctx context.Context) (map[st
 		if err != nil {
 			return nil, err
 		}
-		archivedMap = archive.NormalizeThreadArchiveMap(value)
+		archivedMap = servicearchive.NormalizeThreadArchiveMap(value)
 	}
 	return archivedMap, nil
 }
@@ -30,12 +31,12 @@ func loadThreadArchiveMapLogic(a *Adapter, ctx context.Context) (map[string]int6
 	if err != nil {
 		return nil, err
 	}
-	fromDisk, err := archive.LoadThreadArchiveMapFromDisk()
+	fromDisk, err := consumerarchive.LoadThreadArchiveMapFromDisk()
 	if err != nil {
 		logger.Warn("thread/archive: scan archive root failed", logger.FieldError, err)
 		return archivedMap, nil
 	}
-	return archive.MergeThreadArchiveMaps(archivedMap, fromDisk), nil
+	return servicearchive.MergeThreadArchiveMaps(archivedMap, fromDisk), nil
 }
 
 func persistThreadArchivedStateLogic(a *Adapter, ctx context.Context, threadID string, archivedAt int64) error {
@@ -126,7 +127,7 @@ func threadUnarchiveLogic(a *Adapter, ctx context.Context, threadID string) (map
 	}
 	_, wasArchived := archivedMap[id]
 
-	restoreNotice := archive.ThreadArchiveRestoreNotice{
+	restoreNotice := servicearchive.ThreadArchiveRestoreNotice{
 		Modified:      false,
 		ManifestPath:  "",
 		ModifiedFiles: []string{},
@@ -209,18 +210,18 @@ func bindRolloutPathLogic(a *Adapter, ctx context.Context, agentID, codexThreadI
 	}
 }
 
-func archiveThreadArtifactsLogic(a *Adapter, ctx context.Context, threadID string) (archive.ThreadArchiveManifest, error) {
+func archiveThreadArtifactsLogic(a *Adapter, ctx context.Context, threadID string) (servicearchive.ThreadArchiveManifest, error) {
 	id := strings.TrimSpace(threadID)
-	manifest := archive.ThreadArchiveManifest{
+	manifest := servicearchive.ThreadArchiveManifest{
 		ThreadID:   id,
 		ArchivedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		Files:      []archive.ThreadArchiveFile{},
+		Files:      []servicearchive.ThreadArchiveFile{},
 	}
-	rootDir, err := archive.ResolveThreadArchiveRootDir()
+	rootDir, err := consumerarchive.ResolveThreadArchiveRootDir()
 	if err != nil {
 		return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "resolve archive root")
 	}
-	archiveDir, err := archive.ResolveThreadArchiveSnapshotDir(rootDir, id, manifest.ArchivedAt)
+	archiveDir, err := consumerarchive.ResolveThreadArchiveSnapshotDir(rootDir, id, manifest.ArchivedAt)
 	if err != nil {
 		return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "resolve archive dir")
 	}
@@ -231,7 +232,7 @@ func archiveThreadArtifactsLogic(a *Adapter, ctx context.Context, threadID strin
 
 	codexThreadID, rolloutPath := a.ResolveRolloutHistorySource(ctx, id, normalizeCodexThreadID)
 	manifest.CodexThreadID = normalizeCodexThreadID(codexThreadID)
-	candidates := archive.CollectThreadArtifactCandidates(manifest.CodexThreadID, rolloutPath)
+	candidates := consumerarchive.CollectThreadArtifactCandidates(manifest.CodexThreadID, rolloutPath)
 
 	for _, candidate := range candidates {
 		srcPath := strings.TrimSpace(candidate.Path)
@@ -242,11 +243,11 @@ func archiveThreadArtifactsLogic(a *Adapter, ctx context.Context, threadID strin
 		if err != nil || info.IsDir() {
 			continue
 		}
-		targetPath, err := archive.NextArchiveFilePath(archiveDir, filepath.Base(srcPath))
+		targetPath, err := consumerarchive.NextArchiveFilePath(archiveDir, filepath.Base(srcPath))
 		if err != nil {
 			return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "resolve archive target")
 		}
-		if err := archive.CopyFile(srcPath, targetPath); err != nil {
+		if err := consumerarchive.CopyFile(srcPath, targetPath); err != nil {
 			logger.Error("thread/archive: copy artifact failed",
 				logger.FieldThreadID, id,
 				"source_path", srcPath,
@@ -255,13 +256,13 @@ func archiveThreadArtifactsLogic(a *Adapter, ctx context.Context, threadID strin
 			)
 			continue
 		}
-		fileMeta := archive.ThreadArchiveFile{
+		fileMeta := servicearchive.ThreadArchiveFile{
 			Kind:         candidate.Kind,
 			SourcePath:   srcPath,
 			ArchivedPath: targetPath,
 			SizeBytes:    info.Size(),
 		}
-		checksum, err := archive.FileSHA256(targetPath)
+		checksum, err := consumerarchive.FileSHA256(targetPath)
 		if err != nil {
 			return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "compute archived file checksum")
 		}
@@ -275,7 +276,7 @@ func archiveThreadArtifactsLogic(a *Adapter, ctx context.Context, threadID strin
 		return manifest.Files[i].ArchivedPath < manifest.Files[j].ArchivedPath
 	})
 
-	if err := archive.WriteThreadArchiveManifest(manifest); err != nil {
+	if err := consumerarchive.WriteThreadArchiveManifest(manifest); err != nil {
 		return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "write manifest")
 	}
 	bindRolloutPathLogic(a, ctx, id, manifest.CodexThreadID, manifest.RolloutPath)
@@ -283,42 +284,42 @@ func archiveThreadArtifactsLogic(a *Adapter, ctx context.Context, threadID strin
 	return manifest, nil
 }
 
-func inspectThreadArchiveForRestoreLogic(threadID string) (archive.ThreadArchiveRestoreNotice, error) {
-	deps := archive.BuildThreadArchiveRestoreDeps(
-		archive.ResolveThreadArchiveRootDir,
-		archive.SanitizeArchiveNameStrict,
+func inspectThreadArchiveForRestoreLogic(threadID string) (servicearchive.ThreadArchiveRestoreNotice, error) {
+	deps := consumerarchive.BuildThreadArchiveRestoreDeps(
+		consumerarchive.ResolveThreadArchiveRootDir,
+		servicearchive.SanitizeArchiveNameStrict,
 		nil,
-		archive.PathWithinRoot,
+		servicearchive.PathWithinRoot,
 		nil,
-		archive.FileSHA256,
-		archive.FindLatestThreadArchiveManifestPath,
-		archive.ReadThreadArchiveManifest,
+		consumerarchive.FileSHA256,
+		consumerarchive.FindLatestThreadArchiveManifestPath,
+		consumerarchive.ReadThreadArchiveManifest,
 	)
-	return archive.InspectThreadArchiveForRestore(threadID, deps)
+	return consumerarchive.InspectThreadArchiveForRestore(threadID, deps)
 }
 
 func restoreThreadArchiveSourcesLogic(threadID string) ([]string, []string, error) {
-	return archive.RestoreThreadArchiveSources(
+	return consumerarchive.RestoreThreadArchiveSources(
 		threadID,
-		archive.ResolveThreadArchiveRootDir,
-		archive.SanitizeArchiveNameStrict,
-		archive.ResolveCodexRootDir,
-		archive.PathWithinRoot,
-		archive.CopyFileOverwrite,
-		archive.FileSHA256,
-		archive.FindLatestThreadArchiveManifestPath,
-		archive.ReadThreadArchiveManifest,
+		consumerarchive.ResolveThreadArchiveRootDir,
+		servicearchive.SanitizeArchiveNameStrict,
+		consumerarchive.ResolveCodexRootDir,
+		servicearchive.PathWithinRoot,
+		consumerarchive.CopyFileOverwrite,
+		consumerarchive.FileSHA256,
+		consumerarchive.FindLatestThreadArchiveManifestPath,
+		consumerarchive.ReadThreadArchiveManifest,
 	)
 }
 
-func pruneArchivedCodexSourceFilesLogic(threadID string, files []archive.ThreadArchiveFile, archiveDir string) {
-	archive.PruneArchivedCodexSourceFiles(
+func pruneArchivedCodexSourceFilesLogic(threadID string, files []servicearchive.ThreadArchiveFile, archiveDir string) {
+	consumerarchive.PruneArchivedCodexSourceFiles(
 		threadID,
 		files,
 		archiveDir,
-		archive.ResolveCodexRootDir,
-		archive.PathWithinRoot,
-		archive.FileSHA256,
-		archive.RemoveEmptyCodexParentDirs,
+		consumerarchive.ResolveCodexRootDir,
+		servicearchive.PathWithinRoot,
+		consumerarchive.FileSHA256,
+		consumerarchive.RemoveEmptyCodexParentDirs,
 	)
 }

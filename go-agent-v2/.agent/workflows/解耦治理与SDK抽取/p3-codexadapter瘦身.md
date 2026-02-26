@@ -1,5 +1,5 @@
 ---
-description: P3 codexadapter 瘦身 — turn_tracker 三合一、archive 精简、messages DRY
+description: P3 codexadapter 瘦身 — DRY 去重 + 纯函数分文件（为 P7 迁走即删做准备）
 ---
 
 # P3: codexadapter 瘦身
@@ -8,91 +8,147 @@ description: P3 codexadapter 瘦身 — turn_tracker 三合一、archive 精简�
 
 ## 前置条件
 
-- [ ] P1 tools 接口化已完成（避免 tooladapter 冲突）
+- [x] P1 tools 接口化已完成
 
-## 任务范围
+## 当前基线（2026-02-27）
 
-### 需要修改的文件（全在 `internal/apiserver/codexadapter/` 内）
+| 文件 | 行数 | 纯函数 | Adapter | internal 依赖 | 可拆? |
+|------|------|--------|---------|---------------|-------|
+| `thread_archive.go` | 988 | 18 | 14 | 零 | ✅ ~450 行 |
+| `turn_tracker_event.go` | 656 | 20 | 8 | 零 | ✅ ~350 行 |
+| `thread_archive_utils.go` | 556 | 27 | 0 | codex | ⚠️ 整文件但需 codex |
+| `turn_tracker.go` | 502 | 3 | 15 | 零 | ❌ |
+| `turn_runtime.go` | 508 | 2 | 14 | 4 包 | ❌ 不动 |
+| `thread_listing.go` | 454 | 17 | 10 | 4 包 | ⚠️ 逐函数 |
+| `turn_prepare.go` | 453 | 11 | 12 | 3 包 | ⚠️ 逐函数 |
+| `thread_lifecycle.go` | 374 | — | — | — | 不动 |
+| `adapter.go` | 359 | — | — | — | 不动 |
+| `turn_interrupt.go` | 333 | 8 | 7 | agentcore/runner | ⚠️ 逐函数 |
+| `turn_tracker_stall.go` | 315 | 4 | 13 | 零 | ❌ |
+| `turn_prompt.go` | 295 | 8 | 5 | 4 包 | ⚠️ 逐函数 |
+| `thread_history.go` | 252 | 5 | 6 | 零 | ⚠️ 部分伪纯 |
+| `thread_messages_rollout.go` | 242 | 5 | 4 | agentcore/codex | ⚠️ |
+| `turn_resume.go` | 175 | 5 | 1 | 零 | ✅ ~140 行 |
+| 其余 5 小文件 | 535 | — | — | — | 不动 |
+| **总计** | **7,037** | | | | |
 
-- `turn_tracker.go` (378行) + `turn_tracker_event.go` (656行) + `turn_tracker_stall.go` (319行) → 抽公共逻辑，避免重复状态机
-- `thread_archive.go` (905行) + `thread_archive_utils.go` (556行) → 合并可复用工具，但避免超大函数
-- `thread_messages.go` (549行) → DRY 精简
-- `turn_prepare.go` (387行) + `turn_prompt.go` (306行) + `turn_resume.go` (187行) + `turn_steer_alignment.go` (45行) → 整合公共路径
+**目标**: ≤ 5,700 行（减 ~1,300 行）
 
-### 禁止触碰的文件 ⚠️
+## 核心策略
 
-- `internal/apiserver/*.go` (P4 负责)
-- `internal/apiserver/server.go`, `server_context.go` — 只读（import codexadapter.Adapter/Deps）
-- `internal/apiserver/commonadapter/*` — 只读（被 codexadapter 4 个文件 import，接口不可变）
-- `internal/codex/*` (P5 负责)
-- `internal/uistate/*` (P4/P5 负责)
-- `internal/lsp/*` (P2 已完成)
+1. **内部 DRY** — 去重、合并重复逻辑，不创建新 SDK 包
+2. **纯函数分文件** — 零 `internal/` 依赖的纯函数拆入 `_core.go`
+3. **类型随函数走** — 纯函数引用的本包类型（如 `trackedTurnSummaryCacheEntry`）一起搬入 `_core.go`
+4. **为 P7 做准备** — `_core.go` 为 P7 直接 `git mv`，**不留委托层**
 
-## 接口稳定性约束 ⚠️
+## 禁止触碰的文件 ⚠️
 
-`apiserver/server.go` 和 `server_context.go` 直接引用 `codexadapter.Adapter` 和 `codexadapter.Deps`。
+- `internal/apiserver/*.go` (P4)、`internal/codex/*` (P5)、`internal/uistate/*` (P4/P5)
+- `server.go`、`server_context.go`、`commonadapter/*` — 只读
 
-**P3 不得改变以下公开签名**：
-- `codexadapter.New(deps Deps) *Adapter`
-- `codexadapter.Deps` struct 的字段名和类型
-- `*Adapter` 的所有导出方法签名（`Submit`, `SendCommand`, `GetThreadID`, `ResumeThread` 等）
+## 接口稳定性约束
 
-内部实现可自由重构，但对外接口必须保持不变。
-
-## guardrail 兼容约束（新增）
-
-`thread_archive_utils_guardrail_test.go` 直接解析 `thread_archive_utils.go` 文件路径。
-
-- 默认保留 `thread_archive_utils.go`（可瘦身为 facade/转发层）。
-- 若确需删除该文件，必须在同一提交中同步更新 guardrail test，且补充等价的导出面约束测试。
+`codexadapter.New(deps Deps)`、`Deps` struct、所有 `*Adapter` 导出方法签名不可改变。
 
 ## 执行步骤
 
 // turbo-all
 
-### 步骤 1: turn_tracker 去重与职责归位
+### 步骤 1: turn_tracker_event 纯函数分离（预估减 ~350 行）
 
-1. 先提取共享状态检查/时间窗口判断为 helper，再决定是否需要物理合并文件
-2. 保留 `event` 与 `stall` 的职责边界（推荐分文件，避免 >1,000 行巨型文件）
-3. 删除重复定义，确保同一状态机只存在一处实现
-4. 验证: `go build ./internal/apiserver/codexadapter/...`
-5. 验证: `go test ./internal/apiserver/codexadapter/...`
+**范围**: `turn_tracker_event.go` (656 行, 20 纯函数, 零 internal 依赖)
 
-### 步骤 2: thread_archive 合并精简
+> [!IMPORTANT]
+> 纯函数引用了 `trackedTurnSummaryCacheEntry`、`turnTrackerState` 等类型，
+> 定义在 `turn_tracker.go`。这些类型本身也是零 internal 依赖，**必须一起搬入 `_core.go`**。
 
-1. 将 `thread_archive_utils.go` 中可复用工具按主题并入（I/O、解析、恢复决策）
-2. 简化 `inspectThreadArchiveForRestore`（当前接收 8 个 func 参数的 95 行函数 → 结构体方法/策略对象）
-3. 保留 `thread_archive_utils.go` 作为稳定入口（允许内部委托），避免破坏现有 guardrail
-4. 验证: `go build ./internal/apiserver/codexadapter/...`
+1. 从 `turn_tracker.go` 提取被纯函数引用的类型定义到 `turn_tracker_core.go`
+2. 将 `turn_tracker_event.go` 的 20 个纯函数搬到 `turn_tracker_core.go`
+3. Adapter 方法留在 `turn_tracker_event.go`，直接调 core 纯函数（同包，无额外 import）
+4. 验证: `go build && go test ./internal/apiserver/codexadapter/...`
 
-### 步骤 3: thread_messages DRY
+### 步骤 2: thread_archive 纯函数分离（预估减 ~450 行）
 
-1. 提取消息构建的重复 payload 组装为辅助函数
-2. 合并相似的消息格式化逻辑
+**范围**: `thread_archive.go` (988 行, 18 纯函数, 零 internal 依赖)
+
+> [!IMPORTANT]
+> 纯函数引用 6 个本包类型：`threadArchiveRestoreDeps`、`threadArchiveManifestScope`、
+> `threadArchiveFile`、`threadArchiveManifest`、`threadArchiveRestoreNotice`、`threadArchives`。
+> 这些类型本身零 internal 依赖，一起搬入 `thread_archive_core.go`。
+
+1. 提取类型定义 + 18 纯函数到 `thread_archive_core.go`
+2. 简化 `inspectThreadArchiveForRestore`（8 func 参数 → 结构体）
+3. `thread_archive_utils.go` 保留（guardrail 依赖），内部 DRY 去重
+4. 验证
+
+### 步骤 3: turn_resume 纯函数分离（预估减 ~140 行）
+
+**范围**: `turn_resume.go` (175, 5 纯函数, 零 internal 依赖)
+
+> `TryResumeCandidates` 依赖 `logger`/`apperrors`，均在 `pkg/`，可拆。 
+> 5 个函数均可搬入 `turn_resume_core.go`。
+
+1. 拆 `turn_resume_core.go`
+2. Adapter 方法 `ResumeThread` 留原文件
 3. 验证
 
-### 步骤 4: turn 文件整合
+### 步骤 4: thread_history 部分分离（预估减 ~50 行）
 
-1. 将 `turn_steer_alignment.go` (45行) 合入 `turn_prepare.go`
-2. 审查 `turn_prepare.go` 和 `turn_prompt.go` 重叠逻辑，合并可复用部分
-3. 验证
+**范围**: `thread_history.go` (252, 5 纯函数)
+
+> [!WARNING]
+> `resolveCodexThreadCandidates` 虽然签名是 `func`（非 Adapter 方法），但通过参数
+> 接收 `stores` 和回调，**不是真纯函数**，不可拆。
+> 仅 `ensureContext`、`normalizeHistoryTimeout`、`appendUniqueThreadIDFallback` 可拆（~50 行）。
+
+1. 拆 3 个真纯函数到 `thread_history_core.go`
+2. 验证
+
+### 步骤 5: 有依赖文件逐函数检查（预估减 ~150 行）
+
+**范围**: `turn_prepare.go`、`turn_prompt.go`、`turn_interrupt.go`、`thread_listing.go`
+
+> 这些文件的纯函数多（44 个），但文件级有 internal 依赖。
+> 需要逐函数检查函数体是否引用 internal，不引用的拆入 `_core.go`。
+
+1. 逐函数标注依赖
+2. 可拆的拆出 `_core.go`（预估约 10-15 个函数可拆）
+3. 不可拆的留原文件
+4. 验证
+
+### 步骤 6: 内部 DRY 收尾（预估减 ~200 行）
+
+1. `turn_tracker.go` + `turn_tracker_stall.go` 删除重复逻辑
+2. `thread_messages_rollout.go` + `thread_messages_hydration.go` 合并相似逻辑
+3. 全量验证
 
 ### 最终验证
 
 ```bash
-go build ./internal/apiserver/codexadapter/...
-go test ./internal/apiserver/codexadapter/...
 go build ./...
+go test ./internal/apiserver/codexadapter/...
 go test ./...
+
+# _core.go 零 internal 依赖检查
+for f in internal/apiserver/codexadapter/*_core.go; do
+  if grep -q '"github.com/multi-agent/go-agent-v2/internal/' "$f"; then
+    echo "FAIL: $f has internal imports"
+  else
+    echo "PASS: $f clean"
+  fi
+done
+
+# 行数统计
+find internal/apiserver/codexadapter -name '*.go' ! -name '*_test.go' -exec cat {} + | wc -l
 ```
 
 ## 完成标准
 
-- [ ] `turn_tracker` 不再存在重复状态机逻辑（文件数不作硬性约束）
-- [ ] `thread_archive` 大函数显著收敛（单函数 <=120 行）
-- [ ] `thread_messages` 精简到 ~300 行
-- [ ] codexadapter 总行数从 6,060 降至 ~4,500（优先行为稳定）
-- [ ] `thread_archive_utils.go` 保持可解析（或已同步升级 guardrail）
+- [ ] codexadapter 总行数 ≤ 5,700
+- [ ] `*_core.go` 文件零 `internal/` 依赖
+- [ ] 被拆纯函数引用的本包类型已随函数一起搬入 `_core.go`
+- [ ] 同一逻辑只存在一处（无双实现）
+- [ ] `thread_archive` 单函数 ≤ 120 行
+- [ ] `thread_archive_utils.go` 保持可解析
 - [ ] `Adapter`/`Deps` 公开签名未改变
-- [ ] 所有 codexadapter 测试文件通过
-- [ ] `go build ./...` 通过
+- [ ] `go build ./... && go test ./...` 通过

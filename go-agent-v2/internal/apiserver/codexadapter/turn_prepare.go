@@ -2,12 +2,11 @@ package codexadapter
 
 import (
 	"context"
-	"strings"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
-	"github.com/multi-agent/go-agent-v2/pkg/util"
+	serviceruntime "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/runtime"
 )
 
 type turnStartPreparedSubmission struct {
@@ -40,7 +39,14 @@ func (a *Adapter) prepareTurnSubmissionCommon(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) turnPreparedSubmissionCommon {
-	return prepareTurnSubmissionCommonLogic(a, threadID, input, selectedSkills, manualSkillSelection)
+	prepared := serviceruntime.PrepareTurnSubmissionCommon(
+		newServiceRuntimeBridge(a),
+		threadID,
+		toRuntimeTurnInputs(input),
+		selectedSkills,
+		manualSkillSelection,
+	)
+	return fromRuntimePreparedSubmissionCommon(prepared)
 }
 
 func (a *Adapter) prepareTurnStartSubmission(
@@ -49,7 +55,17 @@ func (a *Adapter) prepareTurnStartSubmission(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) (turnStartPreparedSubmission, error) {
-	return prepareTurnStartSubmissionLogic(a, threadID, input, selectedSkills, manualSkillSelection)
+	prepared, err := serviceruntime.PrepareTurnStartSubmission(
+		newServiceRuntimeBridge(a),
+		threadID,
+		toRuntimeTurnInputs(input),
+		selectedSkills,
+		manualSkillSelection,
+	)
+	if err != nil {
+		return turnStartPreparedSubmission{}, err
+	}
+	return fromRuntimeTurnStartPreparedSubmission(prepared), nil
 }
 
 func (a *Adapter) prepareTurnSteerSubmission(
@@ -58,98 +74,40 @@ func (a *Adapter) prepareTurnSteerSubmission(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) (contracts.TurnSteerEntryPrepareResult, error) {
-	return prepareTurnSteerSubmissionLogic(a, threadID, input, selectedSkills, manualSkillSelection)
+	prepared, err := serviceruntime.PrepareTurnSteerSubmission(
+		newServiceRuntimeBridge(a),
+		threadID,
+		toRuntimeTurnInputs(input),
+		selectedSkills,
+		manualSkillSelection,
+	)
+	if err != nil {
+		return contracts.TurnSteerEntryPrepareResult{}, err
+	}
+	return contracts.TurnSteerEntryPrepareResult{
+		SubmitPrompt: prepared.SubmitPrompt,
+		Images:       prepared.Images,
+		Files:        prepared.Files,
+	}, nil
 }
 
 func (a *Adapter) resolveTurnSteerAlignment(req turnSteerRequest) (string, string, error) {
-	return resolveTurnSteerAlignmentLogic(a, req)
+	return serviceruntime.ResolveTurnSteerAlignment(newServiceRuntimeBridge(a), toRuntimeTurnSteerRequest(req))
 }
 
 func (a *Adapter) turnSteerFromInputAligned(req turnSteerRequest) (map[string]any, error) {
-	return turnSteerFromInputAlignedLogic(a, req)
+	return serviceruntime.TurnSteerFromInputAlignedByAdapter(
+		newServiceRuntimeBridge(a),
+		toRuntimeTurnSteerRequest(req),
+		func(runtimeReq serviceruntime.TurnSteerRequest) (map[string]any, error) {
+			return a.TurnSteerFromInput(fromRuntimeTurnSteerRequest(runtimeReq))
+		},
+	)
 }
 
 func parseTurnInputs(inputs []contracts.TurnInput) parsedTurnInputs {
-	if len(inputs) == 0 {
-		return parsedTurnInputs{}
-	}
-	texts := make([]string, 0, len(inputs))
-	images := make([]string, 0, len(inputs))
-	files := make([]string, 0, len(inputs))
-	attachments := make([]uistate.TimelineAttachment, 0, len(inputs))
-
-	for _, inp := range inputs {
-		switch strings.ToLower(strings.TrimSpace(inp.Type)) {
-		case "text":
-			text := util.StripLeadingSystemNoise(inp.Text)
-			if strings.TrimSpace(text) != "" {
-				texts = append(texts, text)
-			}
-		case "image":
-			image := strings.TrimSpace(inp.URL)
-			if image == "" {
-				image = strings.TrimSpace(inp.Path)
-			}
-			if image == "" {
-				continue
-			}
-			images = append(images, image)
-			attachments = appendImageTimelineAttachment(attachments, buildAttachmentName(image), image, image)
-		case "localimage":
-			imagePath := strings.TrimSpace(inp.Path)
-			preview := strings.TrimSpace(inp.URL)
-			if util.IsRemoteImageURL(preview) {
-				images = append(images, preview)
-			} else if imagePath != "" {
-				images = append(images, imagePath)
-			}
-			if preview == "" {
-				preview = imagePath
-			}
-			if preview == "" {
-				continue
-			}
-			nameSource := imagePath
-			if nameSource == "" {
-				nameSource = preview
-			}
-			attachments = appendImageTimelineAttachment(attachments, buildAttachmentName(nameSource), imagePath, preview)
-		case "filecontent":
-			path := strings.TrimSpace(inp.Path)
-			if path != "" {
-				files = append(files, path)
-				attachments = appendFileTimelineAttachment(attachments, buildAttachmentName(path), path)
-				continue
-			}
-			if inline := commonadapter.FileContentInputText(inp.Name, inp.Content); inline != "" {
-				texts = append(texts, inline)
-			}
-			if strings.TrimSpace(inp.Content) == "" {
-				continue
-			}
-			name := strings.TrimSpace(inp.Name)
-			if name == "" {
-				name = "inline-file"
-			}
-			attachments = appendFileTimelineAttachment(attachments, name, "")
-		case "mention", "file":
-			path := strings.TrimSpace(inp.Path)
-			if path == "" {
-				continue
-			}
-			files = append(files, path)
-			attachments = appendFileTimelineAttachment(attachments, buildAttachmentName(path), path)
-		case "skill":
-			// 技能注入统一由 selectedSkills 处理，避免透传输入中的摘要内容。
-		}
-	}
-
-	return parsedTurnInputs{
-		Prompt:              strings.Join(texts, "\n"),
-		Images:              images,
-		Files:               files,
-		TimelineAttachments: attachments,
-	}
+	parsed := serviceruntime.ParseTurnInputs(toRuntimeTurnInputs(inputs), commonadapter.FileContentInputText)
+	return fromRuntimeParsedTurnInputs(parsed)
 }
 
 func appendImageTimelineAttachment(
@@ -158,12 +116,11 @@ func appendImageTimelineAttachment(
 	path string,
 	preview string,
 ) []uistate.TimelineAttachment {
-	previewURL := util.BuildAttachmentPreviewURL(preview)
 	return append(attachments, uistate.TimelineAttachment{
 		Kind:       "image",
 		Name:       name,
 		Path:       path,
-		PreviewURL: previewURL,
+		PreviewURL: serviceruntime.BuildAttachmentPreviewURL(preview),
 	})
 }
 
@@ -180,35 +137,18 @@ func appendFileTimelineAttachment(
 }
 
 func extractTurnInputs(inputs []contracts.TurnInput) (prompt string, images, files []string) {
-	parsed := parseTurnInputs(inputs)
-	return parsed.Prompt, parsed.Images, parsed.Files
+	return serviceruntime.ExtractTurnInputs(toRuntimeTurnInputs(inputs), commonadapter.FileContentInputText)
 }
 
 func buildUserTimelineAttachments(images, files []string) []uistate.TimelineAttachment {
-	attachments := make([]uistate.TimelineAttachment, 0, len(images)+len(files))
-	for _, raw := range images {
-		path := strings.TrimSpace(raw)
-		if path == "" {
-			continue
-		}
-		attachments = appendImageTimelineAttachment(attachments, buildAttachmentName(path), path, path)
-	}
-	for _, raw := range files {
-		path := strings.TrimSpace(raw)
-		if path == "" {
-			continue
-		}
-		attachments = appendFileTimelineAttachment(attachments, buildAttachmentName(path), path)
-	}
-	return attachments
+	return fromRuntimeTimelineAttachments(serviceruntime.BuildUserTimelineAttachments(images, files))
 }
 
 func buildUserTimelineAttachmentsFromInputs(inputs []contracts.TurnInput) []uistate.TimelineAttachment {
-	parsed := parseTurnInputs(inputs)
-	if len(parsed.TimelineAttachments) == 0 {
-		return nil
-	}
-	return append([]uistate.TimelineAttachment(nil), parsed.TimelineAttachments...)
+	return fromRuntimeTimelineAttachments(serviceruntime.BuildUserTimelineAttachmentsFromInputs(
+		toRuntimeTurnInputs(inputs),
+		commonadapter.FileContentInputText,
+	))
 }
 
 func (a *Adapter) appendTurnStartUserTimeline(
@@ -216,25 +156,26 @@ func (a *Adapter) appendTurnStartUserTimeline(
 	attachments []uistate.TimelineAttachment,
 	opt contracts.TurnAppendUserTimelineOptions,
 ) {
-	appendTurnStartUserTimelineLogic(a, ctx, attachments, opt)
+	serviceruntime.AppendTurnStartUserTimeline(
+		newServiceRuntimeBridge(a),
+		ctx,
+		toRuntimeTimelineAttachments(attachments),
+		serviceruntime.TurnAppendUserTimelineOptions{
+			ThreadID:     opt.ThreadID,
+			Prompt:       opt.Prompt,
+			SubmitPrompt: opt.SubmitPrompt,
+			Images:       opt.Images,
+			Files:        opt.Files,
+		},
+	)
 }
 
 func (a *Adapter) threadTimelineAlreadyShowsInjectedPrompt(threadID string) bool {
-	return threadTimelineAlreadyShowsInjectedPromptLogic(a, threadID)
+	return serviceruntime.ThreadTimelineAlreadyShowsInjectedPrompt(newServiceRuntimeBridge(a), threadID)
 }
 
 func composeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint string, showInjected bool) string {
-	if !showInjected {
-		return prompt
-	}
-	hint := strings.TrimSpace(injectedHint)
-	if hint == "" {
-		return submitPrompt
-	}
-	if strings.Contains(submitPrompt, hint) {
-		return submitPrompt
-	}
-	return commonadapter.MergePromptText(submitPrompt, hint)
+	return serviceruntime.ComposeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint, showInjected, commonadapter.MergePromptText)
 }
 
 func (a *Adapter) buildTurnSkillPrompt(
@@ -244,41 +185,81 @@ func (a *Adapter) buildTurnSkillPrompt(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) (string, int, int) {
-	return buildTurnSkillPromptLogic(a, threadID, prompt, input, selectedSkills, manualSkillSelection)
+	return serviceruntime.BuildTurnSkillPrompt(
+		newServiceRuntimeBridge(a),
+		threadID,
+		prompt,
+		toRuntimeTurnInputs(input),
+		selectedSkills,
+		manualSkillSelection,
+	)
 }
 
 func (a *Adapter) buildForcedOrExplicitMatchedSkillPrompt(agentID, prompt string, input []contracts.TurnInput) (string, int) {
-	return buildForcedOrExplicitMatchedSkillPromptLogic(a, agentID, prompt, input)
+	return serviceruntime.BuildForcedOrExplicitMatchedSkillPrompt(newServiceRuntimeBridge(a), agentID, prompt, toRuntimeTurnInputs(input))
 }
 
 func (a *Adapter) collectAutoMatchedSkillMatches(agentID, prompt string, input []contracts.TurnInput, options contracts.AutoSkillMatchOptions) []autoMatchedSkillMatch {
-	return collectAutoMatchedSkillMatchesLogic(a, agentID, prompt, input, options)
+	matches := serviceruntime.CollectAutoMatchedSkillMatches(
+		newServiceRuntimeBridge(a),
+		agentID,
+		prompt,
+		toRuntimeTurnInputs(input),
+		toRuntimeAutoSkillMatchOptions(options),
+	)
+	return fromRuntimeAutoMatchedSkillMatches(matches)
 }
 
-// CollectAutoMatchedSkillMatchesForThread evaluates auto-match candidates for one thread.
 func (a *Adapter) CollectAutoMatchedSkillMatchesForThread(
 	threadID string,
 	prompt string,
 	input []contracts.TurnInput,
 	options contracts.AutoSkillMatchOptions,
 ) []autoMatchedSkillMatch {
-	return collectAutoMatchedSkillMatchesForThreadLogic(a, threadID, prompt, input, options)
+	matches := serviceruntime.CollectAutoMatchedSkillMatchesForThread(
+		newServiceRuntimeBridge(a),
+		threadID,
+		prompt,
+		toRuntimeTurnInputs(input),
+		toRuntimeAutoSkillMatchOptions(options),
+	)
+	return fromRuntimeAutoMatchedSkillMatches(matches)
 }
 
 func buildAutoMatchInputs(input []contracts.TurnInput) []autoMatchInput {
-	if len(input) == 0 {
-		return nil
-	}
-	out := make([]autoMatchInput, 0, len(input))
-	for _, item := range input {
-		out = append(out, autoMatchInput{
-			Type: item.Type,
-			Name: item.Name,
-		})
-	}
-	return out
+	return fromRuntimeAutoMatchInputs(serviceruntime.BuildAutoMatchInputs(toRuntimeTurnInputs(input)))
 }
 
 func (a *Adapter) renderAutoMatchedSkillPrompt(agentID string, matches []autoMatchedSkillMatch) (string, int) {
-	return renderAutoMatchedSkillPromptLogic(a, agentID, matches)
+	return serviceruntime.RenderAutoMatchedSkillPrompt(newServiceRuntimeBridge(a), agentID, toRuntimeAutoMatchedSkillMatches(matches))
+}
+
+func fromRuntimeParsedTurnInputs(parsed serviceruntime.ParsedTurnInputs) parsedTurnInputs {
+	return parsedTurnInputs{
+		Prompt:              parsed.Prompt,
+		Images:              parsed.Images,
+		Files:               parsed.Files,
+		TimelineAttachments: fromRuntimeTimelineAttachments(parsed.TimelineAttachments),
+	}
+}
+
+func fromRuntimePreparedSubmissionCommon(prepared serviceruntime.PreparedSubmissionCommon) turnPreparedSubmissionCommon {
+	return turnPreparedSubmissionCommon{
+		parsed:                fromRuntimeParsedTurnInputs(prepared.Parsed),
+		submitPrompt:          prepared.SubmitPrompt,
+		selectedSkillCount:    prepared.SelectedSkillCount,
+		autoMatchedSkillCount: prepared.AutoMatchedSkillCount,
+	}
+}
+
+func fromRuntimeTurnStartPreparedSubmission(prepared serviceruntime.TurnStartPreparedSubmission) turnStartPreparedSubmission {
+	return turnStartPreparedSubmission{
+		Prompt:                prepared.Prompt,
+		SubmitPrompt:          prepared.SubmitPrompt,
+		Images:                prepared.Images,
+		Files:                 prepared.Files,
+		TimelineAttachments:   fromRuntimeTimelineAttachments(prepared.TimelineAttachments),
+		SelectedSkillCount:    prepared.SelectedSkillCount,
+		AutoMatchedSkillCount: prepared.AutoMatchedSkillCount,
+	}
 }

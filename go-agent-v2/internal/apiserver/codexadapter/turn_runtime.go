@@ -7,11 +7,15 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	serviceruntime "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/runtime"
 )
 
-// ensureThreadReadyForTurn 负责拉起/恢复线程进程，并处理历史会话丢失降级。
 func (a *Adapter) ensureThreadReadyForTurn(ctx context.Context, threadID, cwd string) (*runner.AgentProcess, error) {
-	return ensureThreadReadyForTurnLogic(a, ctx, threadID, cwd)
+	proc, err := serviceruntime.EnsureThreadReadyForTurn(newServiceRuntimeBridge(a), ctx, threadID, cwd)
+	if err != nil {
+		return nil, err
+	}
+	return unwrapServiceRuntimeProcess(proc), nil
 }
 
 func (a *Adapter) ensureReadyRunningProcess(
@@ -20,7 +24,14 @@ func (a *Adapter) ensureReadyRunningProcess(
 	agentID string,
 	launchCwd string,
 ) (*runner.AgentProcess, bool) {
-	return ensureReadyRunningProcessLogic(a, ctx, manager, agentID, launchCwd)
+	proc, ok := serviceruntime.EnsureReadyRunningProcess(
+		newServiceRuntimeBridge(a),
+		ctx,
+		&serviceRuntimeManager{manager: manager},
+		agentID,
+		launchCwd,
+	)
+	return unwrapServiceRuntimeProcess(proc), ok
 }
 
 func (a *Adapter) ensureReadyLaunchProcess(
@@ -31,14 +42,23 @@ func (a *Adapter) ensureReadyLaunchProcess(
 	startInstructions string,
 	dynamicTools []agentcore.DynamicTool,
 ) (*runner.AgentProcess, error) {
-	return ensureReadyLaunchProcessLogic(a, ctx, manager, agentID, launchCwd, startInstructions, dynamicTools)
+	proc, err := serviceruntime.EnsureReadyLaunchProcess(
+		newServiceRuntimeBridge(a),
+		ctx,
+		&serviceRuntimeManager{manager: manager},
+		agentID,
+		launchCwd,
+		startInstructions,
+		dynamicTools,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return unwrapServiceRuntimeProcess(proc), nil
 }
 
-func (a *Adapter) ensureReadyNoResumeCandidates(
-	agentID string,
-	proc *runner.AgentProcess,
-) *runner.AgentProcess {
-	return ensureReadyNoResumeCandidatesLogic(a, agentID, proc)
+func (a *Adapter) ensureReadyNoResumeCandidates(agentID string, proc *runner.AgentProcess) *runner.AgentProcess {
+	return unwrapServiceRuntimeProcess(serviceruntime.EnsureReadyNoResumeCandidates(newServiceRuntimeBridge(a), agentID, wrapServiceRuntimeProcess(proc)))
 }
 
 func (a *Adapter) ensureReadyResumeFallback(
@@ -52,7 +72,22 @@ func (a *Adapter) ensureReadyResumeFallback(
 	dynamicTools []agentcore.DynamicTool,
 	candidateCount int,
 ) (*runner.AgentProcess, error) {
-	return ensureReadyResumeFallbackLogic(a, ctx, manager, agentID, launchCwd, proc, lastResumeErr, startInstructions, dynamicTools, candidateCount)
+	resolved, err := serviceruntime.EnsureReadyResumeFallback(
+		newServiceRuntimeBridge(a),
+		ctx,
+		&serviceRuntimeManager{manager: manager},
+		agentID,
+		launchCwd,
+		wrapServiceRuntimeProcess(proc),
+		lastResumeErr,
+		startInstructions,
+		dynamicTools,
+		candidateCount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return unwrapServiceRuntimeProcess(resolved), nil
 }
 
 func (a *Adapter) ensureReadyNoHistoricalRollout(
@@ -62,33 +97,31 @@ func (a *Adapter) ensureReadyNoHistoricalRollout(
 	proc *runner.AgentProcess,
 	candidateCount int,
 ) *runner.AgentProcess {
-	return ensureReadyNoHistoricalRolloutLogic(a, ctx, agentID, launchCwd, proc, candidateCount)
+	resolved := serviceruntime.EnsureReadyNoHistoricalRollout(
+		newServiceRuntimeBridge(a),
+		ctx,
+		agentID,
+		launchCwd,
+		wrapServiceRuntimeProcess(proc),
+		candidateCount,
+	)
+	return unwrapServiceRuntimeProcess(resolved)
 }
 
 func (a *Adapter) registerBinding(ctx context.Context, agentID string, proc *runner.AgentProcess) {
-	registerBindingLogic(a, ctx, agentID, proc)
+	serviceruntime.RegisterBinding(newServiceRuntimeBridge(a), ctx, agentID, wrapServiceRuntimeProcess(proc))
 }
 
 func (a *Adapter) notifySessionLost(agentID string, lastErr error) {
-	notifySessionLostLogic(a, agentID, lastErr)
+	serviceruntime.NotifySessionLost(newServiceRuntimeBridge(a), agentID, lastErr)
 }
 
-// BuildSessionLostNotification builds "session lost" fallback notification payload.
 func BuildSessionLostNotification(agentID string, lastErr error) (string, map[string]any) {
-	detail := ""
-	if lastErr != nil {
-		detail = lastErr.Error()
-	}
-	return "ui/state/changed", map[string]any{
-		"source":   "session_lost_warning",
-		"agent_id": agentID,
-		"warning":  "会话历史已丢失 (codex session 文件不存在)，已自动回退到全新会话",
-		"detail":   detail,
-	}
+	return serviceruntime.BuildSessionLostNotification(agentID, lastErr)
 }
 
 func (a *Adapter) collectResumeCandidates(ctx context.Context, agentID string) []string {
-	return collectResumeCandidatesLogic(a, ctx, agentID)
+	return serviceruntime.CollectResumeCandidates(newServiceRuntimeBridge(a), ctx, agentID)
 }
 
 func (a *Adapter) tryResumeHistoricalCandidates(
@@ -99,30 +132,47 @@ func (a *Adapter) tryResumeHistoricalCandidates(
 	launchCwd string,
 	resumeCandidates []string,
 ) (resumed bool, lastResumeErr error, fatalErr error) {
-	return tryResumeHistoricalCandidatesLogic(a, ctx, manager, proc, agentID, launchCwd, resumeCandidates)
+	return serviceruntime.TryResumeHistoricalCandidates(
+		newServiceRuntimeBridge(a),
+		ctx,
+		&serviceRuntimeManager{manager: manager},
+		wrapServiceRuntimeProcess(proc),
+		agentID,
+		launchCwd,
+		resumeCandidates,
+	)
 }
 
-// turnStartRequest carries protocol params for turn/start.
 type turnStartRequest = contracts.TurnStartRequest
 
-// turnSteerRequest carries protocol params for turn/steer.
 type turnSteerRequest = contracts.TurnSteerRequest
 
 type turnStartEntryResult struct {
 	TurnID string
 }
 
-// TurnStart handles turn/start with constructor-time dependencies.
 func (a *Adapter) TurnStart(ctx context.Context, req turnStartRequest) (turnStartEntryResult, error) {
-	return turnStartLogic(a, ctx, req)
+	result, err := serviceruntime.TurnStart(newServiceRuntimeBridge(a), ctx, toRuntimeTurnStartRequest(req))
+	if err != nil {
+		return turnStartEntryResult{}, err
+	}
+	return turnStartEntryResult{TurnID: result.TurnID}, nil
 }
 
-// TurnSteerFromInput handles turn/steer with constructor-time dependencies.
 func (a *Adapter) TurnSteerFromInput(req turnSteerRequest) (map[string]any, error) {
-	return turnSteerFromInputLogic(a, req)
+	return serviceruntime.TurnSteerFromInput(newServiceRuntimeBridge(a), toRuntimeTurnSteerRequest(req))
 }
 
-// StartTurnSubmissionAndTrack handles submit and turn tracker bootstrap.
+func (a *Adapter) TurnSteerFromInputAligned(req turnSteerRequest) (map[string]any, error) {
+	return serviceruntime.TurnSteerFromInputAlignedByAdapter(
+		newServiceRuntimeBridge(a),
+		toRuntimeTurnSteerRequest(req),
+		func(runtimeReq serviceruntime.TurnSteerRequest) (map[string]any, error) {
+			return a.TurnSteerFromInput(fromRuntimeTurnSteerRequest(runtimeReq))
+		},
+	)
+}
+
 func (a *Adapter) startTurnSubmissionAndTrack(
 	ctx context.Context,
 	threadID string,
@@ -132,11 +182,24 @@ func (a *Adapter) startTurnSubmissionAndTrack(
 	files []string,
 	outputSchema json.RawMessage,
 ) (string, error) {
-	return startTurnSubmissionAndTrackLogic(a, ctx, threadID, cwd, submitPrompt, images, files, outputSchema)
+	return serviceruntime.StartTurnSubmissionAndTrack(
+		newServiceRuntimeBridge(a),
+		ctx,
+		threadID,
+		cwd,
+		submitPrompt,
+		images,
+		files,
+		outputSchema,
+	)
 }
 
 func (a *Adapter) resolveProcess(caller, threadID string) (*runner.AgentProcess, error) {
-	return resolveProcessLogic(a, caller, threadID)
+	proc, err := serviceruntime.ResolveProcess(newServiceRuntimeBridge(a), caller, threadID)
+	if err != nil {
+		return nil, err
+	}
+	return unwrapServiceRuntimeProcess(proc), nil
 }
 
 func withProcess[T any](
@@ -145,10 +208,7 @@ func withProcess[T any](
 	threadID string,
 	fn func(*runner.AgentProcess) (T, error),
 ) (T, error) {
-	var zero T
-	proc, err := a.resolveProcess(caller, threadID)
-	if err != nil {
-		return zero, err
-	}
-	return fn(proc)
+	return serviceruntime.WithProcess(newServiceRuntimeBridge(a), caller, threadID, func(proc serviceruntime.Process) (T, error) {
+		return fn(unwrapServiceRuntimeProcess(proc))
+	})
 }

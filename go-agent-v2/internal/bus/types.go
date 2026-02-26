@@ -3,7 +3,7 @@ package bus
 import (
 	"encoding/json"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 )
 
 // AgentClient abstracts agent communication used by the router.

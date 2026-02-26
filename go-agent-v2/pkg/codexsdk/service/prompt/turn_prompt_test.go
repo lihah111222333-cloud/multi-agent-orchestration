@@ -1,4 +1,4 @@
-package codexadapter
+package prompt
 
 import (
 	"context"

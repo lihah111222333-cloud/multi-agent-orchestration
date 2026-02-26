@@ -1,4 +1,4 @@
-package codexadapter
+package lifecycle
 
 import (
 	"fmt"
@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/common"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -21,7 +22,7 @@ func BuildResumeCandidates(threadID string, resolved []string, normalize func(st
 			return []string{normalized}
 		}
 	}
-	candidates := collectTrimmedUniqueValues(resolved, nil)
+	candidates := common.CollectTrimmedUniqueValues(resolved, nil)
 	if len(candidates) > 0 {
 		return candidates
 	}
@@ -37,7 +38,7 @@ func TryResumeCandidates(
 ) (string, error) {
 	if len(candidates) == 0 {
 		logger.Warn("thread/resume: no resume candidates available",
-			append(threadLogFields(fallbackID),
+			append(common.ThreadLogFields(fallbackID),
 				"reason", "no codex thread ID resolved from history",
 			)...,
 		)
@@ -56,7 +57,7 @@ func TryResumeCandidates(
 		lastErr = err
 		if isCandidateError(err) {
 			logger.Warn("thread/resume: candidate unavailable, trying next",
-				append(threadLogFields(fallbackID),
+				append(common.ThreadLogFields(fallbackID),
 					"resume_thread_id", id,
 					logger.FieldError, err,
 				)...,
@@ -67,7 +68,7 @@ func TryResumeCandidates(
 	}
 
 	logger.Warn("thread/resume: all resume candidates exhausted",
-		append(threadLogFields(fallbackID),
+		append(common.ThreadLogFields(fallbackID),
 			"candidate_count", len(candidates),
 			"last_error", lastErr,
 			"reason", "all historical rollouts unavailable",
@@ -136,7 +137,7 @@ func PreviewResumeCandidates(candidates []string, limit int) []string {
 	return out
 }
 
-func fuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern string) bool) []map[string]any {
+func FuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern string) bool) []map[string]any {
 	query = strings.ToLower(query)
 	results := make([]map[string]any, 0)
 	if fuzzyMatch == nil {

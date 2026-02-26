@@ -1,10 +1,10 @@
-package codexadapter
+package interrupt
 
 import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/common"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -134,7 +134,7 @@ func waitInterruptOutcome(
 	}
 }
 
-func sendInterruptCommand(proc *runner.AgentProcess, sendCommand func(*runner.AgentProcess, string, string) error) (bool, error) {
+func sendInterruptCommand(proc any, sendCommand func(any, string, string) error) (bool, error) {
 	if sendCommand == nil {
 		return false, apperrors.New("Server.turnInterrupt", "interrupt sender is not initialized")
 	}
@@ -175,13 +175,13 @@ func turnInterrupt(
 	readThreadRuntimeState func(string) string,
 	hasActiveTrackedTurn func(string) bool,
 	cancelCodeRuns func(string) int,
-	sendInterrupt func(*runner.AgentProcess) (bool, error),
-	withProcess func(string, string, func(*runner.AgentProcess) (any, error)) (any, error),
+	sendInterrupt func(any) (bool, error),
+	withProcess func(string, string, func(any) (any, error)) (any, error),
 	markTrackedTurnInterruptRequested func(string) bool,
 	waitOutcome func(string, time.Duration, bool) (bool, string, int64, bool),
 	notifyTurnCompleted func(string, string, string),
 ) (any, error) {
-	id, err := requireThreadID("Server.turnInterrupt", threadID)
+	id, err := common.RequireThreadID("Server.turnInterrupt", threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +193,7 @@ func turnInterrupt(
 	activeTrackedBefore := hasActiveTrackedTurn != nil && hasActiveTrackedTurn(id)
 	activeBefore := isInterruptActiveState(beforeState)
 	logger.Info("turn/interrupt: request",
-		append(threadLogFields(id),
+		append(common.ThreadLogFields(id),
 			"state_before", beforeState,
 			"active_before", activeBefore,
 			"active_tracked_before", activeTrackedBefore,
@@ -202,14 +202,14 @@ func turnInterrupt(
 	if cancelCodeRuns != nil {
 		if cancelled := cancelCodeRuns(id); cancelled > 0 {
 			logger.Info("turn/interrupt: cancelled running code_run executions",
-				append(threadLogFields(id), "cancelled_runs", cancelled)...,
+				append(common.ThreadLogFields(id), "cancelled_runs", cancelled)...,
 			)
 		}
 	}
 	if withProcess == nil {
 		return nil, apperrors.New("Server.turnInterrupt", "thread process resolver is not initialized")
 	}
-	return withProcess("Server.turnInterrupt", id, func(proc *runner.AgentProcess) (any, error) {
+	return withProcess("Server.turnInterrupt", id, func(proc any) (any, error) {
 		if sendInterrupt == nil {
 			return nil, apperrors.New("Server.turnInterrupt", "interrupt sender is not initialized")
 		}
@@ -217,7 +217,7 @@ func turnInterrupt(
 		if err != nil {
 			if !activeBefore && !activeTrackedBefore && isInterruptTimeoutError(err) {
 				logger.Info("turn/interrupt: timeout with no active state, treating as no active turn",
-					append(threadLogFields(id),
+					append(common.ThreadLogFields(id),
 						"state_before", beforeState,
 						logger.FieldError, err,
 						logger.FieldDurationMS, time.Since(start).Milliseconds(),
@@ -232,7 +232,7 @@ func turnInterrupt(
 				}, nil
 			}
 			logger.Warn("turn/interrupt: send command failed",
-				append(threadLogFields(id),
+				append(common.ThreadLogFields(id),
 					logger.FieldError, err,
 					logger.FieldDurationMS, time.Since(start).Milliseconds(),
 				)...,
@@ -245,7 +245,7 @@ func turnInterrupt(
 				notifyTurnCompleted(id, "completed", "interrupt_no_active_turn")
 			}
 			logger.Info("turn/interrupt: no active turn",
-				append(threadLogFields(id),
+				append(common.ThreadLogFields(id),
 					"state_before", beforeState,
 					logger.FieldDurationMS, time.Since(start).Milliseconds(),
 				)...,
@@ -260,7 +260,7 @@ func turnInterrupt(
 		}
 
 		logger.Info("turn/interrupt: command sent",
-			append(threadLogFields(id), logger.FieldDurationMS, time.Since(start).Milliseconds())...,
+			append(common.ThreadLogFields(id), logger.FieldDurationMS, time.Since(start).Milliseconds())...,
 		)
 		if markTrackedTurnInterruptRequested != nil {
 			markTrackedTurnInterruptRequested(id)
@@ -279,7 +279,7 @@ func turnInterrupt(
 			mode = "no_active_turn"
 		}
 		logger.Info("turn/interrupt: settle",
-			append(threadLogFields(id),
+			append(common.ThreadLogFields(id),
 				"confirmed", confirmed,
 				"mode", mode,
 				"active_observed", observedActive,
@@ -304,34 +304,34 @@ func turnInterrupt(
 func turnForceComplete(
 	threadID string,
 	cancelCodeRuns func(string) int,
-	sendInterrupt func(*runner.AgentProcess) (bool, error),
+	sendInterrupt func(any) (bool, error),
 	notifyTurnCompleted func(string, string, string),
-	withProcess func(string, string, func(*runner.AgentProcess) (any, error)) (any, error),
+	withProcess func(string, string, func(any) (any, error)) (any, error),
 ) (any, error) {
-	id, err := requireThreadID("Server.turnForceComplete", threadID)
+	id, err := common.RequireThreadID("Server.turnForceComplete", threadID)
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("turn/forceComplete: request", threadLogFields(id)...)
+	logger.Info("turn/forceComplete: request", common.ThreadLogFields(id)...)
 	if cancelCodeRuns != nil {
 		if cancelled := cancelCodeRuns(id); cancelled > 0 {
 			logger.Info("turn/forceComplete: cancelled running code_run executions",
-				append(threadLogFields(id), "cancelled_runs", cancelled)...,
+				append(common.ThreadLogFields(id), "cancelled_runs", cancelled)...,
 			)
 		}
 	}
 	if withProcess == nil {
 		return nil, apperrors.New("Server.turnForceComplete", "thread process resolver is not initialized")
 	}
-	return withProcess("Server.turnForceComplete", id, func(proc *runner.AgentProcess) (any, error) {
+	return withProcess("Server.turnForceComplete", id, func(proc any) (any, error) {
 		if sendInterrupt != nil {
 			noActiveTurn, err := sendInterrupt(proc)
 			if err != nil {
 				logger.Warn("turn/forceComplete: interrupt failed (best-effort)",
-					append(threadLogFields(id), logger.FieldError, err)...,
+					append(common.ThreadLogFields(id), logger.FieldError, err)...,
 				)
 			} else if noActiveTurn {
-				logger.Info("turn/forceComplete: no active turn (best-effort)", threadLogFields(id)...)
+				logger.Info("turn/forceComplete: no active turn (best-effort)", common.ThreadLogFields(id)...)
 			}
 		}
 		if notifyTurnCompleted != nil {
@@ -339,4 +339,66 @@ func turnForceComplete(
 		}
 		return map[string]any{"confirmed": true, "forceCompleted": true}, nil
 	})
+}
+
+func ReadThreadRuntimeStateByHooks(threadID string, readRuntimeStatus func(string) string, hasActiveTrackedTurn func(string) bool) string {
+	return readThreadRuntimeStateByHooks(threadID, readRuntimeStatus, hasActiveTrackedTurn)
+}
+
+func WaitInterruptOutcome(
+	threadID string,
+	timeout time.Duration,
+	activeHint bool,
+	waitTrackedTurnTerminal func(string, time.Duration) (string, bool),
+	readThreadRuntimeState func(string) string,
+) (bool, string, int64, bool) {
+	return waitInterruptOutcome(threadID, timeout, activeHint, waitTrackedTurnTerminal, readThreadRuntimeState)
+}
+
+func SendInterruptCommand(proc any, sendCommand func(any, string, string) error) (bool, error) {
+	return sendInterruptCommand(proc, sendCommand)
+}
+
+func NotifyTurnCompleted(
+	threadID string,
+	status string,
+	reason string,
+	completeTrackedTurnByID func(string, string, string, string) (map[string]any, bool),
+	notify func(string, any),
+) {
+	notifyTurnCompleted(threadID, status, reason, completeTrackedTurnByID, notify)
+}
+
+func TurnInterrupt(
+	threadID string,
+	readThreadRuntimeState func(string) string,
+	hasActiveTrackedTurn func(string) bool,
+	cancelCodeRuns func(string) int,
+	sendInterrupt func(any) (bool, error),
+	withProcess func(string, string, func(any) (any, error)) (any, error),
+	markTrackedTurnInterruptRequested func(string) bool,
+	waitOutcome func(string, time.Duration, bool) (bool, string, int64, bool),
+	notifyTurnCompletedFn func(string, string, string),
+) (any, error) {
+	return turnInterrupt(
+		threadID,
+		readThreadRuntimeState,
+		hasActiveTrackedTurn,
+		cancelCodeRuns,
+		sendInterrupt,
+		withProcess,
+		markTrackedTurnInterruptRequested,
+		waitOutcome,
+		notifyTurnCompletedFn,
+	)
+}
+
+func TurnForceComplete(
+	threadID string,
+	cancelCodeRuns func(string) int,
+	sendInterrupt func(any) (bool, error),
+	notifyTurnCompletedFn func(string, string, string),
+	withProcess func(string, string, func(any) (any, error)) (any, error),
+) (any, error) {
+	return turnForceComplete(threadID, cancelCodeRuns, sendInterrupt, notifyTurnCompletedFn, withProcess)
 }

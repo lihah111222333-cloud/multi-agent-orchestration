@@ -1,4 +1,4 @@
-package codexadapter
+package lifecycle
 
 import (
 	"errors"

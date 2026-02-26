@@ -1,24 +1,16 @@
-package codexadapter
+package listing
 
 import (
 	"reflect"
 	"testing"
-
-	"github.com/multi-agent/go-agent-v2/internal/runner"
-	"github.com/multi-agent/go-agent-v2/internal/store"
-	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
-
-// ========================================
-// E2: appendThreadItems — 泛型去重合并
-// ========================================
 
 func TestAppendThreadItems_Bindings(t *testing.T) {
 	seen := map[string]struct{}{}
-	threads := appendThreadItems(nil, seen, []store.AgentCodexBinding{
+	threads := AppendThreadItems(nil, seen, []AgentCodexBinding{
 		{AgentID: "a1"},
 		{AgentID: "a2"},
-		{AgentID: ""}, // should skip
+		{AgentID: ""},
 	})
 	if len(threads) != 2 {
 		t.Fatalf("got %d, want 2", len(threads))
@@ -30,7 +22,7 @@ func TestAppendThreadItems_Bindings(t *testing.T) {
 
 func TestAppendThreadItems_AgentStatus(t *testing.T) {
 	seen := map[string]struct{}{}
-	threads := appendThreadItems(nil, seen, []store.AgentStatus{
+	threads := AppendThreadItems(nil, seen, []AgentStatus{
 		{AgentID: "s1", AgentName: "Status One"},
 		{AgentID: "s2"},
 	})
@@ -47,8 +39,8 @@ func TestAppendThreadItems_AgentStatus(t *testing.T) {
 
 func TestAppendThreadItems_Dedup(t *testing.T) {
 	seen := map[string]struct{}{"a1": {}}
-	threads := appendThreadItems(nil, seen, []store.AgentCodexBinding{
-		{AgentID: "a1"}, // already seen
+	threads := AppendThreadItems(nil, seen, []AgentCodexBinding{
+		{AgentID: "a1"},
 		{AgentID: "a2"},
 	})
 	if len(threads) != 1 {
@@ -59,11 +51,11 @@ func TestAppendThreadItems_Dedup(t *testing.T) {
 	}
 }
 
-func TestAppendThreadItems_RunnerAgentInfo(t *testing.T) {
+func TestAppendThreadItems_AgentInfo(t *testing.T) {
 	seen := map[string]struct{}{}
-	threads := appendThreadItems(nil, seen, []runner.AgentInfo{
-		{ID: "r1", Name: "Runner One", State: runner.StateRunning},
-		{ID: "r2", State: runner.StateIdle},
+	threads := AppendThreadItems(nil, seen, []AgentInfo{
+		{ID: "r1", Name: "Runner One", State: "running"},
+		{ID: "r2", State: "idle"},
 	})
 	if len(threads) != 2 {
 		t.Fatalf("got %d, want 2", len(threads))
@@ -73,16 +65,12 @@ func TestAppendThreadItems_RunnerAgentInfo(t *testing.T) {
 	}
 }
 
-// ========================================
-// E3: toThreadSnapshots — 泛型快照构建
-// ========================================
-
 func TestToThreadSnapshots_FromAgentInfo(t *testing.T) {
-	items := []runner.AgentInfo{
-		{ID: "r1", Name: "Runner", State: runner.StateRunning},
+	items := []AgentInfo{
+		{ID: "r1", Name: "Runner", State: "running"},
 		{ID: "", Name: "skip"},
 	}
-	snaps := toThreadSnapshots(items)
+	snaps := ToThreadSnapshots(items)
 	if len(snaps) != 1 {
 		t.Fatalf("got %d, want 1", len(snaps))
 	}
@@ -92,31 +80,31 @@ func TestToThreadSnapshots_FromAgentInfo(t *testing.T) {
 }
 
 func TestToThreadSnapshots_FromListItems(t *testing.T) {
-	items := []threadListItem{
+	items := []ThreadListItem{
 		{ID: "t1", Name: "Thread One", State: "idle"},
 		{ID: "  ", Name: "skip"},
 	}
-	snaps := toThreadSnapshots(items)
+	snaps := ToThreadSnapshots(items)
 	if len(snaps) != 1 {
 		t.Fatalf("got %d, want 1", len(snaps))
 	}
-	if snaps[0] != (uistate.ThreadSnapshot{ID: "t1", Name: "Thread One", State: "idle"}) {
+	if snaps[0] != (ThreadSnapshot{ID: "t1", Name: "Thread One", State: "idle"}) {
 		t.Errorf("unexpected: %+v", snaps[0])
 	}
 }
 
 func TestLoadedThreadIDsFromAgents(t *testing.T) {
-	agents := []runner.AgentInfo{
+	agents := []AgentInfo{
 		{ID: "  thread-c  "},
 		{ID: "thread-a"},
 		{ID: "thread-b"},
 		{ID: "thread-a"},
 		{ID: ""},
 	}
-	got := loadedThreadIDsFromAgents(agents)
+	got := LoadedThreadIDsFromAgents(agents)
 	want := []string{"thread-a", "thread-b", "thread-c"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("loadedThreadIDsFromAgents() = %v, want %v", got, want)
+		t.Fatalf("LoadedThreadIDsFromAgents() = %v, want %v", got, want)
 	}
 }
 
@@ -125,7 +113,7 @@ func TestPaginateLoadedThreadIDsAppliesCursorAndLimit(t *testing.T) {
 	cursor := "thread-b"
 	limit := uint32(1)
 
-	gotPage, gotNext := paginateLoadedThreadIDs(ids, &cursor, &limit)
+	gotPage, gotNext := PaginateLoadedThreadIDs(ids, &cursor, &limit)
 	wantPage := []string{"thread-c"}
 	if !reflect.DeepEqual(gotPage, wantPage) {
 		t.Fatalf("page = %v, want %v", gotPage, wantPage)
@@ -139,7 +127,7 @@ func TestPaginateLoadedThreadIDsReturnsEmptyPageWhenCursorAfterTail(t *testing.T
 	ids := []string{"thread-a", "thread-b"}
 	cursor := "thread-z"
 
-	gotPage, gotNext := paginateLoadedThreadIDs(ids, &cursor, nil)
+	gotPage, gotNext := PaginateLoadedThreadIDs(ids, &cursor, nil)
 	if len(gotPage) != 0 {
 		t.Fatalf("page len = %d, want 0", len(gotPage))
 	}
@@ -155,7 +143,7 @@ func TestPaginateLoadedThreadIDsClampsLimitToAtLeastOne(t *testing.T) {
 	ids := []string{"thread-a", "thread-b"}
 	limit := uint32(0)
 
-	gotPage, gotNext := paginateLoadedThreadIDs(ids, nil, &limit)
+	gotPage, gotNext := PaginateLoadedThreadIDs(ids, nil, &limit)
 	wantPage := []string{"thread-a"}
 	if !reflect.DeepEqual(gotPage, wantPage) {
 		t.Fatalf("page = %v, want %v", gotPage, wantPage)

@@ -1,13 +1,18 @@
-package codexadapter
+package command
 
 import (
 	"context"
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/internal/runner"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
+
+type ThreadListItem struct {
+	ID    string
+	Name  string
+	State string
+}
 
 func runSendSlashCommand(
 	ctx context.Context,
@@ -17,8 +22,8 @@ func runSendSlashCommand(
 	args string,
 	requireThreadID bool,
 	resolveThread func(context.Context, string, bool) (string, error),
-	withProcess func(string, string, func(*runner.AgentProcess) (map[string]any, error)) (map[string]any, error),
-	sendCommand func(*runner.AgentProcess, string, string) error,
+	withProcess func(string, string, func(any) (map[string]any, error)) (map[string]any, error),
+	sendCommand func(any, string, string) error,
 ) (map[string]any, error) {
 	if resolveThread == nil {
 		return nil, apperrors.New(methodName, "thread resolver is not initialized")
@@ -30,8 +35,8 @@ func runSendSlashCommand(
 	if withProcess == nil {
 		return nil, apperrors.New(methodName, "thread process resolver is not initialized")
 	}
-	return withProcess(methodName, id, func(proc *runner.AgentProcess) (map[string]any, error) {
-		if proc == nil || proc.Client == nil {
+	return withProcess(methodName, id, func(proc any) (map[string]any, error) {
+		if proc == nil {
 			return nil, apperrors.New(methodName, "thread process not available")
 		}
 		if sendCommand == nil {
@@ -56,7 +61,7 @@ func resolveThreadForSlashCommandLogic(
 	ctx context.Context,
 	threadID string,
 	requireThreadID bool,
-	threadList func(context.Context) ([]threadListItem, error),
+	threadList func(context.Context) ([]ThreadListItem, error),
 ) (string, error) {
 	id := strings.TrimSpace(threadID)
 	if id != "" {
@@ -95,4 +100,31 @@ func threadSkillsListResult(result map[string]any, err error) (any, error) {
 		return map[string]any{}, nil
 	}
 	return result, nil
+}
+
+func RunSendSlashCommand(
+	ctx context.Context,
+	methodName string,
+	threadID string,
+	command string,
+	args string,
+	requireThreadID bool,
+	resolveThread func(context.Context, string, bool) (string, error),
+	withProcess func(string, string, func(any) (map[string]any, error)) (map[string]any, error),
+	sendCommand func(any, string, string) error,
+) (map[string]any, error) {
+	return runSendSlashCommand(ctx, methodName, threadID, command, args, requireThreadID, resolveThread, withProcess, sendCommand)
+}
+
+func ResolveThreadForSlashCommandLogic(
+	ctx context.Context,
+	threadID string,
+	requireThreadID bool,
+	threadList func(context.Context) ([]ThreadListItem, error),
+) (string, error) {
+	return resolveThreadForSlashCommandLogic(ctx, threadID, requireThreadID, threadList)
+}
+
+func ThreadSkillsListResult(result map[string]any, err error) (any, error) {
+	return threadSkillsListResult(result, err)
 }

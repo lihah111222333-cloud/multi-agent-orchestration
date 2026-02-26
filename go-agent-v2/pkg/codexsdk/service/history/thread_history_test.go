@@ -1,4 +1,4 @@
-package codexadapter
+package history
 
 import (
 	"context"
@@ -12,7 +12,7 @@ func TestThreadExistsInHistorySkipsStoreLookupForLikelyThreadID(t *testing.T) {
 	t.Helper()
 
 	calls := 0
-	got := threadExistsInHistory(
+	got := ThreadExistsInHistory(
 		context.Background(),
 		"thread-1",
 		0,
@@ -27,7 +27,7 @@ func TestThreadExistsInHistorySkipsStoreLookupForLikelyThreadID(t *testing.T) {
 		nil,
 	)
 	if !got {
-		t.Fatalf("threadExistsInHistory() = false, want true")
+		t.Fatalf("ThreadExistsInHistory() = false, want true")
 	}
 	if calls != 0 {
 		t.Fatalf("store lookup calls = %d, want 0", calls)
@@ -38,10 +38,10 @@ func TestThreadExistsInHistoryChecksSourcesInOrder(t *testing.T) {
 	t.Helper()
 
 	loadArchiveCalls := 0
-	got := threadExistsInHistory(
+	got := ThreadExistsInHistory(
 		context.Background(),
 		"agent-a",
-		defaultHistoryLookupTimeout,
+		DefaultHistoryLookupTimeout,
 		func(_ string) bool {
 			return false
 		},
@@ -57,7 +57,7 @@ func TestThreadExistsInHistoryChecksSourcesInOrder(t *testing.T) {
 		},
 	)
 	if !got {
-		t.Fatalf("threadExistsInHistory() = false, want true")
+		t.Fatalf("ThreadExistsInHistory() = false, want true")
 	}
 	if loadArchiveCalls != 0 {
 		t.Fatalf("archive lookup calls = %d, want 0", loadArchiveCalls)
@@ -67,7 +67,7 @@ func TestThreadExistsInHistoryChecksSourcesInOrder(t *testing.T) {
 func TestThreadExistsInHistoryReturnsFalseOnLookupErrors(t *testing.T) {
 	t.Helper()
 
-	got := threadExistsInHistory(
+	got := ThreadExistsInHistory(
 		context.Background(),
 		"agent-a",
 		time.Second,
@@ -85,14 +85,14 @@ func TestThreadExistsInHistoryReturnsFalseOnLookupErrors(t *testing.T) {
 		},
 	)
 	if got {
-		t.Fatalf("threadExistsInHistory() = true, want false")
+		t.Fatalf("ThreadExistsInHistory() = true, want false")
 	}
 }
 
 func TestResolveCodexThreadCandidatesDefaultAppendUnique(t *testing.T) {
 	t.Helper()
 
-	got := resolveCodexThreadCandidates(
+	got := ResolveCodexThreadCandidates(
 		context.Background(),
 		"agent-a",
 		0,
@@ -134,7 +134,7 @@ func TestResolveCodexThreadCandidatesUsesInjectedAppendUnique(t *testing.T) {
 		return append(dst, value)
 	}
 
-	got := resolveCodexThreadCandidates(
+	got := ResolveCodexThreadCandidates(
 		context.Background(),
 		"agent-a",
 		0,

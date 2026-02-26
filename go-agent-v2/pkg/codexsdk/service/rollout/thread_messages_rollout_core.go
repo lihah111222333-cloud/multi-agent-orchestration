@@ -1,19 +1,28 @@
-package codexadapter
+package rollout
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/runner"
-	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/codex"
 )
 
-// loadAllThreadMessagesFromCodexRollout loads and normalizes rollout history.
-func loadAllThreadMessagesFromCodexRollout(
+type ThreadHistoryMessage struct {
+	ID        int64           `json:"id"`
+	AgentID   string          `json:"agentId"`
+	Role      string          `json:"role"`
+	EventType string          `json:"eventType"`
+	Method    string          `json:"method"`
+	Content   string          `json:"content"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt time.Time       `json:"createdAt"`
+}
+
+func LoadAllThreadMessagesFromCodexRollout(
 	ctx context.Context,
 	threadID string,
 	resolveRolloutHistorySource func(context.Context, string) (string, string),
@@ -21,14 +30,14 @@ func loadAllThreadMessagesFromCodexRollout(
 	findRolloutPath func(string) (string, error),
 	readRolloutMessagesWithTrim func(path string, trimInjected bool) ([]codex.RolloutMessage, error),
 	showInjectedPromptInChat bool,
-) ([]threadHistoryMessage, error) {
+) ([]ThreadHistoryMessage, error) {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
-		return []threadHistoryMessage{}, nil
+		return []ThreadHistoryMessage{}, nil
 	}
 	resolve := resolveRolloutHistorySource
 	if resolve == nil {
-		return []threadHistoryMessage{}, nil
+		return []ThreadHistoryMessage{}, nil
 	}
 	normalize := normalizeCodexThreadID
 	if normalize == nil {
@@ -42,38 +51,34 @@ func loadAllThreadMessagesFromCodexRollout(
 	if readRollout == nil {
 		readRollout = codex.ReadRolloutMessagesWithTrim
 	}
-
 	codexThreadID, rolloutPath := resolve(ctx, threadID)
 	codexThreadID = normalize(codexThreadID)
 	if codexThreadID == "" {
-		return []threadHistoryMessage{}, nil
+		return []ThreadHistoryMessage{}, nil
 	}
-
 	path := strings.TrimSpace(rolloutPath)
 	if path == "" {
 		resolvedPath, err := findRollout(codexThreadID)
 		if err != nil {
-			return []threadHistoryMessage{}, nil
+			return []ThreadHistoryMessage{}, nil
 		}
 		path = resolvedPath
 	}
 	if path == "" {
-		return []threadHistoryMessage{}, nil
+		return []ThreadHistoryMessage{}, nil
 	}
 	if _, err := os.Stat(path); err != nil {
-		return []threadHistoryMessage{}, nil
+		return []ThreadHistoryMessage{}, nil
 	}
-
 	trimInjected := !showInjectedPromptInChat
 	rolloutMsgs, err := readRollout(path, trimInjected)
 	if err != nil {
 		return nil, err
 	}
 	if len(rolloutMsgs) == 0 {
-		return []threadHistoryMessage{}, nil
+		return []ThreadHistoryMessage{}, nil
 	}
-
-	all := make([]threadHistoryMessage, 0, len(rolloutMsgs))
+	all := make([]ThreadHistoryMessage, 0, len(rolloutMsgs))
 	for i, item := range rolloutMsgs {
 		message, ok := rolloutMessageToThreadHistory(threadID, i, item)
 		if !ok {
@@ -82,21 +87,21 @@ func loadAllThreadMessagesFromCodexRollout(
 		all = append(all, message)
 	}
 	if len(all) == 0 {
-		return []threadHistoryMessage{}, nil
+		return []ThreadHistoryMessage{}, nil
 	}
 	return all, nil
 }
 
-func rolloutMessageToThreadHistory(threadID string, index int, item codex.RolloutMessage) (threadHistoryMessage, bool) {
+func rolloutMessageToThreadHistory(threadID string, index int, item codex.RolloutMessage) (ThreadHistoryMessage, bool) {
 	role := strings.ToLower(strings.TrimSpace(item.Role))
 	if role != "user" && role != "assistant" {
-		return threadHistoryMessage{}, false
+		return ThreadHistoryMessage{}, false
 	}
 	eventType := ""
 	if role == "assistant" {
 		eventType = agentcore.EventAgentMessage
 	}
-	return threadHistoryMessage{
+	return ThreadHistoryMessage{
 		ID:        int64(index + 1),
 		AgentID:   threadID,
 		Role:      role,
@@ -104,12 +109,11 @@ func rolloutMessageToThreadHistory(threadID string, index int, item codex.Rollou
 		Method:    "",
 		Content:   item.Content,
 		Metadata:  nil,
-		CreatedAt: parseRolloutTimestamp(item.Timestamp),
+		CreatedAt: ParseRolloutTimestamp(item.Timestamp),
 	}, true
 }
 
-// parseRolloutTimestamp parses rollout timestamp in RFC3339/RFC3339Nano formats.
-func parseRolloutTimestamp(raw string) time.Time {
+func ParseRolloutTimestamp(raw string) time.Time {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return time.Time{}
@@ -123,15 +127,14 @@ func parseRolloutTimestamp(raw string) time.Time {
 	return time.Time{}
 }
 
-// paginateRolloutMessages selects newest-first page from rollout messages.
-func paginateRolloutMessages(all []threadHistoryMessage, limit int, before int64) []threadHistoryMessage {
+func PaginateRolloutMessages(all []ThreadHistoryMessage, limit int, before int64) []ThreadHistoryMessage {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
 	if len(all) == 0 {
-		return []threadHistoryMessage{}
+		return []ThreadHistoryMessage{}
 	}
-	page := make([]threadHistoryMessage, 0, min(limit, len(all)))
+	page := make([]ThreadHistoryMessage, 0, min(limit, len(all)))
 	for idx := len(all) - 1; idx >= 0; idx-- {
 		item := all[idx]
 		if before > 0 && item.ID >= before {
@@ -145,41 +148,22 @@ func paginateRolloutMessages(all []threadHistoryMessage, limit int, before int64
 	return page
 }
 
-func runningCodexThreadIDFromManager(
-	manager *runner.AgentManager,
+func RunningCodexThreadIDFromManager(
 	threadID string,
-	getThreadID func(*runner.AgentProcess) string,
+	getProcess func(string) any,
+	getThreadID func(any) string,
 ) string {
-	if manager == nil || getThreadID == nil {
+	if getProcess == nil || getThreadID == nil {
 		return ""
 	}
-	proc := manager.Get(threadID)
-	if proc == nil || proc.Client == nil {
+	proc := getProcess(threadID)
+	if proc == nil {
 		return ""
 	}
 	return getThreadID(proc)
 }
 
-func bindingRolloutSourceByAgentIDInStore(
-	ctx context.Context,
-	bindingStore *store.AgentCodexBindingStore,
-	agentID string,
-) (string, string, error) {
-	if bindingStore == nil {
-		return "", "", nil
-	}
-	binding, err := bindingStore.FindByAgentID(ctx, agentID)
-	if err != nil {
-		return "", "", err
-	}
-	if binding == nil {
-		return "", "", nil
-	}
-	return binding.CodexThreadID, binding.RolloutPath, nil
-}
-
-// resolveRolloutHistorySource resolves codex thread id and optional rollout path.
-func resolveRolloutHistorySource(
+func ResolveRolloutHistorySource(
 	ctx context.Context,
 	threadID string,
 	getRunningCodexThreadID func(threadID string) string,
@@ -195,14 +179,12 @@ func resolveRolloutHistorySource(
 	if normalize == nil {
 		normalize = strings.TrimSpace
 	}
-
 	if getRunningCodexThreadID != nil {
 		candidate := normalize(getRunningCodexThreadID(id))
 		if candidate != "" {
 			return candidate, ""
 		}
 	}
-
 	if findBinding != nil {
 		boundID, path, err := findBinding(ctx, id)
 		if err == nil {
@@ -212,7 +194,6 @@ func resolveRolloutHistorySource(
 			}
 		}
 	}
-
 	if findStatusSessionID != nil {
 		sessionID, err := findStatusSessionID(ctx, id)
 		if err == nil {
@@ -222,7 +203,6 @@ func resolveRolloutHistorySource(
 			}
 		}
 	}
-
 	if candidate := normalize(id); candidate != "" {
 		return candidate, ""
 	}

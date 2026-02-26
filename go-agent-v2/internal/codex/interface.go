@@ -1,6 +1,6 @@
 package codex
 
-import "github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+import "github.com/multi-agent/go-agent-v2/internal/agentcore"
 
 // CodexClient alias to phase-1 abstract client contract.
 type CodexClient = agentcore.Client

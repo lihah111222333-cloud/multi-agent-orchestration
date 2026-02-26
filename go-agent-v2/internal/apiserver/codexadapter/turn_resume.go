@@ -21,19 +21,7 @@ func BuildResumeCandidates(threadID string, resolved []string, normalize func(st
 			return []string{normalized}
 		}
 	}
-	candidates := make([]string, 0, len(resolved))
-	seen := map[string]struct{}{}
-	for _, candidate := range resolved {
-		value := strings.TrimSpace(candidate)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		candidates = append(candidates, value)
-	}
+	candidates := collectTrimmedUniqueValues(resolved, nil)
 	if len(candidates) > 0 {
 		return candidates
 	}

@@ -9,33 +9,39 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
+type trackedTurnStallAction int
+
+const (
+	trackedTurnStallNoop trackedTurnStallAction = iota
+	trackedTurnStallRescheduled
+	trackedTurnStallEnterGrace
+	trackedTurnStallAutoInterrupt
+)
+
+type trackedTurnStallDecision struct {
+	Action    trackedTurnStallAction
+	ThreadID  string
+	TurnID    string
+	Silent    time.Duration
+	Threshold time.Duration
+}
+
 // peekTrackedTurnMeta returns current tracked turn metadata for one thread.
 func (a *Adapter) peekTrackedTurnMeta(threadID string) (string, time.Time, bool, bool) {
-	var turnID string
-	var startedAt time.Time
-	var interruptRequested bool
-	ok := a.withActiveTurn(threadID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
-		turnID = strings.TrimSpace(turn.ID)
-		startedAt = turn.StartedAt
-		interruptRequested = turn.InterruptRequested
-		return true
-	})
-	return turnID, startedAt, interruptRequested, ok
+	state := a.applyTrackedTurnTransition(threadID, trackedTurnTransitionRequest{})
+	if !state.Found {
+		return "", time.Time{}, false, false
+	}
+	return state.TurnID, state.StartedAt, state.InterruptRequested, true
 }
 
 // markTrackedTurnStallHint marks one-shot stall hint flag.
 func (a *Adapter) markTrackedTurnStallHint(threadID, turnID string) bool {
-	wantTurnID := strings.TrimSpace(turnID)
-	return a.withActiveTurn(threadID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
-		if wantTurnID != "" && !strings.EqualFold(strings.TrimSpace(turn.ID), wantTurnID) {
-			return false
-		}
-		if turn.StallHintLogged {
-			return false
-		}
-		turn.StallHintLogged = true
-		return true
+	state := a.applyTrackedTurnTransition(threadID, trackedTurnTransitionRequest{
+		MarkStallHint:          true,
+		MarkStallHintForTurnID: strings.TrimSpace(turnID),
 	})
+	return state.StallHintApplied
 }
 
 func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time) bool {
@@ -50,10 +56,7 @@ func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time
 
 // touchTrackedTurnLastEvent updates turn heartbeat using adapter-owned tracker state.
 func (a *Adapter) touchTrackedTurnLastEvent(threadID string) {
-	a.withActiveTurn(threadID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
-		turn.LastEventAt = time.Now()
-		return true
-	})
+	a.applyTrackedTurnTransition(threadID, trackedTurnTransitionRequest{TouchHeartbeat: true})
 }
 
 // StartApprovalStallHeartbeat starts approval heartbeat with adapter-owned tracker state.
@@ -69,80 +72,57 @@ func (a *Adapter) StartDynamicToolStallHeartbeat(threadID string) func() {
 
 // stallThreshold returns current tracker stall threshold.
 func (a *Adapter) stallThreshold() time.Duration {
-	state := a.trackerHelperState()
-	if state.Mu != nil {
-		state.Mu.Lock()
-		defer state.Mu.Unlock()
-	}
-	if state.stallThreshold != nil && *state.stallThreshold > 0 {
-		return *state.stallThreshold
-	}
-	return defaultStallThreshold
+	return a.trackerDuration(func(state turnTrackerState) *time.Duration {
+		return state.stallThreshold
+	}, defaultStallThreshold)
 }
 
 // SetStallThreshold updates tracker stall threshold.
 func (a *Adapter) SetStallThreshold(threshold time.Duration) {
-	if threshold <= 0 {
-		return
-	}
-	state := a.trackerHelperState()
-	if state.Mu != nil {
-		state.Mu.Lock()
-		defer state.Mu.Unlock()
-	}
-	ensureTurnTrackerStateLocked(state)
-	if state.stallThreshold != nil {
-		*state.stallThreshold = threshold
-	}
+	a.setTrackerDuration(func(state turnTrackerState) *time.Duration {
+		return state.stallThreshold
+	}, threshold)
 }
 
 // stallHeartbeat returns current configured stall heartbeat interval.
 func (a *Adapter) stallHeartbeat() time.Duration {
-	state := a.trackerHelperState()
-	if state.Mu != nil {
-		state.Mu.Lock()
-		defer state.Mu.Unlock()
-	}
-	if state.stallHeartbeat != nil && *state.stallHeartbeat > 0 {
-		return *state.stallHeartbeat
-	}
-	return defaultStallHeartbeat
+	return a.trackerDuration(func(state turnTrackerState) *time.Duration {
+		return state.stallHeartbeat
+	}, defaultStallHeartbeat)
 }
 
 // SetStallHeartbeat updates stall heartbeat interval.
 func (a *Adapter) SetStallHeartbeat(interval time.Duration) {
-	if interval <= 0 {
-		return
-	}
-	state := a.trackerHelperState()
-	if state.Mu != nil {
-		state.Mu.Lock()
-		defer state.Mu.Unlock()
-	}
-	ensureTurnTrackerStateLocked(state)
-	if state.stallHeartbeat != nil {
-		*state.stallHeartbeat = interval
-	}
+	a.setTrackerDuration(func(state turnTrackerState) *time.Duration {
+		return state.stallHeartbeat
+	}, interval)
 }
 
-// checkTurnStall advances stall detection state machine.
-func (a *Adapter) checkTurnStall(threadID string, turnID string) {
-	activeTurns, turnMu, _, stallThreshold := a.trackerState()
+func (a *Adapter) nextTrackedTurnStallDecision(threadID, turnID string, stallThreshold time.Duration) trackedTurnStallDecision {
+	decision := trackedTurnStallDecision{Action: trackedTurnStallNoop}
 	id := strings.TrimSpace(threadID)
 	tid := strings.TrimSpace(turnID)
-	if id == "" || tid == "" || turnMu == nil {
-		return
+	if id == "" || tid == "" {
+		return decision
+	}
+
+	activeTurns, turnMu, _, _ := a.trackerState()
+	if turnMu == nil {
+		return decision
 	}
 
 	turnMu.Lock()
+	defer turnMu.Unlock()
 	if activeTurns == nil {
-		turnMu.Unlock()
-		return
+		return decision
 	}
 	turn, ok := activeTurns[id]
-	if !ok || turn == nil || !strings.EqualFold(strings.TrimSpace(turn.ID), tid) {
-		turnMu.Unlock()
-		return
+	if !ok || turn == nil {
+		return decision
+	}
+	currentTurnID := strings.TrimSpace(turn.ID)
+	if !strings.EqualFold(currentTurnID, tid) {
+		return decision
 	}
 
 	silent := time.Since(turn.LastEventAt)
@@ -150,26 +130,42 @@ func (a *Adapter) checkTurnStall(threadID string, turnID string) {
 	if threshold <= 0 {
 		threshold = defaultStallThreshold
 	}
+	decision.ThreadID = id
+	decision.TurnID = currentTurnID
+	decision.Silent = silent
+	decision.Threshold = threshold
 
 	if silent < threshold {
-		rescheduleStallCheck(turn, id, turn.ID, silent, threshold, a.checkTurnStall)
-		turnMu.Unlock()
-		return
+		rescheduleStallCheck(turn, id, currentTurnID, silent, threshold, a.checkTurnStall)
+		decision.Action = trackedTurnStallRescheduled
+		return decision
 	}
 	if turn.StallAutoInterrupted {
-		turnMu.Unlock()
-		return
+		return decision
 	}
 	if !turn.StallGraceStarted {
 		turn.StallGraceStarted = true
-		turnMu.Unlock()
-		a.handleStallGracePeriod(id, turn.ID, silent, threshold)
-		return
+		decision.Action = trackedTurnStallEnterGrace
+		return decision
 	}
 
 	turn.StallAutoInterrupted = true
-	turnMu.Unlock()
-	a.executeStallAutoInterrupt(id, turn.ID, silent, threshold)
+	decision.Action = trackedTurnStallAutoInterrupt
+	return decision
+}
+
+// checkTurnStall advances stall detection state machine.
+func (a *Adapter) checkTurnStall(threadID string, turnID string) {
+	_, _, _, stallThreshold := a.trackerState()
+	decision := a.nextTrackedTurnStallDecision(threadID, turnID, stallThreshold)
+	switch decision.Action {
+	case trackedTurnStallRescheduled, trackedTurnStallNoop:
+		return
+	case trackedTurnStallEnterGrace:
+		a.handleStallGracePeriod(decision.ThreadID, decision.TurnID, decision.Silent, decision.Threshold)
+	case trackedTurnStallAutoInterrupt:
+		a.executeStallAutoInterrupt(decision.ThreadID, decision.TurnID, decision.Silent, decision.Threshold)
+	}
 }
 
 func (a *Adapter) handleStallGracePeriod(threadID, turnID string, silent, threshold time.Duration) {

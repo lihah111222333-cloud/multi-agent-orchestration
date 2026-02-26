@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/skillutil"
@@ -24,20 +24,9 @@ func buildSelectedSkillPrompt(
 	if readSkillContent == nil {
 		return "", 0
 	}
-	ordered := make([]string, 0, len(selectedSkills))
-	seen := make(map[string]struct{}, len(selectedSkills))
-	for _, raw := range selectedSkills {
-		name := strings.TrimSpace(raw)
-		if name == "" {
-			continue
-		}
-		key := strings.ToLower(name)
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		ordered = append(ordered, name)
-	}
+	ordered := collectTrimmedUniqueValues(selectedSkills, func(value string) string {
+		return strings.ToLower(value)
+	})
 	if len(ordered) == 0 {
 		return "", 0
 	}

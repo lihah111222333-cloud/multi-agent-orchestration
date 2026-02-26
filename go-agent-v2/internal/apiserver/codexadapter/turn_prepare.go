@@ -9,6 +9,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
@@ -30,23 +31,44 @@ type parsedTurnInputs struct {
 	TimelineAttachments []uistate.TimelineAttachment
 }
 
+type turnPreparedSubmissionCommon struct {
+	parsed               parsedTurnInputs
+	submitPrompt         string
+	selectedSkillCount   int
+	autoMatchedSkillCount int
+}
+
+func (a *Adapter) prepareTurnSubmissionCommon(
+	threadID string,
+	input []contracts.TurnInput,
+	selectedSkills []string,
+	manualSkillSelection bool,
+) turnPreparedSubmissionCommon {
+	parsed := parseTurnInputs(input)
+	skillPrompt, selectedSkillCount, autoMatchedSkillCount := a.buildTurnSkillPrompt(threadID, parsed.Prompt, input, selectedSkills, manualSkillSelection)
+	return turnPreparedSubmissionCommon{
+		parsed:                parsed,
+		submitPrompt:          commonadapter.MergePromptText(parsed.Prompt, skillPrompt),
+		selectedSkillCount:    selectedSkillCount,
+		autoMatchedSkillCount: autoMatchedSkillCount,
+	}
+}
+
 func (a *Adapter) prepareTurnStartSubmission(
 	threadID string,
 	input []contracts.TurnInput,
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) (turnStartPreparedSubmission, error) {
-	parsed := parseTurnInputs(input)
-	skillPrompt, selectedSkillCount, autoMatchedSkillCount := a.buildTurnSkillPrompt(threadID, parsed.Prompt, input, selectedSkills, manualSkillSelection)
-	submitPrompt := commonadapter.MergePromptText(parsed.Prompt, skillPrompt)
+	prepared := a.prepareTurnSubmissionCommon(threadID, input, selectedSkills, manualSkillSelection)
 	return turnStartPreparedSubmission{
-		Prompt:                parsed.Prompt,
-		SubmitPrompt:          submitPrompt,
-		Images:                parsed.Images,
-		Files:                 parsed.Files,
-		TimelineAttachments:   parsed.TimelineAttachments,
-		SelectedSkillCount:    selectedSkillCount,
-		AutoMatchedSkillCount: autoMatchedSkillCount,
+		Prompt:                prepared.parsed.Prompt,
+		SubmitPrompt:          prepared.submitPrompt,
+		Images:                prepared.parsed.Images,
+		Files:                 prepared.parsed.Files,
+		TimelineAttachments:   prepared.parsed.TimelineAttachments,
+		SelectedSkillCount:    prepared.selectedSkillCount,
+		AutoMatchedSkillCount: prepared.autoMatchedSkillCount,
 	}, nil
 }
 
@@ -56,14 +78,58 @@ func (a *Adapter) prepareTurnSteerSubmission(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) (contracts.TurnSteerEntryPrepareResult, error) {
-	parsed := parseTurnInputs(input)
-	skillPrompt, _, _ := a.buildTurnSkillPrompt(threadID, parsed.Prompt, input, selectedSkills, manualSkillSelection)
-	submitPrompt := commonadapter.MergePromptText(parsed.Prompt, skillPrompt)
+	prepared := a.prepareTurnSubmissionCommon(threadID, input, selectedSkills, manualSkillSelection)
 	return contracts.TurnSteerEntryPrepareResult{
-		SubmitPrompt: submitPrompt,
-		Images:       parsed.Images,
-		Files:        parsed.Files,
+		SubmitPrompt: prepared.submitPrompt,
+		Images:       prepared.parsed.Images,
+		Files:        prepared.parsed.Files,
 	}, nil
+}
+
+func (a *Adapter) resolveTurnSteerAlignment(req turnSteerRequest) (string, string, error) {
+	threadID, err := requireThreadID("Server.turnSteer", req.ThreadID)
+	if err != nil {
+		return "", "", err
+	}
+	expectedTurnID := strings.TrimSpace(req.ExpectedTurnID)
+	if expectedTurnID == "" {
+		return "", "", apperrors.New("Server.turnSteer", "expectedTurnId must not be empty")
+	}
+	activeTurnID, hasActiveTurn := a.activeTrackedTurnID(threadID)
+	if !hasActiveTurn {
+		return "", "", apperrors.New("Server.turnSteer", "no active turn to steer")
+	}
+	if !strings.EqualFold(expectedTurnID, activeTurnID) {
+		return "", "", apperrors.Newf(
+			"Server.turnSteer",
+			"expectedTurnId mismatch: expected %s, active %s",
+			expectedTurnID,
+			activeTurnID,
+		)
+	}
+	return threadID, activeTurnID, nil
+}
+
+func ensureTurnSteerResultTurnID(result map[string]any, activeTurnID string) map[string]any {
+	if result == nil {
+		result = map[string]any{}
+	}
+	if currentID, _ := result["turnId"].(string); strings.TrimSpace(currentID) == "" {
+		result["turnId"] = strings.TrimSpace(activeTurnID)
+	}
+	return result
+}
+
+func (a *Adapter) turnSteerFromInputAligned(req turnSteerRequest) (map[string]any, error) {
+	_, activeTurnID, err := a.resolveTurnSteerAlignment(req)
+	if err != nil {
+		return nil, err
+	}
+	result, err := a.TurnSteerFromInput(req)
+	if err != nil {
+		return nil, err
+	}
+	return ensureTurnSteerResultTurnID(result, activeTurnID), nil
 }
 
 func parseTurnInputs(inputs []contracts.TurnInput) parsedTurnInputs {

@@ -35,7 +35,7 @@ description: P7 SDK 提取（极限瘦身版）— codexadapter ≤1000 行，SD
 8. 每步结束创建 checkpoint commit。
 9. **禁止胶水层**：不得新建 bridge/proxy/wrapper/shim/forwarder/relay 层。迁移 = 「剪切 + 粘贴 + 改 package 声明」，不是「复制 + 原地留桥接」。
 10. **反胶水零膨胀**：关注迁移域净增，防止“复制 + 桥接”绕过。
-    - 迁移域（`internal/apiserver/codexadapter` + `pkg/codexsdk`）Go 代码净增 `delta_scope = added - deleted` 必须 `<= +50`
+    - 迁移域（`internal/apiserver/codexadapter` + `pkg/codexsdk` + `internal/agentcore` + `internal/codex`）Go 代码净增 `delta_scope = added - deleted` 必须 `<= +50`
     - `codexadapter` Go 代码净增 `delta_adapter = added - deleted`：`B0` 允许 `<= +200`，其余步骤必须 `<= 0`
 11. **禁止 net-new 文件**：除 B0 的 `_logic.go` 和 SDK 骨架 `doc.go`/`iface.go` 外，不得新建任何 `.go` 文件。如果需要新文件，先删旧文件——总文件数只减不增。
 12. **迁移即删除**：`git mv` 完成后原路径不得残留同名/近似文件。每步检查：
@@ -48,7 +48,8 @@ description: P7 SDK 提取（极限瘦身版）— codexadapter ≤1000 行，SD
       git diff --numstat -- "$@" | \
         awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /\.go$/ {a+=$1; d+=$2} END {print a-d+0}'
     }
-    scope_delta=$(calc_delta internal/apiserver/codexadapter pkg/codexsdk)
+    # 注意：包含 internal/{agentcore,codex}，避免 P7-A 的 git mv 被误判为净膨胀
+    scope_delta=$(calc_delta internal/apiserver/codexadapter pkg/codexsdk internal/agentcore internal/codex)
     adapter_delta=$(calc_delta internal/apiserver/codexadapter)
     echo "delta_scope=$scope_delta delta_adapter=$adapter_delta step=${P7_STEP:-unset}"
     test "$scope_delta" -le 50 || { echo "FAIL: migration scope inflated too much"; exit 1; }

@@ -1,13 +1,13 @@
 package codexadapter
 
 import (
-	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
+
 
 const (
 	DefaultTurnWatchdogTimeout        = 10 * time.Minute
@@ -114,179 +114,39 @@ func trackerDurationOrDefault(value *time.Duration, fallback time.Duration) time
 }
 
 func (a *Adapter) withTrackerStateLock(fn func(turnTrackerState)) {
-	if a == nil || fn == nil {
-		return
-	}
-	state := a.trackerHelperState()
-	if state.Mu != nil {
-		state.Mu.Lock()
-		defer state.Mu.Unlock()
-	}
-	ensureTurnTrackerStateLocked(state)
-	fn(state)
+	withTrackerStateLockCore(a.trackerHelperState(), fn)
 }
+
 
 func (a *Adapter) trackerDuration(getter func(turnTrackerState) *time.Duration, fallback time.Duration) time.Duration {
-	if getter == nil {
-		return fallback
-	}
-	value := fallback
-	a.withTrackerStateLock(func(state turnTrackerState) {
-		value = trackerDurationOrDefault(getter(state), fallback)
-	})
-	return value
+	return trackerDurationCore(a.trackerHelperState(), getter, fallback)
 }
+
 
 func (a *Adapter) setTrackerDuration(getter func(turnTrackerState) *time.Duration, value time.Duration) {
-	if value <= 0 || getter == nil {
-		return
-	}
-	a.withTrackerStateLock(func(state turnTrackerState) {
-		target := getter(state)
-		if target != nil {
-			*target = value
-		}
-	})
+	setTrackerDurationCore(a.trackerHelperState(), getter, value)
 }
+
 
 func (a *Adapter) trackerState() (map[string]*trackedTurn, *sync.Mutex, time.Duration, time.Duration) {
-	if a == nil {
-		return nil, nil, 0, 0
-	}
-	state := a.trackerHelperState()
-	var activeTurns map[string]*trackedTurn
-	if state.ActiveTurns != nil {
-		activeTurns = *state.ActiveTurns
-	}
-	turnMu := state.Mu
-	watchdogTimeout := trackerDurationOrDefault(state.TurnWatchdogTimeout, DefaultTurnWatchdogTimeout)
-	stallThreshold := trackerDurationOrDefault(state.stallThreshold, defaultStallThreshold)
-	return activeTurns, turnMu, watchdogTimeout, stallThreshold
+	return trackerStateCore(a.trackerHelperState())
 }
+
 
 func (a *Adapter) applyTrackedTurnTransition(threadID string, req trackedTurnTransitionRequest) trackedTurnTransitionResult {
-	result := trackedTurnTransitionResult{}
-	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return result
-	}
-
-	activeTurns, turnMu, _, _ := a.trackerState()
-	if turnMu == nil || activeTurns == nil {
-		return result
-	}
-
-	turnMu.Lock()
-	defer turnMu.Unlock()
-	a.ensureTurnTrackerStateLocked()
-
-	turn, ok := activeTurns[id]
-	if !ok || turn == nil {
-		return result
-	}
-
-	result.Found = true
-	result.ThreadID = id
-	result.TurnID = strings.TrimSpace(turn.ID)
-	result.StartedAt = turn.StartedAt
-	result.LastEventAt = turn.LastEventAt
-	result.InterruptRequested = turn.InterruptRequested
-	result.StallHintLogged = turn.StallHintLogged
-
-	if req.TouchHeartbeat {
-		turn.LastEventAt = time.Now()
-		result.LastEventAt = turn.LastEventAt
-	}
-	if req.MarkInterruptRequested {
-		turn.InterruptRequested = true
-		turn.InterruptRequestedAt = time.Now()
-		result.InterruptRequested = true
-	}
-	if req.MarkStallHint {
-		wantTurnID := strings.TrimSpace(req.MarkStallHintForTurnID)
-		if wantTurnID != "" && !strings.EqualFold(result.TurnID, wantTurnID) {
-			return result
-		}
-		if !turn.StallHintLogged {
-			turn.StallHintLogged = true
-			result.StallHintLogged = true
-			result.StallHintApplied = true
-		}
-	}
-
-	if req.Finalize != nil {
-		wantTurnID := strings.TrimSpace(req.Finalize.TurnID)
-		result.ExpectedTurnID = wantTurnID
-		if wantTurnID != "" && !strings.EqualFold(result.TurnID, wantTurnID) {
-			result.TurnIDMismatch = true
-		}
-
-		delete(activeTurns, id)
-		if turn.Timer != nil {
-			turn.Timer.Stop()
-		}
-		if turn.StallTimer != nil {
-			turn.StallTimer.Stop()
-		}
-
-		finalStatus := normalizeTrackedTurnStatus(req.Finalize.Status)
-		if turn.InterruptRequested && finalStatus == "completed" {
-			finalStatus = "interrupted"
-		}
-		if turn.Done != nil {
-			select {
-			case turn.Done <- finalStatus:
-			default:
-			}
-		}
-		reasonText := strings.TrimSpace(req.Finalize.Reason)
-		result.Finalized = true
-		result.FinalStatus = finalStatus
-		result.FinalReason = reasonText
-		result.Completion = map[string]any{
-			"threadId": id,
-			"turn": map[string]any{
-				"id":     result.TurnID,
-				"status": finalStatus,
-			},
-			"status": finalStatus,
-			"reason": reasonText,
-		}
-	}
-
-	return result
+	return applyTrackedTurnTransitionCore(a.trackerHelperState(), threadID, req)
 }
+
 
 func (a *Adapter) withActiveTurn(threadID string, fn func(threadID string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool) bool {
-	activeTurns, turnMu, _, _ := a.trackerState()
-	id := strings.TrimSpace(threadID)
-	if id == "" || turnMu == nil || fn == nil {
-		return false
-	}
-	turnMu.Lock()
-	defer turnMu.Unlock()
-	if activeTurns == nil {
-		return false
-	}
-	turn, ok := activeTurns[id]
-	if !ok || turn == nil {
-		return false
-	}
-	return fn(id, turn, activeTurns)
+	return withActiveTurnCore(a.trackerHelperState(), threadID, fn)
 }
 
+
 func (a *Adapter) withActiveTurnByID(threadID, turnID string, fn func(threadID string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool) bool {
-	expectedTurnID := strings.TrimSpace(turnID)
-	if expectedTurnID == "" || fn == nil {
-		return false
-	}
-	return a.withActiveTurn(threadID, func(id string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool {
-		if !strings.EqualFold(strings.TrimSpace(turn.ID), expectedTurnID) {
-			return false
-		}
-		return fn(id, turn, activeTurns)
-	})
+	return withActiveTurnByIDCore(a.trackerHelperState(), threadID, turnID, fn)
 }
+
 
 func supersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurnID string) (map[string]any, string, bool) {
 	if activeTurns == nil {
@@ -344,78 +204,18 @@ func supersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurn
 }
 
 // beginTrackedTurn establishes tracked turn state and supersedes old one when needed.
+// beginTrackedTurn establishes tracked turn state and supersedes old one when needed.
 func (a *Adapter) beginTrackedTurn(threadID, turnID string) string {
-	activeTurns, turnMu, watchdogTimeout, stallThreshold := a.trackerState()
-	completeTrackedTurnByID := a.completeTrackedTurnByID
-	notify := a.trackerNotify()
-	checkTurnStall := a.checkTurnStall
-
-	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return ""
-	}
-	tid := strings.TrimSpace(turnID)
-	if tid == "" {
-		tid = fmt.Sprintf("turn-%d", time.Now().UnixMilli())
-	}
-	if turnMu == nil || activeTurns == nil {
-		return tid
-	}
-
-	var superseded map[string]any
-	var prevTurnID string
-	var hadPrevTurn bool
-
-	turnMu.Lock()
-	a.ensureTurnTrackerStateLocked()
-	superseded, prevTurnID, hadPrevTurn = supersedeActiveTurn(activeTurns, id, tid)
-
-	now := time.Now()
-	turn := &trackedTurn{
-		ID:          tid,
-		ThreadID:    id,
-		StartedAt:   now,
-		LastEventAt: now,
-		Done:        make(chan string, 1),
-	}
-
-	watchdogTurnID := tid
-	watchdogThreadID := id
-	watchdogStartedAt := turn.StartedAt
-	turn.Timer = time.AfterFunc(watchdogTimeout, func() {
-		logger.Warn("turn tracker: watchdog timeout reached", append(threadLogFields(watchdogThreadID),
-			logger.FieldTurnID, watchdogTurnID,
-			"watchdog_timeout_ms", watchdogTimeout.Milliseconds(),
-			"turn_age_ms", time.Since(watchdogStartedAt).Milliseconds(),
-		)...)
-		if notify == nil {
-			return
-		}
-		if completion, ok := completeTrackedTurnByID(watchdogThreadID, watchdogTurnID, "failed", "watchdog_timeout"); ok {
-			notify("turn/completed", completion)
-		}
-	})
-
-	activeTurns[id] = turn
-	stallInterval := max(stallThreshold/3, 10*time.Second)
-	turn.StallTimer = time.AfterFunc(stallInterval, func() {
-		checkTurnStall(id, tid)
-	})
-	turnMu.Unlock()
-
-	logger.Info("turn tracker: begin turn tracking", append(threadLogFields(id),
-		logger.FieldTurnID, tid,
-		"source_turn_id", strings.TrimSpace(turnID),
-		"watchdog_timeout_ms", watchdogTimeout.Milliseconds(),
-		"had_prev_turn", hadPrevTurn,
-		"prev_turn_id", prevTurnID,
-	)...)
-
-	if superseded != nil && notify != nil {
-		notify("turn/completed", superseded)
-	}
-	return tid
+	return beginTrackedTurnCore(
+		a.trackerHelperState(),
+		threadID,
+		turnID,
+		a.completeTrackedTurnByID,
+		a.trackerNotify(),
+		a.checkTurnStall,
+	)
 }
+
 
 // hasActiveTrackedTurn checks whether a thread has an active tracked turn.
 func (a *Adapter) hasActiveTrackedTurn(threadID string) bool {
@@ -438,60 +238,15 @@ func (a *Adapter) markTrackedTurnInterruptRequested(threadID string) bool {
 }
 
 // waitTrackedTurnTerminal waits until tracked turn reaches terminal status or timeout.
+// waitTrackedTurnTerminal waits until tracked turn reaches terminal status or timeout.
 func (a *Adapter) waitTrackedTurnTerminal(threadID string, timeout time.Duration) (string, bool) {
-	if timeout <= 0 {
-		return "", false
-	}
-	var done chan string
-	ok := a.withActiveTurn(threadID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
-		if turn.Done == nil {
-			return false
-		}
-		done = turn.Done
-		return true
-	})
-	if !ok || done == nil {
-		return "", false
-	}
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case status := <-done:
-		return normalizeTrackedTurnStatus(status), true
-	case <-timer.C:
-		return "", false
-	}
+	return waitTrackedTurnTerminalCore(a.trackerHelperState(), threadID, timeout)
 }
+
 
 // completeTrackedTurnByID closes a tracked turn and returns completion payload.
+// completeTrackedTurnByID closes a tracked turn and returns completion payload.
 func (a *Adapter) completeTrackedTurnByID(threadID, turnID, status, reason string) (map[string]any, bool) {
-	transition := a.applyTrackedTurnTransition(threadID, trackedTurnTransitionRequest{
-		Finalize: &trackedTurnFinalizeRequest{
-			TurnID: turnID,
-			Status: status,
-			Reason: reason,
-		},
-	})
-	if !transition.Finalized || transition.Completion == nil {
-		return nil, false
-	}
-
-	if transition.TurnIDMismatch {
-		logger.Info("turn tracker: turn id mismatch, completing anyway to avoid stuck state", append(threadLogFields(transition.ThreadID),
-			"active_turn_id", transition.TurnID,
-			"event_turn_id", transition.ExpectedTurnID,
-			logger.FieldStatus, strings.TrimSpace(status),
-			"reason", strings.TrimSpace(reason),
-		)...)
-	}
-
-	logger.Info("turn tracker: turn completed", append(threadLogFields(transition.ThreadID),
-		logger.FieldTurnID, transition.TurnID,
-		logger.FieldStatus, transition.FinalStatus,
-		"reason", transition.FinalReason,
-		"duration_ms", time.Since(transition.StartedAt).Milliseconds(),
-		"interrupt_requested", transition.InterruptRequested,
-	)...)
-	return transition.Completion, true
+	return completeTrackedTurnByIDCore(a.trackerHelperState(), threadID, turnID, status, reason)
 }
+

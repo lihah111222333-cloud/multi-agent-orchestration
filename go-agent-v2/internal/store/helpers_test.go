@@ -13,7 +13,7 @@ func TestQueryBuilder_Gte_AddsCondition(t *testing.T) {
 	q := NewQueryBuilder().Gte("started_at", "2024-01-01")
 	sql, params := q.Build("SELECT * FROM t", "id", 10)
 
-	wantSQL := "SELECT * FROM t WHERE \"started_at\" >= $1 ORDER BY id LIMIT $2"
+	wantSQL := "SELECT * FROM t WHERE (\"started_at\" >= $1) ORDER BY id LIMIT $2"
 	if sql != wantSQL {
 		t.Fatalf("SQL mismatch:\n got:  %s\n want: %s", sql, wantSQL)
 	}
@@ -44,7 +44,7 @@ func TestQueryBuilder_Gte_CombinesWithEq(t *testing.T) {
 		Gte("started_at", "2024-01-01")
 	sql, params := q.Build("SELECT * FROM t", "id", 10)
 
-	wantSQL := "SELECT * FROM t WHERE \"component\" = $1 AND \"started_at\" >= $2 ORDER BY id LIMIT $3"
+	wantSQL := "SELECT * FROM t WHERE (\"component\" = $1 AND \"started_at\" >= $2) ORDER BY id LIMIT $3"
 	if sql != wantSQL {
 		t.Fatalf("SQL mismatch:\n got:  %s\n want: %s", sql, wantSQL)
 	}

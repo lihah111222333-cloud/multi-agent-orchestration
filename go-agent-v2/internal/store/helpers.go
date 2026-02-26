@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 
+	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -68,15 +69,13 @@ func sanitizeCol(col string) string {
 }
 
 // ========================================
-// QueryBuilder — 动态 WHERE 子句构造
+// QueryBuilder — 动态 WHERE 子句构造 (基于 squirrel)
 // ========================================
 
 // QueryBuilder 渐进式 SQL WHERE 拼接器。
-// 14 个 store 共用，消除重复的 where/params/keyword 逻辑。
+// 14 个 store 共用。内部使用 squirrel 构建 SQL，外部 API 保持不变。
 type QueryBuilder struct {
-	where  []string
-	params []any
-	n      int // $N 参数计数器 (pgx 用 $1, $2, ...)
+	where sq.And // squirrel And 条件组
 }
 
 // NewQueryBuilder 创建空构造器。
@@ -89,26 +88,25 @@ func (q *QueryBuilder) Eq(col, val string) *QueryBuilder {
 	if val == "" {
 		return q
 	}
-	q.n++
-	q.where = append(q.where, fmt.Sprintf("%s = $%d", sanitizeCol(col), q.n))
-	q.params = append(q.params, val)
+	q.where = append(q.where, sq.Eq{sanitizeCol(col): val})
 	return q
 }
 
 // KeywordLike 添加多列 LIKE 关键词搜索。
-// 对应 Python 中反复出现的 "(LOWER(a) LIKE $N OR LOWER(b) LIKE $N ...)" 模式。
+// 生成: (LOWER(a) LIKE $N ESCAPE E'\\' OR LOWER(b) LIKE $N ESCAPE E'\\' ...)
 func (q *QueryBuilder) KeywordLike(keyword string, cols ...string) *QueryBuilder {
 	if keyword == "" || len(cols) == 0 {
 		return q
 	}
 	kw := "%" + util.EscapeLike(strings.ToLower(keyword)) + "%"
-	parts := make([]string, 0, len(cols))
+	var or sq.Or
 	for _, c := range cols {
-		q.n++
-		parts = append(parts, fmt.Sprintf("LOWER(%s) LIKE $%d ESCAPE E'\\\\'", sanitizeCol(c), q.n))
-		q.params = append(q.params, kw)
+		or = append(or, sq.Expr(
+			fmt.Sprintf("LOWER(%s) LIKE ? ESCAPE E'\\\\'", sanitizeCol(c)),
+			kw,
+		))
 	}
-	q.where = append(q.where, "("+strings.Join(parts, " OR ")+")")
+	q.where = append(q.where, or)
 	return q
 }
 
@@ -117,26 +115,55 @@ func (q *QueryBuilder) Gte(col string, val any) *QueryBuilder {
 	if val == nil {
 		return q
 	}
-	q.n++
-	q.where = append(q.where, fmt.Sprintf("%s >= $%d", sanitizeCol(col), q.n))
-	q.params = append(q.params, val)
+	q.where = append(q.where, sq.GtOrEq{sanitizeCol(col): val})
 	return q
 }
 
 // Build 构建完整 SQL: baseSql + WHERE + ORDER BY + LIMIT。
 func (q *QueryBuilder) Build(baseSql, orderBy string, limit int) (string, []any) {
 	limit = util.ClampInt(limit, 1, 2000)
-	sql := baseSql
+
+	builder := sq.Select("1").PlaceholderFormat(sq.Dollar) // 占位: 以 baseSql 为基准重构
 	if len(q.where) > 0 {
-		sql += " WHERE " + strings.Join(q.where, " AND ")
+		builder = builder.Where(q.where)
 	}
+
+	// 从 builder 中提取 WHERE 子句和参数
+	// squirrel 的 Select builder 不支持直接拼 baseSql，因此手动拼接
+	_, args, _ := builder.ToSql()
+
+	result := baseSql
+	if len(q.where) > 0 {
+		whereSql, whereArgs, _ := q.where.ToSql()
+		// squirrel 用 ? 占位符，转换为 $N (Dollar format)
+		converted := dollarReplace(whereSql, 1)
+		result += " WHERE " + converted
+		args = whereArgs
+	}
+
 	if orderBy != "" {
-		sql += " ORDER BY " + orderBy
+		result += " ORDER BY " + orderBy
 	}
-	q.n++
-	sql += fmt.Sprintf(" LIMIT $%d", q.n)
-	q.params = append(q.params, limit)
-	return sql, q.params
+
+	result += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+	args = append(args, limit)
+	return result, args
+}
+
+// dollarReplace 将 ? 占位符替换为 $1, $2, $3...（从 start 开始编号）。
+func dollarReplace(sql string, start int) string {
+	var buf strings.Builder
+	buf.Grow(len(sql) + 20)
+	n := start
+	for i := 0; i < len(sql); i++ {
+		if sql[i] == '?' {
+			buf.WriteString(fmt.Sprintf("$%d", n))
+			n++
+		} else {
+			buf.WriteByte(sql[i])
+		}
+	}
+	return buf.String()
 }
 
 // ========================================

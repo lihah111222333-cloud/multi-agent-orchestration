@@ -1,7 +1,7 @@
 package apiserver
 
 import (
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/pkg/diffsdk/difftracker"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )

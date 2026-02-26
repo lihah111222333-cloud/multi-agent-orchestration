@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tooladapter"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
@@ -59,14 +59,14 @@ func (p codeRunProvider) CodeRunner() tools.CodeExecRunner {
 	if p.s == nil {
 		return nil
 	}
-	return tooladapter.AdaptCodeExecRunner(p.s.codeRunner)
+	return adaptCodeExecRunner(p.s.codeRunner)
 }
 
 func (p codeRunProvider) AuditLogger() tools.AuditLogger {
 	if p.s == nil {
 		return nil
 	}
-	return tooladapter.AdaptAuditLogger(p.s.auditLogStore)
+	return adaptAuditLogger(p.s.auditLogStore)
 }
 
 type resourceProvider struct {
@@ -77,35 +77,35 @@ func (p resourceProvider) DAGManager() tools.DAGManager {
 	if p.s == nil {
 		return nil
 	}
-	return tooladapter.AdaptDAGManager(p.s.dagStore)
+	return adaptDAGManager(p.s.dagStore)
 }
 
 func (p resourceProvider) CommandCardStore() tools.CardStore {
 	if p.s == nil {
 		return nil
 	}
-	return tooladapter.AdaptCardStore(p.s.cmdStore)
+	return adaptCardStore(p.s.cmdStore)
 }
 
 func (p resourceProvider) PromptTemplateStore() tools.TemplateStore {
 	if p.s == nil {
 		return nil
 	}
-	return tooladapter.AdaptTemplateStore(p.s.promptStore)
+	return adaptTemplateStore(p.s.promptStore)
 }
 
 func (p resourceProvider) SharedFileStore() tools.FileStore {
 	if p.s == nil {
 		return nil
 	}
-	return tooladapter.AdaptFileStore(p.s.fileStore)
+	return adaptFileStore(p.s.fileStore)
 }
 
 func (p resourceProvider) WorkspaceOps() tools.WorkspaceOps {
 	if p.s == nil {
 		return nil
 	}
-	return tooladapter.AdaptWorkspaceOps(p.s.workspaceMgr)
+	return adaptWorkspaceOps(p.s.workspaceMgr)
 }
 
 func (p resourceProvider) NotifyEvent(method string, params any) {
@@ -123,14 +123,14 @@ func (p orchestrationProvider) AgentLauncher() tools.AgentLauncher {
 	if p.s == nil {
 		return nil
 	}
-	return tooladapter.AdaptAgentLauncher(p.s.mgr)
+	return adaptAgentLauncher(p.s.mgr)
 }
 
 func (p orchestrationProvider) WorkspaceOps() tools.WorkspaceOps {
 	if p.s == nil {
 		return nil
 	}
-	return tooladapter.AdaptWorkspaceOps(p.s.workspaceMgr)
+	return adaptWorkspaceOps(p.s.workspaceMgr)
 }
 
 func (p orchestrationProvider) SubmitPrompt(agentID, prompt string, images, files []string) error {

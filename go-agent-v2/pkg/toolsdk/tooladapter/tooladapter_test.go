@@ -6,11 +6,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
-	"github.com/multi-agent/go-agent-v2/internal/executor"
-	"github.com/multi-agent/go-agent-v2/internal/service"
-	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 )
 
@@ -49,22 +44,48 @@ func (c *fakeCounter) IncrementToolCall(name string) int64 {
 
 type fakeSharedProviders struct{}
 
-func (fakeSharedProviders) CodeRunner() tools.CodeExecRunner { return AdaptCodeExecRunner(&executor.CodeRunner{}) }
+type fakeCodeRunner struct{}
+
+func (fakeCodeRunner) Run(context.Context, tools.CodeRunRequest) (*tools.CodeRunResult, error) {
+	return &tools.CodeRunResult{Success: true, ExitCode: 0, Mode: "test"}, nil
+}
+
+type fakeDAGManager struct{}
+
+func (fakeDAGManager) SaveDAG(context.Context, *tools.TaskDAG) (*tools.TaskDAG, error) {
+	return &tools.TaskDAG{DagKey: "fake"}, nil
+}
+
+func (fakeDAGManager) ListDAGs(context.Context, string, string, int) ([]tools.TaskDAG, error) {
+	return []tools.TaskDAG{}, nil
+}
+
+func (fakeDAGManager) GetDAGDetail(context.Context, string) (*tools.TaskDAG, []tools.TaskDAGNode, error) {
+	return &tools.TaskDAG{DagKey: "fake"}, []tools.TaskDAGNode{}, nil
+}
+
+func (fakeDAGManager) SaveNode(context.Context, *tools.TaskDAGNode) (*tools.TaskDAGNode, error) {
+	return &tools.TaskDAGNode{DagKey: "fake"}, nil
+}
+
+func (fakeDAGManager) UpdateNodeStatus(context.Context, string, string, string, any) (*tools.TaskDAGNode, error) {
+	return &tools.TaskDAGNode{DagKey: "fake"}, nil
+}
+
+func (fakeDAGManager) ListNodes(context.Context, string) ([]tools.TaskDAGNode, error) {
+	return []tools.TaskDAGNode{}, nil
+}
+
+func (fakeSharedProviders) CodeRunner() tools.CodeExecRunner { return fakeCodeRunner{} }
 func (fakeSharedProviders) AuditLogger() tools.AuditLogger    { return nil }
 func (fakeSharedProviders) AwaitApproval(string, string, string, string, bool) bool {
 	return true
 }
-func (fakeSharedProviders) DAGManager() tools.DAGManager { return AdaptDAGManager(&store.TaskDAGStore{}) }
-func (fakeSharedProviders) CommandCardStore() tools.CardStore {
-	return AdaptCardStore(&store.CommandCardStore{})
-}
-func (fakeSharedProviders) PromptTemplateStore() tools.TemplateStore {
-	return AdaptTemplateStore(&store.PromptTemplateStore{})
-}
-func (fakeSharedProviders) SharedFileStore() tools.FileStore { return AdaptFileStore(&store.SharedFileStore{}) }
-func (fakeSharedProviders) WorkspaceOps() tools.WorkspaceOps {
-	return AdaptWorkspaceOps(&service.WorkspaceManager{})
-}
+func (fakeSharedProviders) DAGManager() tools.DAGManager                      { return fakeDAGManager{} }
+func (fakeSharedProviders) CommandCardStore() tools.CardStore                 { return nil }
+func (fakeSharedProviders) PromptTemplateStore() tools.TemplateStore          { return nil }
+func (fakeSharedProviders) SharedFileStore() tools.FileStore                  { return nil }
+func (fakeSharedProviders) WorkspaceOps() tools.WorkspaceOps                  { return nil }
 func (fakeSharedProviders) NotifyEvent(string, any)                               {}
 func (fakeSharedProviders) AgentLauncher() tools.AgentLauncher                    { return nil }
 func (fakeSharedProviders) SubmitPrompt(string, string, []string, []string) error { return nil }
@@ -240,8 +261,8 @@ func TestRegisterIncludesCustomExtendedLSPProviders(t *testing.T) {
 		func(provider tools.LSPProvider) {
 			provider.BindDynamicTool("lsp_custom_probe", func(_ json.RawMessage) string { return "custom" })
 		},
-		func() []agentcore.DynamicTool {
-			return []agentcore.DynamicTool{{
+		func() []tools.DynamicTool {
+			return []tools.DynamicTool{{
 				Name:        "lsp_custom_probe",
 				Description: "custom",
 				InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},

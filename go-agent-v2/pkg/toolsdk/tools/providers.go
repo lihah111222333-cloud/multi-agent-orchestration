@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 )
+
+// DynamicTool is the tools-layer alias for dynamic tool schema.
+type DynamicTool = agentcore.DynamicTool
 
 // Tool is a dynamic tool schema paired with its runtime handler.
 type Tool struct {
-	Schema  agentcore.DynamicTool
+	Schema  DynamicTool
 	Handler func(ctx ToolCallContext, args json.RawMessage) string
 }
 
@@ -23,11 +26,11 @@ type ToolCallContext struct {
 }
 
 // Schemas extracts schemas from tool definitions.
-func Schemas(list []Tool) []agentcore.DynamicTool {
+func Schemas(list []Tool) []DynamicTool {
 	if len(list) == 0 {
 		return nil
 	}
-	out := make([]agentcore.DynamicTool, 0, len(list))
+	out := make([]DynamicTool, 0, len(list))
 	for _, tool := range list {
 		out = append(out, tool.Schema)
 	}
@@ -84,7 +87,7 @@ type AgentRuntimeProvider interface {
 
 // SchemaProvider exposes all dynamic tool schemas for recursive orchestration dependencies.
 type SchemaProvider interface {
-	AllSchemas() []agentcore.DynamicTool
+	AllSchemas() []DynamicTool
 }
 
 // CodeExecRunner abstracts code execution behavior.
@@ -197,7 +200,7 @@ type WorkspaceOps interface {
 
 // AgentLauncher abstracts agent process lifecycle behavior.
 type AgentLauncher interface {
-	Launch(ctx context.Context, id, name, prompt, cwd, instructions string, dynamicTools []agentcore.DynamicTool) error
+	Launch(ctx context.Context, id, name, prompt, cwd, instructions string, dynamicTools []DynamicTool) error
 	Submit(id, prompt string, images, files []string) error
 	Stop(id string) error
 	List() any

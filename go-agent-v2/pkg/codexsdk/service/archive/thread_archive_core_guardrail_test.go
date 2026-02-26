@@ -24,12 +24,30 @@ func TestThreadArchiveCoreExportSurfaceGuardrail(t *testing.T) {
 	}
 
 	allowedExports := map[string]struct{}{
-		"InferThreadArtifactKind":    {},
-		"ThreadArchiveFile":          {},
-		"ThreadArchiveManifest":      {},
-		"ThreadArchiveRestoreNotice": {},
-		"ThreadArtifactCandidate":    {},
-		"MergeThreadArchiveMaps":     {},
+		"InferThreadArtifactKind":             {},
+		"ThreadArchiveFile":                   {},
+		"ThreadArchiveManifest":               {},
+		"ThreadArchiveRestoreNotice":          {},
+		"ThreadArchiveRestoreDeps":            {},
+		"ThreadArtifactCandidate":             {},
+		"MergeThreadArchiveMaps":              {},
+		"LoadThreadArchiveMapFromDisk":        {},
+		"ResolveThreadArchiveRootDir":         {},
+		"ResolveThreadArchiveSnapshotDir":     {},
+		"CollectThreadArtifactCandidates":     {},
+		"NextArchiveFilePath":                 {},
+		"CopyFile":                            {},
+		"CopyFileOverwrite":                   {},
+		"FileSHA256":                          {},
+		"WriteThreadArchiveManifest":          {},
+		"BuildThreadArchiveRestoreDeps":       {},
+		"FindLatestThreadArchiveManifestPath": {},
+		"ReadThreadArchiveManifest":           {},
+		"InspectThreadArchiveForRestore":      {},
+		"RestoreThreadArchiveSources":         {},
+		"ResolveCodexRootDir":                 {},
+		"PruneArchivedCodexSourceFiles":       {},
+		"RemoveEmptyCodexParentDirs":          {},
 	}
 	foundAllowed := map[string]struct{}{}
 	unexpected := make([]string, 0)

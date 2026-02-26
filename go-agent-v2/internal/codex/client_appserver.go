@@ -120,6 +120,8 @@ type AppServerClient struct {
 	health   appServerConnectionHealth
 	// 防止并发执行多次 respawn recovery。
 	respawnRecoverInFlight atomic.Bool
+	// readLoop 单例保护: 确保同一时刻只有一个 readLoop 协程运行。
+	readLoopRunning atomic.Bool
 }
 
 const (

@@ -19,7 +19,15 @@ import (
 )
 
 func (c *AppServerClient) readLoop() {
+	// 单例保护: 同一时刻只允许一个 readLoop 运行。
+	// restartProcessAndReconnect 启动新 readLoop 时, 旧 readLoop 可能尚未退出,
+	// 此守卫确保新旧不会同时运行。
+	if !c.readLoopRunning.CompareAndSwap(false, true) {
+		return
+	}
+	connectionDead := false // 标记非正常退出, defer 时发射 connection_dead 事件
 	defer func() {
+		c.readLoopRunning.Store(false)
 		c.wsMu.Lock()
 		if c.ws != nil {
 			_ = c.ws.Close()
@@ -32,6 +40,11 @@ func (c *AppServerClient) readLoop() {
 		default:
 			close(c.wsDone)
 		}
+
+		// 非正常退出 (所有恢复手段耗尽) 时通知 manager 更新 agent 状态。
+		if connectionDead {
+			c.emitConnectionDeadEvent()
+		}
 	}()
 
 	for !c.stopped.Load() {
@@ -41,6 +54,7 @@ func (c *AppServerClient) readLoop() {
 				return
 			}
 			if !c.reconnectWS("ws_missing", apperrors.New("AppServerClient.readLoop", "ws not connected")) {
+				connectionDead = true
 				return
 			}
 			continue
@@ -101,6 +115,7 @@ func (c *AppServerClient) readLoop() {
 			if c.reconnectWS(trigger, readErr) {
 				continue
 			}
+			connectionDead = true
 			return
 		}
 
@@ -1063,6 +1078,27 @@ func (c *AppServerClient) emitStreamError(err error, phase string, idleTimeout b
 	}
 	data, _ := json.Marshal(payload)
 	handler(Event{Type: EventStreamError, Data: data})
+}
+
+// emitConnectionDeadEvent 在 readLoop 永久退出时通知 handler, 使 manager 将 agent 标记为 error。
+//
+// 仅在所有重连/重生尝试耗尽后调用 (非正常关停)。
+func (c *AppServerClient) emitConnectionDeadEvent() {
+	c.handlerMu.RLock()
+	h := c.handler
+	c.handlerMu.RUnlock()
+	if h == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"message": "Connection permanently lost — all recovery attempts exhausted",
+		"status":  "dead",
+		"agentId": c.AgentID,
+	})
+	logger.Warn("codex: emitting connection_dead event",
+		logger.FieldAgentID, c.AgentID,
+	)
+	h(Event{Type: EventConnectionDead, Data: payload})
 }
 
 func streamErrorWillRetry(raw json.RawMessage) bool {

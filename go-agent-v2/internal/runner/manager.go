@@ -364,6 +364,9 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event agentcore.Event) {
 	if event.Type == agentcore.EventShutdownComplete {
 		newState = StateStopped
 	}
+	if event.Type == agentcore.EventConnectionDead {
+		newState = StateError
+	}
 
 	if newState != "" {
 		proc.mu.Lock()

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	backofflib "github.com/cenkalti/backoff/v4"
 	"github.com/gorilla/websocket"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -118,21 +119,17 @@ func (c *AppServerClient) replaceWSConn(conn *websocket.Conn) {
 	}
 }
 
-func appServerReconnectDelay(attempt int) time.Duration {
-	if attempt <= 1 {
-		return 0
-	}
-	delay := appServerReconnectBaseDelay
-	for i := 2; i < attempt; i++ {
-		delay *= 2
-		if delay >= appServerReconnectMaxDelay {
-			return appServerReconnectMaxDelay
-		}
-	}
-	if delay > appServerReconnectMaxDelay {
-		return appServerReconnectMaxDelay
-	}
-	return delay
+// appServerReconnectBackoff 创建预配置的指数退避器。
+// 首次无延迟 (由调用方控制), 后续: 300ms → 600ms → 1.2s → 2.4s → 3s (capped)。
+func appServerReconnectBackoff() backofflib.BackOff {
+	b := backofflib.NewExponentialBackOff()
+	b.InitialInterval = appServerReconnectBaseDelay
+	b.MaxInterval = appServerReconnectMaxDelay
+	b.MaxElapsedTime = 0 // 不自动停止，由调用方控制重试次数
+	b.Multiplier = 2
+	b.RandomizationFactor = 0 // 保持确定性，与原实现一致
+	b.Reset()
+	return b
 }
 
 func (c *AppServerClient) sleepWithContext(delay time.Duration) bool {
@@ -208,6 +205,7 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 		}
 	}
 
+	bo := appServerReconnectBackoff()
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if c.stopped.Load() {
 			return false
@@ -220,7 +218,13 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 			)
 			break
 		}
-		delay := appServerReconnectDelay(attempt)
+		var delay time.Duration
+		if attempt > 1 {
+			delay = bo.NextBackOff()
+			if delay == backofflib.Stop {
+				delay = appServerReconnectMaxDelay
+			}
+		}
 		if !c.sleepWithContext(delay) {
 			return false
 		}
@@ -341,6 +345,9 @@ func (c *AppServerClient) restartProcessAndReconnect() error {
 		return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "dial ws")
 	}
 	c.replaceWSConn(conn)
+	// 重置 wsDone 以支持新的 readLoop 生命周期信号。
+	c.wsDone = make(chan struct{})
+	util.SafeGo(func() { c.readLoop() })
 	util.SafeGo(func() { c.pingLoop(conn) })
 	return nil
 }

@@ -202,4 +202,5 @@ const (
 	EventTurnPlan          = "turn_plan"
 	EventPlanDelta         = "plan_delta"
 	EventPlanUpdate        = "plan_update"
+	EventConnectionDead    = "connection_dead"
 )

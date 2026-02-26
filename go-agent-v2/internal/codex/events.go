@@ -118,6 +118,7 @@ const (
 	EventBackgroundEvent             = agentcore.EventBackgroundEvent
 	EventPlanDelta                   = agentcore.EventPlanDelta
 	EventPlanUpdate                  = agentcore.EventPlanUpdate
+	EventConnectionDead              = agentcore.EventConnectionDead
 )
 
 // ========================================

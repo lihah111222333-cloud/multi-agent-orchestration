@@ -77,8 +77,9 @@ var classifyMap = map[string]classifyResult{
 	"user_message": {UITypeUserMessage},
 
 	// Errors
-	"error":        {UITypeError},
-	"stream_error": {UITypeError},
+	"error":           {UITypeError},
+	"stream_error":    {UITypeError},
+	"connection_dead": {UITypeError},
 
 	// Warnings
 	"warning": {UITypeSystem},

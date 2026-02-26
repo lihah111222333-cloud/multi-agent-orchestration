@@ -98,8 +98,9 @@
   },
   {
     "name": "lsp_completion",
-    "description": "LSP completion suggestions.",
+    "description": "Code completion suggestions at a cursor position.",
     "inputSchema": {
+      "additionalProperties": false,
       "properties": {
         "column": {
           "description": "0-indexed column number",
@@ -124,18 +125,22 @@
   },
   {
     "name": "lsp_edit",
-    "description": "LSP edit operations (rename/code_action/format).",
+    "description": "Editing operations: rename/code_action/format/replace_range.",
     "inputSchema": {
+      "additionalProperties": false,
       "oneOf": [
         {
           "properties": {
             "action": {
-              "const": "format"
+              "const": "rename"
             }
           },
           "required": [
             "action",
-            "file_path"
+            "file_path",
+            "line",
+            "column",
+            "new_name"
           ]
         },
         {
@@ -154,84 +159,7 @@
         {
           "properties": {
             "action": {
-              "const": "rename"
-            }
-          },
-          "required": [
-            "action",
-            "file_path",
-            "line",
-            "column",
-            "new_name"
-          ]
-        }
-      ],
-      "properties": {
-        "action": {
-          "description": "Edit action.",
-          "enum": [
-            "rename",
-            "code_action",
-            "format"
-          ],
-          "type": "string"
-        },
-        "column": {
-          "description": "0-indexed column number",
-          "type": "number"
-        },
-        "end_column": {
-          "description": "Optional end column for code_action.",
-          "type": "number"
-        },
-        "end_line": {
-          "description": "Optional end line for code_action.",
-          "type": "number"
-        },
-        "file_path": {
-          "description": "Absolute or relative path to the file",
-          "type": "string"
-        },
-        "insert_spaces": {
-          "description": "Use spaces for format.",
-          "type": "boolean"
-        },
-        "line": {
-          "description": "0-indexed line number",
-          "type": "number"
-        },
-        "new_name": {
-          "description": "New symbol name for rename.",
-          "type": "string"
-        },
-        "only": {
-          "description": "Optional code action kinds filter.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "tab_size": {
-          "description": "Tab size for format.",
-          "type": "number"
-        }
-      },
-      "required": [
-        "action",
-        "file_path"
-      ],
-      "type": "object"
-    }
-  },
-  {
-    "name": "lsp_file",
-    "description": "LSP file operations (open/change).",
-    "inputSchema": {
-      "oneOf": [
-        {
-          "properties": {
-            "action": {
-              "const": "open"
+              "const": "format"
             }
           },
           "required": [
@@ -242,22 +170,28 @@
         {
           "properties": {
             "action": {
-              "const": "change"
+              "const": "replace_range"
             }
           },
           "required": [
             "action",
             "file_path",
-            "new_content"
+            "line",
+            "column",
+            "end_line",
+            "end_column",
+            "new_text"
           ]
         }
       ],
       "properties": {
         "action": {
-          "description": "File action.",
+          "description": "Edit operation",
           "enum": [
-            "open",
-            "change"
+            "rename",
+            "code_action",
+            "format",
+            "replace_range"
           ],
           "type": "string"
         },
@@ -265,76 +199,100 @@
           "description": "0-indexed column number",
           "type": "number"
         },
+        "end_column": {
+          "description": "0-indexed end column",
+          "type": "number"
+        },
+        "end_line": {
+          "description": "0-indexed end line",
+          "type": "number"
+        },
         "file_path": {
           "description": "Absolute or relative path to the file",
           "type": "string"
+        },
+        "insert_spaces": {
+          "description": "Use spaces for formatting",
+          "type": "boolean"
         },
         "line": {
           "description": "0-indexed line number",
           "type": "number"
         },
-        "new_content": {
-          "description": "Full new content for action=change.",
+        "new_name": {
+          "description": "New symbol name for rename",
           "type": "string"
+        },
+        "new_text": {
+          "description": "Replacement text for replace_range",
+          "type": "string"
+        },
+        "only": {
+          "description": "Code action kinds filter",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "persist_to_disk": {
-          "description": "Persist to disk when action=change.",
+          "description": "Persist replace_range result to disk",
           "type": "boolean"
         },
+        "tab_size": {
+          "description": "Tab size for formatting",
+          "type": "number"
+        },
         "version": {
-          "description": "Optional document version.",
+          "description": "Document version",
           "type": "number"
         }
       },
       "required": [
-        "action",
-        "file_path"
+        "action"
       ],
       "type": "object"
     }
   },
   {
-    "name": "lsp_grep",
-    "description": "Workspace grep operations (text_search/ast_search).",
+    "name": "lsp_file",
+    "description": "File-level LSP operations: open/read/sync document state and query diagnostics.",
     "inputSchema": {
-      "properties": {
-        "action": {
-          "description": "Grep action.",
-          "enum": [
-            "text_search",
-            "ast_search"
-          ],
-          "type": "string"
-        },
-        "lang": {
-          "description": "Optional language hint for ast_search.",
-          "type": "string"
-        },
-        "limit": {
-          "description": "Optional result limit.",
-          "type": "number"
-        },
-        "path": {
-          "description": "Optional path constraint.",
-          "type": "string"
-        },
-        "query": {
-          "description": "Search query or AST pattern.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "action",
-        "query"
-      ],
-      "type": "object"
-    }
-  },
-  {
-    "name": "lsp_inspect",
-    "description": "LSP inspect operations (hover/diagnostics/signature_help).",
-    "inputSchema": {
+      "additionalProperties": false,
       "oneOf": [
+        {
+          "properties": {
+            "action": {
+              "const": "open_file"
+            }
+          },
+          "required": [
+            "action",
+            "file_path"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "read_file"
+            }
+          },
+          "required": [
+            "action",
+            "file_path"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "did_change"
+            }
+          },
+          "required": [
+            "action",
+            "file_path",
+            "new_content"
+          ]
+        },
         {
           "properties": {
             "action": {
@@ -345,14 +303,178 @@
             "action",
             "file_path"
           ]
+        }
+      ],
+      "properties": {
+        "action": {
+          "description": "File operation to execute",
+          "enum": [
+            "open_file",
+            "read_file",
+            "did_change",
+            "diagnostics"
+          ],
+          "type": "string"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "new_content": {
+          "description": "Full new document content for did_change",
+          "type": "string"
+        },
+        "persist_to_disk": {
+          "description": "Persist did_change content to disk",
+          "type": "boolean"
+        },
+        "version": {
+          "description": "Document version",
+          "type": "number"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_grep",
+    "description": "Search source text and symbols (text search / AST search).",
+    "inputSchema": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "action": {
+              "const": "text_search"
+            }
+          },
+          "required": [
+            "action",
+            "query"
+          ]
         },
         {
           "properties": {
             "action": {
-              "enum": [
-                "hover",
-                "signature_help"
-              ]
+              "const": "ast_search"
+            }
+          },
+          "required": [
+            "action",
+            "language",
+            "symbol"
+          ]
+        }
+      ],
+      "properties": {
+        "action": {
+          "description": "Search operation",
+          "enum": [
+            "text_search",
+            "ast_search"
+          ],
+          "type": "string"
+        },
+        "case_sensitive": {
+          "description": "Case sensitive match",
+          "type": "boolean"
+        },
+        "glob": {
+          "description": "Glob filter for file paths",
+          "type": "string"
+        },
+        "language": {
+          "description": "Language selector for AST search",
+          "type": "string"
+        },
+        "max_results": {
+          "description": "Maximum number of matches",
+          "type": "number"
+        },
+        "path": {
+          "description": "Search root path",
+          "type": "string"
+        },
+        "query": {
+          "description": "Search query",
+          "type": "string"
+        },
+        "symbol": {
+          "description": "Symbol query for AST search",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_inspect",
+    "description": "LSP inspection operations for symbol/type/location introspection.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "action": {
+              "const": "hover"
+            }
+          },
+          "required": [
+            "action",
+            "file_path",
+            "line",
+            "column"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "definition"
+            }
+          },
+          "required": [
+            "action",
+            "file_path",
+            "line",
+            "column"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "implementation"
+            }
+          },
+          "required": [
+            "action",
+            "file_path",
+            "line",
+            "column"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "type_definition"
+            }
+          },
+          "required": [
+            "action",
+            "file_path",
+            "line",
+            "column"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "signature_help"
             }
           },
           "required": [
@@ -365,10 +487,12 @@
       ],
       "properties": {
         "action": {
-          "description": "Inspect action.",
+          "description": "Inspect operation",
           "enum": [
             "hover",
-            "diagnostics",
+            "definition",
+            "implementation",
+            "type_definition",
             "signature_help"
           ],
           "type": "string"
@@ -387,25 +511,21 @@
         }
       },
       "required": [
-        "action",
-        "file_path"
+        "action"
       ],
       "type": "object"
     }
   },
   {
     "name": "lsp_structure",
-    "description": "LSP structure operations (symbols/hierarchies/semantic/folding).",
+    "description": "Structural LSP views: document/workspace symbols, folding and semantic tokens.",
     "inputSchema": {
+      "additionalProperties": false,
       "oneOf": [
         {
           "properties": {
             "action": {
-              "enum": [
-                "document_symbol",
-                "semantic_tokens",
-                "folding_range"
-              ]
+              "const": "document_symbol"
             }
           },
           "required": [
@@ -416,9 +536,142 @@
         {
           "properties": {
             "action": {
+              "const": "folding_range"
+            }
+          },
+          "required": [
+            "action",
+            "file_path"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "semantic_tokens"
+            }
+          },
+          "required": [
+            "action",
+            "file_path"
+          ]
+        },
+        {
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "language"
+                ]
+              },
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "not": {
+                "required": [
+                  "path"
+                ]
+              },
+              "required": [
+                "language"
+              ]
+            }
+          ],
+          "properties": {
+            "action": {
+              "const": "workspace_symbol"
+            }
+          },
+          "required": [
+            "action",
+            "query"
+          ]
+        }
+      ],
+      "properties": {
+        "action": {
+          "description": "Structure operation",
+          "enum": [
+            "document_symbol",
+            "workspace_symbol",
+            "folding_range",
+            "semantic_tokens"
+          ],
+          "type": "string"
+        },
+        "file_path": {
+          "description": "Absolute or relative path to the file",
+          "type": "string"
+        },
+        "language": {
+          "description": "Language selector for workspace symbol",
+          "type": "string"
+        },
+        "path": {
+          "description": "Workspace path selector",
+          "type": "string"
+        },
+        "query": {
+          "description": "Workspace symbol query",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lsp_xref",
+    "description": "Cross-reference operations across call/type hierarchies.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "action": {
+              "const": "references"
+            }
+          },
+          "required": [
+            "action",
+            "file_path",
+            "line",
+            "column"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "call_hierarchy"
+            },
+            "direction": {
               "enum": [
-                "call_hierarchy",
-                "type_hierarchy"
+                "incoming",
+                "outgoing",
+                "both"
+              ]
+            }
+          },
+          "required": [
+            "action",
+            "file_path",
+            "line",
+            "column"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "type_hierarchy"
+            },
+            "direction": {
+              "enum": [
+                "supertypes",
+                "subtypes",
+                "both"
               ]
             }
           },
@@ -432,13 +685,11 @@
       ],
       "properties": {
         "action": {
-          "description": "Structure action.",
+          "description": "Cross-reference operation",
           "enum": [
-            "document_symbol",
             "call_hierarchy",
             "type_hierarchy",
-            "semantic_tokens",
-            "folding_range"
+            "references"
           ],
           "type": "string"
         },
@@ -447,7 +698,7 @@
           "type": "number"
         },
         "direction": {
-          "description": "Hierarchy direction.",
+          "description": "Hierarchy direction",
           "enum": [
             "incoming",
             "outgoing",
@@ -461,84 +712,13 @@
           "description": "Absolute or relative path to the file",
           "type": "string"
         },
-        "line": {
-          "description": "0-indexed line number",
-          "type": "number"
-        }
-      },
-      "required": [
-        "action",
-        "file_path"
-      ],
-      "type": "object"
-    }
-  },
-  {
-    "name": "lsp_xref",
-    "description": "LSP cross-reference operations.",
-    "inputSchema": {
-      "oneOf": [
-        {
-          "properties": {
-            "action": {
-              "const": "workspace_symbol"
-            }
-          },
-          "required": [
-            "action",
-            "query"
-          ]
-        },
-        {
-          "properties": {
-            "action": {
-              "enum": [
-                "definition",
-                "references",
-                "implementation",
-                "type_definition"
-              ]
-            }
-          },
-          "required": [
-            "action",
-            "file_path",
-            "line",
-            "column"
-          ]
-        }
-      ],
-      "properties": {
-        "action": {
-          "description": "XRef action.",
-          "enum": [
-            "definition",
-            "references",
-            "implementation",
-            "type_definition",
-            "workspace_symbol"
-          ],
-          "type": "string"
-        },
-        "column": {
-          "description": "0-indexed column number",
-          "type": "number"
-        },
-        "file_path": {
-          "description": "Absolute or relative path to the file",
-          "type": "string"
-        },
         "include_declaration": {
-          "description": "Include declaration for references action.",
+          "description": "Include declaration for references",
           "type": "boolean"
         },
         "line": {
           "description": "0-indexed line number",
           "type": "number"
-        },
-        "query": {
-          "description": "Workspace symbol query for action=workspace_symbol.",
-          "type": "string"
         }
       },
       "required": [

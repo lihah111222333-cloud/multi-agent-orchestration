@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	agentcore "github.com/multi-agent/go-agent-v2/internal/agentcore"
-	"github.com/multi-agent/go-agent-v2/internal/tools"
+	agentcore "github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 )
 
 type RuntimeToolHandler = func(ctx tools.ToolCallContext, args json.RawMessage) string

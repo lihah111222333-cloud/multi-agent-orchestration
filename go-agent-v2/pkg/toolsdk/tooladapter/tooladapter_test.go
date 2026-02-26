@@ -7,12 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
-	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	"github.com/multi-agent/go-agent-v2/internal/store"
-	"github.com/multi-agent/go-agent-v2/internal/tools"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 )
 
 type fakeRuntimeRegistry struct {
@@ -50,24 +49,24 @@ func (c *fakeCounter) IncrementToolCall(name string) int64 {
 
 type fakeSharedProviders struct{}
 
-func (fakeSharedProviders) CodeRunner() *executor.CodeRunner { return &executor.CodeRunner{} }
-func (fakeSharedProviders) AuditLogStore() *store.AuditLogStore {
-	return nil
+func (fakeSharedProviders) CodeRunner() tools.CodeExecRunner { return AdaptCodeExecRunner(&executor.CodeRunner{}) }
+func (fakeSharedProviders) AuditLogger() tools.AuditLogger    { return nil }
+func (fakeSharedProviders) AwaitApproval(string, string, string, string, bool) bool {
+	return true
 }
-func (fakeSharedProviders) AwaitApproval(string, string, string, string, bool) bool { return true }
-func (fakeSharedProviders) DAGStore() *store.TaskDAGStore                           { return &store.TaskDAGStore{} }
-func (fakeSharedProviders) CommandCardStore() *store.CommandCardStore {
-	return &store.CommandCardStore{}
+func (fakeSharedProviders) DAGManager() tools.DAGManager { return AdaptDAGManager(&store.TaskDAGStore{}) }
+func (fakeSharedProviders) CommandCardStore() tools.CardStore {
+	return AdaptCardStore(&store.CommandCardStore{})
 }
-func (fakeSharedProviders) PromptTemplateStore() *store.PromptTemplateStore {
-	return &store.PromptTemplateStore{}
+func (fakeSharedProviders) PromptTemplateStore() tools.TemplateStore {
+	return AdaptTemplateStore(&store.PromptTemplateStore{})
 }
-func (fakeSharedProviders) SharedFileStore() *store.SharedFileStore { return &store.SharedFileStore{} }
-func (fakeSharedProviders) WorkspaceManager() *service.WorkspaceManager {
-	return &service.WorkspaceManager{}
+func (fakeSharedProviders) SharedFileStore() tools.FileStore { return AdaptFileStore(&store.SharedFileStore{}) }
+func (fakeSharedProviders) WorkspaceOps() tools.WorkspaceOps {
+	return AdaptWorkspaceOps(&service.WorkspaceManager{})
 }
 func (fakeSharedProviders) NotifyEvent(string, any)                               {}
-func (fakeSharedProviders) Manager() *runner.AgentManager                         { return nil }
+func (fakeSharedProviders) AgentLauncher() tools.AgentLauncher                    { return nil }
 func (fakeSharedProviders) SubmitPrompt(string, string, []string, []string) error { return nil }
 func (fakeSharedProviders) RememberReportRequest(string, string)                  {}
 func (fakeSharedProviders) NextThreadSeq() int64                                  { return 1 }

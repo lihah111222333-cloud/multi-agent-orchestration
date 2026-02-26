@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -86,15 +87,15 @@ func OrchestrationTools(provider OrchestrationProvider, runtime AgentRuntimeProv
 }
 
 func orchestrationListAgents(provider OrchestrationProvider) string {
-	if provider == nil || provider.Manager() == nil {
+	if provider == nil || provider.AgentLauncher() == nil {
 		return "[]"
 	}
-	infos := provider.Manager().List()
+	infos := provider.AgentLauncher().List()
 	data, err := json.Marshal(infos)
 	if err != nil {
 		return ToolError(err)
 	}
-	if len(infos) == 0 {
+	if orchestrationListLen(infos) == 0 {
 		return "[]"
 	}
 	return string(data)
@@ -141,15 +142,15 @@ func orchestrationLaunchAgent(provider OrchestrationProvider, runtime AgentRunti
 	if p.Name == "" {
 		return `{"error":"name is required"}`
 	}
-	if provider == nil || provider.Manager() == nil {
+	if provider == nil || provider.AgentLauncher() == nil {
 		return ToolError(apperrors.New("orchestrationLaunchAgent", "agent manager not initialized"))
 	}
 
 	if p.WorkspaceRunKey != "" {
-		if provider.WorkspaceManager() == nil {
+		if provider.WorkspaceOps() == nil {
 			return ToolError(apperrors.New("orchestrationLaunchAgent", "workspace manager not initialized"))
 		}
-		workspacePath, err := provider.WorkspaceManager().ResolveRunWorkspace(context.Background(), p.WorkspaceRunKey)
+		workspacePath, err := provider.WorkspaceOps().ResolveRunWorkspace(context.Background(), p.WorkspaceRunKey)
 		if err != nil {
 			return ToolError(apperrors.Wrapf(err, "orchestrationLaunchAgent", "resolve workspace run %s", p.WorkspaceRunKey))
 		}
@@ -159,7 +160,7 @@ func orchestrationLaunchAgent(provider OrchestrationProvider, runtime AgentRunti
 		p.Cwd = "."
 	}
 
-	if len(provider.Manager().List()) >= maxAgents {
+	if orchestrationListLen(provider.AgentLauncher().List()) >= maxAgents {
 		return ToolError(apperrors.Newf("orchestrationLaunchAgent", "max agents (%d) reached", maxAgents))
 	}
 
@@ -176,7 +177,7 @@ func orchestrationLaunchAgent(provider OrchestrationProvider, runtime AgentRunti
 	if schemaProvider != nil {
 		schemas = schemaProvider.AllSchemas()
 	}
-	if err := provider.Manager().Launch(ctx, id, p.Name, p.Prompt, p.Cwd, "", schemas); err != nil {
+	if err := provider.AgentLauncher().Launch(ctx, id, p.Name, p.Prompt, p.Cwd, "", schemas); err != nil {
 		return ToolError(apperrors.Wrap(err, "orchestrationLaunchAgent", "launch agent"))
 	}
 	if runtime != nil {
@@ -203,7 +204,7 @@ func orchestrationStopAgent(provider OrchestrationProvider, runtime AgentRuntime
 	if p.AgentID == "" {
 		return `{"error":"agent_id is required"}`
 	}
-	if provider == nil || provider.Manager() == nil {
+	if provider == nil || provider.AgentLauncher() == nil {
 		return ToolError(apperrors.New("orchestrationStopAgent", "agent manager not initialized"))
 	}
 
@@ -216,7 +217,7 @@ func orchestrationStopAgent(provider OrchestrationProvider, runtime AgentRuntime
 		}
 	}
 
-	if err := provider.Manager().Stop(p.AgentID); err != nil {
+	if err := provider.AgentLauncher().Stop(p.AgentID); err != nil {
 		return ToolError(apperrors.Wrap(err, "orchestrationStopAgent", "stop agent"))
 	}
 	if runtime != nil {
@@ -225,6 +226,25 @@ func orchestrationStopAgent(provider OrchestrationProvider, runtime AgentRuntime
 
 	logger.Info("orchestration: agent stopped", logger.FieldID, p.AgentID)
 	return ToolJSON(map[string]any{"success": true, "agent_id": p.AgentID})
+}
+
+func orchestrationListLen(v any) int {
+	if v == nil {
+		return 0
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return 0
+		}
+		rv = rv.Elem()
+	}
+	switch rv.Kind() {
+	case reflect.Slice, reflect.Array, reflect.Map, reflect.String:
+		return rv.Len()
+	default:
+		return 0
+	}
 }
 
 func nextThreadSeq(provider OrchestrationProvider) int64 {

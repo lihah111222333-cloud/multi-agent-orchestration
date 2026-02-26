@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/internal/tools"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 )
 
 const lspToolCallMetaKey = "__tool_call_meta"

@@ -28,9 +28,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver"
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/codex"
+	"github.com/multi-agent/go-agent-v2/internal/codex"
 	"github.com/multi-agent/go-agent-v2/internal/config"
 	"github.com/multi-agent/go-agent-v2/internal/database"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"

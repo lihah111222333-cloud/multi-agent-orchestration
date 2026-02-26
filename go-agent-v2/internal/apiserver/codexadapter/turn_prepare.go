@@ -2,13 +2,12 @@ package codexadapter
 
 import (
 	"context"
+	"strings"
+
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
-	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
-	"strings"
 )
 
 type turnStartPreparedSubmission struct {
@@ -41,14 +40,7 @@ func (a *Adapter) prepareTurnSubmissionCommon(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) turnPreparedSubmissionCommon {
-	parsed := parseTurnInputs(input)
-	skillPrompt, selectedSkillCount, autoMatchedSkillCount := a.buildTurnSkillPrompt(threadID, parsed.Prompt, input, selectedSkills, manualSkillSelection)
-	return turnPreparedSubmissionCommon{
-		parsed:                parsed,
-		submitPrompt:          commonadapter.MergePromptText(parsed.Prompt, skillPrompt),
-		selectedSkillCount:    selectedSkillCount,
-		autoMatchedSkillCount: autoMatchedSkillCount,
-	}
+	return prepareTurnSubmissionCommonLogic(a, threadID, input, selectedSkills, manualSkillSelection)
 }
 
 func (a *Adapter) prepareTurnStartSubmission(
@@ -57,16 +49,7 @@ func (a *Adapter) prepareTurnStartSubmission(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) (turnStartPreparedSubmission, error) {
-	prepared := a.prepareTurnSubmissionCommon(threadID, input, selectedSkills, manualSkillSelection)
-	return turnStartPreparedSubmission{
-		Prompt:                prepared.parsed.Prompt,
-		SubmitPrompt:          prepared.submitPrompt,
-		Images:                prepared.parsed.Images,
-		Files:                 prepared.parsed.Files,
-		TimelineAttachments:   prepared.parsed.TimelineAttachments,
-		SelectedSkillCount:    prepared.selectedSkillCount,
-		AutoMatchedSkillCount: prepared.autoMatchedSkillCount,
-	}, nil
+	return prepareTurnStartSubmissionLogic(a, threadID, input, selectedSkills, manualSkillSelection)
 }
 
 func (a *Adapter) prepareTurnSteerSubmission(
@@ -75,48 +58,15 @@ func (a *Adapter) prepareTurnSteerSubmission(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) (contracts.TurnSteerEntryPrepareResult, error) {
-	prepared := a.prepareTurnSubmissionCommon(threadID, input, selectedSkills, manualSkillSelection)
-	return contracts.TurnSteerEntryPrepareResult{
-		SubmitPrompt: prepared.submitPrompt,
-		Images:       prepared.parsed.Images,
-		Files:        prepared.parsed.Files,
-	}, nil
+	return prepareTurnSteerSubmissionLogic(a, threadID, input, selectedSkills, manualSkillSelection)
 }
 
 func (a *Adapter) resolveTurnSteerAlignment(req turnSteerRequest) (string, string, error) {
-	threadID, err := requireThreadID("Server.turnSteer", req.ThreadID)
-	if err != nil {
-		return "", "", err
-	}
-	expectedTurnID := strings.TrimSpace(req.ExpectedTurnID)
-	if expectedTurnID == "" {
-		return "", "", apperrors.New("Server.turnSteer", "expectedTurnId must not be empty")
-	}
-	activeTurnID, hasActiveTurn := a.activeTrackedTurnID(threadID)
-	if !hasActiveTurn {
-		return "", "", apperrors.New("Server.turnSteer", "no active turn to steer")
-	}
-	if !strings.EqualFold(expectedTurnID, activeTurnID) {
-		return "", "", apperrors.Newf(
-			"Server.turnSteer",
-			"expectedTurnId mismatch: expected %s, active %s",
-			expectedTurnID,
-			activeTurnID,
-		)
-	}
-	return threadID, activeTurnID, nil
+	return resolveTurnSteerAlignmentLogic(a, req)
 }
 
 func (a *Adapter) turnSteerFromInputAligned(req turnSteerRequest) (map[string]any, error) {
-	_, activeTurnID, err := a.resolveTurnSteerAlignment(req)
-	if err != nil {
-		return nil, err
-	}
-	result, err := a.TurnSteerFromInput(req)
-	if err != nil {
-		return nil, err
-	}
-	return ensureTurnSteerResultTurnID(result, activeTurnID), nil
+	return turnSteerFromInputAlignedLogic(a, req)
 }
 
 func parseTurnInputs(inputs []contracts.TurnInput) parsedTurnInputs {
@@ -266,38 +216,11 @@ func (a *Adapter) appendTurnStartUserTimeline(
 	attachments []uistate.TimelineAttachment,
 	opt contracts.TurnAppendUserTimelineOptions,
 ) {
-	uiRuntime := a.uiRuntime()
-	if uiRuntime == nil {
-		return
-	}
-	if len(attachments) == 0 {
-		attachments = buildUserTimelineAttachments(opt.Images, opt.Files)
-	}
-	showInjected := a.showInjectedPromptInChat(ctx)
-	appendInjectedHint := showInjected && !a.threadTimelineAlreadyShowsInjectedPrompt(opt.ThreadID)
-	injectedHint := ""
-	if appendInjectedHint {
-		injectedHint = a.ResolveLSPUsagePromptHint(ctx, defaultLSPUsagePromptHint, maxLSPUsagePromptHintLen)
-	}
-	timelineText := composeUserTimelineTextForTurn(opt.Prompt, opt.SubmitPrompt, injectedHint, showInjected)
-	uiRuntime.AppendUserMessage(opt.ThreadID, timelineText, attachments)
+	appendTurnStartUserTimelineLogic(a, ctx, attachments, opt)
 }
 
 func (a *Adapter) threadTimelineAlreadyShowsInjectedPrompt(threadID string) bool {
-	uiRuntime := a.uiRuntime()
-	if uiRuntime == nil {
-		return false
-	}
-	const marker = "\n已注入"
-	for _, item := range uiRuntime.ThreadTimeline(threadID) {
-		if item.Kind != "user" {
-			continue
-		}
-		if strings.Contains(item.Text, marker) {
-			return true
-		}
-	}
-	return false
+	return threadTimelineAlreadyShowsInjectedPromptLogic(a, threadID)
 }
 
 func composeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint string, showInjected bool) string {
@@ -321,53 +244,15 @@ func (a *Adapter) buildTurnSkillPrompt(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) (string, int, int) {
-	selectedSkillPrompt, selectedSkillCount := a.BuildSelectedSkillPrompt(selectedSkills)
-	if manualSkillSelection || selectedSkillCount > 0 {
-		return selectedSkillPrompt, selectedSkillCount, 0
-	}
-	autoSkillPrompt, autoSkillCount := a.buildForcedOrExplicitMatchedSkillPrompt(threadID, prompt, input)
-	return commonadapter.MergePromptText(selectedSkillPrompt, autoSkillPrompt), selectedSkillCount, autoSkillCount
+	return buildTurnSkillPromptLogic(a, threadID, prompt, input, selectedSkills, manualSkillSelection)
 }
 
 func (a *Adapter) buildForcedOrExplicitMatchedSkillPrompt(agentID, prompt string, input []contracts.TurnInput) (string, int) {
-	matches := a.collectAutoMatchedSkillMatches(agentID, prompt, input, contracts.AutoSkillMatchOptions{
-		IncludeConfiguredExplicit: true,
-		IncludeConfiguredForce:    true,
-	})
-	if len(matches) == 0 {
-		return "", 0
-	}
-	filtered := make([]autoMatchedSkillMatch, 0, len(matches))
-	for _, match := range matches {
-		switch match.MatchedBy {
-		case "force", "explicit":
-			filtered = append(filtered, match)
-		}
-	}
-	return a.renderAutoMatchedSkillPrompt(agentID, filtered)
+	return buildForcedOrExplicitMatchedSkillPromptLogic(a, agentID, prompt, input)
 }
 
 func (a *Adapter) collectAutoMatchedSkillMatches(agentID, prompt string, input []contracts.TurnInput, options contracts.AutoSkillMatchOptions) []autoMatchedSkillMatch {
-	if strings.TrimSpace(prompt) == "" {
-		return nil
-	}
-	candidates, err := a.listSkillMatchCandidates()
-	if err != nil {
-		logger.Warn("skills/auto-match: list skills failed",
-			append(threadLogFields(agentID), logger.FieldError, err)...,
-		)
-		return nil
-	}
-	if len(candidates) == 0 {
-		return nil
-	}
-	return collectAutoMatchedSkillMatches(
-		prompt,
-		buildAutoMatchInputs(input),
-		a.listAgentSkills(agentID),
-		candidates,
-		options,
-	)
+	return collectAutoMatchedSkillMatchesLogic(a, agentID, prompt, input, options)
 }
 
 // CollectAutoMatchedSkillMatchesForThread evaluates auto-match candidates for one thread.
@@ -377,7 +262,7 @@ func (a *Adapter) CollectAutoMatchedSkillMatchesForThread(
 	input []contracts.TurnInput,
 	options contracts.AutoSkillMatchOptions,
 ) []autoMatchedSkillMatch {
-	return a.collectAutoMatchedSkillMatches(threadID, prompt, input, options)
+	return collectAutoMatchedSkillMatchesForThreadLogic(a, threadID, prompt, input, options)
 }
 
 func buildAutoMatchInputs(input []contracts.TurnInput) []autoMatchInput {
@@ -395,8 +280,5 @@ func buildAutoMatchInputs(input []contracts.TurnInput) []autoMatchInput {
 }
 
 func (a *Adapter) renderAutoMatchedSkillPrompt(agentID string, matches []autoMatchedSkillMatch) (string, int) {
-	if len(matches) == 0 {
-		return "", 0
-	}
-	return a.RenderAutoMatchedSkillPrompt(agentID, matches)
+	return renderAutoMatchedSkillPromptLogic(a, agentID, matches)
 }

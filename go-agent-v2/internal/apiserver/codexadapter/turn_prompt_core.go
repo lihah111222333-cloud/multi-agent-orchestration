@@ -2,8 +2,13 @@ package codexadapter
 
 import (
 	"context"
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"strings"
+
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
+	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
+	"github.com/multi-agent/go-agent-v2/internal/skillutil"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 func passthroughSkillInputText(_ string, content string) string {
@@ -111,6 +116,114 @@ func prependLSPAvailabilityWarning(
 		return warning + "\n" + hint, missing
 	}
 	return merge(warning, hint), missing
+}
+
+func collectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]struct{} {
+	if len(dynamicTools) == 0 {
+		return nil
+	}
+	toolNames := make(map[string]struct{}, len(dynamicTools))
+	for _, tool := range dynamicTools {
+		name := strings.TrimSpace(tool.Name)
+		if name == "" {
+			continue
+		}
+		toolNames[name] = struct{}{}
+	}
+	return toolNames
+}
+
+func collectAutoMatchedSkillMatches(
+	prompt string,
+	inputs []contracts.AutoMatchInput,
+	configuredSkillNames []string,
+	candidates []contracts.SkillMatchCandidate,
+	options contracts.AutoSkillMatchOptions,
+) []contracts.AutoMatchedSkillMatch {
+	normalizedPrompt := strings.ToLower(strings.TrimSpace(prompt))
+	if normalizedPrompt == "" || len(candidates) == 0 {
+		return nil
+	}
+	inputSkillSet := skillutil.CollectInputSkillNames(
+		inputs,
+		func(input contracts.AutoMatchInput) string { return input.Type },
+		func(input contracts.AutoMatchInput) string { return input.Name },
+	)
+	configuredSet := commonadapter.CollectSkillNameSet(configuredSkillNames)
+
+	matches := make([]contracts.AutoMatchedSkillMatch, 0, len(candidates))
+	for _, skill := range candidates {
+		skillName := strings.TrimSpace(skill.Name)
+		if skillName == "" {
+			continue
+		}
+		skillNameLower := strings.ToLower(skillName)
+		if _, exists := inputSkillSet[skillNameLower]; exists {
+			continue
+		}
+		matchedBy, matchedTerms := commonadapter.ClassifyAutoSkillMatch(normalizedPrompt, skillName, skill.ForceWords, skill.TriggerWords)
+		if matchedBy == "" {
+			continue
+		}
+		if _, configured := configuredSet[skillNameLower]; configured {
+			includeConfigured := false
+			switch matchedBy {
+			case "explicit":
+				includeConfigured = options.IncludeConfiguredExplicit
+			case "force":
+				includeConfigured = options.IncludeConfiguredForce
+			}
+			if !includeConfigured {
+				continue
+			}
+		}
+		matches = append(matches, contracts.AutoMatchedSkillMatch{
+			Name:         skillName,
+			MatchedBy:    matchedBy,
+			MatchedTerms: matchedTerms,
+		})
+	}
+	return matches
+}
+
+func renderAutoMatchedSkillPrompt(
+	agentID string,
+	matches []contracts.AutoMatchedSkillMatch,
+	readSkillContent func(skillName string) (string, error),
+	mergePromptText func(prompt, extra string) string,
+	skillInputText func(name, content string) string,
+) (string, int) {
+	if len(matches) == 0 || readSkillContent == nil || skillInputText == nil {
+		return "", 0
+	}
+
+	texts := make([]string, 0, len(matches))
+	for _, match := range matches {
+		skillName := strings.TrimSpace(match.Name)
+		if skillName == "" {
+			continue
+		}
+		content, err := readSkillContent(skillName)
+		if err != nil {
+			logAutoMatchedSkillReadError(agentID, skillName, match.MatchedBy, err)
+			continue
+		}
+		if match.MatchedBy == "force" {
+			instruction := commonadapter.ForceMatchedSkillInstruction(match.MatchedTerms)
+			if strings.TrimSpace(instruction) != "" {
+				if mergePromptText != nil {
+					content = mergePromptText(instruction, content)
+				} else {
+					content = strings.TrimSpace(instruction) + "\n" + strings.TrimSpace(content)
+				}
+			}
+		}
+		texts = append(texts, skillInputText(skillName, content))
+	}
+	if len(texts) == 0 {
+		return "", 0
+	}
+	return strings.Join(texts, "\n"), len(texts)
 }
 
 func logAutoMatchedSkillReadError(agentID, skillName, matchedBy string, readErr error) {

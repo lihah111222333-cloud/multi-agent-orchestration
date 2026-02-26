@@ -14,6 +14,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	consumerruntime "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/runtime"
 	appErrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -359,5 +360,61 @@ func (a *Adapter) notify(method string, payload any) {
 	}
 	if notify := a.notifier(); notify != nil {
 		notify(method, payload)
+	}
+}
+
+func (a *Adapter) runtimeConsumerDeps() consumerruntime.Deps {
+	if a == nil {
+		return consumerruntime.Deps{}
+	}
+	return consumerruntime.Deps{
+		Manager:      a.manager(),
+		BindingStore: a.bindingStore(),
+		UIRuntime:    a.uiRuntime(),
+
+		BuildSelectedSkillPrompt: a.BuildSelectedSkillPrompt,
+		ListSkillMatchCandidates: a.listSkillMatchCandidates,
+		ListAgentSkills:          a.listAgentSkills,
+		CollectAutoMatchedSkillMatch: func(
+			prompt string,
+			inputs []contracts.AutoMatchInput,
+			configuredSkillNames []string,
+			candidates []contracts.SkillMatchCandidate,
+			options contracts.AutoSkillMatchOptions,
+		) []contracts.AutoMatchedSkillMatch {
+			return a.CollectAutoMatchedSkillMatches(prompt, inputs, configuredSkillNames, candidates, options)
+		},
+		RenderAutoMatchedSkillPrompt: a.RenderAutoMatchedSkillPrompt,
+		ActiveTrackedTurnID:          a.activeTrackedTurnID,
+		ShowInjectedPromptInChat:     a.showInjectedPromptInChat,
+		ResolveLSPUsagePromptHint:    a.ResolveLSPUsagePromptHint,
+
+		ThreadExistsInHistory: a.ThreadExistsInHistory,
+		AllDynamicToolSchemas: a.allDynamicToolSchemas,
+		ResolveStartInstructions: func(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
+			return a.resolveStartInstructionsForLaunch(ctx, dynamicTools)
+		},
+		SetAgentWorkDir: a.setAgentWorkDir,
+		GetThreadID:     a.GetThreadID,
+		CancelCodeRuns:  a.cancelCodeRuns,
+		ResolveCodexThreadCandidates: func(ctx context.Context, agentID string) []string {
+			return a.ResolveCodexThreadCandidates(ctx, agentID, appendUniqueThreadIDFallback, PreviewResumeCandidates)
+		},
+		ResumeThread: func(proc *runner.AgentProcess, req agentcore.ResumeThreadRequest) error {
+			return a.ResumeThread(proc, req)
+		},
+		IsCodexProcessCrashError:       IsCodexProcessCrashError,
+		IsHistoricalResumeCandidateErr: IsHistoricalResumeCandidateError,
+		PreviewResumeCandidates:        PreviewResumeCandidates,
+		Notify:                         a.notify,
+		Submit:                         a.Submit,
+		ResolveClientActiveTurnID: func(proc *runner.AgentProcess) string {
+			if proc == nil {
+				return ""
+			}
+			return resolveClientActiveTurnID(proc.Client)
+		},
+		BeginTrackedTurn: a.beginTrackedTurn,
+		TurnSteer:        a.TurnSteer,
 	}
 }

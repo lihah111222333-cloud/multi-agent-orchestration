@@ -289,3 +289,38 @@ func TestHandleRPCResponseStringIDMatchesPending(t *testing.T) {
 		t.Fatalf("pending call not resolved")
 	}
 }
+
+
+func TestTrackTurnLifecycleStartedStreamingTerminalOrder(t *testing.T) {
+	c := &AppServerClient{AgentID: "agent-1"}
+
+	startedData, err := json.Marshal(map[string]any{"turnId": "turn-42"})
+	if err != nil {
+		t.Fatalf("marshal started data failed: %v", err)
+	}
+	c.trackTurnLifecycle(Event{Type: EventTurnStarted, Data: startedData}, "turn/started")
+	if got := c.getActiveTurnID(); got != "turn-42" {
+		t.Fatalf("expected active turn set after started, got %q", got)
+	}
+
+	c.trackTurnLifecycle(Event{Type: EventTurnDiff, Data: json.RawMessage(`{"delta":"partial"}`)}, "turn/diff/updated")
+	if got := c.getActiveTurnID(); got != "turn-42" {
+		t.Fatalf("expected active turn kept during streaming progress, got %q", got)
+	}
+
+	c.trackTurnLifecycle(Event{Type: EventTurnComplete, Data: json.RawMessage(`{"turnId":"turn-42"}`)}, "turn/completed")
+	if got := c.getActiveTurnID(); got != "" {
+		t.Fatalf("expected active turn cleared on terminal event, got %q", got)
+	}
+}
+
+func TestJSONRPCToEventUnknownMethodFallsBackToRawType(t *testing.T) {
+	c := &AppServerClient{AgentID: "agent-1"}
+	event := c.jsonRPCToEvent(jsonRPCMessage{
+		Method: "unknown/method",
+		Params: json.RawMessage(`{"ok":true}`),
+	})
+	if event.Type != "unknown/method" {
+		t.Fatalf("expected unknown method to fall back to raw type, got %q", event.Type)
+	}
+}

@@ -330,82 +330,135 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 }
 
 // trackTurnLifecycle 从事件中提取并维护当前活跃 turnId。
+type turnLifecycleHandler func(c *AppServerClient, event Event, method, activeTurnID string)
+
+type turnLogLevel uint8
+
+const (
+	turnLogLevelDebug turnLogLevel = iota
+	turnLogLevelWarn
+)
+
+var turnLifecycleHandlers = map[string]turnLifecycleHandler{
+	EventTurnStarted:        handleTurnStartedLifecycleEvent,
+	EventTurnComplete:       handleTurnTerminalLifecycleEvent,
+	"turn_aborted":          handleTurnTerminalLifecycleEvent,
+	EventIdle:               handleTurnTerminalLifecycleEvent,
+	EventError:              handleTurnTerminalLifecycleEvent,
+	EventShutdownComplete:   handleTurnTerminalLifecycleEvent,
+	EventStreamError:        handleTurnStreamErrorLifecycleEvent,
+	"thread/status/changed": handleTurnThreadStatusChangedLifecycleEvent,
+}
+
 func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 	method = strings.TrimSpace(method)
 	activeTurnID := c.getActiveTurnID()
 
-	switch event.Type {
-	case EventTurnStarted:
-		if turnID := extractTurnIDFromEventData(event.Data); turnID != "" {
-			prevTurnID := activeTurnID
-			c.setActiveTurnID(turnID)
-			logger.Warn("DIAG: codex: active turn set (turn_started)",
-				logger.FieldAgentID, c.AgentID,
-				logger.FieldTurnID, turnID,
-				"prev_turn_id", prevTurnID,
-				logger.FieldMethod, method,
-			)
-			return
-		}
-		logger.Warn("codex: turn started event missing turn id",
-			logger.FieldAgentID, c.AgentID,
-			logger.FieldMethod, method,
-			logger.FieldEventType, event.Type,
+	if handler, ok := turnLifecycleHandlers[event.Type]; ok {
+		handler(c, event, method, activeTurnID)
+		return
+	}
+	c.handleTurnProgressLifecycleEvent(event, method, activeTurnID)
+}
+
+func handleTurnStartedLifecycleEvent(c *AppServerClient, event Event, method, activeTurnID string) {
+	turnID := extractTurnIDFromEventData(event.Data)
+	if turnID == "" {
+		c.logTurnEvent(turnLogLevelWarn,
+			"codex: turn started event missing turn id",
+			event.Type,
+			method,
 			logger.FieldDataLen, len(event.Data),
 			"active_turn_id_before", activeTurnID,
 		)
-	case EventTurnComplete, "turn_aborted", EventIdle, EventError, EventShutdownComplete:
-		if activeTurnID != "" {
-			c.clearActiveTurnID()
-			logger.Warn("DIAG: codex: active turn cleared (terminal event)",
-				logger.FieldAgentID, c.AgentID,
-				logger.FieldEventType, event.Type,
-				logger.FieldMethod, method,
-				"cleared_turn_id", activeTurnID,
-			)
-		} else {
-			logger.Warn("DIAG: codex: terminal event but no active turn to clear",
-				logger.FieldAgentID, c.AgentID,
-				logger.FieldEventType, event.Type,
-				logger.FieldMethod, method,
-			)
-		}
-	case EventStreamError:
-		if streamErrorWillRetry(event.Data) {
-			return
-		}
-		if activeTurnID != "" {
-			c.clearActiveTurnID()
-			logger.Debug("codex: active turn cleared by non-retryable stream error",
-				logger.FieldAgentID, c.AgentID,
-				logger.FieldEventType, event.Type,
-				logger.FieldMethod, method,
-				"prev_turn_id", activeTurnID,
-			)
-		}
-	case "thread/status/changed":
-		if activeTurnID == "" {
-			return
-		}
-		if status, terminal := threadStatusChangedTerminalState(event.Data); terminal {
-			c.clearActiveTurnID()
-			logger.Debug("codex: active turn cleared by thread/status/changed terminal state",
-				logger.FieldAgentID, c.AgentID,
-				logger.FieldMethod, method,
-				"thread_status", status,
-				"prev_turn_id", activeTurnID,
-			)
-		}
+		return
+	}
+	c.setActiveTurnID(turnID)
+	c.logTurnEvent(turnLogLevelWarn,
+		"DIAG: codex: active turn set (turn_started)",
+		event.Type,
+		method,
+		logger.FieldTurnID, turnID,
+		"prev_turn_id", activeTurnID,
+	)
+}
+
+func handleTurnTerminalLifecycleEvent(c *AppServerClient, event Event, method, activeTurnID string) {
+	if activeTurnID == "" {
+		c.logTurnEvent(turnLogLevelWarn,
+			"DIAG: codex: terminal event but no active turn to clear",
+			event.Type,
+			method,
+		)
+		return
+	}
+	c.clearActiveTurnID()
+	c.logTurnEvent(turnLogLevelWarn,
+		"DIAG: codex: active turn cleared (terminal event)",
+		event.Type,
+		method,
+		"cleared_turn_id", activeTurnID,
+	)
+}
+
+func handleTurnStreamErrorLifecycleEvent(c *AppServerClient, event Event, method, activeTurnID string) {
+	if streamErrorWillRetry(event.Data) || activeTurnID == "" {
+		return
+	}
+	c.clearActiveTurnID()
+	c.logTurnEvent(turnLogLevelDebug,
+		"codex: active turn cleared by non-retryable stream error",
+		event.Type,
+		method,
+		"prev_turn_id", activeTurnID,
+	)
+}
+
+func handleTurnThreadStatusChangedLifecycleEvent(c *AppServerClient, event Event, method, activeTurnID string) {
+	if activeTurnID == "" {
+		return
+	}
+	if status, terminal := threadStatusChangedTerminalState(event.Data); terminal {
+		c.clearActiveTurnID()
+		c.logTurnEvent(turnLogLevelDebug,
+			"codex: active turn cleared by thread/status/changed terminal state",
+			event.Type,
+			method,
+			"thread_status", status,
+			"prev_turn_id", activeTurnID,
+		)
+	}
+}
+
+func (c *AppServerClient) handleTurnProgressLifecycleEvent(event Event, method, activeTurnID string) {
+	if activeTurnID == "" || !isTurnTailProgressEvent(event.Type, method) {
+		return
+	}
+	c.logTurnEvent(turnLogLevelDebug,
+		"codex: active turn observed progress event without terminal yet",
+		event.Type,
+		method,
+		logger.FieldTurnID, activeTurnID,
+		logger.FieldDataLen, len(event.Data),
+	)
+}
+
+func (c *AppServerClient) logTurnEvent(level turnLogLevel, message, eventType, method string, fields ...any) {
+	args := make([]any, 0, 6+len(fields))
+	args = append(args, logger.FieldAgentID, c.AgentID)
+	if strings.TrimSpace(eventType) != "" {
+		args = append(args, logger.FieldEventType, eventType)
+	}
+	if strings.TrimSpace(method) != "" {
+		args = append(args, logger.FieldMethod, method)
+	}
+	args = append(args, fields...)
+
+	switch level {
+	case turnLogLevelWarn:
+		logger.Warn(message, args...)
 	default:
-		if activeTurnID != "" && isTurnTailProgressEvent(event.Type, method) {
-			logger.Debug("codex: active turn observed progress event without terminal yet",
-				logger.FieldAgentID, c.AgentID,
-				logger.FieldTurnID, activeTurnID,
-				logger.FieldEventType, event.Type,
-				logger.FieldMethod, method,
-				logger.FieldDataLen, len(event.Data),
-			)
-		}
+		logger.Debug(message, args...)
 	}
 }
 

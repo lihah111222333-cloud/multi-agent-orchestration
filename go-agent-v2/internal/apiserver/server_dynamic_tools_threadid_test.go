@@ -259,14 +259,40 @@ func TestSplitUnifiedDiffByFileSupportsQuotedPaths(t *testing.T) {
 	}
 }
 
-func TestHandleDynamicToolCallUpdatesRuntimeDiffTextForCurrentCall(t *testing.T) {
+func TestMaybeEmitDynamicToolDiffUpdateUpdatesUIRuntimeForCurrentCall(t *testing.T) {
 	repoRoot := initTestGitRepo(t)
 	preexistingPath := filepath.Join(repoRoot, "preexisting.txt")
 	if err := os.WriteFile(preexistingPath, []byte("keep\n"), 0o644); err != nil {
 		t.Fatalf("seed preexisting file: %v", err)
 	}
 
-	const agentID = "thread-123"
+	s := New(Deps{})
+	tracker := beginDynamicToolDiffTracker(s, "thread-123", "run", map[string]any{"work_dir": repoRoot})
+	if !tracker.enabled {
+		t.Fatalf("expected dynamic tool diff tracker to be enabled")
+	}
+
+	trackedPath := filepath.Join(repoRoot, "tracked.txt")
+	if err := os.WriteFile(trackedPath, []byte("line-1\nline-2\n"), 0o644); err != nil {
+		t.Fatalf("write tracked file: %v", err)
+	}
+	maybeEmitDynamicToolDiffUpdate(s, "thread-123", "019c96bd-1450-7510-800f-6270ab10f06c", "run", tracker)
+
+	diffText := s.uiRuntime.ThreadDiff("thread-123")
+	if !strings.Contains(diffText, "tracked.txt") {
+		t.Fatalf("expected tracked file in diff, got: %s", diffText)
+	}
+	if !strings.Contains(diffText, "line-2") {
+		t.Fatalf("expected updated content in diff, got: %s", diffText)
+	}
+	if strings.Contains(diffText, "preexisting.txt") {
+		t.Fatalf("diff should not include preexisting dirty file, got: %s", diffText)
+	}
+}
+
+func TestHandleDynamicToolCallAppliesDiffToUIRuntime(t *testing.T) {
+	repoRoot := initTestGitRepo(t)
+	const agentID = "thread-789"
 	mgr := newDynamicToolTestManager(t, "019c96bd-1450-7510-800f-6270ab10f06c")
 	if err := mgr.Launch(context.Background(), agentID, agentID, "", repoRoot, "", nil); err != nil {
 		t.Fatalf("Launch() error = %v", err)
@@ -274,6 +300,8 @@ func TestHandleDynamicToolCallUpdatesRuntimeDiffTextForCurrentCall(t *testing.T)
 	t.Cleanup(func() { _ = mgr.Stop(agentID) })
 
 	s := New(Deps{Manager: mgr})
+	setAgentWorkDirState(s, agentID, repoRoot)
+
 	trackedPath := filepath.Join(repoRoot, "tracked.txt")
 	setRuntimeTool(s, "run", func(_ tools.ToolCallContext, args json.RawMessage) string {
 		var req struct {
@@ -290,6 +318,7 @@ func TestHandleDynamicToolCallUpdatesRuntimeDiffTextForCurrentCall(t *testing.T)
 	})
 
 	callArgs, err := json.Marshal(map[string]any{
+		"work_dir":  repoRoot,
 		"file_path": trackedPath,
 		"content":   "line-1\nline-2\n",
 	})
@@ -325,9 +354,6 @@ func TestHandleDynamicToolCallUpdatesRuntimeDiffTextForCurrentCall(t *testing.T)
 	}
 	if !strings.Contains(diffText, "line-2") {
 		t.Fatalf("expected updated content in diff, got: %s", diffText)
-	}
-	if strings.Contains(diffText, "preexisting.txt") {
-		t.Fatalf("diff should not include preexisting dirty file, got: %s", diffText)
 	}
 }
 

@@ -875,20 +875,12 @@ func runGitNoIndexDiff(repoRoot, relPath string) (string, error) {
 }
 
 func runGitNoIndexDiffAgainstFiles(path, beforePath, afterPath string) (string, error) {
-	labelPath := filepath.ToSlash(strings.TrimSpace(path))
-	if labelPath == "" {
-		labelPath = "unknown"
-	}
 	cmd := exec.Command(
 		"git",
 		"diff",
 		"--no-color",
 		"--no-ext-diff",
 		"--no-index",
-		"--label",
-		"a/"+labelPath,
-		"--label",
-		"b/"+labelPath,
 		"--",
 		beforePath,
 		afterPath,
@@ -900,7 +892,23 @@ func runGitNoIndexDiffAgainstFiles(path, beforePath, afterPath string) (string, 
 			return "", err
 		}
 	}
-	return string(output), nil
+	return normalizeNoIndexDiffOutput(string(output), path, beforePath, afterPath), nil
+}
+
+func normalizeNoIndexDiffOutput(raw, path, beforePath, afterPath string) string {
+	labelPath := filepath.ToSlash(strings.TrimSpace(path))
+	if labelPath == "" {
+		labelPath = "unknown"
+	}
+	beforeSlash := filepath.ToSlash(beforePath)
+	afterSlash := filepath.ToSlash(afterPath)
+
+	normalized := raw
+	normalized = strings.ReplaceAll(normalized, beforeSlash, labelPath)
+	normalized = strings.ReplaceAll(normalized, afterSlash, labelPath)
+	normalized = strings.ReplaceAll(normalized, beforePath, filepath.FromSlash(labelPath))
+	normalized = strings.ReplaceAll(normalized, afterPath, filepath.FromSlash(labelPath))
+	return normalized
 }
 
 func dynamicToolCallResultPayload(output string) map[string]any {

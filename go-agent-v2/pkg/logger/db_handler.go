@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	slogmulti "github.com/samber/slog-multi"
 )
 
 // LogEntry 对应 system_logs 表的一行。
@@ -263,76 +264,14 @@ func applyAttr(e *LogEntry, a slog.Attr) {
 }
 
 // ========================================
-// MultiHandler — 同时写多个 Handler (TextHandler + DBHandler)
-// ========================================
-
-// MultiHandler 扇出日志到多个 slog.Handler。
-type MultiHandler struct {
-	handlers []slog.Handler
-}
-
-// NewMultiHandler 创建多路 Handler。
-func NewMultiHandler(handlers ...slog.Handler) *MultiHandler {
-	return &MultiHandler{handlers: handlers}
-}
-
-// Enabled 只要有一个 Handler 接受该级别就返回 true。
-func (m *MultiHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	for _, h := range m.handlers {
-		if h.Enabled(ctx, level) {
-			return true
-		}
-	}
-	return false
-}
-
-// Handle 分发到所有 Handler, 返回首个错误 (若有)。
-func (m *MultiHandler) Handle(ctx context.Context, r slog.Record) error {
-	var firstErr error
-	for _, h := range m.handlers {
-		if h.Enabled(ctx, r.Level) {
-			if err := h.Handle(ctx, r); err != nil && firstErr == nil {
-				firstErr = err
-			}
-		}
-	}
-	return firstErr
-}
-
-// WithAttrs 对所有 Handler 调用 WithAttrs。
-func (m *MultiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	handlers := make([]slog.Handler, len(m.handlers))
-	for i, h := range m.handlers {
-		handlers[i] = h.WithAttrs(attrs)
-	}
-	return &MultiHandler{handlers: handlers}
-}
-
-// WithGroup 对所有 Handler 调用 WithGroup。
-func (m *MultiHandler) WithGroup(name string) slog.Handler {
-	handlers := make([]slog.Handler, len(m.handlers))
-	for i, h := range m.handlers {
-		handlers[i] = h.WithGroup(name)
-	}
-	return &MultiHandler{handlers: handlers}
-}
-
-// ========================================
 // AttachDBHandler — pool ready 后动态挂载
 // ========================================
 
 var (
-	dbHandler atomic.Pointer[DBHandler]
-	attachMu  sync.Mutex
+	dbHandler   atomic.Pointer[DBHandler]
+	attachMu    sync.Mutex
+	baseHandler slog.Handler // 记录原始 handler，用于 AttachDBHandler 重建时避免嵌套
 )
-
-// unwrapBaseHandler 从 MultiHandler 包装中提取原始 handler, 防止嵌套。
-func unwrapBaseHandler(h slog.Handler) slog.Handler {
-	if mh, ok := h.(*MultiHandler); ok && len(mh.handlers) > 0 {
-		return mh.handlers[0]
-	}
-	return h
-}
 
 // AttachDBHandler 在 pool 初始化后调用，将 DBHandler 作为第二路 Handler 挂载。
 // 调用前的日志只写 stdout; 调用后开始双写。幂等: 重复调用会先关闭旧 DBHandler。
@@ -348,9 +287,12 @@ func AttachDBHandler(pool *pgxpool.Pool) {
 	h := NewDBHandler(pool, slog.LevelInfo)
 	dbHandler.Store(h)
 
-	// 重建 defaultLogger: 取原始 handler (跳过 MultiHandler 包装层) + 新 dbHandler
-	origHandler := unwrapBaseHandler(getLogger().Handler())
-	multi := NewMultiHandler(origHandler, h)
+	// 首次挂载时记录原始 handler，后续重建时复用，防止 Fanout 嵌套
+	if baseHandler == nil {
+		baseHandler = getLogger().Handler()
+	}
+
+	multi := slogmulti.Fanout(baseHandler, h)
 	storeLogger(slog.New(multi))
 }
 

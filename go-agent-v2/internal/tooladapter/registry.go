@@ -151,8 +151,18 @@ func runtimeTools(deps Providers) []tools.Tool {
 
 func schemaTools(deps Providers) []tools.Tool {
 	out := make([]tools.Tool, 0, 64)
-	if deps.LSP != nil && hasAvailableLSPServer(deps.LSP) {
-		out = append(out, buildLSPTools(deps.LSP)...)
+	if deps.LSP != nil {
+		lspTools := buildLSPTools(deps.LSP)
+		if hasAvailableLSPServer(deps.LSP) {
+			out = append(out, lspTools...)
+		} else {
+			for _, tool := range lspTools {
+				if strings.TrimSpace(tool.Schema.Name) == "lsp_grep" {
+					out = append(out, tool)
+					break
+				}
+			}
+		}
 	}
 
 	schemaProvider := deps.Schema

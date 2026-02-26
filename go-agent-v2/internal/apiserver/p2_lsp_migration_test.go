@@ -31,6 +31,8 @@ var p2BannedLSPServerMethods = map[string]struct{}{
 	"lspWorkspaceSymbol":       {},
 	"lspImplementation":        {},
 	"lspTypeDefinition":        {},
+	"lspTextSearch":            {},
+	"lspAstSearch":             {},
 	"lspAvailabilitySummary":   {},
 	"lspDiagnosticsQueryTyped": {},
 }

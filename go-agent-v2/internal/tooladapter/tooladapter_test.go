@@ -116,6 +116,8 @@ func (p *fakeLSPProvider) FoldingRange(json.RawMessage) string    { return "fold
 func (p *fakeLSPProvider) WorkspaceSymbol(json.RawMessage) string { return "workspace_symbol" }
 func (p *fakeLSPProvider) Implementation(json.RawMessage) string  { return "implementation" }
 func (p *fakeLSPProvider) TypeDefinition(json.RawMessage) string  { return "type_definition" }
+func (p *fakeLSPProvider) TextSearch(json.RawMessage) string      { return "text_search" }
+func (p *fakeLSPProvider) AstSearch(json.RawMessage) string       { return "ast_search" }
 
 func testProviders(hasAvailableServer bool) Providers {
 	deps := fakeSharedProviders{}
@@ -170,6 +172,8 @@ func TestRegisterAndAllSchemasAlign(t *testing.T) {
 		"orchestration_launch_agent",
 		"lsp_hover",
 		"lsp_code_action",
+		"lsp_text_search",
+		"lsp_ast_search",
 	} {
 		if _, ok := registry.handlers[required]; !ok {
 			t.Fatalf("expected handler %q to be registered", required)

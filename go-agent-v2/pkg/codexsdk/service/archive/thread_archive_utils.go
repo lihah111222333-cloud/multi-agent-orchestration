@@ -1,4 +1,4 @@
-package codexadapter
+package archive
 
 import (
 	"crypto/sha256"
@@ -17,6 +17,11 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/codex"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
+
+type threadArtifactCandidate struct {
+	Kind string
+	Path string
+}
 
 // NormalizeThreadArchiveMap normalizes archive state payload into map[string]int64.
 func NormalizeThreadArchiveMap(value any) map[string]int64 {

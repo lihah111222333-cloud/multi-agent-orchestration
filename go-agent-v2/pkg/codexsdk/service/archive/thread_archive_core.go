@@ -1,4 +1,4 @@
-package codexadapter
+package archive
 
 import (
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
@@ -30,6 +30,142 @@ type threadArchiveManifest struct {
 // InferThreadArtifactKind infers the artifact kind from filename.
 func InferThreadArtifactKind(filename string) string {
 	return inferThreadArtifactKind(filename)
+}
+
+type ThreadArchiveFile = threadArchiveFile
+
+type ThreadArchiveManifest = threadArchiveManifest
+
+type ThreadArchiveRestoreNotice = threadArchiveRestoreNotice
+
+type ThreadArchiveRestoreDeps = threadArchiveRestoreDeps
+
+type ThreadArtifactCandidate = threadArtifactCandidate
+
+func MergeThreadArchiveMaps(dst map[string]int64, src map[string]int64) map[string]int64 {
+	return mergeThreadArchiveMaps(dst, src)
+}
+
+func LoadThreadArchiveMapFromDisk() (map[string]int64, error) {
+	return loadThreadArchiveMapFromDisk()
+}
+
+func ResolveThreadArchiveRootDir() (string, error) {
+	return resolveThreadArchiveRootDir()
+}
+
+func ResolveThreadArchiveSnapshotDir(rootDir string, threadID string, archivedAt string) (string, error) {
+	return resolveThreadArchiveSnapshotDir(rootDir, threadID, archivedAt)
+}
+
+func CollectThreadArtifactCandidates(codexThreadID string, rolloutPath string) []ThreadArtifactCandidate {
+	return collectThreadArtifactCandidates(codexThreadID, rolloutPath)
+}
+
+func NextArchiveFilePath(dir, filename string) (string, error) {
+	return nextArchiveFilePath(dir, filename)
+}
+
+func CopyFile(srcPath, targetPath string) error {
+	return copyFile(srcPath, targetPath)
+}
+
+func CopyFileOverwrite(srcPath, targetPath string) error {
+	return copyFileOverwrite(srcPath, targetPath)
+}
+
+func FileSHA256(path string) (string, error) {
+	return fileSHA256(path)
+}
+
+func WriteThreadArchiveManifest(manifest ThreadArchiveManifest) error {
+	return writeThreadArchiveManifest(manifest)
+}
+
+func BuildThreadArchiveRestoreDeps(
+	resolveThreadArchiveRoot func() (string, error),
+	sanitizeArchiveNameStrict func(string) (string, error),
+	resolveCodexRootDir func() (string, error),
+	pathWithinRoot func(root, path string) (bool, error),
+	copyFileOverwrite func(srcPath, targetPath string) error,
+	fileSHA256 func(path string) (string, error),
+	findLatestManifestPath func(threadDir string) (string, error),
+	readManifestFile func(manifestPath string) (ThreadArchiveManifest, error),
+) ThreadArchiveRestoreDeps {
+	return buildThreadArchiveRestoreDeps(
+		resolveThreadArchiveRoot,
+		sanitizeArchiveNameStrict,
+		resolveCodexRootDir,
+		pathWithinRoot,
+		copyFileOverwrite,
+		fileSHA256,
+		findLatestManifestPath,
+		readManifestFile,
+	)
+}
+
+func FindLatestThreadArchiveManifestPath(threadDir string) (string, error) {
+	return findLatestThreadArchiveManifestPath(threadDir)
+}
+
+func ReadThreadArchiveManifest(manifestPath string) (ThreadArchiveManifest, error) {
+	return readThreadArchiveManifest(manifestPath)
+}
+
+func InspectThreadArchiveForRestore(threadID string, deps ThreadArchiveRestoreDeps) (ThreadArchiveRestoreNotice, error) {
+	return inspectThreadArchiveForRestore(threadID, deps)
+}
+
+func RestoreThreadArchiveSources(
+	threadID string,
+	resolveThreadArchiveRoot func() (string, error),
+	sanitizeArchiveNameStrict func(string) (string, error),
+	resolveCodexRootDir func() (string, error),
+	pathWithinRoot func(root, path string) (bool, error),
+	copyFileOverwrite func(srcPath, targetPath string) error,
+	fileSHA256 func(path string) (string, error),
+	findLatestManifestPath func(threadDir string) (string, error),
+	readManifestFile func(manifestPath string) (ThreadArchiveManifest, error),
+) ([]string, []string, error) {
+	return restoreThreadArchiveSources(
+		threadID,
+		resolveThreadArchiveRoot,
+		sanitizeArchiveNameStrict,
+		resolveCodexRootDir,
+		pathWithinRoot,
+		copyFileOverwrite,
+		fileSHA256,
+		findLatestManifestPath,
+		readManifestFile,
+	)
+}
+
+func ResolveCodexRootDir() (string, error) {
+	return resolveCodexRootDir()
+}
+
+func PruneArchivedCodexSourceFiles(
+	threadID string,
+	files []ThreadArchiveFile,
+	archiveDir string,
+	resolveCodexRootDir func() (string, error),
+	pathWithinRoot func(root, path string) (bool, error),
+	fileSHA256 func(path string) (string, error),
+	removeEmptyCodexParentDir func(startDir, codexRoot string),
+) {
+	pruneArchivedCodexSourceFiles(
+		threadID,
+		files,
+		archiveDir,
+		resolveCodexRootDir,
+		pathWithinRoot,
+		fileSHA256,
+		removeEmptyCodexParentDir,
+	)
+}
+
+func RemoveEmptyCodexParentDirs(startDir string, codexRoot string) {
+	removeEmptyCodexParentDirs(startDir, codexRoot)
 }
 
 // threadArchiveRestoreNotice describes archive integrity status before restore.

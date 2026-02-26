@@ -1,4 +1,4 @@
-package codexadapter
+package archive
 
 import (
 	"os"

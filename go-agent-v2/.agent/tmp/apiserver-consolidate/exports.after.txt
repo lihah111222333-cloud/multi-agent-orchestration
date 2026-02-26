@@ -1,0 +1,63 @@
+package apiserver // import "github.com/multi-agent/go-agent-v2/internal/apiserver"
+
+methods_config.go — 配置、模型、MCP、LSP 诊断、日志查询 JSON-RPC 方法。
+
+methods_thread.go — thread/* JSON-RPC 方法实现。
+
+methods_ui_state.go — UI 偏好/状态管理 JSON-RPC 方法 (preferences, state, thread
+aliases)。
+
+notifications.go — Codex Agent 事件 → JSON-RPC Notification 映射。
+
+完整对标 codex app-server-protocol v2 通知规范。 参考: APP-SERVER-PROTOCOL.md § 三、四
+
+protocol.go — JSON-RPC 2.0 协议类型定义。
+
+规范: https://www.jsonrpc.org/specification
+
+    Request:      {"jsonrpc":"2.0", "id":1, "method":"...", "params":{...}}
+    Response:     {"jsonrpc":"2.0", "id":1, "result":{...}}
+    Error:        {"jsonrpc":"2.0", "id":1, "error":{"code":..., "message":"..."}}
+    Notification: {"jsonrpc":"2.0", "method":"...", "params":{...}}
+
+server.go — JSON-RPC over WebSocket 服务器（核心结构体与启动）。
+
+架构:
+
+    WebSocket 连接 → JSON-RPC 2.0 消息解析 → 方法分发 → 响应
+    Agent 事件 → Notification 广播给所有连接
+
+拆分说明:
+  - server_conn.go / server_transport.go: 连接管理与 WS/HTTP/SSE 传输
+  - server_event_handler.go / server_payload*.go: 事件转发与 payload 增强
+  - server_bootstrap_*.go: stores/skills/runtime 初始化装配
+  - server_lifecycle.go: 服务启动与运行时清理
+
+server_approval.go — 审批事件处理: Server→Client 请求 → 等回复 → 回传 codex。
+
+server_conn.go — WebSocket 连接管理、RPC 消息解析与方法分发。
+
+server_dynamic_tools.go — LSP 动态工具: 注册、构建、调用 & 回传。
+
+server_event_handler.go — Agent 事件转发与事件级 payload 增强。
+
+server_lifecycle.go — 服务启动与运行时清理。
+
+server_transport.go — HTTP JSON-RPC / SSE 传输层。
+
+const CodeParseError = -32700 ...
+func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler
+func InvokeMethod(s *Server, ctx context.Context, method string, params json.RawMessage) (any, error)
+func Notify(s *Server, method string, params any)
+func ResolvePendingRequest(s *Server, reqID int64, result map[string]any) bool
+func SetNotifyHook(s *Server, h func(method string, params any))
+func SetupLSP(s *Server, rootDir string)
+type Deps struct{ ... }
+type Handler func(ctx context.Context, params json.RawMessage) (any, error)
+type Notification struct{ ... }
+type RPCError struct{ ... }
+type Request struct{ ... }
+type Response struct{ ... }
+type Server struct{ ... }
+    func New(deps Deps) *Server
+type UserInput struct{ ... }

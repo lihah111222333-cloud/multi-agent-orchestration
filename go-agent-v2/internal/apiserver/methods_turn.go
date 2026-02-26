@@ -135,40 +135,19 @@ type threadRealtimeStopParams struct {
 }
 
 func (s *Server) threadRealtimeStartTyped(_ context.Context, p threadRealtimeStartParams) (any, error) {
-	if strings.TrimSpace(p.ThreadID) == "" {
-		return nil, pkgerr.New("Server.threadRealtimeStart", "threadId is required")
-	}
-	if strings.TrimSpace(p.Prompt) == "" {
-		return nil, pkgerr.New("Server.threadRealtimeStart", "prompt is required")
-	}
-	return map[string]any{}, nil
+	return s.codexAdapter.ThreadRealtimeStart(p.ThreadID, p.Prompt, p.SessionID)
 }
 
 func (s *Server) threadRealtimeAppendAudioTyped(_ context.Context, p threadRealtimeAppendAudioParams) (any, error) {
-	if strings.TrimSpace(p.ThreadID) == "" {
-		return nil, pkgerr.New("Server.threadRealtimeAppendAudio", "threadId is required")
-	}
-	if p.Audio == nil {
-		return nil, pkgerr.New("Server.threadRealtimeAppendAudio", "audio is required")
-	}
-	return map[string]any{}, nil
+	return s.codexAdapter.ThreadRealtimeAppendAudio(p.ThreadID, p.Audio)
 }
 
 func (s *Server) threadRealtimeAppendTextTyped(_ context.Context, p threadRealtimeAppendTextParams) (any, error) {
-	if strings.TrimSpace(p.ThreadID) == "" {
-		return nil, pkgerr.New("Server.threadRealtimeAppendText", "threadId is required")
-	}
-	if strings.TrimSpace(p.Text) == "" {
-		return nil, pkgerr.New("Server.threadRealtimeAppendText", "text is required")
-	}
-	return map[string]any{}, nil
+	return s.codexAdapter.ThreadRealtimeAppendText(p.ThreadID, p.Text)
 }
 
 func (s *Server) threadRealtimeStopTyped(_ context.Context, p threadRealtimeStopParams) (any, error) {
-	if strings.TrimSpace(p.ThreadID) == "" {
-		return nil, pkgerr.New("Server.threadRealtimeStop", "threadId is required")
-	}
-	return map[string]any{}, nil
+	return s.codexAdapter.ThreadRealtimeStop(p.ThreadID)
 }
 
 // reviewStartParams review/start 请求参数。

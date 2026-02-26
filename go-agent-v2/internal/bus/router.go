@@ -1,59 +1,48 @@
-// router.go — Agent 消息路由器 (基于 agent_threads 表的服务发现)。
-//
-// 简化架构:
-//
-//	agent_threads 表 = 服务注册表 (port/pid/status)
-//	任何 Agent 查表 → 拿端口 → 直接 HTTP/WS 互通
-//
-// 路由流程:
-//  1. DelegateTask(fromID, toID, prompt) → 查 agent_threads 获取 toID 端口
-//  2. 构造 codex.Client(port) → Submit(prompt)
-//  3. 事件通过 bus 广播给监听者
 package bus
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"sync"
-	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/codex"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/discovery"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
-// AgentDiscoverer 服务发现接口（对齐 internal/discovery 契约）。
+// AgentDiscoverer is the discovery contract used by the router.
 type AgentDiscoverer = discovery.Discoverer
 
-// AgentEndpoint 发现的 Agent 端点（兼容旧名称）。
+// AgentEndpoint is the discovered running agent endpoint.
 type AgentEndpoint = discovery.RunningAgent
 
-// AgentRouter Agent 消息路由器 (基于 agent_threads 服务发现)。
+// AgentRouter routes messages between agents discovered from agent_threads.
 type AgentRouter struct {
-	bus        *MessageBus
-	discover   AgentDiscoverer
-	mu         sync.RWMutex             // 保护 clients map (活跃连接缓存)
-	clients    map[string]*codex.Client // threadID → 活跃连接缓存
-	httpClient *http.Client
+	bus       *MessageBus
+	discover  AgentDiscoverer
+	mu        sync.RWMutex
+	clients   map[string]AgentClient
+	newClient AgentClientFactory
 }
 
-// NewAgentRouter 创建路由器。
-func NewAgentRouter(bus *MessageBus, discover AgentDiscoverer) *AgentRouter {
+// NewAgentRouter creates a router with optional client factory injection.
+func NewAgentRouter(bus *MessageBus, discover AgentDiscoverer, factories ...AgentClientFactory) *AgentRouter {
+	var factory AgentClientFactory
+	if len(factories) > 0 {
+		factory = factories[0]
+	}
+
 	return &AgentRouter{
-		bus:        bus,
-		discover:   discover,
-		clients:    make(map[string]*codex.Client),
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		bus:       bus,
+		discover:  discover,
+		clients:   make(map[string]AgentClient),
+		newClient: factory,
 	}
 }
 
-// DelegateTask Agent A 委托任务给 Agent B (基于 agent_threads 查表路由)。
-//
-// 流程: 查 agent_threads → 获取端口 → POST /threads/:id/submit。
+// DelegateTask routes one task from fromID to toThreadID.
 func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prompt string, images, files []string) error {
-	// 查表获取目标 Agent 的端点
 	endpoints, err := r.discover.ListRunning(ctx)
 	if err != nil {
 		return apperrors.Wrap(err, "AgentRouter.DelegateTask", "discover agents")
@@ -70,13 +59,14 @@ func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prom
 		return apperrors.Newf("AgentRouter.DelegateTask", "agent %s not found or not running", toThreadID)
 	}
 
-	// 直接 HTTP POST submit 到目标 Agent
-	client := r.getOrCreateClient(target.ThreadID, target.Port)
+	client, err := r.getOrCreateClient(target.ThreadID, target.Port)
+	if err != nil {
+		return apperrors.Wrapf(err, "AgentRouter.DelegateTask", "get client for %s (port %d)", toThreadID, target.Port)
+	}
 	if err := client.Submit(prompt, images, files, nil); err != nil {
 		return apperrors.Wrapf(err, "AgentRouter.DelegateTask", "submit to %s (port %d)", toThreadID, target.Port)
 	}
 
-	// 发布委托事件到总线 (通知监听者)
 	payload := delegatePayload{
 		Prompt: prompt,
 		Images: images,
@@ -86,18 +76,21 @@ func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prom
 	if err != nil {
 		return apperrors.Wrap(err, "AgentRouter.DelegateTask", "marshal delegate payload")
 	}
-	r.bus.Publish(Message{
-		Topic:   fmt.Sprintf("agent.%s.input", toThreadID),
-		From:    fromID,
-		To:      toThreadID,
-		Type:    MsgTaskDelegate,
-		Payload: data,
-	})
+
+	if r.bus != nil {
+		r.bus.Publish(Message{
+			Topic:   fmt.Sprintf("agent.%s.input", toThreadID),
+			From:    fromID,
+			To:      toThreadID,
+			Type:    MsgTaskDelegate,
+			Payload: data,
+		})
+	}
 
 	return nil
 }
 
-// SendToAgent 直接向指定 Agent 发送消息。
+// SendToAgent sends one prompt to one target agent.
 func (r *AgentRouter) SendToAgent(ctx context.Context, threadID, prompt string) error {
 	endpoints, err := r.discover.ListRunning(ctx)
 	if err != nil {
@@ -106,102 +99,116 @@ func (r *AgentRouter) SendToAgent(ctx context.Context, threadID, prompt string) 
 
 	for _, ep := range endpoints {
 		if ep.ThreadID == threadID {
-			client := r.getOrCreateClient(ep.ThreadID, ep.Port)
+			client, err := r.getOrCreateClient(ep.ThreadID, ep.Port)
+			if err != nil {
+				return apperrors.Wrapf(err, "AgentRouter.SendToAgent", "get client for %s (port %d)", ep.ThreadID, ep.Port)
+			}
 			return client.Submit(prompt, nil, nil, nil)
 		}
 	}
 	return apperrors.Newf("AgentRouter.SendToAgent", "agent %s not found", threadID)
 }
 
-// Broadcast 向所有运行中的 Agent 广播消息。
+// Broadcast sends one prompt to all running agents except sender.
 func (r *AgentRouter) Broadcast(ctx context.Context, fromID, prompt string) error {
 	endpoints, err := r.discover.ListRunning(ctx)
 	if err != nil {
 		return apperrors.Wrap(err, "AgentRouter.Broadcast", "discover")
 	}
 
-	var lastErr error
 	for _, ep := range endpoints {
 		if ep.ThreadID == fromID {
-			continue // 不发给自己
+			continue
 		}
-		client := r.getOrCreateClient(ep.ThreadID, ep.Port)
+
+		client, err := r.getOrCreateClient(ep.ThreadID, ep.Port)
+		if err != nil {
+			continue
+		}
 		if err := client.Submit(prompt, nil, nil, nil); err != nil {
-			lastErr = err
+			continue
 		}
 	}
-	return lastErr
+	return nil
 }
 
-// PublishAgentEvent 将 Codex 事件发布到总线 (由 runner 事件回调调用)。
-func (r *AgentRouter) PublishAgentEvent(agentID string, event codex.Event) {
+// PublishAgentEvent publishes one normalized agent event to bus with subtopic routing.
+func (r *AgentRouter) PublishAgentEvent(agentID string, event AgentEvent) {
+	if r.bus == nil {
+		return
+	}
+
 	data, err := json.Marshal(event)
 	if err != nil {
-		return // marshal 失败时静默跳过 (避免崩溃事件循环)
+		return
 	}
 
 	subtopic := "event"
 	switch event.Type {
-	case codex.EventAgentMessageDelta, codex.EventAgentMessage:
+	case agentcore.EventAgentMessageDelta, agentcore.EventAgentMessage:
 		subtopic = "output"
-	case codex.EventExecCommandBegin, codex.EventExecCommandEnd, codex.EventExecCommandOutputDelta:
+	case agentcore.EventExecCommandBegin, agentcore.EventExecCommandEnd, agentcore.EventExecCommandOutputDelta:
 		subtopic = "exec"
-	case codex.EventError:
+	case agentcore.EventError:
 		subtopic = "error"
-	case codex.EventIdle, codex.EventTurnComplete:
+	case agentcore.EventIdle, agentcore.EventTurnComplete:
 		subtopic = "lifecycle"
 	}
 
 	r.bus.Publish(Message{
 		Topic:   fmt.Sprintf("agent.%s.%s", agentID, subtopic),
 		From:    agentID,
-		To:      TopicAll,
+		To:      "*",
 		Type:    MsgAgentEvent,
 		Payload: data,
 	})
 }
 
-// ListAgents 列出所有运行中的 Agent。
+// ListAgents lists running agents from discovery.
 func (r *AgentRouter) ListAgents(ctx context.Context) ([]AgentEndpoint, error) {
 	return r.discover.ListRunning(ctx)
 }
 
-// getOrCreateClient 获取或创建到目标 Agent 的客户端连接。
-func (r *AgentRouter) getOrCreateClient(threadID string, port int) *codex.Client {
+// getOrCreateClient returns a running cached client or creates a new one via factory.
+func (r *AgentRouter) getOrCreateClient(threadID string, port int) (AgentClient, error) {
 	r.mu.RLock()
 	c, ok := r.clients[threadID]
 	r.mu.RUnlock()
-	if ok && c.Running() {
-		return c
+	if ok && c != nil && c.Running() {
+		return c, nil
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	// double-check
-	if c, ok := r.clients[threadID]; ok && c.Running() {
-		return c
+	if c, ok := r.clients[threadID]; ok && c != nil && c.Running() {
+		return c, nil
 	}
 
-	client := codex.NewClient(port, threadID)
-	client.ThreadID = threadID
-	client.Transport = codex.TransportSSE // 跨 Agent 通信用 POST+SSE (无需维持 WS)
+	if r.newClient == nil {
+		return nil, apperrors.New("AgentRouter.getOrCreateClient", "agent client factory is nil")
+	}
+
+	client := r.newClient(threadID, port)
+	if client == nil {
+		return nil, apperrors.Newf("AgentRouter.getOrCreateClient", "factory returned nil client for %s:%d", threadID, port)
+	}
+
 	r.clients[threadID] = client
-	return client
+	return client, nil
 }
 
-// CleanupStale 清理已停止的 Agent 连接缓存。
+// CleanupStale removes cached clients that are no longer running.
 func (r *AgentRouter) CleanupStale() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, c := range r.clients {
-		if !c.Running() {
+		if c == nil || !c.Running() {
 			delete(r.clients, id)
 		}
 	}
 }
 
-// delegatePayload 任务委托载荷。
+// delegatePayload is the task delegation payload.
 type delegatePayload struct {
 	Prompt string   `json:"prompt"`
 	Images []string `json:"images,omitempty"`

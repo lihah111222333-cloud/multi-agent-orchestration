@@ -4,7 +4,7 @@ description: P3 codexadapter 瘦身 — DRY 去重 + 纯函数分文件（为 P7
 
 # P3: codexadapter 瘦身
 
-> **⚡ 可并行** — 与 P4、P5 同时执行（第二波）
+> **收尾串行执行** — 当前流程中 P4/P5 已完成，P3 完成后进入 P6-lite 与 P7。
 
 ## 前置条件
 

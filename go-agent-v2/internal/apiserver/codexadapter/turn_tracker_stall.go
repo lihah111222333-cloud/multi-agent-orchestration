@@ -1,13 +1,10 @@
 package codexadapter
 
 import (
-	"fmt"
 	"strings"
 	"time"
-
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
-	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
+
 
 type trackedTurnStallAction int
 
@@ -27,22 +24,18 @@ type trackedTurnStallDecision struct {
 }
 
 // peekTrackedTurnMeta returns current tracked turn metadata for one thread.
+// peekTrackedTurnMeta returns current tracked turn metadata for one thread.
 func (a *Adapter) peekTrackedTurnMeta(threadID string) (string, time.Time, bool, bool) {
-	state := a.applyTrackedTurnTransition(threadID, trackedTurnTransitionRequest{})
-	if !state.Found {
-		return "", time.Time{}, false, false
-	}
-	return state.TurnID, state.StartedAt, state.InterruptRequested, true
+	return peekTrackedTurnMetaCore(a.trackerHelperState(), threadID)
 }
 
+
+// markTrackedTurnStallHint marks one-shot stall hint flag.
 // markTrackedTurnStallHint marks one-shot stall hint flag.
 func (a *Adapter) markTrackedTurnStallHint(threadID, turnID string) bool {
-	state := a.applyTrackedTurnTransition(threadID, trackedTurnTransitionRequest{
-		MarkStallHint:          true,
-		MarkStallHintForTurnID: strings.TrimSpace(turnID),
-	})
-	return state.StallHintApplied
+	return markTrackedTurnStallHintCore(a.trackerHelperState(), threadID, turnID)
 }
+
 
 func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time) bool {
 	if isTerminalEventType(eventType, method) {
@@ -55,9 +48,11 @@ func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time
 }
 
 // touchTrackedTurnLastEvent updates turn heartbeat using adapter-owned tracker state.
+// touchTrackedTurnLastEvent updates turn heartbeat using adapter-owned tracker state.
 func (a *Adapter) touchTrackedTurnLastEvent(threadID string) {
-	a.applyTrackedTurnTransition(threadID, trackedTurnTransitionRequest{TouchHeartbeat: true})
+	touchTrackedTurnLastEventCore(a.trackerHelperState(), threadID)
 }
+
 
 // StartApprovalStallHeartbeat starts approval heartbeat with adapter-owned tracker state.
 func (a *Adapter) StartApprovalStallHeartbeat(threadID string) func() {
@@ -99,84 +94,23 @@ func (a *Adapter) SetStallHeartbeat(interval time.Duration) {
 }
 
 func (a *Adapter) nextTrackedTurnStallDecision(threadID, turnID string, stallThreshold time.Duration) trackedTurnStallDecision {
-	decision := trackedTurnStallDecision{Action: trackedTurnStallNoop}
-	id := strings.TrimSpace(threadID)
-	tid := strings.TrimSpace(turnID)
-	if id == "" || tid == "" {
-		return decision
-	}
-
-	threshold := stallThreshold
-	if threshold <= 0 {
-		threshold = defaultStallThreshold
-	}
-
-	a.withActiveTurnByID(id, tid, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
-		currentTurnID := strings.TrimSpace(turn.ID)
-		silent := time.Since(turn.LastEventAt)
-		decision.ThreadID = id
-		decision.TurnID = currentTurnID
-		decision.Silent = silent
-		decision.Threshold = threshold
-
-		if silent < threshold {
-			rescheduleStallCheck(turn, id, currentTurnID, silent, threshold, a.checkTurnStall)
-			decision.Action = trackedTurnStallRescheduled
-			return true
-		}
-		if turn.StallAutoInterrupted {
-			return true
-		}
-		if !turn.StallGraceStarted {
-			turn.StallGraceStarted = true
-			decision.Action = trackedTurnStallEnterGrace
-			return true
-		}
-
-		turn.StallAutoInterrupted = true
-		decision.Action = trackedTurnStallAutoInterrupt
-		return true
-	})
-
-	return decision
+	return nextTrackedTurnStallDecisionCore(a.trackerHelperState(), threadID, turnID, stallThreshold, a.checkTurnStall)
 }
+
 
 // checkTurnStall advances stall detection state machine.
+// checkTurnStall advances stall detection state machine.
 func (a *Adapter) checkTurnStall(threadID string, turnID string) {
-	_, _, _, stallThreshold := a.trackerState()
-	decision := a.nextTrackedTurnStallDecision(threadID, turnID, stallThreshold)
-	switch decision.Action {
-	case trackedTurnStallRescheduled, trackedTurnStallNoop:
-		return
-	case trackedTurnStallEnterGrace:
-		a.handleStallGracePeriod(decision.ThreadID, decision.TurnID, decision.Silent, decision.Threshold)
-	case trackedTurnStallAutoInterrupt:
-		a.executeStallAutoInterrupt(decision.ThreadID, decision.TurnID, decision.Silent, decision.Threshold)
-	}
+	checkTurnStallCore(a.trackerHelperState(), threadID, turnID, a.handleStallGracePeriod, a.executeStallAutoInterrupt, a.checkTurnStall)
 }
+
 
 func (a *Adapter) handleStallGracePeriod(threadID, turnID string, silent, threshold time.Duration) {
-	logger.Warn("turn tracker: stall detected (grace period)", append(threadLogFields(threadID),
-		logger.FieldTurnID, turnID,
-		"silent_ms", silent.Milliseconds(),
-		"threshold_ms", threshold.Milliseconds(),
-		"grace_ms", (30*time.Second).Milliseconds(),
-	)...)
-
-	var pushAlert func(threadID, category, message string)
-	if runtime := a.uiRuntime(); runtime != nil {
-		pushAlert = runtime.PushAlert
-	}
-	if pushAlert != nil {
-		pushAlert(threadID, "stall_warning", "长时间无事件，若持续将自动中断")
-	}
-
-	a.withActiveTurnByID(threadID, turnID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
-		turn.StallTimer = time.AfterFunc(30*time.Second, func() { a.checkTurnStall(threadID, turnID) })
-		return true
-	})
+	handleStallGracePeriodCore(a.trackerHelperState(), threadID, turnID, silent, threshold, trackerRuntimePushAlert(a.uiRuntime()), a.checkTurnStall)
 }
 
+
+// executeStallAutoInterrupt performs /interrupt and fallback completion when stalled.
 // executeStallAutoInterrupt performs /interrupt and fallback completion when stalled.
 func (a *Adapter) executeStallAutoInterrupt(
 	threadID string,
@@ -184,58 +118,9 @@ func (a *Adapter) executeStallAutoInterrupt(
 	silent time.Duration,
 	threshold time.Duration,
 ) {
-	if a == nil {
-		return
-	}
-
-	var pushAlert func(threadID, category, message string)
-	if runtime := a.uiRuntime(); runtime != nil {
-		pushAlert = runtime.PushAlert
-	}
-	manager := a.manager()
-	cancelCodeRuns := a.cancelCodeRuns
-	completeTrackedTurnByID := a.completeTrackedTurnByID
-	notify := a.trackerNotify()
-
-	logger.Warn("turn tracker: thinking stall detected - auto interrupting", append(threadLogFields(threadID),
-		logger.FieldTurnID, turnID,
-		"silent_ms", silent.Milliseconds(),
-		"threshold_ms", threshold.Milliseconds(),
-	)...)
-
-	if pushAlert != nil {
-		pushAlert(threadID, "stall", fmt.Sprintf("思考超时 %ds 未响应，自动中断", int(silent.Seconds())))
-	}
-
-	util.SafeGo(func() {
-		a.markTrackedTurnInterruptRequested(threadID)
-		if cancelled := cancelCodeRuns(threadID); cancelled > 0 {
-			logger.Info("turn tracker: cancelled running code_run executions", append(threadLogFields(threadID),
-				logger.FieldTurnID, turnID,
-				"cancelled_runs", cancelled,
-			)...)
-		}
-
-		interrupted := false
-		if manager != nil {
-			if proc := manager.Get(threadID); proc != nil {
-				if err := a.SendCommand(proc, "/interrupt", ""); err != nil {
-					logger.Warn("turn tracker: stall auto-interrupt failed", append(threadLogFields(threadID),
-						logger.FieldTurnID, turnID,
-						logger.FieldError, err,
-					)...)
-				} else {
-					interrupted = true
-				}
-			}
-		}
-		if !interrupted && notify != nil {
-			if completion, ok := completeTrackedTurnByID(threadID, turnID, "failed", "thinking_stall_timeout"); ok {
-				notify("turn/completed", completion)
-			}
-		}
-	})
+	executeStallAutoInterruptCore(threadID, turnID, silent, threshold, trackerRuntimePushAlert(a.uiRuntime()), a.markTrackedTurnInterruptRequested, a.cancelCodeRuns, trackerInterruptSender(a.manager(), a.SendCommand), a.completeTrackedTurnByID, a.trackerNotify())
 }
+
 
 func approvalstallHeartbeatInterval(stallThreshold, fallback time.Duration) time.Duration {
 	base := stallThreshold

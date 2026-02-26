@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
@@ -159,6 +160,20 @@ func (a *Adapter) streamRemainingHistory(threadID string, all []threadHistoryMes
 	if runtime == nil {
 		return
 	}
+	notifyPage := func(id string, totalLoaded int, pages int) {
+		a.notify("thread/messages/page", buildThreadMessagesPagePayload(id, totalLoaded, pages))
+	}
+	streamRemainingHistoryWithRuntime(threadID, all, firstPage, limit, runtime, notifyPage)
+}
+
+func streamRemainingHistoryWithRuntime(
+	threadID string,
+	all []threadHistoryMessage,
+	firstPage []threadHistoryMessage,
+	limit int,
+	runtime *uistate.RuntimeManager,
+	notifyPage func(string, int, int),
+) {
 	streamRemainingHistory(
 		threadID,
 		all,
@@ -169,9 +184,7 @@ func (a *Adapter) streamRemainingHistory(threadID string, all []threadHistoryMes
 		runtime.AppendHistory,
 		func(id string) int { return len(runtime.ThreadDiff(id)) },
 		func(id string) int { return len(runtime.ThreadTimeline(id)) },
-		func(id string, totalLoaded int, pages int) {
-			a.notify("thread/messages/page", buildThreadMessagesPagePayload(id, totalLoaded, pages))
-		},
+		notifyPage,
 	)
 }
 

@@ -8,12 +8,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	appErrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -119,6 +119,10 @@ func New(deps Deps) *Adapter {
 }
 
 func (a *Adapter) initTrackerState() {
+	initializeTrackerState(a)
+}
+
+func initializeTrackerState(a *Adapter) {
 	if a == nil {
 		return
 	}

@@ -405,11 +405,16 @@ func pingConnLoop(s *Server, entry *connEntry, connID string) {
 //   - ID: 保留原始 JSON 字节，response 分支直接解析为 int64 (零 alloc)
 //   - Params/Result/Error: 按需解析
 type rpcEnvelope struct {
-	ID     json.RawMessage `json:"id"`
-	Method string          `json:"method"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  json.RawMessage `json:"error,omitempty"`
-	Params json.RawMessage `json:"params,omitempty"`
+	JSONRPC string          `json:"jsonrpc,omitempty"`
+	ID      json.RawMessage `json:"id"`
+	Method  string          `json:"method"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   json.RawMessage `json:"error,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+func validIncomingJSONRPCVersion(version string) bool {
+	return strings.TrimSpace(version) == jsonrpcVersion
 }
 
 // parseIntID 从 JSON 原始字节直接解析 int64，无需 json.Unmarshal。
@@ -494,6 +499,18 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 		var env rpcEnvelope
 		if err := json.Unmarshal(message, &env); err != nil {
 			_ = sendResponseViaOutbox(s, connID, entry, newError(nil, CodeParseError, "parse error: "+err.Error()), "parse_error_response")
+			continue
+		}
+		if !validIncomingJSONRPCVersion(env.JSONRPC) {
+			if !sendResponseViaOutbox(
+				s,
+				connID,
+				entry,
+				newError(rawIDtoAny(env.ID), CodeInvalidRequest, "invalid request: jsonrpc must be \"2.0\""),
+				"invalid_jsonrpc_version",
+			) {
+				return
+			}
 			continue
 		}
 

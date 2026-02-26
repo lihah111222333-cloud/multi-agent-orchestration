@@ -15,7 +15,7 @@ import (
 
 // handleHTTPRPC 处理 HTTP POST /rpc 请求 (调试模式用)。
 //
-// 接收标准 JSON-RPC 2.0 请求, 调用 InvokeMethod, 返回 JSON-RPC 响应。
+// 接收标准 JSON-RPC 2.0 请求，复用 dispatchRequest 分发，返回 JSON-RPC 响应。
 func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		http.Error(w, "server not ready", http.StatusServiceUnavailable)
@@ -38,12 +38,15 @@ func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONRPCError(w, nil, -32700, "Parse error: "+err.Error())
+		writeJSONRPCError(w, nil, CodeParseError, "parse error: "+err.Error())
 		return
 	}
-
+	if req.JSONRPC != jsonrpcVersion {
+		writeJSONRPCError(w, req.ID, CodeInvalidRequest, "invalid request: jsonrpc must be \"2.0\"")
+		return
+	}
 	if req.Method == "" {
-		writeJSONRPCError(w, req.ID, -32600, "Invalid Request: method is required")
+		writeJSONRPCError(w, req.ID, CodeInvalidRequest, "invalid request: method is required")
 		return
 	}
 
@@ -53,19 +56,23 @@ func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 		params = json.RawMessage("{}")
 	}
 
-	result, err := InvokeMethod(s, r.Context(), req.Method, params)
-	if err != nil {
-		writeJSONRPCError(w, req.ID, -32603, err.Error())
+	resp := dispatchRequest(s, r.Context(), req.ID, req.Method, params)
+	if resp == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if resp.Error != nil {
+		writeJSONRPCError(w, req.ID, resp.Error.Code, resp.Error.Message)
 		return
 	}
 
-	resp := map[string]any{
-		"jsonrpc": "2.0",
+	result := map[string]any{
+		"jsonrpc": jsonrpcVersion,
 		"id":      req.ID,
-		"result":  result,
+		"result":  resp.Result,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
+	if err := json.NewEncoder(w).Encode(result); err != nil {
 		logger.Warn("http-rpc: encode response failed", logger.FieldError, err)
 	}
 }
@@ -73,7 +80,7 @@ func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 // writeJSONRPCError 写 JSON-RPC 错误响应。
 func writeJSONRPCError(w http.ResponseWriter, id any, code int, message string) {
 	resp := map[string]any{
-		"jsonrpc": "2.0",
+		"jsonrpc": jsonrpcVersion,
 		"id":      id,
 		"error": map[string]any{
 			"code":    code,
@@ -157,4 +164,3 @@ func handleSSE(s *Server, w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-

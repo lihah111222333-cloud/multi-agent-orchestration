@@ -11,6 +11,7 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
@@ -64,14 +65,75 @@ func newResult(id any, result any) *Response {
 	return &Response{JSONRPC: jsonrpcVersion, ID: id, Result: result}
 }
 
+func normalizeInternalErrorCode(code int, msg string) int {
+	if code != CodeInternalError {
+		return code
+	}
+	text := strings.ToLower(strings.TrimSpace(msg))
+	if strings.Contains(text, "invalid params") {
+		return CodeInvalidParams
+	}
+	if isLikelyInvalidParamsMessage(text) {
+		return CodeInvalidParams
+	}
+	return code
+}
+
+func isLikelyInvalidParamsMessage(text string) bool {
+	if text == "" {
+		return false
+	}
+	if strings.Contains(text, " is required") {
+		return true
+	}
+	if strings.Contains(text, "must not be empty") {
+		return true
+	}
+	if strings.Contains(text, "invalid cursor") {
+		return true
+	}
+	if strings.Contains(text, "invalid thread id") {
+		return true
+	}
+	if strings.Contains(text, "input must not be empty") {
+		return true
+	}
+	if strings.Contains(text, "no active turn") {
+		return true
+	}
+	if strings.Contains(text, "expectedturnid mismatch") {
+		return true
+	}
+	if strings.Contains(text, "expected active turn id") {
+		return true
+	}
+	if strings.Contains(text, "turn not found") {
+		return true
+	}
+	if strings.Contains(text, "unknown turn") {
+		return true
+	}
+	if strings.Contains(text, "thread ") && strings.Contains(text, " not found") {
+		return true
+	}
+	if strings.Contains(text, "invalid_request_id") {
+		return true
+	}
+	return false
+}
+
 // newError 错误响应。
 func newError(id any, code int, msg string) *Response {
-	return &Response{JSONRPC: jsonrpcVersion, ID: id, Error: &RPCError{Code: code, Message: msg}}
+	normalizedMessage := strings.TrimSpace(msg)
+	normalizedCode := normalizeInternalErrorCode(code, normalizedMessage)
+	return &Response{JSONRPC: jsonrpcVersion, ID: id, Error: &RPCError{Code: normalizedCode, Message: normalizedMessage}}
 }
 
 // newErrorData 带 data 的错误响应。
 func newErrorData(id any, code int, msg string, data any) *Response {
-	return &Response{JSONRPC: jsonrpcVersion, ID: id, Error: &RPCError{Code: code, Message: msg, Data: data}}
+	normalizedMessage := strings.TrimSpace(msg)
+	normalizedCode := normalizeInternalErrorCode(code, normalizedMessage)
+	return &Response{JSONRPC: jsonrpcVersion, ID: id, Error: &RPCError{Code: normalizedCode, Message: normalizedMessage, Data: data}}
 }
 
 // newNotification 通知。

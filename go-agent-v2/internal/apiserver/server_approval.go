@@ -3,6 +3,7 @@ package apiserver
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -10,6 +11,22 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
+
+const (
+	approvalMethodCommandExecution = "item/commandExecution/requestApproval"
+	approvalMethodFileChange       = "item/fileChange/requestApproval"
+)
+
+func approvalStringValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return ""
+	}
+}
 
 func extractBoolFromPayload(payload map[string]any, keys ...string) (bool, bool) {
 	if payload == nil {
@@ -35,23 +52,136 @@ func extractBoolFromPayload(payload map[string]any, keys ...string) (bool, bool)
 	return false, false
 }
 
-func extractApprovalDecision(result any) (bool, bool) {
-	payload, ok := result.(map[string]any)
-	if !ok || payload == nil {
-		return false, false
+func extractMapValue(payload map[string]any, keys ...string) (any, bool) {
+	if payload == nil {
+		return nil, false
 	}
-	if approved, ok := extractBoolFromPayload(payload, "approved"); ok {
-		return approved, true
+	for _, key := range keys {
+		if value, ok := payload[key]; ok {
+			return value, true
+		}
 	}
-	rawDecision, _ := payload["decision"].(string)
-	switch strings.ToLower(strings.TrimSpace(rawDecision)) {
-	case "accept", "acceptforsession", "yes", "approved":
-		return true, true
-	case "decline", "cancel", "no", "denied":
-		return false, true
+	for existingKey, value := range payload {
+		for _, key := range keys {
+			if strings.EqualFold(strings.TrimSpace(existingKey), strings.TrimSpace(key)) {
+				return value, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func normalizeApprovalDecisionString(raw string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	switch normalized {
+	case "accept", "approved", "yes", "y", "true", "1":
+		return "accept", true
+	case "acceptforsession", "accept_for_session", "accept-for-session":
+		return "acceptForSession", true
+	case "decline", "denied", "no", "n", "false", "0":
+		return "decline", true
+	case "cancel", "abort", "aborted":
+		return "cancel", true
 	default:
-		return false, false
+		return "", false
 	}
+}
+
+func normalizeFileChangeApprovalDecision(raw any) (any, bool) {
+	decision, ok := normalizeApprovalDecisionString(approvalStringValue(raw))
+	if !ok {
+		return nil, false
+	}
+	switch decision {
+	case "accept", "acceptForSession", "decline", "cancel":
+		return decision, true
+	default:
+		return nil, false
+	}
+}
+
+func normalizeCommandApprovalDecision(raw any) (any, bool) {
+	if decision, ok := normalizeApprovalDecisionString(approvalStringValue(raw)); ok {
+		switch decision {
+		case "accept", "acceptForSession", "decline", "cancel":
+			return decision, true
+		}
+	}
+	decisionObj, ok := raw.(map[string]any)
+	if !ok || decisionObj == nil {
+		return nil, false
+	}
+
+	if amendmentRaw, ok := extractMapValue(decisionObj, "acceptWithExecpolicyAmendment"); ok {
+		amendmentObj, ok := amendmentRaw.(map[string]any)
+		if !ok || amendmentObj == nil {
+			return nil, false
+		}
+		execPolicyAmendment, ok := extractMapValue(amendmentObj, "execpolicy_amendment", "execpolicyAmendment")
+		if !ok {
+			return nil, false
+		}
+		return map[string]any{
+			"acceptWithExecpolicyAmendment": map[string]any{
+				"execpolicy_amendment": execPolicyAmendment,
+			},
+		}, true
+	}
+
+	if amendmentRaw, ok := extractMapValue(decisionObj, "applyNetworkPolicyAmendment"); ok {
+		amendmentObj, ok := amendmentRaw.(map[string]any)
+		if !ok || amendmentObj == nil {
+			return nil, false
+		}
+		networkPolicyAmendment, ok := extractMapValue(amendmentObj, "network_policy_amendment", "networkPolicyAmendment")
+		if !ok {
+			return nil, false
+		}
+		return map[string]any{
+			"applyNetworkPolicyAmendment": map[string]any{
+				"network_policy_amendment": networkPolicyAmendment,
+			},
+		}, true
+	}
+	return nil, false
+}
+
+func normalizeApprovalDecision(method string, raw any) (any, bool) {
+	switch strings.TrimSpace(method) {
+	case approvalMethodCommandExecution:
+		return normalizeCommandApprovalDecision(raw)
+	case approvalMethodFileChange:
+		return normalizeFileChangeApprovalDecision(raw)
+	default:
+		if decision, ok := normalizeCommandApprovalDecision(raw); ok {
+			return decision, true
+		}
+		return normalizeFileChangeApprovalDecision(raw)
+	}
+}
+
+func normalizeApprovalResultPayload(method string, result any) (map[string]any, bool) {
+	switch typed := result.(type) {
+	case bool:
+		return approvalDecisionPayload(method, typed), true
+	case string:
+		decision, ok := normalizeApprovalDecision(method, typed)
+		if !ok {
+			return nil, false
+		}
+		return map[string]any{"decision": decision}, true
+	case map[string]any:
+		if decisionRaw, ok := extractMapValue(typed, "decision"); ok {
+			decision, ok := normalizeApprovalDecision(method, decisionRaw)
+			if ok {
+				return map[string]any{"decision": decision}, true
+			}
+		}
+		if approved, ok := extractBoolFromPayload(typed, "approved"); ok {
+			return approvalDecisionPayload(method, approved), true
+		}
+	}
+	return nil, false
 }
 
 func approvalDecisionPayload(_ string, approved bool) map[string]any {
@@ -60,6 +190,57 @@ func approvalDecisionPayload(_ string, approved bool) map[string]any {
 		decision = "accept"
 	}
 	return map[string]any{"decision": decision}
+}
+
+func commandDecisionAllowsSubmit(raw any) bool {
+	decision, ok := normalizeCommandApprovalDecision(raw)
+	if !ok {
+		return false
+	}
+	switch typed := decision.(type) {
+	case string:
+		return typed == "accept" || typed == "acceptForSession"
+	case map[string]any:
+		if _, ok := extractMapValue(typed, "acceptWithExecpolicyAmendment"); ok {
+			return true
+		}
+		if networkRaw, ok := extractMapValue(typed, "applyNetworkPolicyAmendment"); ok {
+			networkObj, ok := networkRaw.(map[string]any)
+			if !ok || networkObj == nil {
+				return false
+			}
+			amendmentRaw, ok := extractMapValue(networkObj, "network_policy_amendment", "networkPolicyAmendment")
+			if !ok {
+				return false
+			}
+			amendmentObj, ok := amendmentRaw.(map[string]any)
+			if !ok || amendmentObj == nil {
+				return false
+			}
+			action := strings.ToLower(strings.TrimSpace(approvalStringValue(amendmentObj["action"])))
+			return action == "allow"
+		}
+	}
+	return false
+}
+
+func approvalDecisionAllowsSubmit(method string, payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	decisionRaw, ok := extractMapValue(payload, "decision")
+	if !ok {
+		return false
+	}
+	if strings.TrimSpace(method) == approvalMethodFileChange {
+		decision, ok := normalizeFileChangeApprovalDecision(decisionRaw)
+		if !ok {
+			return false
+		}
+		decisionStr, _ := decision.(string)
+		return decisionStr == "accept" || decisionStr == "acceptForSession"
+	}
+	return commandDecisionAllowsSubmit(decisionRaw)
 }
 
 func denyApprovalSafely(event agentcore.Event, agentID string) {
@@ -95,17 +276,17 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	stopHeartbeat := s.codexAdapter.StartApprovalStallHeartbeat(agentID)
 	defer stopHeartbeat()
 
-	approved := false
+	decisionPayload := approvalDecisionPayload(method, false)
 
 	// 尝试 WebSocket 通道 (IDE 客户端)
 	resp, wsErr := sendRequestToAll(s, method, payload)
 	if wsErr == nil && resp != nil && resp.Result != nil {
-		if decision, ok := extractApprovalDecision(resp.Result); ok {
-			approved = decision
+		if normalized, ok := normalizeApprovalResultPayload(method, resp.Result); ok {
+			decisionPayload = normalized
 		}
 	} else {
 		// 降级: Wails 模式 — 通过 broadcastNotification + pending channel
-		// 仅在有 notifyHook (Wails 前端) 时才等待, 否则直接跳过 (approved=false → deny)
+		// 仅在有 notifyHook (Wails 前端) 时才等待, 否则直接跳过 (默认 decline)
 		hasHook := hasNotifyHookState(s)
 
 		if hasHook {
@@ -141,8 +322,8 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 			select {
 			case wailsResp := <-ch:
 				if wailsResp != nil {
-					if decision, ok := extractApprovalDecision(wailsResp.Result); ok {
-						approved = decision
+					if normalized, ok := normalizeApprovalResultPayload(method, wailsResp.Result); ok {
+						decisionPayload = normalized
 					}
 				}
 			case <-timer.C:
@@ -157,8 +338,7 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	}
 
 	if event.RespondResultFunc != nil {
-		decision := approvalDecisionPayload(method, approved)
-		if err := event.RespondResultFunc(decision); err != nil {
+		if err := event.RespondResultFunc(decisionPayload); err != nil {
 			logger.Warn("app-server: respond approval result failed",
 				logger.FieldAgentID, agentID,
 				logger.FieldMethod, method,
@@ -183,11 +363,11 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 		denyApprovalSafely(event, agentID)
 		return
 	}
-	decision := "no"
-	if approved {
-		decision = "yes"
+	legacyDecision := "no"
+	if approvalDecisionAllowsSubmit(method, decisionPayload) {
+		legacyDecision = "yes"
 	}
-	if err := s.codexAdapter.Submit(proc, decision, nil, nil, nil); err != nil {
+	if err := s.codexAdapter.Submit(proc, legacyDecision, nil, nil, nil); err != nil {
 		logger.Warn("app-server: relay approval to codex failed", logger.FieldAgentID, agentID, logger.FieldError, err)
 	}
 }
@@ -198,7 +378,22 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 
 type approvalRespondParams struct {
 	RequestID int64 `json:"requestId"`
-	Approved  bool  `json:"approved"`
+	Approved  *bool `json:"approved,omitempty"`
+	Decision  any   `json:"decision,omitempty"`
+}
+
+func approvalRespondResultPayload(p approvalRespondParams) (map[string]any, bool) {
+	result := make(map[string]any, 2)
+	hasResult := false
+	if p.Decision != nil {
+		result["decision"] = p.Decision
+		hasResult = true
+	}
+	if p.Approved != nil {
+		result["approved"] = *p.Approved
+		hasResult = true
+	}
+	return result, hasResult
 }
 
 func approvalRespondTyped(s *Server, _ context.Context, p approvalRespondParams) (any, error) {
@@ -215,7 +410,15 @@ func approvalRespondTyped(s *Server, _ context.Context, p approvalRespondParams)
 		}, nil
 	}
 
-	if !ResolvePendingRequest(s, p.RequestID, map[string]any{"approved": p.Approved}) {
+	result, ok := approvalRespondResultPayload(p)
+	if !ok {
+		return map[string]any{
+			"ok":     false,
+			"status": "decision_or_approved_required",
+		}, nil
+	}
+
+	if !ResolvePendingRequest(s, p.RequestID, result) {
 		return map[string]any{
 			"ok":     false,
 			"status": "not_pending",

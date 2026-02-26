@@ -7,7 +7,7 @@ package apiserver
 import (
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 

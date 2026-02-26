@@ -3,7 +3,7 @@ package tools
 import (
 	"encoding/json"
 
-	agentcore "github.com/multi-agent/go-agent-v2/internal/agentcore"
+	agentcore "github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 )
 
 type LSPDynamicToolHandler = func(json.RawMessage) string

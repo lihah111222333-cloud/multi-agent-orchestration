@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 )
 
 type fakeClient struct {

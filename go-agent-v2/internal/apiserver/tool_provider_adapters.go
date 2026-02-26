@@ -8,7 +8,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	"github.com/multi-agent/go-agent-v2/internal/store"
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 )
 

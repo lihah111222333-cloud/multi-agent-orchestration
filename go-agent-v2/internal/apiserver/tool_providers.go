@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tooladapter"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"

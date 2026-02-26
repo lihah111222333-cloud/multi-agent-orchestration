@@ -1,6 +1,6 @@
 package tools
 
-import agentcore "github.com/multi-agent/go-agent-v2/internal/agentcore"
+import agentcore "github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 
 const (
 	defaultFilePathDescription = "Absolute or relative path to the file"

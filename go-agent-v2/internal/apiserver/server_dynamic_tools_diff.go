@@ -115,9 +115,9 @@ func maybeEmitDynamicToolDiffUpdate(s *Server, threadID, codexThreadID, tool str
 
 func shouldCaptureDynamicToolDiff(tool string, args map[string]any) bool {
 	switch normalizeDynamicToolName(tool) {
-	case "lsp_file":
+	case "lsp_file", "lsp_edit":
 		action := strings.ToLower(strings.TrimSpace(extractStringArg(args, "action")))
-		if action != "change" {
+		if action != "did_change" {
 			return false
 		}
 		return extractBoolArg(args, "persist_to_disk")

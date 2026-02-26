@@ -3,12 +3,13 @@ package codexadapter
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
+
 	"github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
-	"regexp"
-	"strings"
 )
 
 // threadStartResult is the normalized thread/start payload.
@@ -137,14 +138,55 @@ func (a *Adapter) ThreadFork(threadID string) (threadForkResult, error) {
 		})
 }
 
-// ThreadRollback sends /undo index command.
-func (a *Adapter) ThreadRollback(threadID string, turnIndex int) (map[string]any, error) {
-	return a.sendThreadCommand("Server.threadRollback", threadID, "/undo", fmt.Sprintf("%d", turnIndex), "send undo command")
+// ThreadRollback sends /undo count command.
+func (a *Adapter) ThreadRollback(threadID string, numTurns int) (map[string]any, error) {
+	return a.sendThreadCommand("Server.threadRollback", threadID, "/undo", fmt.Sprintf("%d", numTurns), "send undo command")
 }
 
 // ReviewStart dispatches /review command.
-func (a *Adapter) ReviewStart(threadID, delivery string) (map[string]any, error) {
-	return a.sendThreadCommand("Server.reviewStart", threadID, "/review", delivery, "send review command")
+func (a *Adapter) ReviewStart(threadID, reviewArgs string) (map[string]any, error) {
+	return a.sendThreadCommand("Server.reviewStart", threadID, "/review", reviewArgs, "send review command")
+}
+
+// ThreadRealtimeStart validates and starts a realtime thread flow.
+func (a *Adapter) ThreadRealtimeStart(threadID, prompt string, _ *string) (map[string]any, error) {
+	if _, err := requireThreadID("Server.threadRealtimeStart", threadID); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return nil, apperrors.New("Server.threadRealtimeStart", "prompt is required")
+	}
+	return map[string]any{}, nil
+}
+
+// ThreadRealtimeAppendAudio validates realtime audio append payload.
+func (a *Adapter) ThreadRealtimeAppendAudio(threadID string, audio any) (map[string]any, error) {
+	if _, err := requireThreadID("Server.threadRealtimeAppendAudio", threadID); err != nil {
+		return nil, err
+	}
+	if audio == nil {
+		return nil, apperrors.New("Server.threadRealtimeAppendAudio", "audio is required")
+	}
+	return map[string]any{}, nil
+}
+
+// ThreadRealtimeAppendText validates realtime text append payload.
+func (a *Adapter) ThreadRealtimeAppendText(threadID, text string) (map[string]any, error) {
+	if _, err := requireThreadID("Server.threadRealtimeAppendText", threadID); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil, apperrors.New("Server.threadRealtimeAppendText", "text is required")
+	}
+	return map[string]any{}, nil
+}
+
+// ThreadRealtimeStop validates realtime stop payload.
+func (a *Adapter) ThreadRealtimeStop(threadID string) (map[string]any, error) {
+	if _, err := requireThreadID("Server.threadRealtimeStop", threadID); err != nil {
+		return nil, err
+	}
+	return map[string]any{}, nil
 }
 
 // TurnSteer submits steering prompt to existing thread.

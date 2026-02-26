@@ -4,6 +4,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -32,40 +35,38 @@ func TestP0PostPromptToolnameGuard(t *testing.T) {
 		"internal/apiserver/commonadapter/skills.go",
 		"internal/store/prompt_template.go",
 	}
-	legacyNames := []string{
-		"lsp_hover",
-		"lsp_open_file",
-		"lsp_diagnostics",
-		"lsp_definition",
-		"lsp_references",
-		"lsp_document_symbol",
-		"lsp_rename",
-		"lsp_did_change",
-		"lsp_code_action",
-		"lsp_signature_help",
-		"lsp_format",
-		"lsp_call_hierarchy",
-		"lsp_type_hierarchy",
-		"lsp_semantic_tokens",
-		"lsp_folding_range",
-		"lsp_workspace_symbol",
-		"lsp_implementation",
-		"lsp_type_definition",
-		"lsp_text_search",
-		"lsp_ast_search",
+	allowed := map[string]struct{}{
+		"lsp_file":       {},
+		"lsp_inspect":    {},
+		"lsp_xref":       {},
+		"lsp_grep":       {},
+		"lsp_structure":  {},
+		"lsp_edit":       {},
+		"lsp_completion": {},
 	}
+	ignoredNonToolTokens := map[string]struct{}{
+		"lsp_tools":          {},
+		"lsp_ext_":           {},
+		"lsp_schema_builder": {},
+	}
+	toolPattern := regexp.MustCompile(`\blsp_[a-z_]+\b`)
+	disallowed := make(map[string]int)
 
-	totalHits := 0
 	scanFile := func(path string) error {
 		content, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return readErr
 		}
 		lower := strings.ToLower(string(content))
-		for _, tool := range legacyNames {
-			if strings.Contains(lower, tool) {
-				totalHits++
+		matches := toolPattern.FindAllString(lower, -1)
+		for _, tool := range matches {
+			if _, ok := allowed[tool]; ok {
+				continue
 			}
+			if _, ok := ignoredNonToolTokens[tool]; ok {
+				continue
+			}
+			disallowed[tool]++
 		}
 		return nil
 	}
@@ -106,7 +107,12 @@ func TestP0PostPromptToolnameGuard(t *testing.T) {
 		}
 	}
 
-	if totalHits != 0 {
-		t.Fatalf("p0-post expects zero legacy tool-name hits, got %d", totalHits)
+	if len(disallowed) != 0 {
+		tools := make([]string, 0, len(disallowed))
+		for tool, count := range disallowed {
+			tools = append(tools, tool+"("+strconv.Itoa(count)+")")
+		}
+		sort.Strings(tools)
+		t.Fatalf("p0-post expects only merged tool names in targets, disallowed=%v", tools)
 	}
 }

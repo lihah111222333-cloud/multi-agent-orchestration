@@ -206,11 +206,50 @@ func buildReviewStartArgs(p reviewStartParams) (string, error) {
 	}
 }
 
-func (s *Server) reviewStartTyped(_ context.Context, p reviewStartParams) (any, error) {
+func validateReviewStartParams(p reviewStartParams) (string, error) {
 	if strings.TrimSpace(p.ThreadID) == "" {
-		return nil, pkgerr.New("Server.reviewStart", "threadId is required")
+		return "", pkgerr.New("Server.reviewStart", "threadId is required")
 	}
-	args, err := buildReviewStartArgs(p)
+	return buildReviewStartArgs(p)
+}
+
+func normalizeReviewStartResponse(threadID string, result map[string]any) reviewStartResponse {
+	response := reviewStartResponse{
+		Turn: reviewStartTurn{
+			ID:     "",
+			Status: "inProgress",
+			Items:  []any{},
+		},
+		ReviewThreadID: threadID,
+	}
+	if result == nil {
+		return response
+	}
+	if reviewThreadID, ok := result["reviewThreadId"].(string); ok {
+		reviewThreadID = strings.TrimSpace(reviewThreadID)
+		if reviewThreadID != "" {
+			response.ReviewThreadID = reviewThreadID
+		}
+	}
+	if turnMap, ok := result["turn"].(map[string]any); ok {
+		if id, ok := turnMap["id"].(string); ok {
+			response.Turn.ID = id
+		}
+		if status, ok := turnMap["status"].(string); ok {
+			status = strings.TrimSpace(status)
+			if status != "" {
+				response.Turn.Status = status
+			}
+		}
+		if items, ok := turnMap["items"].([]any); ok {
+			response.Turn.Items = items
+		}
+	}
+	return response
+}
+
+func (s *Server) reviewStartTyped(_ context.Context, p reviewStartParams) (any, error) {
+	args, err := validateReviewStartParams(p)
 	if err != nil {
 		return nil, err
 	}
@@ -218,37 +257,7 @@ func (s *Server) reviewStartTyped(_ context.Context, p reviewStartParams) (any, 
 	if err != nil {
 		return nil, err
 	}
-	response := reviewStartResponse{
-		Turn: reviewStartTurn{
-			ID:     "",
-			Status: "inProgress",
-			Items:  []any{},
-		},
-		ReviewThreadID: p.ThreadID,
-	}
-	if result != nil {
-		if reviewThreadID, ok := result["reviewThreadId"].(string); ok {
-			reviewThreadID = strings.TrimSpace(reviewThreadID)
-			if reviewThreadID != "" {
-				response.ReviewThreadID = reviewThreadID
-			}
-		}
-		if turnMap, ok := result["turn"].(map[string]any); ok {
-			if id, ok := turnMap["id"].(string); ok {
-				response.Turn.ID = id
-			}
-			if status, ok := turnMap["status"].(string); ok {
-				status = strings.TrimSpace(status)
-				if status != "" {
-					response.Turn.Status = status
-				}
-			}
-			if items, ok := turnMap["items"].([]any); ok {
-				response.Turn.Items = items
-			}
-		}
-	}
-	return response, nil
+	return normalizeReviewStartResponse(p.ThreadID, result), nil
 }
 
 type fuzzySearchParams struct {

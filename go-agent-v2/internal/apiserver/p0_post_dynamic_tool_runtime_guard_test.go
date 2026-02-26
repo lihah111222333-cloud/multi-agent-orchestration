@@ -31,22 +31,25 @@ func TestP0PostDynamicToolRuntimeGuard(t *testing.T) {
 		t.Skip("skip p0-post guard when LSP_P0_MODE is not post")
 	}
 
-	if !shouldCaptureDynamicToolDiff("lsp_file", map[string]any{"action": "change", "persist_to_disk": true}) {
-		t.Fatalf("p0-post expects lsp_file action=change persist_to_disk=true to capture diff")
+	if !shouldCaptureDynamicToolDiff("lsp_file", map[string]any{"action": "did_change", "persist_to_disk": true}) {
+		t.Fatalf("p0-post expects lsp_file action=did_change persist_to_disk=true to capture diff")
 	}
-	if shouldCaptureDynamicToolDiff("lsp_file", map[string]any{"action": "change", "persist_to_disk": false}) {
-		t.Fatalf("p0-post expects lsp_file action=change persist_to_disk=false to skip diff")
+	if shouldCaptureDynamicToolDiff("lsp_file", map[string]any{"action": "did_change", "persist_to_disk": false}) {
+		t.Fatalf("p0-post expects lsp_file action=did_change persist_to_disk=false to skip diff")
 	}
-	if shouldCaptureDynamicToolDiff("lsp_did_change", map[string]any{"persist_to_disk": true}) {
-		t.Fatalf("p0-post expects legacy lsp_did_change route to be removed")
+	if shouldCaptureDynamicToolDiff("lsp_file", map[string]any{"action": "open_file", "persist_to_disk": true}) {
+		t.Fatalf("p0-post expects lsp_file action=open_file to skip diff")
+	}
+	if !shouldCaptureDynamicToolDiff("lsp_edit", map[string]any{"action": "did_change", "persist_to_disk": true}) {
+		t.Fatalf("p0-post expects lsp_edit action=did_change persist_to_disk=true to capture diff")
 	}
 
-	_, err := tooladapter.Dispatch(tooladapter.DynamicToolCall{Tool: "lsp_hover"}, tooladapter.Providers{
+	_, err := tooladapter.Dispatch(tooladapter.DynamicToolCall{Tool: "lsp_legacy_removed"}, tooladapter.Providers{
 		Lookup:  p0PostEmptyLookup{},
 		Counter: p0PostCounter{},
 	})
 	if err == nil {
-		t.Fatalf("p0-post expects unknown legacy tool to fail")
+		t.Fatalf("p0-post expects unknown legacy-shaped tool to fail")
 	}
 	if !strings.Contains(strings.ToUpper(err.Error()), "UNKNOWN_TOOL") {
 		t.Fatalf("p0-post expects UNKNOWN_TOOL error code, got: %v", err)

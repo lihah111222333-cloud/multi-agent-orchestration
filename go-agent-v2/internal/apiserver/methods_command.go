@@ -71,7 +71,7 @@ var readCommands = map[string]bool{
 	"awk":  true,
 }
 
-const lspPreferenceHint = "[LSP提示] 你有 19 个 LSP 工具可用于代码理解，请优先使用 LSP 工具而非命令行读取代码。\n---\n"
+const lspPreferenceHint = "[LSP提示] 你有 7 个合并后的 LSP 工具：`lsp_file` `lsp_inspect` `lsp_xref` `lsp_grep` `lsp_structure` `lsp_edit` `lsp_completion`。请优先使用 LSP 工具而非命令行读取代码。\n---\n"
 
 // commandExecResponse command/exec 响应。
 type commandExecResponse struct {

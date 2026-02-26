@@ -15,6 +15,7 @@ import (
 const (
 	approvalMethodCommandExecution = "item/commandExecution/requestApproval"
 	approvalMethodFileChange       = "item/fileChange/requestApproval"
+	approvalMethodSkillRequest     = "skill/requestApproval"
 )
 
 func approvalStringValue(value any) string {
@@ -146,17 +147,34 @@ func normalizeCommandApprovalDecision(raw any) (any, bool) {
 	return nil, false
 }
 
+func normalizeSkillApprovalDecision(raw any) (any, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(approvalStringValue(raw)))
+	switch normalized {
+	case "approve", "approved", "accept", "yes", "y", "true", "1":
+		return "approve", true
+	case "decline", "denied", "reject", "rejected", "cancel", "abort", "aborted", "no", "n", "false", "0":
+		return "decline", true
+	default:
+		return nil, false
+	}
+}
+
 func normalizeApprovalDecision(method string, raw any) (any, bool) {
 	switch strings.TrimSpace(method) {
 	case approvalMethodCommandExecution:
 		return normalizeCommandApprovalDecision(raw)
 	case approvalMethodFileChange:
 		return normalizeFileChangeApprovalDecision(raw)
+	case approvalMethodSkillRequest:
+		return normalizeSkillApprovalDecision(raw)
 	default:
 		if decision, ok := normalizeCommandApprovalDecision(raw); ok {
 			return decision, true
 		}
-		return normalizeFileChangeApprovalDecision(raw)
+		if decision, ok := normalizeFileChangeApprovalDecision(raw); ok {
+			return decision, true
+		}
+		return normalizeSkillApprovalDecision(raw)
 	}
 }
 
@@ -184,10 +202,13 @@ func normalizeApprovalResultPayload(method string, result any) (map[string]any, 
 	return nil, false
 }
 
-func approvalDecisionPayload(_ string, approved bool) map[string]any {
+func approvalDecisionPayload(method string, approved bool) map[string]any {
 	decision := "decline"
 	if approved {
 		decision = "accept"
+		if strings.TrimSpace(method) == approvalMethodSkillRequest {
+			decision = "approve"
+		}
 	}
 	return map[string]any{"decision": decision}
 }
@@ -232,15 +253,24 @@ func approvalDecisionAllowsSubmit(method string, payload map[string]any) bool {
 	if !ok {
 		return false
 	}
-	if strings.TrimSpace(method) == approvalMethodFileChange {
+	switch strings.TrimSpace(method) {
+	case approvalMethodFileChange:
 		decision, ok := normalizeFileChangeApprovalDecision(decisionRaw)
 		if !ok {
 			return false
 		}
 		decisionStr, _ := decision.(string)
 		return decisionStr == "accept" || decisionStr == "acceptForSession"
+	case approvalMethodSkillRequest:
+		decision, ok := normalizeSkillApprovalDecision(decisionRaw)
+		if !ok {
+			return false
+		}
+		decisionStr, _ := decision.(string)
+		return decisionStr == "approve"
+	default:
+		return commandDecisionAllowsSubmit(decisionRaw)
 	}
-	return commandDecisionAllowsSubmit(decisionRaw)
 }
 
 func denyApprovalSafely(event agentcore.Event, agentID string) {

@@ -7,52 +7,44 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/multi-agent/go-agent-v2/internal/agentcore"
+	agentcore "github.com/multi-agent/go-agent-v2/internal/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/tools"
 )
 
-// RuntimeToolHandler is the unified dynamic tool runtime handler signature.
 type RuntimeToolHandler = func(ctx tools.ToolCallContext, args json.RawMessage) string
 
-// RuntimeRegistry registers dynamic tool handlers for runtime dispatch.
 type RuntimeRegistry interface {
 	RegisterRuntimeTool(name string, handler RuntimeToolHandler)
 }
 
-// RuntimeLookup resolves runtime handlers for dispatch.
 type RuntimeLookup interface {
 	LookupRuntimeTool(name string) (RuntimeToolHandler, bool)
 }
 
-// SetRuntimeTool writes a runtime handler into map storage.
 func SetRuntimeTool(dst map[string]RuntimeToolHandler, name string, handler RuntimeToolHandler) {
 	if dst == nil || strings.TrimSpace(name) == "" || handler == nil {
 		return
 	}
-	dst[strings.TrimSpace(name)] = handler
+	dst[name] = handler
 }
 
-// GetRuntimeTool reads a runtime handler from map storage.
 func GetRuntimeTool(src map[string]RuntimeToolHandler, name string) (RuntimeToolHandler, bool) {
-	if src == nil {
+	if src == nil || strings.TrimSpace(name) == "" {
 		return nil, false
 	}
-	handler, ok := src[strings.TrimSpace(name)]
+	handler, ok := src[name]
 	return handler, ok
 }
 
-// ToolCallCounter increments and tracks tool-call invocation count.
 type ToolCallCounter interface {
 	IncrementToolCall(name string) int64
 }
 
-// CodeRunTracker tracks in-flight code_run/code_run_test execution cancellation.
 type CodeRunTracker interface {
 	RegisterCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string
 	UnregisterCodeRunCancel(agentID, runKey string)
 }
 
-// Providers wires all dependencies required by register/dispatch.
 type Providers struct {
 	LSP           tools.LSPProvider
 	CodeRun       tools.CodeRunProvider
@@ -68,116 +60,114 @@ type Providers struct {
 
 type schemaProviderFunc func() []agentcore.DynamicTool
 
-func (f schemaProviderFunc) AllSchemas() []agentcore.DynamicTool { return f() }
+func (f schemaProviderFunc) AllSchemas() []agentcore.DynamicTool {
+	if f == nil {
+		return nil
+	}
+	return f()
+}
 
-type extendedLSPDynamicToolProvider struct {
+type lspAddonDynamicToolProvider struct {
 	name     string
 	register func(tools.LSPProvider)
 	build    func() []agentcore.DynamicTool
 }
 
 var (
-	extendedLSPDynamicToolProvidersMu sync.RWMutex
-	extendedLSPDynamicToolProviders   []extendedLSPDynamicToolProvider
+	lspAddonDynamicToolProvidersMu sync.RWMutex
+	lspAddonDynamicToolProviders   []lspAddonDynamicToolProvider
 )
 
-// RegisterExtendedLSPDynamicToolProvider registers an additional extended LSP tool provider.
-func RegisterExtendedLSPDynamicToolProvider(
-	name string,
-	register func(tools.LSPProvider),
-	build func() []agentcore.DynamicTool,
-) {
+func RegisterExtendedLSPDynamicToolProvider(name string, register func(tools.LSPProvider), build func() []agentcore.DynamicTool) {
 	trimmed := strings.TrimSpace(name)
-	if trimmed == "" || build == nil {
+	if trimmed == "" || (register == nil && build == nil) {
 		return
 	}
 
-	extendedLSPDynamicToolProvidersMu.Lock()
-	defer extendedLSPDynamicToolProvidersMu.Unlock()
-	extendedLSPDynamicToolProviders = append(extendedLSPDynamicToolProviders, extendedLSPDynamicToolProvider{
+	provider := lspAddonDynamicToolProvider{
 		name:     trimmed,
 		register: register,
 		build:    build,
+	}
+
+	lspAddonDynamicToolProvidersMu.Lock()
+	defer lspAddonDynamicToolProvidersMu.Unlock()
+
+	for i := range lspAddonDynamicToolProviders {
+		if lspAddonDynamicToolProviders[i].name == trimmed {
+			lspAddonDynamicToolProviders[i] = provider
+			return
+		}
+	}
+
+	lspAddonDynamicToolProviders = append(lspAddonDynamicToolProviders, provider)
+	sort.SliceStable(lspAddonDynamicToolProviders, func(i, j int) bool {
+		return lspAddonDynamicToolProviders[i].name < lspAddonDynamicToolProviders[j].name
 	})
 }
 
-// Register wires all dynamic tools into the runtime registry.
 func Register(registry RuntimeRegistry, deps Providers) {
 	if registry == nil {
 		return
 	}
 	for _, tool := range runtimeTools(deps) {
-		name := strings.TrimSpace(tool.Schema.Name)
-		if name == "" || tool.Handler == nil {
+		if strings.TrimSpace(tool.Schema.Name) == "" || tool.Handler == nil {
 			continue
 		}
-		registry.RegisterRuntimeTool(name, tool.Handler)
+		registry.RegisterRuntimeTool(tool.Schema.Name, tool.Handler)
 	}
 }
 
-// AllSchemas returns all dynamic tool schemas exposed to agents.
 func AllSchemas(deps Providers) []agentcore.DynamicTool {
 	allTools := schemaTools(deps)
-	if len(allTools) == 0 {
-		return nil
+	schemas := make([]agentcore.DynamicTool, 0, len(allTools))
+	for _, tool := range allTools {
+		if strings.TrimSpace(tool.Schema.Name) == "" {
+			continue
+		}
+		schemas = append(schemas, tool.Schema)
 	}
-	schemas := tools.Schemas(allTools)
-	sort.SliceStable(schemas, func(i, j int) bool {
-		return schemas[i].Name < schemas[j].Name
-	})
-	return schemas
+	return dedupeSchemasByName(schemas)
 }
 
 func runtimeTools(deps Providers) []tools.Tool {
-	out := make([]tools.Tool, 0, 64)
-	if deps.LSP != nil {
-		out = append(out, buildLSPTools(deps.LSP)...)
+	resolvedSchema := deps.Schema
+	if resolvedSchema == nil {
+		resolvedSchema = schemaProviderFunc(func() []agentcore.DynamicTool { return nil })
 	}
 
-	schemaProvider := deps.Schema
-	if schemaProvider == nil {
-		fallbackDeps := deps
-		fallbackDeps.Schema = nil
-		schemaProvider = schemaProviderFunc(func() []agentcore.DynamicTool {
-			return AllSchemas(fallbackDeps)
-		})
-	}
-
-	out = append(out, tools.OrchestrationTools(deps.Orchestration, deps.AgentRuntime, schemaProvider)...)
-	out = append(out, tools.ResourceTools(deps.Resource)...)
-	out = append(out, tools.CodeRunTools(deps.CodeRun, deps.AgentRuntime, deps.Approvals)...)
-	return dedupeToolsByName(out)
+	all := make([]tools.Tool, 0, 32)
+	all = append(all, buildLSPTools(deps.LSP)...)
+	all = append(all, tools.CodeRunTools(deps.CodeRun, deps.AgentRuntime, deps.Approvals)...)
+	all = append(all, tools.ResourceTools(deps.Resource)...)
+	all = append(all, tools.OrchestrationTools(deps.Orchestration, deps.AgentRuntime, resolvedSchema)...)
+	return dedupeToolsByName(all)
 }
 
 func schemaTools(deps Providers) []tools.Tool {
-	out := make([]tools.Tool, 0, 64)
-	if deps.LSP != nil {
-		lspTools := buildLSPTools(deps.LSP)
-		if hasAvailableLSPServer(deps.LSP) {
-			out = append(out, lspTools...)
-		} else {
-			for _, tool := range lspTools {
-				if strings.TrimSpace(tool.Schema.Name) == "lsp_grep" {
-					out = append(out, tool)
-					break
-				}
+	resolvedSchema := deps.Schema
+	if resolvedSchema == nil {
+		resolvedSchema = schemaProviderFunc(func() []agentcore.DynamicTool { return nil })
+	}
+
+	lspTools := buildLSPTools(deps.LSP)
+	if !hasAvailableLSPServer(deps.LSP) {
+		filtered := make([]tools.Tool, 0, 1)
+		for _, tool := range lspTools {
+			if tool.Schema.Name == "lsp_grep" {
+				filtered = append(filtered, tool)
+				break
 			}
 		}
+		lspTools = filtered
 	}
 
-	schemaProvider := deps.Schema
-	if schemaProvider == nil {
-		fallbackDeps := deps
-		fallbackDeps.Schema = nil
-		schemaProvider = schemaProviderFunc(func() []agentcore.DynamicTool {
-			return AllSchemas(fallbackDeps)
-		})
-	}
-
-	out = append(out, tools.OrchestrationTools(deps.Orchestration, deps.AgentRuntime, schemaProvider)...)
-	out = append(out, tools.ResourceTools(deps.Resource)...)
-	out = append(out, tools.CodeRunTools(deps.CodeRun, deps.AgentRuntime, deps.Approvals)...)
-	return dedupeToolsByName(out)
+	all := make([]tools.Tool, 0, 32)
+	all = append(all, lspTools...)
+	all = append(all, tools.CodeRunTools(deps.CodeRun, deps.AgentRuntime, deps.Approvals)...)
+	all = append(all, tools.ResourceTools(deps.Resource)...)
+	all = append(all, tools.OrchestrationTools(deps.Orchestration, deps.AgentRuntime, resolvedSchema)...)
+	return dedupeToolsByName(all)
 }
 
 func buildLSPTools(provider tools.LSPProvider) []tools.Tool {
@@ -185,52 +175,37 @@ func buildLSPTools(provider tools.LSPProvider) []tools.Tool {
 		return nil
 	}
 
-	var out []tools.Tool
+	dynTools := make(map[string]tools.LSPDynamicToolHandler)
+	tools.RegisterLSPHandlers(dynTools, provider)
 
-	baseHandlers := make(map[string]tools.LSPDynamicToolHandler)
-	tools.RegisterLSPHandlers(baseHandlers, provider)
-	for _, schema := range tools.LSPTools() {
-		handler, ok := baseHandlers[strings.TrimSpace(schema.Name)]
-		if !ok || handler == nil {
-			continue
-		}
-		out = append(out, tools.Tool{
-			Schema: schema,
-			Handler: func(h tools.LSPDynamicToolHandler) RuntimeToolHandler {
-				return func(callCtx tools.ToolCallContext, args json.RawMessage) string {
-					return h(withLSPToolCallMeta(args, callCtx))
-				}
-			}(handler),
-		})
-	}
-
-	extProviders := snapshotExtendedLSPDynamicToolProviders()
-	extHandlers := make(map[string]tools.LSPDynamicToolHandler)
-	extContext := lspExtProviderContext{
-		LSPHandlerProvider: provider,
-		dynTools:           extHandlers,
-	}
-	for _, ext := range extProviders {
+	addonProviders := snapshotLSPAddonDynamicToolProviders()
+	addonCtx := lspAddonProviderContext{LSPHandlerProvider: provider, dynTools: dynTools}
+	for _, ext := range addonProviders {
 		if ext.register != nil {
-			ext.register(extContext)
+			ext.register(addonCtx)
 		}
 	}
 
-	for _, schema := range buildExtendedLSPDynamicToolSchemas(extProviders) {
-		handler, ok := extHandlers[strings.TrimSpace(schema.Name)]
+	schemas := append([]agentcore.DynamicTool{}, tools.LSPTools()...)
+	schemas = append(schemas, buildLSPAddonDynamicToolSchemas(addonProviders)...)
+	schemas = append(schemas, tools.LSPAddonTools()...)
+	schemas = dedupeSchemasByName(schemas)
+
+	result := make([]tools.Tool, 0, len(schemas))
+	for _, schema := range schemas {
+		handler, ok := dynTools[schema.Name]
 		if !ok || handler == nil {
 			continue
 		}
-		out = append(out, tools.Tool{
+		localHandler := handler
+		result = append(result, tools.Tool{
 			Schema: schema,
-			Handler: func(h tools.LSPDynamicToolHandler) RuntimeToolHandler {
-				return func(callCtx tools.ToolCallContext, args json.RawMessage) string {
-					return h(withLSPToolCallMeta(args, callCtx))
-				}
-			}(handler),
+			Handler: func(_ tools.ToolCallContext, args json.RawMessage) string {
+				return localHandler(args)
+			},
 		})
 	}
-	return dedupeToolsByName(out)
+	return dedupeToolsByName(result)
 }
 
 func hasAvailableLSPServer(provider tools.LSPProvider) bool {
@@ -241,81 +216,115 @@ func hasAvailableLSPServer(provider tools.LSPProvider) bool {
 	if len(summary) == 0 {
 		return true
 	}
-	v, ok := summary["hasAvailableServer"]
-	if !ok {
-		return true
-	}
-	available, ok := v.(bool)
-	if !ok {
+	available, known := availabilityFromAny(summary)
+	if !known {
 		return true
 	}
 	return available
 }
 
-func snapshotExtendedLSPDynamicToolProviders() []extendedLSPDynamicToolProvider {
-	defaultProviders := tools.LSPExtTools()
-
-	extendedLSPDynamicToolProvidersMu.RLock()
-	customProviders := append([]extendedLSPDynamicToolProvider(nil), extendedLSPDynamicToolProviders...)
-	extendedLSPDynamicToolProvidersMu.RUnlock()
-
-	providers := make([]extendedLSPDynamicToolProvider, 0, len(defaultProviders)+len(customProviders))
-	seen := make(map[string]struct{}, len(defaultProviders)+len(customProviders))
-	appendProvider := func(provider extendedLSPDynamicToolProvider) {
-		name := strings.TrimSpace(provider.name)
-		if name == "" || provider.build == nil {
-			return
+func availabilityFromAny(value any) (bool, bool) {
+	switch v := value.(type) {
+	case bool:
+		return v, true
+	case string:
+		return availabilityFromStatus(v)
+	case map[string]any:
+		if raw, ok := v["available"]; ok {
+			if available, known := availabilityFromAny(raw); known {
+				return available, true
+			}
 		}
-		if _, ok := seen[name]; ok {
-			return
+		if raw, ok := v["enabled"]; ok {
+			if available, known := availabilityFromAny(raw); known {
+				return available, true
+			}
 		}
-		seen[name] = struct{}{}
-		provider.name = name
-		providers = append(providers, provider)
+		if raw, ok := v["status"]; ok {
+			if available, known := availabilityFromAny(raw); known {
+				return available, true
+			}
+		}
+		known := false
+		anyAvailable := false
+		for _, raw := range v {
+			available, ok := availabilityFromAny(raw)
+			if !ok {
+				continue
+			}
+			known = true
+			if available {
+				anyAvailable = true
+			}
+		}
+		return anyAvailable, known
+	case []any:
+		known := false
+		anyAvailable := false
+		for _, raw := range v {
+			available, ok := availabilityFromAny(raw)
+			if !ok {
+				continue
+			}
+			known = true
+			if available {
+				anyAvailable = true
+			}
+		}
+		return anyAvailable, known
+	default:
+		return false, false
 	}
-
-	for _, provider := range defaultProviders {
-		appendProvider(extendedLSPDynamicToolProvider{
-			name:     provider.Name,
-			register: provider.Register,
-			build:    provider.Build,
-		})
-	}
-	for _, provider := range customProviders {
-		appendProvider(provider)
-	}
-
-	sort.SliceStable(providers, func(i, j int) bool {
-		return providers[i].name < providers[j].name
-	})
-	return providers
 }
 
-func buildExtendedLSPDynamicToolSchemas(providers []extendedLSPDynamicToolProvider) []agentcore.DynamicTool {
+func availabilityFromStatus(status string) (bool, bool) {
+	s := strings.ToLower(strings.TrimSpace(status))
+	if s == "" {
+		return false, false
+	}
+	switch s {
+	case "available", "enabled", "ready", "ok", "healthy", "running":
+		return true, true
+	case "unavailable", "disabled", "offline", "down", "stopped", "error", "failed":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func snapshotLSPAddonDynamicToolProviders() []lspAddonDynamicToolProvider {
+	lspAddonDynamicToolProvidersMu.RLock()
+	defer lspAddonDynamicToolProvidersMu.RUnlock()
+	if len(lspAddonDynamicToolProviders) == 0 {
+		return nil
+	}
+	out := make([]lspAddonDynamicToolProvider, 0, len(lspAddonDynamicToolProviders))
+	for _, provider := range lspAddonDynamicToolProviders {
+		out = append(out, provider)
+	}
+	return out
+}
+
+func buildLSPAddonDynamicToolSchemas(providers []lspAddonDynamicToolProvider) []agentcore.DynamicTool {
 	if len(providers) == 0 {
 		return nil
 	}
-
-	toolsOut := make([]agentcore.DynamicTool, 0, len(providers))
+	out := make([]agentcore.DynamicTool, 0, len(providers))
 	for _, provider := range providers {
 		if provider.build == nil {
 			continue
 		}
-		toolsOut = append(toolsOut, provider.build()...)
+		out = append(out, provider.build()...)
 	}
-
-	sort.SliceStable(toolsOut, func(i, j int) bool {
-		return toolsOut[i].Name < toolsOut[j].Name
-	})
-	return dedupeSchemasByName(toolsOut)
+	return dedupeSchemasByName(out)
 }
 
-type lspExtProviderContext struct {
+type lspAddonProviderContext struct {
 	tools.LSPHandlerProvider
 	dynTools map[string]tools.LSPDynamicToolHandler
 }
 
-func (c lspExtProviderContext) BindDynamicTool(name string, handler tools.LSPDynamicToolHandler) {
+func (c lspAddonProviderContext) BindDynamicTool(name string, handler tools.LSPDynamicToolHandler) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" || handler == nil || c.dynTools == nil {
 		return
@@ -324,11 +333,11 @@ func (c lspExtProviderContext) BindDynamicTool(name string, handler tools.LSPDyn
 }
 
 func dedupeToolsByName(list []tools.Tool) []tools.Tool {
-	if len(list) == 0 {
-		return nil
+	if len(list) <= 1 {
+		return list
 	}
-	seen := make(map[string]struct{}, len(list))
 	out := make([]tools.Tool, 0, len(list))
+	seen := make(map[string]struct{}, len(list))
 	for _, tool := range list {
 		name := strings.TrimSpace(tool.Schema.Name)
 		if name == "" {
@@ -344,13 +353,13 @@ func dedupeToolsByName(list []tools.Tool) []tools.Tool {
 }
 
 func dedupeSchemasByName(list []agentcore.DynamicTool) []agentcore.DynamicTool {
-	if len(list) == 0 {
-		return nil
+	if len(list) <= 1 {
+		return list
 	}
-	seen := make(map[string]struct{}, len(list))
 	out := make([]agentcore.DynamicTool, 0, len(list))
-	for _, tool := range list {
-		name := strings.TrimSpace(tool.Name)
+	seen := make(map[string]struct{}, len(list))
+	for _, schema := range list {
+		name := strings.TrimSpace(schema.Name)
 		if name == "" {
 			continue
 		}
@@ -358,13 +367,13 @@ func dedupeSchemasByName(list []agentcore.DynamicTool) []agentcore.DynamicTool {
 			continue
 		}
 		seen[name] = struct{}{}
-		out = append(out, tool)
+		out = append(out, schema)
 	}
 	return out
 }
 
 func resetExtendedLSPDynamicToolProvidersForTest() {
-	extendedLSPDynamicToolProvidersMu.Lock()
-	extendedLSPDynamicToolProviders = nil
-	extendedLSPDynamicToolProvidersMu.Unlock()
+	lspAddonDynamicToolProvidersMu.Lock()
+	defer lspAddonDynamicToolProvidersMu.Unlock()
+	lspAddonDynamicToolProviders = nil
 }

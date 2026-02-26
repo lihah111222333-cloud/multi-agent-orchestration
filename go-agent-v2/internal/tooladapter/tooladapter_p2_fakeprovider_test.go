@@ -25,3 +25,7 @@ func (f *fakeLSPProvider) LSPStructure(_ json.RawMessage) string {
 func (f *fakeLSPProvider) LSPEdit(_ json.RawMessage) string {
 	return "{\"ok\":true,\"tool\":\"lsp_edit\"}"
 }
+
+func (f *fakeLSPProvider) Completion(_ json.RawMessage) string {
+	return "{\"ok\":true,\"tool\":\"lsp_completion\"}"
+}

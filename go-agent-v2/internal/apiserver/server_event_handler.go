@@ -90,11 +90,14 @@ func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 
 		// § 二 审批事件: 需要客户端回复 (双向请求)
 		switch event.Type {
-		case "exec_approval_request":
-			util.SafeGo(func() { handleApprovalRequest(s, agentID, "item/commandExecution/requestApproval", payload, event) })
+		case agentcore.EventExecApprovalRequest:
+			util.SafeGo(func() { handleApprovalRequest(s, agentID, approvalMethodCommandExecution, payload, event) })
 			return
-		case "file_change_approval_request":
-			util.SafeGo(func() { handleApprovalRequest(s, agentID, "item/fileChange/requestApproval", payload, event) })
+		case agentcore.EventFileChangeApprovalRequest:
+			util.SafeGo(func() { handleApprovalRequest(s, agentID, approvalMethodFileChange, payload, event) })
+			return
+		case approvalMethodSkillRequest:
+			util.SafeGo(func() { handleApprovalRequest(s, agentID, approvalMethodSkillRequest, payload, event) })
 			return
 		case agentcore.EventDynamicToolCall:
 			util.SafeGo(func() { handleDynamicToolCall(s, agentID, event) })

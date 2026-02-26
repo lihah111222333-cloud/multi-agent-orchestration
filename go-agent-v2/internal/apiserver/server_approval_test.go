@@ -75,6 +75,28 @@ func TestNormalizeApprovalResultPayloadFileChangeDecisionAndFallback(t *testing.
 	}
 }
 
+func TestNormalizeApprovalResultPayloadSkillDecisionAndFallback(t *testing.T) {
+	decisionResult := map[string]any{"decision": "accept"}
+	got, ok := normalizeApprovalResultPayload(approvalMethodSkillRequest, decisionResult)
+	if !ok {
+		t.Fatalf("normalizeApprovalResultPayload() = not ok, want ok")
+	}
+	want := map[string]any{"decision": "approve"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalizeApprovalResultPayload() = %#v, want %#v", got, want)
+	}
+
+	fallbackResult := map[string]any{"approved": true}
+	fallback, fallbackOK := normalizeApprovalResultPayload(approvalMethodSkillRequest, fallbackResult)
+	if !fallbackOK {
+		t.Fatalf("normalizeApprovalResultPayload() fallback = not ok, want ok")
+	}
+	fallbackWant := map[string]any{"decision": "approve"}
+	if !reflect.DeepEqual(fallback, fallbackWant) {
+		t.Fatalf("normalizeApprovalResultPayload() fallback = %#v, want %#v", fallback, fallbackWant)
+	}
+}
+
 func TestApprovalDecisionAllowsSubmitNetworkPolicyAction(t *testing.T) {
 	allowPayload := map[string]any{
 		"decision": map[string]any{
@@ -102,6 +124,23 @@ func TestApprovalDecisionAllowsSubmitNetworkPolicyAction(t *testing.T) {
 	}
 	if approvalDecisionAllowsSubmit(approvalMethodCommandExecution, denyPayload) {
 		t.Fatalf("approvalDecisionAllowsSubmit() = true, want false for deny action")
+	}
+}
+
+func TestApprovalDecisionAllowsSubmitSkillDecision(t *testing.T) {
+	approvePayload := map[string]any{"decision": "approve"}
+	if !approvalDecisionAllowsSubmit(approvalMethodSkillRequest, approvePayload) {
+		t.Fatalf("approvalDecisionAllowsSubmit() = false, want true for approve")
+	}
+
+	acceptAliasPayload := map[string]any{"decision": "accept"}
+	if !approvalDecisionAllowsSubmit(approvalMethodSkillRequest, acceptAliasPayload) {
+		t.Fatalf("approvalDecisionAllowsSubmit() = false, want true for accept alias")
+	}
+
+	declinePayload := map[string]any{"decision": "decline"}
+	if approvalDecisionAllowsSubmit(approvalMethodSkillRequest, declinePayload) {
+		t.Fatalf("approvalDecisionAllowsSubmit() = true, want false for decline")
 	}
 }
 

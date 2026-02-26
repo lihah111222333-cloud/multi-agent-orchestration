@@ -29,42 +29,24 @@ func TestP0PostLSPSchemaGuard(t *testing.T) {
 		"lsp_edit",
 		"lsp_completion",
 	}
-	legacyNames := []string{
-		"lsp_hover",
-		"lsp_open_file",
-		"lsp_diagnostics",
-		"lsp_definition",
-		"lsp_references",
-		"lsp_document_symbol",
-		"lsp_rename",
-		"lsp_did_change",
-		"lsp_code_action",
-		"lsp_signature_help",
-		"lsp_format",
-		"lsp_call_hierarchy",
-		"lsp_type_hierarchy",
-		"lsp_semantic_tokens",
-		"lsp_folding_range",
-		"lsp_workspace_symbol",
-		"lsp_implementation",
-		"lsp_type_definition",
-		"lsp_text_search",
-		"lsp_ast_search",
+	expectedSet := make(map[string]struct{}, len(expectedMerged))
+	for _, name := range expectedMerged {
+		expectedSet[name] = struct{}{}
 	}
 
 	schemas := AllSchemas(testProviders(true))
 	schemaSet := make(map[string]struct{}, len(schemas))
 	for _, schema := range schemas {
 		schemaSet[schema.Name] = struct{}{}
+		if strings.HasPrefix(schema.Name, "lsp_") {
+			if _, ok := expectedSet[schema.Name]; !ok {
+				t.Fatalf("p0-post must not expose unexpected lsp schema %q", schema.Name)
+			}
+		}
 	}
 	for _, name := range expectedMerged {
 		if _, ok := schemaSet[name]; !ok {
 			t.Fatalf("p0-post schema missing merged tool %q", name)
-		}
-	}
-	for _, name := range legacyNames {
-		if _, ok := schemaSet[name]; ok {
-			t.Fatalf("p0-post must not expose legacy tool %q", name)
 		}
 	}
 

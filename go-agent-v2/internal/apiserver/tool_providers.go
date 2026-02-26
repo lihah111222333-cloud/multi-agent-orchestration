@@ -13,6 +13,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/internal/tooladapter"
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -239,6 +240,7 @@ func (p approvalProvider) AwaitApproval(agentID, callID, mode, command string, i
 	defer endApprovalState(p.s, inflightKey)
 
 	payload := map[string]any{
+		"threadId":     agentID,
 		"type":         "code_run_approval",
 		"agent_id":     agentID,
 		"mode":         mode,
@@ -246,10 +248,10 @@ func (p approvalProvider) AwaitApproval(agentID, callID, mode, command string, i
 		"is_dangerous": isDangerous,
 	}
 
-	return p.waitForFrontendDecision(method, payload)
+	return p.waitForFrontendDecision(agentID, method, payload)
 }
 
-func (p approvalProvider) waitForFrontendDecision(method string, payload map[string]any) bool {
+func (p approvalProvider) waitForFrontendDecision(agentID, method string, payload map[string]any) bool {
 	resp, wsErr := sendRequestToAll(p.s, method, payload)
 	if wsErr == nil && resp != nil && resp.Result != nil {
 		if m, ok := resp.Result.(map[string]any); ok {
@@ -273,6 +275,20 @@ func (p approvalProvider) waitForFrontendDecision(method string, payload map[str
 		payload = make(map[string]any)
 	}
 	payload["requestId"] = reqID
+
+	// 回灌到 uiRuntime，确保 timeline 审批卡拿到 requestId 可交互。
+	if p.s.uiRuntime != nil {
+		threadID := strings.TrimSpace(agentID)
+		if threadID != "" {
+			normalized := uistate.NormalizeEventFromPayload(method, method, payload)
+			p.s.uiRuntime.ApplyAgentEvent(threadID, normalized, payload)
+			throttledUIStateChanged(p.s, map[string]any{
+				"source":   method,
+				"threadId": threadID,
+			})
+		}
+	}
+
 	broadcastNotification(p.s, method, payload)
 
 	timer := time.NewTimer(5 * time.Minute)

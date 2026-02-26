@@ -48,7 +48,7 @@ func Dispatch(call DynamicToolCall, deps Providers) (string, error) {
 	}
 	handler, ok := deps.Lookup.LookupRuntimeTool(toolName)
 	if !ok || handler == nil {
-		return "", fmt.Errorf("unknown tool: %s", toolName)
+		return "", fmt.Errorf("UNKNOWN_TOOL: unknown tool: %s", toolName)
 	}
 
 	callCtx := BuildToolCallContext(call)

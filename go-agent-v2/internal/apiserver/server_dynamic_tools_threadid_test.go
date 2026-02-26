@@ -81,21 +81,33 @@ func TestShouldCaptureDynamicToolDiff(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "lsp did_change persist true",
-			tool: "lsp_did_change",
-			args: map[string]any{"persist_to_disk": true},
+			name: "lsp file did_change persist true",
+			tool: "lsp_file",
+			args: map[string]any{"action": "did_change", "persist_to_disk": true},
 			want: true,
 		},
 		{
-			name: "lsp did_change persist false",
-			tool: "lsp_did_change",
-			args: map[string]any{"persist_to_disk": false},
+			name: "lsp file did_change persist false",
+			tool: "lsp_file",
+			args: map[string]any{"action": "did_change", "persist_to_disk": false},
 			want: false,
 		},
 		{
-			name: "lsp did_change string true",
-			tool: "lsp_did_change",
-			args: map[string]any{"persist_to_disk": "true"},
+			name: "lsp file did_change string true",
+			tool: "lsp_file",
+			args: map[string]any{"action": "did_change", "persist_to_disk": "true"},
+			want: true,
+		},
+		{
+			name: "lsp file open_file does not capture",
+			tool: "lsp_file",
+			args: map[string]any{"action": "open_file", "persist_to_disk": true},
+			want: false,
+		},
+		{
+			name: "lsp edit did_change persist true",
+			tool: "lsp_edit",
+			args: map[string]any{"action": "did_change", "persist_to_disk": true},
 			want: true,
 		},
 		{
@@ -112,8 +124,8 @@ func TestShouldCaptureDynamicToolDiff(t *testing.T) {
 		},
 		{
 			name: "read-only lsp",
-			tool: "lsp_hover",
-			args: map[string]any{"file_path": "main.go"},
+			tool: "lsp_inspect",
+			args: map[string]any{"action": "diagnostics", "file_path": "main.go"},
 			want: false,
 		},
 	}

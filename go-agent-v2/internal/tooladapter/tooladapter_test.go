@@ -97,27 +97,6 @@ func (p *fakeLSPProvider) AvailabilitySummary() map[string]any {
 }
 
 func (p *fakeLSPProvider) DiagnosticsQuery(string) map[string]any { return map[string]any{} }
-func (p *fakeLSPProvider) Hover(json.RawMessage) string           { return "hover" }
-func (p *fakeLSPProvider) OpenFile(json.RawMessage) string        { return "open_file" }
-func (p *fakeLSPProvider) Diagnostics(json.RawMessage) string     { return "diagnostics" }
-func (p *fakeLSPProvider) Definition(json.RawMessage) string      { return "definition" }
-func (p *fakeLSPProvider) References(json.RawMessage) string      { return "references" }
-func (p *fakeLSPProvider) DocumentSymbol(json.RawMessage) string  { return "document_symbol" }
-func (p *fakeLSPProvider) Rename(json.RawMessage) string          { return "rename" }
-func (p *fakeLSPProvider) Completion(json.RawMessage) string      { return "completion" }
-func (p *fakeLSPProvider) DidChange(json.RawMessage) string       { return "did_change" }
-func (p *fakeLSPProvider) CodeAction(json.RawMessage) string      { return "code_action" }
-func (p *fakeLSPProvider) SignatureHelp(json.RawMessage) string   { return "signature_help" }
-func (p *fakeLSPProvider) Format(json.RawMessage) string          { return "format" }
-func (p *fakeLSPProvider) CallHierarchy(json.RawMessage) string   { return "call_hierarchy" }
-func (p *fakeLSPProvider) TypeHierarchy(json.RawMessage) string   { return "type_hierarchy" }
-func (p *fakeLSPProvider) SemanticTokens(json.RawMessage) string  { return "semantic_tokens" }
-func (p *fakeLSPProvider) FoldingRange(json.RawMessage) string    { return "folding_range" }
-func (p *fakeLSPProvider) WorkspaceSymbol(json.RawMessage) string { return "workspace_symbol" }
-func (p *fakeLSPProvider) Implementation(json.RawMessage) string  { return "implementation" }
-func (p *fakeLSPProvider) TypeDefinition(json.RawMessage) string  { return "type_definition" }
-func (p *fakeLSPProvider) TextSearch(json.RawMessage) string      { return "text_search" }
-func (p *fakeLSPProvider) AstSearch(json.RawMessage) string       { return "ast_search" }
 
 func testProviders(hasAvailableServer bool) Providers {
 	deps := fakeSharedProviders{}
@@ -170,10 +149,13 @@ func TestRegisterAndAllSchemasAlign(t *testing.T) {
 		"code_run_test",
 		"task_create_dag",
 		"orchestration_launch_agent",
-		"lsp_hover",
-		"lsp_code_action",
-		"lsp_text_search",
-		"lsp_ast_search",
+		"lsp_file",
+		"lsp_inspect",
+		"lsp_xref",
+		"lsp_grep",
+		"lsp_structure",
+		"lsp_edit",
+		"lsp_completion",
 	} {
 		if _, ok := registry.handlers[required]; !ok {
 			t.Fatalf("expected handler %q to be registered", required)
@@ -232,7 +214,7 @@ func TestDispatchUnknownToolStillCountsAndReturnsError(t *testing.T) {
 	if result != "" {
 		t.Fatalf("expected empty result, got %q", result)
 	}
-	if !strings.Contains(err.Error(), "unknown tool") {
+	if !strings.Contains(strings.ToUpper(err.Error()), "UNKNOWN_TOOL") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if counter.counts["missing"] != 1 {
@@ -307,15 +289,23 @@ func TestLSPAvailabilityTransitionKeepsRuntimeHandlers(t *testing.T) {
 	registry := newFakeRuntimeRegistry()
 	Register(registry, providers)
 
-	if _, ok := registry.LookupRuntimeTool("lsp_hover"); !ok {
-		t.Fatalf("expected lsp_hover runtime handler to be registered even when unavailable")
+	if _, ok := registry.LookupRuntimeTool("lsp_file"); !ok {
+		t.Fatalf("expected lsp_file runtime handler to be registered even when unavailable")
 	}
 
 	initialSchemas := AllSchemas(providers)
+	foundGrep := false
 	for _, schema := range initialSchemas {
-		if schema.Name == "lsp_hover" {
-			t.Fatalf("lsp_hover should not be exposed in schemas when unavailable")
+		if strings.HasPrefix(schema.Name, "lsp_") {
+			if schema.Name == "lsp_grep" {
+				foundGrep = true
+				continue
+			}
+			t.Fatalf("only lsp_grep should be exposed when unavailable, got %q", schema.Name)
 		}
+	}
+	if !foundGrep {
+		t.Fatalf("expected lsp_grep schema when unavailable")
 	}
 
 	lspProvider.hasAvailableServer = true
@@ -323,15 +313,15 @@ func TestLSPAvailabilityTransitionKeepsRuntimeHandlers(t *testing.T) {
 	updatedSchemas := AllSchemas(providers)
 	found := false
 	for _, schema := range updatedSchemas {
-		if schema.Name == "lsp_hover" {
+		if schema.Name == "lsp_file" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected lsp_hover schema once availability becomes true")
+		t.Fatalf("expected lsp_file schema once availability becomes true")
 	}
-	if _, ok := registry.LookupRuntimeTool("lsp_hover"); !ok {
-		t.Fatalf("lsp_hover runtime handler should remain registered after availability transition")
+	if _, ok := registry.LookupRuntimeTool("lsp_file"); !ok {
+		t.Fatalf("lsp_file runtime handler should remain registered after availability transition")
 	}
 }

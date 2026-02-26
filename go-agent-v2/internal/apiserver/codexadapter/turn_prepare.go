@@ -95,16 +95,6 @@ func (a *Adapter) resolveTurnSteerAlignment(req turnSteerRequest) (string, strin
 	return serviceruntime.ResolveTurnSteerAlignment(newServiceRuntimeBridge(a), toRuntimeTurnSteerRequest(req))
 }
 
-func (a *Adapter) turnSteerFromInputAligned(req turnSteerRequest) (map[string]any, error) {
-	return serviceruntime.TurnSteerFromInputAlignedByAdapter(
-		newServiceRuntimeBridge(a),
-		toRuntimeTurnSteerRequest(req),
-		func(runtimeReq serviceruntime.TurnSteerRequest) (map[string]any, error) {
-			return a.TurnSteerFromInput(fromRuntimeTurnSteerRequest(runtimeReq))
-		},
-	)
-}
-
 func parseTurnInputs(inputs []contracts.TurnInput) parsedTurnInputs {
 	parsed := serviceruntime.ParseTurnInputs(toRuntimeTurnInputs(inputs), commonadapter.FileContentInputText)
 	return fromRuntimeParsedTurnInputs(parsed)

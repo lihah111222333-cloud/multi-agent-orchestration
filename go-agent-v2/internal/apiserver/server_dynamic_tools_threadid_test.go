@@ -142,17 +142,17 @@ func TestResolveDynamicToolDiffRepoRoot(t *testing.T) {
 	}
 }
 
-func TestCaptureRepoDiffSnapshotIncludesTrackedAndUntracked(t *testing.T) {
+func TestListRepoDirtyPathsIncludesTrackedAndUntracked(t *testing.T) {
 	repoRoot := initTestGitRepo(t)
 	trackedPath := filepath.Join(repoRoot, "tracked.txt")
 	newPath := filepath.Join(repoRoot, "new.txt")
 
-	before, err := captureRepoDiffSnapshot(repoRoot)
+	before, err := listRepoDirtyPaths(repoRoot)
 	if err != nil {
-		t.Fatalf("captureRepoDiffSnapshot(before): %v", err)
+		t.Fatalf("listRepoDirtyPaths(before): %v", err)
 	}
-	if strings.TrimSpace(before) != "" {
-		t.Fatalf("expected empty baseline diff, got: %s", before)
+	if len(before) != 0 {
+		t.Fatalf("expected empty baseline paths, got: %v", before)
 	}
 
 	if err := os.WriteFile(trackedPath, []byte("line-1\nline-2\n"), 0o644); err != nil {
@@ -162,15 +162,15 @@ func TestCaptureRepoDiffSnapshotIncludesTrackedAndUntracked(t *testing.T) {
 		t.Fatalf("write untracked file: %v", err)
 	}
 
-	after, err := captureRepoDiffSnapshot(repoRoot)
+	after, err := listRepoDirtyPaths(repoRoot)
 	if err != nil {
-		t.Fatalf("captureRepoDiffSnapshot(after): %v", err)
+		t.Fatalf("listRepoDirtyPaths(after): %v", err)
 	}
-	if !strings.Contains(after, "diff --git a/tracked.txt b/tracked.txt") {
-		t.Fatalf("tracked diff missing, got: %s", after)
+	if !containsPath(after, "tracked.txt") {
+		t.Fatalf("tracked path missing, got: %v", after)
 	}
-	if !strings.Contains(after, "new.txt") {
-		t.Fatalf("untracked diff missing, got: %s", after)
+	if !containsPath(after, "new.txt") {
+		t.Fatalf("untracked path missing, got: %v", after)
 	}
 }
 
@@ -182,29 +182,29 @@ func TestBuildIncrementalDiffTextFiltersPreexistingChanges(t *testing.T) {
 	if err := os.WriteFile(trackedPath, []byte("line-1\npreexisting\n"), 0o644); err != nil {
 		t.Fatalf("write preexisting tracked diff: %v", err)
 	}
-	beforeByFile, err := captureRepoDiffSnapshotByFile(repoRoot)
+	beforePaths, err := listRepoDirtyPaths(repoRoot)
 	if err != nil {
-		t.Fatalf("capture before snapshot: %v", err)
+		t.Fatalf("list before paths: %v", err)
 	}
-	beforeSnapshots := captureWorkingTreeFileSnapshots(repoRoot, sortedDiffMapKeys(beforeByFile))
+	beforeSnapshots := captureWorkingTreeFileSnapshots(repoRoot, beforePaths)
 
 	if err := os.WriteFile(freshPath, []byte("new-file\n"), 0o644); err != nil {
 		t.Fatalf("write fresh untracked file: %v", err)
 	}
-	afterByFile, err := captureRepoDiffSnapshotByFile(repoRoot)
+	afterPaths, err := listRepoDirtyPaths(repoRoot)
 	if err != nil {
-		t.Fatalf("capture after snapshot: %v", err)
+		t.Fatalf("list after paths: %v", err)
 	}
 
-	delta, err := buildIncrementalDiffText(repoRoot, beforeByFile, afterByFile, beforeSnapshots)
+	delta, err := buildIncrementalDiffText(repoRoot, beforeSnapshots, afterPaths)
 	if err != nil {
 		t.Fatalf("buildIncrementalDiffText: %v", err)
 	}
 	if !strings.Contains(delta, "fresh.txt") {
 		t.Fatalf("incremental diff should include fresh.txt, got: %s", delta)
 	}
-	if strings.Contains(delta, "tracked.txt") {
-		t.Fatalf("incremental diff should exclude preexisting tracked.txt, got: %s", delta)
+	if strings.Contains(delta, "preexisting") {
+		t.Fatalf("incremental diff should exclude unchanged preexisting hunks, got: %s", delta)
 	}
 }
 
@@ -215,47 +215,59 @@ func TestBuildIncrementalDiffTextIncludesFurtherChangesOnDirtyFile(t *testing.T)
 	if err := os.WriteFile(trackedPath, []byte("line-1\nline-2\n"), 0o644); err != nil {
 		t.Fatalf("write first dirty state: %v", err)
 	}
-	beforeByFile, err := captureRepoDiffSnapshotByFile(repoRoot)
+	beforePaths, err := listRepoDirtyPaths(repoRoot)
 	if err != nil {
-		t.Fatalf("capture before snapshot: %v", err)
+		t.Fatalf("list before paths: %v", err)
 	}
-	beforeSnapshots := captureWorkingTreeFileSnapshots(repoRoot, sortedDiffMapKeys(beforeByFile))
+	beforeSnapshots := captureWorkingTreeFileSnapshots(repoRoot, beforePaths)
 
 	if err := os.WriteFile(trackedPath, []byte("line-1\nline-2\nline-3\n"), 0o644); err != nil {
 		t.Fatalf("write second dirty state: %v", err)
 	}
-	afterByFile, err := captureRepoDiffSnapshotByFile(repoRoot)
+	afterPaths, err := listRepoDirtyPaths(repoRoot)
 	if err != nil {
-		t.Fatalf("capture after snapshot: %v", err)
+		t.Fatalf("list after paths: %v", err)
 	}
 
-	delta, err := buildIncrementalDiffText(repoRoot, beforeByFile, afterByFile, beforeSnapshots)
+	delta, err := buildIncrementalDiffText(repoRoot, beforeSnapshots, afterPaths)
 	if err != nil {
 		t.Fatalf("buildIncrementalDiffText: %v", err)
 	}
 	if !strings.Contains(delta, "tracked.txt") {
 		t.Fatalf("incremental diff should include updated dirty tracked.txt, got: %s", delta)
 	}
+	if !strings.Contains(delta, "line-3") {
+		t.Fatalf("incremental diff should include latest line-3, got: %s", delta)
+	}
 }
 
-func TestSplitUnifiedDiffByFileSupportsQuotedPaths(t *testing.T) {
-	diff := strings.Join([]string{
-		"diff --git \"a/dir with space/a.txt\" \"b/dir with space/a.txt\"",
-		"index 1111111..2222222 100644",
-		"--- \"a/dir with space/a.txt\"",
-		"+++ \"b/dir with space/a.txt\"",
-		"@@ -1 +1,2 @@",
-		" line-1",
-		"+line-2",
-	}, "\n")
+func TestBuildIncrementalDiffTextIncludesDeletedFile(t *testing.T) {
+	repoRoot := initTestGitRepo(t)
+	trackedPath := filepath.Join(repoRoot, "tracked.txt")
 
-	byFile := splitUnifiedDiffByFile(diff)
-	block, ok := byFile["dir with space/a.txt"]
-	if !ok {
-		t.Fatalf("expected quoted path key to be parsed, got keys: %v", sortedDiffMapKeys(byFile))
+	beforePaths, err := listRepoDirtyPaths(repoRoot)
+	if err != nil {
+		t.Fatalf("list before paths: %v", err)
 	}
-	if !strings.Contains(block, "+line-2") {
-		t.Fatalf("unexpected diff block: %s", block)
+	beforeSnapshots := captureWorkingTreeFileSnapshots(repoRoot, beforePaths)
+
+	if err := os.Remove(trackedPath); err != nil {
+		t.Fatalf("remove tracked file: %v", err)
+	}
+	afterPaths, err := listRepoDirtyPaths(repoRoot)
+	if err != nil {
+		t.Fatalf("list after paths: %v", err)
+	}
+
+	delta, err := buildIncrementalDiffText(repoRoot, beforeSnapshots, afterPaths)
+	if err != nil {
+		t.Fatalf("buildIncrementalDiffText: %v", err)
+	}
+	if !strings.Contains(delta, "tracked.txt") {
+		t.Fatalf("incremental diff should include deleted tracked.txt, got: %s", delta)
+	}
+	if !strings.Contains(delta, "+++ /dev/null") && !strings.Contains(delta, "deleted file mode") {
+		t.Fatalf("incremental diff should include deleted-file markers, got: %s", delta)
 	}
 }
 
@@ -467,6 +479,16 @@ func sameFilePath(left, right string) bool {
 		return false
 	}
 	return filepath.Clean(leftResolved) == filepath.Clean(rightResolved)
+}
+
+func containsPath(paths []string, want string) bool {
+	want = filepath.ToSlash(strings.TrimSpace(want))
+	for _, path := range paths {
+		if filepath.ToSlash(strings.TrimSpace(path)) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func initTestGitRepo(t *testing.T) string {

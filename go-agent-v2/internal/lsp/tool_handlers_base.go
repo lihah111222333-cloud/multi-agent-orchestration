@@ -540,6 +540,20 @@ func (h *ToolHandlers) DidChange(args json.RawMessage) string {
 		)...,
 	)
 	if err := h.manager.ChangeFile(filePath, params.Version, params.NewContent); err != nil {
+		if params.PersistToDisk {
+			call.step("lsp_sync_unavailable_after_persist",
+				append(baseAttrs,
+					"phase", "lsp_sync",
+					"stage", "execute",
+					"warning", err.Error(),
+				)...,
+			)
+			call.done(append(baseAttrs,
+				"result_empty", false,
+				"lsp_sync_warning", err.Error(),
+			)...)
+			return "ok: file content updated and persisted to disk (lsp sync unavailable: " + err.Error() + ")"
+		}
 		call.fail(err, append(baseAttrs,
 			"phase", "lsp_sync",
 			"stage", "execute",

@@ -102,3 +102,46 @@ func TestDidChange_PersistToDiskWritesFile(t *testing.T) {
 		t.Fatalf("bootstrap should not push stale content after persisted did_change: before=%d after=%d", beforeWrites, afterWrites)
 	}
 }
+
+func TestDidChange_PersistToDiskWithoutLanguageServerStillReportsOK(t *testing.T) {
+	m := NewManager(nil)
+
+	tmp := t.TempDir()
+	filePath := filepath.Join(tmp, "notes.txt")
+	oldContent := "old value\n"
+	newContent := "new value\n"
+	if err := os.WriteFile(filePath, []byte(oldContent), 0o644); err != nil {
+		t.Fatalf("write old file: %v", err)
+	}
+
+	h := NewToolHandlers(m, nil)
+	raw, err := json.Marshal(map[string]any{
+		"file_path":       filePath,
+		"new_content":     newContent,
+		"version":         2,
+		"persist_to_disk": true,
+	})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+
+	result := h.DidChange(raw)
+	lower := strings.ToLower(strings.TrimSpace(result))
+	if strings.HasPrefix(lower, "error:") {
+		t.Fatalf("DidChange result = %q, want ok-with-warning", result)
+	}
+	if !strings.Contains(result, "persisted to disk") {
+		t.Fatalf("DidChange result = %q, want persisted hint", result)
+	}
+	if !strings.Contains(lower, "lsp sync unavailable") {
+		t.Fatalf("DidChange result = %q, want lsp sync warning", result)
+	}
+
+	got, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(got) != newContent {
+		t.Fatalf("disk content mismatch:\n%s", string(got))
+	}
+}

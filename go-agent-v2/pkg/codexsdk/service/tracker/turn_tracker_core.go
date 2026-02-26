@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
@@ -1177,22 +1176,6 @@ func trackerRuntimePushAlert(runtime trackerAlertRuntime) func(threadID, categor
 	return runtime.PushAlert
 }
 
-func trackerInterruptSender(manager *runner.AgentManager, sendCommand func(*runner.AgentProcess, string, string) error) func(string) (bool, error) {
-	if manager == nil || sendCommand == nil {
-		return nil
-	}
-	return func(threadID string) (bool, error) {
-		proc := manager.Get(threadID)
-		if proc == nil {
-			return false, nil
-		}
-		if err := sendCommand(proc, "/interrupt", ""); err != nil {
-			return true, err
-		}
-		return true, nil
-	}
-}
-
 func executeStallAutoInterruptCore(
 	threadID string,
 	turnID string,
@@ -1534,10 +1517,6 @@ func HandleStallGracePeriodCore(
 
 func TrackerRuntimePushAlert(runtime TrackerAlertRuntime) func(threadID, category, message string) {
 	return trackerRuntimePushAlert(runtime)
-}
-
-func TrackerInterruptSender(manager *runner.AgentManager, sendCommand func(*runner.AgentProcess, string, string) error) func(string) (bool, error) {
-	return trackerInterruptSender(manager, sendCommand)
 }
 
 func ExecuteStallAutoInterruptCore(

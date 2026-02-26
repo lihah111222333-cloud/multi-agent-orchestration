@@ -285,7 +285,19 @@ func trackerRuntimePushAlert(runtime trackerAlertRuntime) func(threadID, categor
 }
 
 func trackerInterruptSender(manager *runner.AgentManager, sendCommand func(*runner.AgentProcess, string, string) error) func(string) (bool, error) {
-	return trackersvc.TrackerInterruptSender(manager, sendCommand)
+	if manager == nil || sendCommand == nil {
+		return nil
+	}
+	return func(threadID string) (bool, error) {
+		proc := manager.Get(threadID)
+		if proc == nil {
+			return false, nil
+		}
+		if err := sendCommand(proc, "/interrupt", ""); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
 }
 
 func executeStallAutoInterruptCore(

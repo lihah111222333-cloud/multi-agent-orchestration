@@ -1,10 +1,16 @@
 package codexadapter
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/internal/store"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 func paginateLoadedThreadIDs(ids []string, cursor *string, limit *uint32) ([]string, *string) {
@@ -45,6 +51,130 @@ func paginateLoadedThreadIDs(ids []string, cursor *string, limit *uint32) ([]str
 	}
 	nextCursor := page[len(page)-1]
 	return page, &nextCursor
+}
+
+func buildThreadList(
+	ctx context.Context,
+	methodName string,
+	syncRuntime bool,
+	runningAgents func() []runner.AgentInfo,
+	appendHistoryFromStores func(context.Context, []threadListItem, map[string]struct{}, string) []threadListItem,
+	loadThreadAliases func(context.Context) map[string]string,
+	syncRuntimeThreads func([]threadListItem),
+) ([]threadListItem, error) {
+	agents := []runner.AgentInfo(nil)
+	if runningAgents != nil {
+		agents = runningAgents()
+	}
+	threads := make([]threadListItem, 0, len(agents)+32)
+	seen := make(map[string]struct{}, len(agents)+32)
+	for _, item := range agents {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			name = id
+		}
+		threads = append(threads, threadListItem{ID: id, Name: name, State: string(item.State)})
+		seen[id] = struct{}{}
+	}
+	if appendHistoryFromStores != nil {
+		threads = appendHistoryFromStores(ctx, threads, seen, methodName)
+	}
+	if loadThreadAliases != nil {
+		applyThreadAliases(threads, loadThreadAliases(ctx))
+	}
+	if syncRuntime && syncRuntimeThreads != nil {
+		syncRuntimeThreads(threads)
+	}
+	return threads, nil
+}
+
+func appendThreadHistoryFromStores(
+	ctx context.Context,
+	threads []threadListItem,
+	seen map[string]struct{},
+	methodName string,
+	appendHistoryFromBindingStore func(context.Context, []threadListItem, map[string]struct{}, string) []threadListItem,
+	appendHistoryFromStatusStore func(context.Context, []threadListItem, map[string]struct{}, string) []threadListItem,
+	appendHistoryFromArchiveState func(context.Context, []threadListItem, map[string]struct{}, string) []threadListItem,
+) []threadListItem {
+	idMethod := strings.TrimSpace(methodName)
+	if idMethod == "" {
+		idMethod = "thread/list"
+	}
+	if appendHistoryFromBindingStore != nil {
+		threads = appendHistoryFromBindingStore(ctx, threads, seen, idMethod)
+	}
+	if appendHistoryFromStatusStore != nil {
+		threads = appendHistoryFromStatusStore(ctx, threads, seen, idMethod)
+	}
+	if appendHistoryFromArchiveState != nil {
+		threads = appendHistoryFromArchiveState(ctx, threads, seen, idMethod)
+	}
+	return threads
+}
+
+func appendHistoryFromBindingStore(
+	ctx context.Context,
+	threads []threadListItem,
+	seen map[string]struct{},
+	methodName string,
+	bindingStore *store.AgentCodexBindingStore,
+) []threadListItem {
+	if bindingStore == nil {
+		return threads
+	}
+	dbCtx, cancel := context.WithTimeout(ensureContext(ctx), 5*time.Second)
+	bindings, err := bindingStore.ListAll(dbCtx)
+	cancel()
+	if err != nil {
+		logger.Warn(methodName+": load history threads from agent_codex_binding failed", logger.FieldError, err)
+		return threads
+	}
+	return appendThreadItems(threads, seen, bindings)
+}
+
+func appendHistoryFromStatusStore(
+	ctx context.Context,
+	threads []threadListItem,
+	seen map[string]struct{},
+	methodName string,
+	statusStore *store.AgentStatusStore,
+) []threadListItem {
+	if statusStore == nil {
+		return threads
+	}
+	dbCtx, cancel := context.WithTimeout(ensureContext(ctx), 5*time.Second)
+	items, err := statusStore.List(dbCtx, "")
+	cancel()
+	if err != nil {
+		logger.Warn(methodName+": load history threads from agent_status failed", logger.FieldError, err)
+		return threads
+	}
+	return appendThreadItems(threads, seen, items)
+}
+
+func appendHistoryFromArchiveState(
+	ctx context.Context,
+	threads []threadListItem,
+	seen map[string]struct{},
+	methodName string,
+	loadThreadArchiveMap func(context.Context) (map[string]int64, error),
+) []threadListItem {
+	if loadThreadArchiveMap == nil {
+		return threads
+	}
+	dbCtx, cancel := context.WithTimeout(ensureContext(ctx), 3*time.Second)
+	archivedMap, err := loadThreadArchiveMap(dbCtx)
+	cancel()
+	if err != nil {
+		logger.Warn(methodName+": load history threads from threadArchives.chat failed", logger.FieldError, err)
+		return threads
+	}
+	return appendArchivedThreads(threads, seen, archivedMap)
 }
 
 func appendArchivedThreads(threads []threadListItem, seen map[string]struct{}, archived map[string]int64) []threadListItem {
@@ -170,6 +300,46 @@ func applyThreadAliases(threads []threadListItem, aliases map[string]string) {
 		}
 		threads[i].Name = alias
 	}
+}
+
+func loadThreadAliases(ctx context.Context, getPref func(context.Context, string) (any, error)) map[string]string {
+	if getPref == nil {
+		return map[string]string{}
+	}
+	value, err := getPref(ctx, prefThreadAliases)
+	if err != nil {
+		logger.Warn("thread aliases: load preference failed", logger.FieldError, err)
+		return map[string]string{}
+	}
+	return normalizeThreadAliases(value)
+}
+
+func persistThreadAlias(
+	ctx context.Context,
+	threadID string,
+	alias string,
+	getPref func(context.Context, string) (any, error),
+	setPref func(context.Context, string, any) error,
+) error {
+	if getPref == nil || setPref == nil {
+		return nil
+	}
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return nil
+	}
+	value, err := getPref(ctx, prefThreadAliases)
+	if err != nil {
+		return err
+	}
+	aliases := normalizeThreadAliases(value)
+	nextAlias := strings.TrimSpace(alias)
+	if nextAlias == "" || nextAlias == id {
+		delete(aliases, id)
+	} else {
+		aliases[id] = nextAlias
+	}
+	return setPref(ctx, prefThreadAliases, aliases)
 }
 
 // stringValue extracts a string from any value (string or fmt.Stringer).

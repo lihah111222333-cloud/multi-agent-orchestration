@@ -1,13 +1,37 @@
 package codexadapter
 
-import "context"
+import (
+	"context"
 
-type threadArtifactCandidate struct {
-	Kind string
-	Path string
-}
+	archive "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/archive"
+)
 
 const prefThreadArchivesChat = "threadArchives.chat"
+
+// NormalizeThreadArchiveMap normalizes archive state payload into map[string]int64.
+func NormalizeThreadArchiveMap(value any) map[string]int64 {
+	return archive.NormalizeThreadArchiveMap(value)
+}
+
+// SanitizeArchiveName sanitizes archive file and directory names.
+func SanitizeArchiveName(raw string) string {
+	return archive.SanitizeArchiveName(raw)
+}
+
+// SanitizeArchiveNameStrict validates sanitized archive names.
+func SanitizeArchiveNameStrict(raw string) (string, error) {
+	return archive.SanitizeArchiveNameStrict(raw)
+}
+
+// PathWithinRoot returns whether path is inside root (or equal root).
+func PathWithinRoot(root string, path string) (bool, error) {
+	return archive.PathWithinRoot(root, path)
+}
+
+// InferThreadArtifactKind infers the artifact kind from filename.
+func InferThreadArtifactKind(filename string) string {
+	return archive.InferThreadArtifactKind(filename)
+}
 
 func (a *Adapter) loadThreadArchiveMapFromStore(ctx context.Context) (map[string]int64, error) {
 	return loadThreadArchiveMapFromStoreLogic(a, ctx)
@@ -62,11 +86,11 @@ func (a *Adapter) bindRolloutPath(ctx context.Context, agentID, codexThreadID, r
 }
 
 // ArchiveThreadArtifacts archives codex thread related files.
-func (a *Adapter) ArchiveThreadArtifacts(ctx context.Context, threadID string) (threadArchiveManifest, error) {
+func (a *Adapter) ArchiveThreadArtifacts(ctx context.Context, threadID string) (archive.ThreadArchiveManifest, error) {
 	return archiveThreadArtifactsLogic(a, ctx, threadID)
 }
 
-func (a *Adapter) inspectThreadArchiveForRestore(threadID string) (threadArchiveRestoreNotice, error) {
+func (a *Adapter) inspectThreadArchiveForRestore(threadID string) (archive.ThreadArchiveRestoreNotice, error) {
 	return inspectThreadArchiveForRestoreLogic(threadID)
 }
 
@@ -74,6 +98,6 @@ func (a *Adapter) restoreThreadArchiveSources(threadID string) ([]string, []stri
 	return restoreThreadArchiveSourcesLogic(threadID)
 }
 
-func (a *Adapter) pruneArchivedCodexSourceFiles(threadID string, files []threadArchiveFile, archiveDir string) {
+func (a *Adapter) pruneArchivedCodexSourceFiles(threadID string, files []archive.ThreadArchiveFile, archiveDir string) {
 	pruneArchivedCodexSourceFilesLogic(threadID, files, archiveDir)
 }

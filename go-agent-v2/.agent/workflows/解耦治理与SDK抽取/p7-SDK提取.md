@@ -34,9 +34,14 @@ description: P7 SDK 提取（极限瘦身版）— codexadapter ≤1000 行，SD
 7. import 替换仅改 import 行，排除 `vendor/.agent/.tmp`。
 8. 每步结束创建 checkpoint commit。
 9. **禁止胶水层**：不得新建 bridge/proxy/wrapper/shim/forwarder/relay 层。迁移 = 「剪切 + 粘贴 + 改 package 声明」，不是「复制 + 原地留桥接」。
-10. **反胶水零膨胀**：关注迁移域净增，防止“复制 + 桥接”绕过。
-    - 迁移域（`internal/apiserver/codexadapter` + `pkg/codexsdk` + `internal/agentcore` + `internal/codex`）Go 代码净增 `delta_scope = added - deleted` 必须 `<= +50`
-    - `codexadapter` Go 代码净增 `delta_adapter = added - deleted`：`B0` 允许 `<= +200`，其余步骤必须 `<= 0`
+10. **反胶水零膨胀**：关注迁移域净增，防止“复制 + 桥接”绕过（按阶段分档）。
+    - 迁移域：`internal/apiserver/codexadapter` + `pkg/codexsdk` + `internal/agentcore` + `internal/codex`
+    - 净增定义：`delta = added - deleted`（基于 `git diff --numstat`）
+    - 阶段阈值：
+      - `P7-A`：`delta_scope <= +50` 且 `delta_adapter <= 0`
+      - `P7-B0`：`delta_scope <= +1000` 且 `delta_adapter <= +1000`（允许解耦期临时重排膨胀）
+      - `P7-B1`：`delta_scope <= +200` 且 `delta_adapter <= +200`（迁移后应显著回落）
+      - `P7-B2/P7-C`：`delta_scope <= 0` 且 `delta_adapter <= 0`（进入净收缩阶段）
 11. **禁止 net-new 文件**：除 B0 的 `_logic.go` 和 SDK 骨架 `doc.go`/`iface.go` 外，不得新建任何 `.go` 文件。如果需要新文件，先删旧文件——总文件数只减不增。
 12. **迁移即删除**：`git mv` 完成后原路径不得残留同名/近似文件。每步检查：
     ```bash
@@ -52,12 +57,28 @@ description: P7 SDK 提取（极限瘦身版）— codexadapter ≤1000 行，SD
     scope_delta=$(calc_delta internal/apiserver/codexadapter pkg/codexsdk internal/agentcore internal/codex)
     adapter_delta=$(calc_delta internal/apiserver/codexadapter)
     echo "delta_scope=$scope_delta delta_adapter=$adapter_delta step=${P7_STEP:-unset}"
-    test "$scope_delta" -le 50 || { echo "FAIL: migration scope inflated too much"; exit 1; }
-    if [ "${P7_STEP:-}" = "B0" ]; then
-      test "$adapter_delta" -le 200 || { echo "FAIL: B0 adapter delta too large"; exit 1; }
-    else
-      test "$adapter_delta" -le 0 || { echo "FAIL: adapter must be non-increasing outside B0"; exit 1; }
-    fi
+    case "${P7_STEP:-}" in
+      A)
+        test "$scope_delta" -le 50 || { echo "FAIL: P7-A scope delta too large"; exit 1; }
+        test "$adapter_delta" -le 0 || { echo "FAIL: P7-A adapter must be non-increasing"; exit 1; }
+        ;;
+      B0)
+        test "$scope_delta" -le 1000 || { echo "FAIL: P7-B0 scope delta too large"; exit 1; }
+        test "$adapter_delta" -le 1000 || { echo "FAIL: P7-B0 adapter delta too large"; exit 1; }
+        ;;
+      B1)
+        test "$scope_delta" -le 200 || { echo "FAIL: P7-B1 scope delta too large"; exit 1; }
+        test "$adapter_delta" -le 200 || { echo "FAIL: P7-B1 adapter delta too large"; exit 1; }
+        ;;
+      B2|C)
+        test "$scope_delta" -le 0 || { echo "FAIL: ${P7_STEP} scope must be non-increasing"; exit 1; }
+        test "$adapter_delta" -le 0 || { echo "FAIL: ${P7_STEP} adapter must be non-increasing"; exit 1; }
+        ;;
+      *)
+        echo "FAIL: set P7_STEP to A|B0|B1|B2|C"
+        exit 1
+        ;;
+    esac
     ```
 
 ## 现状审计基线

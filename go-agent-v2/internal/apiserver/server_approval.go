@@ -217,6 +217,13 @@ func normalizeApprovalResultPayload(method string, result any) (map[string]any, 
 	return nil, false
 }
 
+func mergeApprovalDecisionPayload(method string, current map[string]any, result any) map[string]any {
+	if normalized, ok := normalizeApprovalResultPayload(method, result); ok {
+		return normalized
+	}
+	return current
+}
+
 func approvalDecisionPayload(method string, approved bool) map[string]any {
 	decision := "decline"
 	if approved {
@@ -288,6 +295,29 @@ func denyApprovalSafely(event agentcore.Event, agentID string) {
 	}
 }
 
+func submitApprovalLegacyDecision(s *Server, agentID, method, decision string, event agentcore.Event, denyOnMissing, logSubmitErr bool) {
+	if s == nil || s.mgr == nil {
+		if denyOnMissing {
+			logger.Error("app-server: approval auto-denied — mgr is nil",
+				logger.FieldAgentID, agentID, logger.FieldMethod, method)
+			denyApprovalSafely(event, agentID)
+		}
+		return
+	}
+	proc := s.mgr.Get(agentID)
+	if proc == nil {
+		if denyOnMissing {
+			logger.Error("app-server: approval auto-denied — agent gone",
+				logger.FieldAgentID, agentID, logger.FieldMethod, method)
+			denyApprovalSafely(event, agentID)
+		}
+		return
+	}
+	if err := s.codexAdapter.Submit(proc, decision, nil, nil, nil); err != nil && logSubmitErr {
+		logger.Warn("app-server: relay approval to codex failed", logger.FieldAgentID, agentID, logger.FieldError, err)
+	}
+}
+
 // handleApprovalRequest 处理审批事件: 双通道模式。
 //
 // 优先尝试 WebSocket (SendRequestToAll) — 适用于 IDE 客户端。
@@ -346,10 +376,8 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 					logger.FieldAgentID, agentID, logger.FieldMethod, method, logger.FieldError, err)
 				denyApprovalSafely(event, agentID)
 			}
-		} else if s.mgr != nil {
-			if proc := s.mgr.Get(agentID); proc != nil {
-				_ = s.codexAdapter.Submit(proc, "yes", nil, nil, nil)
-			}
+		} else {
+			submitApprovalLegacyDecision(s, agentID, method, "yes", event, false, false)
 		}
 		return
 	}
@@ -372,9 +400,7 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	// 尝试 WebSocket 通道 (IDE 客户端)
 	resp, wsErr := sendRequestToAll(s, method, payload)
 	if wsErr == nil && resp != nil && resp.Result != nil {
-		if normalized, ok := normalizeApprovalResultPayload(method, resp.Result); ok {
-			decisionPayload = normalized
-		}
+		decisionPayload = mergeApprovalDecisionPayload(method, decisionPayload, resp.Result)
 	} else {
 		// 降级: Wails 模式 — 通过 broadcastNotification + pending channel
 		// 仅在有 notifyHook (Wails 前端) 时才等待, 否则直接跳过 (默认 decline)
@@ -413,9 +439,7 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 			select {
 			case wailsResp := <-ch:
 				if wailsResp != nil {
-					if normalized, ok := normalizeApprovalResultPayload(method, wailsResp.Result); ok {
-						decisionPayload = normalized
-					}
+					decisionPayload = mergeApprovalDecisionPayload(method, decisionPayload, wailsResp.Result)
 				}
 			case <-timer.C:
 				logger.Warn("app-server: approval timed out (Wails mode)",
@@ -441,26 +465,11 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	}
 
 	// 回退兼容路径: 老协议下无 Request-Response 回调时, 仍用 yes/no submit。
-	if s.mgr == nil {
-		logger.Error("app-server: approval auto-denied — mgr is nil",
-			logger.FieldAgentID, agentID, logger.FieldMethod, method)
-		denyApprovalSafely(event, agentID)
-		return
-	}
-	proc := s.mgr.Get(agentID)
-	if proc == nil {
-		logger.Error("app-server: approval auto-denied — agent gone",
-			logger.FieldAgentID, agentID, logger.FieldMethod, method)
-		denyApprovalSafely(event, agentID)
-		return
-	}
 	legacyDecision := "no"
 	if approvalDecisionAllowsSubmit(method, decisionPayload) {
 		legacyDecision = "yes"
 	}
-	if err := s.codexAdapter.Submit(proc, legacyDecision, nil, nil, nil); err != nil {
-		logger.Warn("app-server: relay approval to codex failed", logger.FieldAgentID, agentID, logger.FieldError, err)
-	}
+	submitApprovalLegacyDecision(s, agentID, method, legacyDecision, event, true, true)
 }
 
 // ========================================

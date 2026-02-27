@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 )
 
 const (
@@ -495,6 +495,27 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 	}
 
 	relativePath := resolveCodeOpenRelativePath(resolvedPath, p.Project, p.Projects)
+	buildSingleLineResult := func(line int, snippetText string, binary bool, mediaType string, sizeBytes int) map[string]any {
+		return map[string]any{
+			"ok":          true,
+			"filePath":    resolvedPath,
+			"relative":    relativePath,
+			"line":        line,
+			"column":      clampColumn(p.Column),
+			"startLine":   1,
+			"endLine":     1,
+			"totalLines":  1,
+			"language":    fileLanguageByPath(resolvedPath),
+			"context":     0,
+			"snippet":     []map[string]any{{"line": 1, "text": snippetText}},
+			"diagnostics": []map[string]any{},
+			"lspOpened":   false,
+			"binary":      binary,
+			"mediaType":   mediaType,
+			"sizeBytes":   sizeBytes,
+		}
+	}
+
 	if isImagePreviewExtension(resolvedPath) {
 		mediaType := detectMediaType(resolvedPath, content)
 		targetLine := 1
@@ -514,28 +535,18 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 			"media_type", mediaType,
 			"size_bytes", len(content),
 		)
-		return map[string]any{
-			"ok":           true,
-			"filePath":     resolvedPath,
-			"relative":     relativePath,
-			"line":         targetLine,
-			"column":       clampColumn(p.Column),
-			"startLine":    1,
-			"endLine":      1,
-			"totalLines":   1,
-			"language":     fileLanguageByPath(resolvedPath),
-			"context":      0,
-			"snippet":      []map[string]any{{"line": 1, "text": fmt.Sprintf("[image preview: %s, %d bytes]", mediaType, len(content))}},
-			"diagnostics":  []map[string]any{},
-			"lspOpened":    false,
-			"binary":       looksLikeBinaryContent(content),
-			"mediaType":    mediaType,
-			"sizeBytes":    len(content),
-			"image":        true,
-			"plugin":       "image-parser",
-			"previewURL":   previewURL,
-			"thumbnailURL": thumbnailURL,
-		}, nil
+		result := buildSingleLineResult(
+			targetLine,
+			fmt.Sprintf("[image preview: %s, %d bytes]", mediaType, len(content)),
+			looksLikeBinaryContent(content),
+			mediaType,
+			len(content),
+		)
+		result["image"] = true
+		result["plugin"] = "image-parser"
+		result["previewURL"] = previewURL
+		result["thumbnailURL"] = thumbnailURL
+		return result, nil
 	}
 
 	if looksLikeBinaryContent(content) {
@@ -550,27 +561,13 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 			"media_type", mediaType,
 			"size_bytes", len(content),
 		)
-		return map[string]any{
-			"ok":         true,
-			"filePath":   resolvedPath,
-			"relative":   relativePath,
-			"line":       targetLine,
-			"column":     clampColumn(p.Column),
-			"startLine":  1,
-			"endLine":    1,
-			"totalLines": 1,
-			"language":   fileLanguageByPath(resolvedPath),
-			"context":    0,
-			"snippet": []map[string]any{{
-				"line": 1,
-				"text": fmt.Sprintf("[binary file omitted: %s, %d bytes]", mediaType, len(content)),
-			}},
-			"diagnostics": []map[string]any{},
-			"lspOpened":   false,
-			"binary":      true,
-			"mediaType":   mediaType,
-			"sizeBytes":   len(content),
-		}, nil
+		return buildSingleLineResult(
+			targetLine,
+			fmt.Sprintf("[binary file omitted: %s, %d bytes]", mediaType, len(content)),
+			true,
+			mediaType,
+			len(content),
+		), nil
 	}
 
 	text := strings.ReplaceAll(string(content), "\r\n", "\n")

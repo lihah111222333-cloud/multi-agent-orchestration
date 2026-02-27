@@ -27,12 +27,8 @@ type turnInputParams struct {
 	ManualSkillSelection bool        `json:"manualSkillSelection,omitempty"`
 }
 
-type turnThreadIDParams struct {
-	ThreadID string `json:"threadId"`
-}
-
 type turnStartParams struct {
-	turnThreadIDParams
+	threadIDParams
 	turnInputParams
 	Cwd            string          `json:"cwd,omitempty"`
 	ApprovalPolicy string          `json:"approvalPolicy,omitempty"`
@@ -55,16 +51,9 @@ func toCodexTurnInputs(input []UserInput) []contracts.TurnInput {
 	if len(input) == 0 {
 		return nil
 	}
-	out := make([]contracts.TurnInput, 0, len(input))
-	for _, item := range input {
-		out = append(out, contracts.TurnInput{
-			Type:    item.Type,
-			Text:    item.Text,
-			URL:     item.URL,
-			Path:    item.Path,
-			Name:    item.Name,
-			Content: item.Content,
-		})
+	out := make([]contracts.TurnInput, len(input))
+	for i := range input {
+		out[i] = contracts.TurnInput(input[i])
 	}
 	return out
 }
@@ -88,7 +77,7 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 }
 
 type turnSteerParams struct {
-	turnThreadIDParams
+	threadIDParams
 	ExpectedTurnID string `json:"expectedTurnId"`
 	turnInputParams
 }
@@ -103,27 +92,27 @@ func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, erro
 	})
 }
 
-type turnInterruptParams = turnThreadIDParams
+type turnInterruptParams = threadIDParams
 
-type turnForceCompleteParams = turnThreadIDParams
+type turnForceCompleteParams = threadIDParams
 
 type threadRealtimeStartParams struct {
-	turnThreadIDParams
+	threadIDParams
 	Prompt    string  `json:"prompt"`
 	SessionID *string `json:"sessionId,omitempty"`
 }
 
 type threadRealtimeAppendAudioParams struct {
-	turnThreadIDParams
+	threadIDParams
 	Audio any `json:"audio"`
 }
 
 type threadRealtimeAppendTextParams struct {
-	turnThreadIDParams
+	threadIDParams
 	Text string `json:"text"`
 }
 
-type threadRealtimeStopParams = turnThreadIDParams
+type threadRealtimeStopParams = threadIDParams
 
 // reviewStartParams review/start 请求参数。
 type reviewTarget struct {
@@ -187,7 +176,6 @@ func validateReviewStartParams(p reviewStartParams) (string, error) {
 func normalizeReviewStartResponse(threadID string, result map[string]any) reviewStartResponse {
 	response := reviewStartResponse{
 		Turn: reviewStartTurn{
-			ID:     "",
 			Status: "inProgress",
 			Items:  []any{},
 		},
@@ -197,8 +185,7 @@ func normalizeReviewStartResponse(threadID string, result map[string]any) review
 		return response
 	}
 	if reviewThreadID, ok := result["reviewThreadId"].(string); ok {
-		reviewThreadID = strings.TrimSpace(reviewThreadID)
-		if reviewThreadID != "" {
+		if reviewThreadID = strings.TrimSpace(reviewThreadID); reviewThreadID != "" {
 			response.ReviewThreadID = reviewThreadID
 		}
 	}
@@ -207,8 +194,7 @@ func normalizeReviewStartResponse(threadID string, result map[string]any) review
 			response.Turn.ID = id
 		}
 		if status, ok := turnMap["status"].(string); ok {
-			status = strings.TrimSpace(status)
-			if status != "" {
+			if status = strings.TrimSpace(status); status != "" {
 				response.Turn.Status = status
 			}
 		}

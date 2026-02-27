@@ -592,14 +592,10 @@ func (m *WorkspaceManager) handleDeletedFiles(
 }
 
 func validateBootstrapFile(
-	run *store.WorkspaceRun,
 	rel string,
 	info os.FileInfo,
 	totalBytes, maxFileBytes, maxTotalBytes int64,
 ) error {
-	if run == nil {
-		return apperrors.New("WorkspaceManager.bootstrapFiles", "run is nil")
-	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap symlink not allowed: %s", rel)
 	}
@@ -648,7 +644,7 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "bootstrap stat %s", rel)
 		}
 		nextTotalBytes := totalBytes + info.Size()
-		if err := validateBootstrapFile(run, rel, info, nextTotalBytes, m.maxFileBytes, m.maxTotalBytes); err != nil {
+		if err := validateBootstrapFile(rel, info, nextTotalBytes, m.maxFileBytes, m.maxTotalBytes); err != nil {
 			return copied, totalBytes, err
 		}
 		totalBytes = nextTotalBytes

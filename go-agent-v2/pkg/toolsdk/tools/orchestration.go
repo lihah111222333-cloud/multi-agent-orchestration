@@ -27,8 +27,8 @@ func OrchestrationTools(provider OrchestrationProvider, runtime AgentRuntimeProv
 					"properties": map[string]any{},
 				},
 			},
-			Handler: func(_ ToolCallContext, _ json.RawMessage) string {
-				return orchestrationListAgents(provider)
+			Handler: func(ctx ToolCallContext, _ json.RawMessage) string {
+				return orchestrationListAgents(provider, ctx.AgentID)
 			},
 		},
 		{
@@ -86,19 +86,47 @@ func OrchestrationTools(provider OrchestrationProvider, runtime AgentRuntimeProv
 	}
 }
 
-func orchestrationListAgents(provider OrchestrationProvider) string {
+func orchestrationListAgents(provider OrchestrationProvider, callerID string) string {
 	if provider == nil || provider.AgentLauncher() == nil {
 		return "[]"
 	}
 	infos := provider.AgentLauncher().List()
+	if orchestrationListLen(infos) == 0 {
+		return "[]"
+	}
+	// 过滤掉调用者自己, 任何 agent 都不应的在列表中看到自己。
+	callerID = strings.TrimSpace(callerID)
+	if callerID == "" {
+		data, err := json.Marshal(infos)
+		if err != nil {
+			return ToolError(err)
+		}
+		return string(data)
+	}
 	data, err := json.Marshal(infos)
 	if err != nil {
 		return ToolError(err)
 	}
-	if orchestrationListLen(infos) == 0 {
+	var list []map[string]any
+	if err := json.Unmarshal(data, &list); err != nil {
+		return string(data)
+	}
+	filtered := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		agentID, _ := item["id"].(string)
+		if strings.TrimSpace(agentID) == callerID {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	if len(filtered) == 0 {
 		return "[]"
 	}
-	return string(data)
+	out, err := json.Marshal(filtered)
+	if err != nil {
+		return ToolError(err)
+	}
+	return string(out)
 }
 
 func orchestrationSendMessage(provider OrchestrationProvider, senderID string, args json.RawMessage) string {

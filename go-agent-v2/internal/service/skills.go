@@ -557,7 +557,7 @@ func extractSkillMetadata(path string) skillMetadata {
 
 func parseSkillMetadata(content string) skillMetadata {
 	meta := skillMetadata{}
-	if frontmatter, ok := extractFrontmatter(content); ok {
+	if frontmatter, _, ok := splitFrontmatterContent(normalizeSkillContent(content)); ok {
 		lines := strings.Split(frontmatter, "\n")
 		for idx := 0; idx < len(lines); idx++ {
 			key, value, ok := parseFrontmatterKeyValue(lines[idx])
@@ -713,15 +713,6 @@ func quoteYAMLScalar(value string) string {
 	return `"` + escaped + `"`
 }
 
-func extractFrontmatter(content string) (string, bool) {
-	normalized := normalizeSkillContent(content)
-	frontmatter, _, ok := splitFrontmatterContent(normalized)
-	if !ok {
-		return "", false
-	}
-	return frontmatter, true
-}
-
 func stripFrontmatter(content string) string {
 	normalized := normalizeSkillContent(content)
 	_, body, ok := splitFrontmatterContent(normalized)
@@ -831,8 +822,9 @@ func parseFrontmatterWords(value string, tail []string) ([]string, int) {
 		if !strings.HasPrefix(line, "-") {
 			break
 		}
-		item := strings.TrimSpace(strings.TrimPrefix(line, "-"))
-		words = appendFrontmatterWord(words, item)
+		if item := parseFrontmatterScalar(strings.TrimSpace(strings.TrimPrefix(line, "-"))); item != "" {
+			words = append(words, item)
+		}
 		consumed++
 	}
 	return words, consumed
@@ -875,17 +867,11 @@ func parseFrontmatterKeyValue(raw string) (key, value string, ok bool) {
 func parseWordParts(parts []string) []string {
 	words := make([]string, 0, len(parts))
 	for _, part := range parts {
-		words = appendFrontmatterWord(words, part)
+		if item := parseFrontmatterScalar(part); item != "" {
+			words = append(words, item)
+		}
 	}
 	return words
-}
-
-func appendFrontmatterWord(words []string, raw string) []string {
-	item := parseFrontmatterScalar(raw)
-	if item == "" {
-		return words
-	}
-	return append(words, item)
 }
 
 func uniqueWords(raw []string) []string {

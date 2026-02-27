@@ -181,10 +181,7 @@ func (c *AppServerClient) emitBackgroundEvent(message string, status string, act
 func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 	trigger = strings.TrimSpace(trigger)
 	activeTurnID := c.getActiveTurnID()
-	maxRetries := appServerStreamMaxRetries
-	if maxRetries <= 0 {
-		maxRetries = 0
-	}
+	maxRetries := max(appServerStreamMaxRetries, 0)
 	now := time.Now()
 	if remaining, health := c.circuitRemaining(now); remaining > 0 {
 		c.emitBackgroundEvent("Reconnect paused (circuit breaker)", "reconnecting", true, false, reconnectDetails(trigger, activeTurnID, map[string]any{
@@ -442,13 +439,12 @@ func (c *AppServerClient) recoverByRespawn(trigger, activeTurnID, reason string,
 
 // RecoverConnection forces a process restart recovery flow for manual UI recovery.
 func (c *AppServerClient) RecoverConnection(reason string) error {
-	if c == nil {
+	switch {
+	case c == nil:
 		return apperrors.New("AppServerClient.RecoverConnection", "client is nil")
-	}
-	if c.stopped.Load() {
+	case c.stopped.Load():
 		return apperrors.New("AppServerClient.RecoverConnection", "client is stopped")
-	}
-	if c.respawnRecoverInFlight.Load() {
+	case c.respawnRecoverInFlight.Load():
 		return apperrors.New("AppServerClient.RecoverConnection", "recovery already in progress")
 	}
 	recoveryReason := strings.TrimSpace(reason)
@@ -517,8 +513,7 @@ func (c *AppServerClient) handleReconnectExhausted(trigger, activeTurnID string,
 
 // call 发送 JSON-RPC 请求并等待响应。
 func (c *AppServerClient) call(method string, params any, timeout time.Duration) (json.RawMessage, error) {
-	id := c.nextID.Add(1)
-	rpcID := newJSONRPCIntID(id)
+	rpcID := newJSONRPCIntID(c.nextID.Add(1))
 	pc := &pendingCall{done: make(chan struct{})}
 	c.pending.Store(rpcID.pendingKey(), pc)
 	defer c.pending.Delete(rpcID.pendingKey())
@@ -572,10 +567,6 @@ func (c *AppServerClient) respondWithID(id jsonRPCID, result any) error {
 }
 
 // RespondError 向 codex 发送 JSON-RPC 错误响应 (用于 server request 失败场景)。
-//
-// 当 codex 发送带 id 的 server request (如 dynamic_tool_call / approval) 时,
-// 我方必须回复 response; 若处理过程中遇到错误, 用此方法发 error response,
-// 避免 codex turn 永久挂起。
 func (c *AppServerClient) RespondError(id int64, code int, message string) error {
 	return c.respondErrorWithID(newJSONRPCIntID(id), code, message)
 }

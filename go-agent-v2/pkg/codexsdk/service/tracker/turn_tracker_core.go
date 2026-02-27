@@ -356,9 +356,6 @@ func extractThreadStatusType(payload map[string]any) string {
 	}
 }
 func ThreadStatusTerminalFromPayload(payload map[string]any) (status string, reason string, terminal bool) {
-	if payload == nil {
-		return "", "", false
-	}
 	if terminal, ok := threadStatusTerminalMap[extractThreadStatusType(payload)]; ok {
 		return terminal.status, terminal.reason, true
 	}
@@ -454,11 +451,7 @@ func RememberTrackedTurnSummary(state TurnTrackerState, turnMu *sync.Mutex, thre
 		*state.TurnSummaryCache = cache
 	}
 	cache[TrackedTurnSummaryCacheKey(id, tid)] = TrackedTurnSummaryCacheEntry{TurnID: tid, Summary: text, UpdatedAt: time.Now()}
-	ttl := DefaultTrackedTurnSummaryTTL
-	if state.TurnSummaryTTL != nil && *state.TurnSummaryTTL > 0 {
-		ttl = *state.TurnSummaryTTL
-	}
-	pruneTrackedTurnSummaryCacheLocked(cache, time.Now(), ttl, TrackedTurnSummaryCacheMaxEntries)
+	pruneTrackedTurnSummaryCacheLocked(cache, time.Now(), TrackerDurationOrDefault(state.TurnSummaryTTL, DefaultTrackedTurnSummaryTTL), TrackedTurnSummaryCacheMaxEntries)
 }
 func LookupTrackedTurnSummary(state TurnTrackerState, turnMu *sync.Mutex, threadID, turnID string) string {
 	id := strings.TrimSpace(threadID)
@@ -473,17 +466,10 @@ func LookupTrackedTurnSummary(state TurnTrackerState, turnMu *sync.Mutex, thread
 	if state.TurnSummaryCache == nil {
 		return ""
 	}
-	cache := *state.TurnSummaryCache
-	entry, ok := cache[TrackedTurnSummaryCacheKey(id, tid)]
-	if !ok {
-		return ""
-	}
+	entry := (*state.TurnSummaryCache)[TrackedTurnSummaryCacheKey(id, tid)]
 	return strings.TrimSpace(entry.Summary)
 }
 func TrackedTurnSummaryFromPayload(payload map[string]any) string {
-	if payload == nil {
-		return ""
-	}
 	if summary := ExtractTrackedString(payload, trackedTurnSummaryKeys...); summary != "" {
 		return summary
 	}
@@ -677,16 +663,17 @@ func ApplyTrackedTurnTransitionCore(state TurnTrackerState, threadID string, req
 			}
 		}
 		if req.Finalize != nil {
-			wantTurnID := strings.TrimSpace(req.Finalize.TurnID)
+			finalize := req.Finalize
+			wantTurnID := strings.TrimSpace(finalize.TurnID)
 			result.ExpectedTurnID = wantTurnID
 			result.TurnIDMismatch = wantTurnID != "" && !strings.EqualFold(result.TurnID, wantTurnID)
 			removeActiveTrackedTurn(activeTurns, id)
-			finalStatus := NormalizeTrackedTurnStatus(req.Finalize.Status)
+			finalStatus := NormalizeTrackedTurnStatus(finalize.Status)
 			if turn.InterruptRequested && finalStatus == "completed" {
 				finalStatus = "interrupted"
 			}
 			sendTrackedTurnDone(turn, finalStatus)
-			reasonText := strings.TrimSpace(req.Finalize.Reason)
+			reasonText := strings.TrimSpace(finalize.Reason)
 			result.Finalized = true
 			result.FinalStatus = finalStatus
 			result.FinalReason = reasonText
@@ -792,8 +779,8 @@ func BeginTrackedTurnCore(
 	}
 	turn.EarlySilenceTimer = time.AfterFunc(earlySilenceTimeout, func() {
 		turnMu.Lock()
-		current, ok := activeTurns[id]
-		if !ok || current == nil || current.ID != tid {
+		current := activeTurns[id]
+		if current == nil || current.ID != tid {
 			turnMu.Unlock()
 			return
 		}

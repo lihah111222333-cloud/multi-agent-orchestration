@@ -485,6 +485,12 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 			disconnectConn(s, connID)
 		}
 	}()
+	sendLoopResponse := func(resp *Response, reason string, failFast bool) bool {
+		if sendResponseViaOutbox(s, connID, entry, resp, reason) {
+			return true
+		}
+		return !failFast
+	}
 	for {
 		_, message, err := entry.ws.ReadMessage()
 		if err != nil {
@@ -498,16 +504,16 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 		// 单次 Unmarshal: 路由 + 延迟解析
 		var env rpcEnvelope
 		if err := json.Unmarshal(message, &env); err != nil {
-			_ = sendResponseViaOutbox(s, connID, entry, newError(nil, CodeParseError, "parse error: "+err.Error()), "parse_error_response")
+			if !sendLoopResponse(newError(nil, CodeParseError, "parse error: "+err.Error()), "parse_error_response", false) {
+				return
+			}
 			continue
 		}
 		if !validIncomingJSONRPCVersion(env.JSONRPC) {
-			if !sendResponseViaOutbox(
-				s,
-				connID,
-				entry,
+			if !sendLoopResponse(
 				newError(rawIDtoAny(env.ID), CodeInvalidRequest, "invalid request: jsonrpc must be \"2.0\""),
 				"invalid_jsonrpc_version",
+				true,
 			) {
 				return
 			}
@@ -520,10 +526,13 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 			continue
 		}
 		if env.Method != "" && len(env.ID) > 0 && string(env.ID) != "null" && entry.outboxDepth() >= connBacklogCut {
-			overloaded := newErrorData(rawIDtoAny(env.ID), CodeOverloaded, "Server overloaded; retry later.", map[string]any{
-				"retry_after_ms": 500,
-			})
-			if !sendResponseViaOutbox(s, connID, entry, overloaded, "request_overloaded") {
+			if !sendLoopResponse(
+				newErrorData(rawIDtoAny(env.ID), CodeOverloaded, "Server overloaded; retry later.", map[string]any{
+					"retry_after_ms": 500,
+				}),
+				"request_overloaded",
+				true,
+			) {
 				return
 			}
 			continue
@@ -535,7 +544,7 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 			continue
 		}
 
-		if !sendResponseViaOutbox(s, connID, entry, resp, "request_response") {
+		if !sendLoopResponse(resp, "request_response", true) {
 			return
 		}
 	}

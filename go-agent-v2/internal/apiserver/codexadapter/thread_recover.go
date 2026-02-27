@@ -13,7 +13,6 @@ type recoverConnectionClient interface {
 	RecoverConnection(reason string) error
 }
 
-// threadRecoverResult is the normalized thread/recover payload.
 type threadRecoverResult struct {
 	ThreadID  string
 	Status    string
@@ -21,7 +20,6 @@ type threadRecoverResult struct {
 	Mode      string
 }
 
-// RecoverConnection asks client to force process restart recovery.
 func (a *Adapter) RecoverConnection(proc *codexsdk.AgentProcess, reason string) error {
 	return withClient(proc, func(c codexsdk.Client) error {
 		recoverClient, ok := c.(recoverConnectionClient)
@@ -32,12 +30,7 @@ func (a *Adapter) RecoverConnection(proc *codexsdk.AgentProcess, reason string) 
 	})
 }
 
-// ThreadRecover forces manual connection recovery for current thread process.
 func (a *Adapter) ThreadRecover(_ context.Context, threadID string) (threadRecoverResult, error) {
-	return threadRecoverLogic(a, threadID)
-}
-
-func threadRecoverLogic(a *Adapter, threadID string) (threadRecoverResult, error) {
 	id, err := requireThreadID("Server.threadRecover", threadID)
 	if err != nil {
 		return threadRecoverResult{}, err
@@ -47,11 +40,6 @@ func threadRecoverLogic(a *Adapter, threadID string) (threadRecoverResult, error
 			return threadRecoverResult{}, apperrors.Wrap(recoverErr, "Server.threadRecover", "recover connection")
 		}
 		logger.Info("thread/recover: manual recovery triggered", threadLogFields(id)...)
-		return threadRecoverResult{
-			ThreadID:  id,
-			Status:    "recovering",
-			Recovered: true,
-			Mode:      "respawn",
-		}, nil
+		return threadRecoverResult{ThreadID: id, Status: "recovering", Recovered: true, Mode: "respawn"}, nil
 	})
 }

@@ -22,19 +22,11 @@ func defaultCancelCodeRunsProvider(string) int         { return 0 }
 func defaultReadSkillContentProvider(string) (string, error) {
 	return "", appErrors.New("codexadapter.readSkillContent", "server context is not configured")
 }
-func defaultListSkillNamesProvider() ([]string, error) {
-	return nil, appErrors.New("codexadapter.listSkillNames", "server context is not configured")
-}
 func defaultListSkillMatchCandidatesProvider() ([]contracts.SkillMatchCandidate, error) {
 	return nil, appErrors.New("codexadapter.listSkillMatchCandidates", "server context is not configured")
 }
 func defaultGetAgentSkillsProvider(string) []string { return nil }
 func defaultNotifyProvider(string, any)             {}
-
-func asAgentProcess(proc any) *codexsdk.AgentProcess {
-	typed, _ := proc.(*codexsdk.AgentProcess)
-	return typed
-}
 
 func requireThreadID(caller, threadID string) (string, error) {
 	id := strings.TrimSpace(threadID)
@@ -68,42 +60,30 @@ func withClient(proc *codexsdk.AgentProcess, fn func(codexsdk.Client) error) err
 }
 
 func toLifecycleAgentInfos(items []codexsdk.AgentInfo) []lifecyclesvc.AgentInfo {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]lifecyclesvc.AgentInfo, len(items))
-	for i, item := range items {
-		out[i] = lifecyclesvc.AgentInfo{ID: item.ID, Name: item.Name, State: string(item.State), Port: item.Port, ThreadID: item.ThreadID}
-	}
-	return out
+	return mapSlice(items, func(item codexsdk.AgentInfo) lifecyclesvc.AgentInfo {
+		return lifecyclesvc.AgentInfo{ID: item.ID, Name: item.Name, State: string(item.State), Port: item.Port, ThreadID: item.ThreadID}
+	})
 }
 
 func toRuntimeThreadSnapshots(items []lifecyclesvc.AgentInfo) []uistate.ThreadSnapshot {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]uistate.ThreadSnapshot, len(items))
-	for i, item := range items {
-		out[i] = uistate.ThreadSnapshot{ID: item.ID, Name: item.Name, State: item.State}
-	}
-	return out
+	return mapSlice(items, func(item lifecyclesvc.AgentInfo) uistate.ThreadSnapshot {
+		return uistate.ThreadSnapshot{ID: item.ID, Name: item.Name, State: item.State}
+	})
 }
 
 func threadExistsInRuntime(threadID string, runtime *uistate.RuntimeManager) bool {
 	if runtime == nil {
 		return false
 	}
-	snapshots := runtime.SnapshotLight().Threads
-	items := make([]lifecyclesvc.ThreadSnapshot, 0, len(snapshots))
-	for _, item := range snapshots {
-		items = append(items, lifecyclesvc.ThreadSnapshot{ID: item.ID})
-	}
+	items := mapSlice(runtime.SnapshotLight().Threads, func(item uistate.ThreadSnapshot) lifecyclesvc.ThreadSnapshot {
+		return lifecyclesvc.ThreadSnapshot{ID: item.ID}
+	})
 	return lifecyclesvc.ThreadExistsInRuntimeSnapshots(threadID, items)
 }
 
 func fuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern string) bool) []map[string]any {
 	pattern := strings.ToLower(strings.TrimSpace(query))
-	results := make([]map[string]any, 0)
+	var results []map[string]any
 	if pattern == "" || fuzzyMatch == nil {
 		return results
 	}
@@ -130,4 +110,15 @@ func fuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern
 		})
 	}
 	return results
+}
+
+func mapSlice[T any, R any](src []T, mapper func(T) R) []R {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]R, len(src))
+	for i, item := range src {
+		out[i] = mapper(item)
+	}
+	return out
 }

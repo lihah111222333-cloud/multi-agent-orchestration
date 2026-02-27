@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/common"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
@@ -73,9 +74,9 @@ func RunThreadStart(
 }
 
 func RunThreadResume(
-	ctx context.Context, threadID, path, cwd, model string, proc any,
+	ctx context.Context, threadID, path, cwd, model string, proc *codexsdk.AgentProcess,
 	resolveCandidates func(context.Context, string, func([]string, map[string]struct{}, string) []string, func([]string, int) []string) []string,
-	normalizeThreadID func(string) string, resumeThread func(any, agentcore.ResumeThreadRequest) error,
+	normalizeThreadID func(string) string, resumeThread func(*codexsdk.AgentProcess, agentcore.ResumeThreadRequest) error,
 ) (ThreadResumeResult, error) {
 	resolved := []string(nil)
 	if resolveCandidates != nil {
@@ -97,7 +98,7 @@ func RunThreadResume(
 	return ThreadResumeResult{ThreadID: threadID, Status: "resumed", Model: model}, nil
 }
 
-func RunThreadFork(threadID string, proc any, forkThread func(any, agentcore.ForkThreadRequest) (*agentcore.ForkThreadResponse, error), nowUnixMilli func() int64) (ThreadForkResult, error) {
+func RunThreadFork(threadID string, proc *codexsdk.AgentProcess, forkThread func(*codexsdk.AgentProcess, agentcore.ForkThreadRequest) (*agentcore.ForkThreadResponse, error), nowUnixMilli func() int64) (ThreadForkResult, error) {
 	sourceThreadID := strings.TrimSpace(threadID)
 	if forkThread == nil {
 		return ThreadForkResult{}, apperrors.New("Server.threadFork", "fork handler is not initialized")
@@ -141,14 +142,14 @@ func RunThreadRealtimeStop(threadID string) (map[string]any, error) {
 }
 
 func RunTurnSteer(
-	proc any, submit func(any, string, []string, []string, json.RawMessage) error, submitPrompt string, images, files []string,
+	proc *codexsdk.AgentProcess, submit func(*codexsdk.AgentProcess, string, []string, []string, json.RawMessage) error, submitPrompt string, images, files []string,
 ) (map[string]any, error) {
 	return runNoContentAction("Server.turnSteer", "submit handler is not initialized", "", submit != nil, func() error {
 		return submit(proc, submitPrompt, images, files, nil)
 	})
 }
 
-func RunThreadCommand(proc any, methodName, command, args, wrapMsg string, sendCommand func(any, string, string) error) (map[string]any, error) {
+func RunThreadCommand(proc *codexsdk.AgentProcess, methodName, command, args, wrapMsg string, sendCommand func(*codexsdk.AgentProcess, string, string) error) (map[string]any, error) {
 	return runNoContentAction(methodName, "command sender is not initialized", wrapMsg, sendCommand != nil, func() error {
 		return sendCommand(proc, command, args)
 	})
@@ -200,7 +201,7 @@ func RunThreadNameSet(
 	return map[string]any{}, nil
 }
 
-func RunThreadRead(proc any, listThreads func(any) ([]agentcore.ThreadInfo, error)) (map[string]any, error) {
+func RunThreadRead(proc *codexsdk.AgentProcess, listThreads func(*codexsdk.AgentProcess) ([]agentcore.ThreadInfo, error)) (map[string]any, error) {
 	if listThreads == nil {
 		return nil, apperrors.New("Server.threadRead", "thread list handler is not initialized")
 	}

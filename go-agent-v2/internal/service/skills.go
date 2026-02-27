@@ -574,18 +574,19 @@ func parseSkillMetadata(content string) skillMetadata {
 				if strings.TrimSpace(meta.Summary) != "" {
 					meta.SummarySource = "frontmatter"
 				}
-			case "trigger_words", "triggerwords", "trigger_words_list", "triggers":
+			case "trigger_words", "triggerwords", "trigger_words_list", "triggers",
+				"force_words", "forcewords", "mandatory_words", "must_words",
+				"aliases", "alias", "tags", "tag", "keywords", "keyword":
 				words, consumed := parseFrontmatterWords(value, lines[idx+1:])
-				meta.TriggerWords = words
 				idx += consumed
-			case "force_words", "forcewords", "mandatory_words", "must_words":
-				words, consumed := parseFrontmatterWords(value, lines[idx+1:])
-				meta.ForceWords = words
-				idx += consumed
-			case "aliases", "alias", "tags", "tag", "keywords", "keyword":
-				words, consumed := parseFrontmatterWords(value, lines[idx+1:])
-				meta.TriggerWords = append(meta.TriggerWords, words...)
-				idx += consumed
+				switch key {
+				case "force_words", "forcewords", "mandatory_words", "must_words":
+					meta.ForceWords = words
+				case "aliases", "alias", "tags", "tag", "keywords", "keyword":
+					meta.TriggerWords = append(meta.TriggerWords, words...)
+				default:
+					meta.TriggerWords = words
+				}
 			}
 		}
 	}
@@ -715,11 +716,10 @@ func quoteYAMLScalar(value string) string {
 
 func stripFrontmatter(content string) string {
 	normalized := normalizeSkillContent(content)
-	_, body, ok := splitFrontmatterContent(normalized)
-	if !ok {
-		return normalized
+	if _, body, ok := splitFrontmatterContent(normalized); ok {
+		return body
 	}
-	return body
+	return normalized
 }
 
 func deriveSummaryFromBody(content string) string {
@@ -847,9 +847,7 @@ func parseWordsFromValue(value string) []string {
 }
 
 func parseFrontmatterScalar(value string) string {
-	trimmed := strings.TrimSpace(value)
-	trimmed = strings.Trim(trimmed, "\"'")
-	return strings.TrimSpace(trimmed)
+	return strings.TrimSpace(strings.Trim(strings.TrimSpace(value), "\"'"))
 }
 
 func parseFrontmatterKeyValue(raw string) (key, value string, ok bool) {
@@ -899,9 +897,6 @@ func truncateRunes(value string, limit int) string {
 	if limit <= 0 {
 		return ""
 	}
-	if value == "" {
-		return ""
-	}
 	if utf8.RuneCountInString(value) <= limit {
 		return value
 	}
@@ -912,9 +907,6 @@ func truncateRunes(value string, limit int) string {
 		return ellipsis
 	}
 	maxContentRunes := limit - ellipsisRunes
-	if maxContentRunes <= 0 {
-		return ellipsis
-	}
 
 	var builder strings.Builder
 	builder.Grow(len(value))
@@ -927,9 +919,5 @@ func truncateRunes(value string, limit int) string {
 		usedRunes += 1
 	}
 
-	result := builder.String() + ellipsis
-	if !utf8.ValidString(result) {
-		return value
-	}
-	return result
+	return builder.String() + ellipsis
 }

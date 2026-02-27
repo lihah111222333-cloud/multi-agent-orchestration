@@ -552,21 +552,21 @@ func (m *WorkspaceManager) handleDeletedFiles(
 			continue
 		}
 		sourceBefore, hashErr := hashFileIfExists(sourcePath)
-		if hashErr != nil {
-			m.saveFileAndRecord(ctx, result, &store.WorkspaceRunFile{
+		toTrackedFile := func(state, sourceAfter, lastError string) *store.WorkspaceRunFile {
+			return &store.WorkspaceRunFile{
 				RunKey: run.RunKey, RelativePath: normalizedRel,
 				BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
-				State: WorkspaceFileStateError, LastError: hashErr.Error(),
-			}, &result.Errors, "error", hashErr.Error())
+				SourceSHA256After: sourceAfter, State: state, LastError: lastError,
+			}
+		}
+		if hashErr != nil {
+			msg := hashErr.Error()
+			m.saveFileAndRecord(ctx, result, toTrackedFile(WorkspaceFileStateError, "", msg), &result.Errors, "error", msg)
 			continue
 		}
 		if trackedFile.BaselineSHA256 != "" && sourceBefore != "" && sourceBefore != trackedFile.BaselineSHA256 {
 			reason := "delete conflict: source changed since baseline"
-			m.saveFileAndRecord(ctx, result, &store.WorkspaceRunFile{
-				RunKey: run.RunKey, RelativePath: normalizedRel,
-				BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
-				State: WorkspaceFileStateConflict, LastError: reason,
-			}, &result.Conflicts, "conflict", reason)
+			m.saveFileAndRecord(ctx, result, toTrackedFile(WorkspaceFileStateConflict, "", reason), &result.Conflicts, "conflict", reason)
 			continue
 		}
 
@@ -576,18 +576,11 @@ func (m *WorkspaceManager) handleDeletedFiles(
 		}
 
 		if err := os.Remove(sourcePath); err != nil && !os.IsNotExist(err) {
-			m.saveFileAndRecord(ctx, result, &store.WorkspaceRunFile{
-				RunKey: run.RunKey, RelativePath: normalizedRel,
-				BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
-				State: WorkspaceFileStateError, LastError: err.Error(),
-			}, &result.Errors, "error", err.Error())
+			msg := err.Error()
+			m.saveFileAndRecord(ctx, result, toTrackedFile(WorkspaceFileStateError, "", msg), &result.Errors, "error", msg)
 			continue
 		}
-		m.saveFileAndRecord(ctx, result, &store.WorkspaceRunFile{
-			RunKey: run.RunKey, RelativePath: normalizedRel,
-			BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
-			SourceSHA256After: "", State: WorkspaceFileStateMerged,
-		}, &result.Merged, "deleted", "")
+		m.saveFileAndRecord(ctx, result, toTrackedFile(WorkspaceFileStateMerged, "", ""), &result.Merged, "deleted", "")
 	}
 }
 

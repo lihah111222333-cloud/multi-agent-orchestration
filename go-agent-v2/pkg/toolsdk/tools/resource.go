@@ -44,11 +44,7 @@ func buildResourceTools(provider ResourceProvider, specs []resourceToolSpec) []T
 	return tools
 }
 
-func resourceObjectSchema(properties map[string]any, required ...string) map[string]any {
-	schema := map[string]any{"type": "object", "properties": properties}
-	if len(required) > 0 { schema["required"] = required }
-	return schema
-}
+func resourceObjectSchema(properties map[string]any, required ...string) map[string]any { schema := map[string]any{"type": "object", "properties": properties}; if len(required) > 0 { schema["required"] = required }; return schema }
 
 func resourceToolSpecs() []resourceToolSpec {
 	return []resourceToolSpec{
@@ -283,18 +279,11 @@ func resourceToolCtx() (context.Context, context.CancelFunc) { return context.Wi
 
 func resourceJSON(v any) string { data, _ := json.Marshal(v); return string(data) }
 
-func resourceDecodeArgs(args json.RawMessage, dst any, op string) string {
-	if err := json.Unmarshal(args, dst); err != nil { return ToolError(pkgerr.Wrap(err, op, "invalid args")) }
-	return ""
-}
+func resourceDecodeArgs(args json.RawMessage, dst any, op string) string { if err := json.Unmarshal(args, dst); err != nil { return ToolError(pkgerr.Wrap(err, op, "invalid args")) }; return "" }
 
-func resourceDecodeArgsOptional(args json.RawMessage, dst any, logMsg string) {
-	if err := json.Unmarshal(args, dst); err != nil { logger.Debug(logMsg, logger.FieldError, err) }
-}
+func resourceDecodeArgsOptional(args json.RawMessage, dst any, logMsg string) { if err := json.Unmarshal(args, dst); err != nil { logger.Debug(logMsg, logger.FieldError, err) } }
 
-func resourceWrapError(err error, op, msg string) string {
-	return ToolError(pkgerr.Wrap(err, op, msg))
-}
+func resourceWrapError(err error, op, msg string) string { return ToolError(pkgerr.Wrap(err, op, msg)) }
 
 func resourceWorkspaceOps(provider ResourceProvider, op string) (WorkspaceOps, string) {
 	if provider == nil { return nil, ToolError(pkgerr.New(op, "workspace manager not initialized")) }
@@ -302,12 +291,7 @@ func resourceWorkspaceOps(provider ResourceProvider, op string) (WorkspaceOps, s
 	return nil, ToolError(pkgerr.New(op, "workspace manager not initialized"))
 }
 
-func resourceWorkspaceDecodeArgs(provider ResourceProvider, args json.RawMessage, dst any, op string) (WorkspaceOps, string) {
-	ops, errMsg := resourceWorkspaceOps(provider, op)
-	if errMsg != "" { return nil, errMsg }
-	if errMsg := resourceDecodeArgs(args, dst, op); errMsg != "" { return nil, errMsg }
-	return ops, ""
-}
+func resourceWorkspaceDecodeArgs(provider ResourceProvider, args json.RawMessage, dst any, op string) (WorkspaceOps, string) { ops, errMsg := resourceWorkspaceOps(provider, op); if errMsg != "" { return nil, errMsg }; if errMsg := resourceDecodeArgs(args, dst, op); errMsg != "" { return nil, errMsg }; return ops, "" }
 
 func resourceTaskCreateDAG(provider ResourceProvider, args json.RawMessage) string {
 	var p struct {
@@ -350,9 +334,7 @@ func resourceTaskCreateDAG(provider ResourceProvider, args json.RawMessage) stri
 }
 
 func resourceTaskGetDAG(provider ResourceProvider, args json.RawMessage) string {
-	var p struct {
-		DagKey string `json:"dag_key"`
-	}
+	var p struct { DagKey string `json:"dag_key"` }
 	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.GetDAG"); errMsg != "" { return errMsg }
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
@@ -382,9 +364,7 @@ func resourceTaskUpdateNode(provider ResourceProvider, args json.RawMessage) str
 }
 
 func resourceCommandList(provider ResourceProvider, args json.RawMessage) string {
-	var p struct {
-		Keyword string `json:"keyword"`
-	}
+	var p struct { Keyword string `json:"keyword"` }
 	resourceDecodeArgsOptional(args, &p, "resource: unmarshal command list args")
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
@@ -394,9 +374,7 @@ func resourceCommandList(provider ResourceProvider, args json.RawMessage) string
 }
 
 func resourceCommandGet(provider ResourceProvider, args json.RawMessage) string {
-	var p struct {
-		CardKey string `json:"card_key"`
-	}
+	var p struct { CardKey string `json:"card_key"` }
 	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.CommandGet"); errMsg != "" { return errMsg }
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
@@ -407,9 +385,7 @@ func resourceCommandGet(provider ResourceProvider, args json.RawMessage) string 
 }
 
 func resourcePromptList(provider ResourceProvider, args json.RawMessage) string {
-	var p struct {
-		Keyword string `json:"keyword"`
-	}
+	var p struct { Keyword string `json:"keyword"` }
 	resourceDecodeArgsOptional(args, &p, "resource: unmarshal prompt list args")
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
@@ -419,9 +395,7 @@ func resourcePromptList(provider ResourceProvider, args json.RawMessage) string 
 }
 
 func resourcePromptGet(provider ResourceProvider, args json.RawMessage) string {
-	var p struct {
-		PromptKey string `json:"prompt_key"`
-	}
+	var p struct { PromptKey string `json:"prompt_key"` }
 	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.PromptGet"); errMsg != "" { return errMsg }
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
@@ -432,9 +406,7 @@ func resourcePromptGet(provider ResourceProvider, args json.RawMessage) string {
 }
 
 func resourceSharedFileRead(provider ResourceProvider, args json.RawMessage) string {
-	var p struct {
-		Path string `json:"path"`
-	}
+	var p struct { Path string `json:"path"` }
 	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.FileRead"); errMsg != "" { return errMsg }
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
@@ -445,10 +417,7 @@ func resourceSharedFileRead(provider ResourceProvider, args json.RawMessage) str
 }
 
 func resourceSharedFileWrite(provider ResourceProvider, args json.RawMessage) string {
-	var p struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
-	}
+	var p struct { Path string `json:"path"`; Content string `json:"content"` }
 	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.FileWrite"); errMsg != "" { return errMsg }
 	if strings.TrimSpace(p.Path) == "" { return `{"error":"path is required"}` }
 	ctx, cancel := resourceToolCtx()
@@ -488,9 +457,7 @@ func resourceWorkspaceCreateRun(provider ResourceProvider, args json.RawMessage)
 }
 
 func resourceWorkspaceGetRun(provider ResourceProvider, args json.RawMessage) string {
-	var p struct {
-		RunKey string `json:"run_key"`
-	}
+	var p struct { RunKey string `json:"run_key"` }
 	ops, errMsg := resourceWorkspaceDecodeArgs(provider, args, &p, "ResourceTool.WorkspaceGet")
 	if errMsg != "" { return errMsg }
 	ctx, cancel := resourceToolCtx()
@@ -504,11 +471,7 @@ func resourceWorkspaceGetRun(provider ResourceProvider, args json.RawMessage) st
 func resourceWorkspaceListRuns(provider ResourceProvider, args json.RawMessage) string {
 	ops, errMsg := resourceWorkspaceOps(provider, "ResourceTool.WorkspaceList")
 	if errMsg != "" { return errMsg }
-	var p struct {
-		Status string `json:"status"`
-		DagKey string `json:"dag_key"`
-		Limit  int    `json:"limit"`
-	}
+	var p struct { Status string `json:"status"`; DagKey string `json:"dag_key"`; Limit int `json:"limit"` }
 	resourceDecodeArgsOptional(args, &p, "resource: unmarshal workspace list args")
 	if p.Limit <= 0 || p.Limit > 5000 { p.Limit = 200 }
 	ctx, cancel := resourceToolCtx()
@@ -519,12 +482,7 @@ func resourceWorkspaceListRuns(provider ResourceProvider, args json.RawMessage) 
 }
 
 func resourceWorkspaceMergeRun(provider ResourceProvider, args json.RawMessage) string {
-	var p struct {
-		RunKey        string `json:"run_key"`
-		UpdatedBy     string `json:"updated_by"`
-		DryRun        bool   `json:"dry_run"`
-		DeleteRemoved bool   `json:"delete_removed"`
-	}
+	var p struct { RunKey string `json:"run_key"`; UpdatedBy string `json:"updated_by"`; DryRun bool `json:"dry_run"`; DeleteRemoved bool `json:"delete_removed"` }
 	ops, errMsg := resourceWorkspaceDecodeArgs(provider, args, &p, "ResourceTool.WorkspaceMerge")
 	if errMsg != "" { return errMsg }
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -541,11 +499,7 @@ func resourceWorkspaceMergeRun(provider ResourceProvider, args json.RawMessage) 
 }
 
 func resourceWorkspaceAbortRun(provider ResourceProvider, args json.RawMessage) string {
-	var p struct {
-		RunKey    string `json:"run_key"`
-		UpdatedBy string `json:"updated_by"`
-		Reason    string `json:"reason"`
-	}
+	var p struct { RunKey string `json:"run_key"`; UpdatedBy string `json:"updated_by"`; Reason string `json:"reason"` }
 	ops, errMsg := resourceWorkspaceDecodeArgs(provider, args, &p, "ResourceTool.WorkspaceAbort")
 	if errMsg != "" { return errMsg }
 	ctx, cancel := resourceToolCtx()
@@ -556,23 +510,6 @@ func resourceWorkspaceAbortRun(provider ResourceProvider, args json.RawMessage) 
 	return resourceJSON(run)
 }
 
-func isNilAny(v any) bool {
-	if v == nil { return true }
-	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return rv.IsNil()
-	default:
-		return false
-	}
-}
+func isNilAny(v any) bool { if v == nil { return true }; rv := reflect.ValueOf(v); switch rv.Kind() { case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice: return rv.IsNil(); default: return false } }
 
-func resourceWorkspaceRunKey(run any) string {
-	if run == nil { return "" }
-	v := reflect.ValueOf(run)
-	for v.Kind() == reflect.Pointer { if v.IsNil() { return "" }; v = v.Elem() }
-	if v.Kind() != reflect.Struct { return "" }
-	f := v.FieldByName("RunKey")
-	if !f.IsValid() || f.Kind() != reflect.String { return "" }
-	return f.String()
-}
+func resourceWorkspaceRunKey(run any) string { if run == nil { return "" }; v := reflect.ValueOf(run); for v.Kind() == reflect.Pointer { if v.IsNil() { return "" }; v = v.Elem() }; if v.Kind() != reflect.Struct { return "" }; f := v.FieldByName("RunKey"); if !f.IsValid() || f.Kind() != reflect.String { return "" }; return f.String() }

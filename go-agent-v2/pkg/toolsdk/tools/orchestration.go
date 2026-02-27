@@ -230,6 +230,7 @@ func orchestrationLaunchAgent(provider OrchestrationProvider, runtime AgentRunti
 	if runtime != nil {
 		runtime.SetAgentWorkDir(id, p.Cwd)
 	}
+	provider.SaveSubAgent(id, p.Name, p.Cwd)
 
 	logger.Info("orchestration: agent launched", logger.FieldID, id, logger.FieldName, p.Name, logger.FieldCwd, p.Cwd, logger.FieldRunKey, p.WorkspaceRunKey)
 	return ToolJSON(map[string]any{
@@ -270,6 +271,7 @@ func orchestrationStopAgent(provider OrchestrationProvider, runtime AgentRuntime
 	if runtime != nil {
 		runtime.ClearAgentWorkDir(p.AgentID)
 	}
+	provider.DeleteSubAgent(p.AgentID)
 
 	logger.Info("orchestration: agent stopped", logger.FieldID, p.AgentID)
 	return ToolJSON(map[string]any{"success": true, "agent_id": p.AgentID})

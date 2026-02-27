@@ -618,4 +618,7 @@ type storeBundle struct {
 
 	// Agent <-> Codex Thread 1:1 共生绑定 (根基约束, 不允许绕过)。
 	bindingStore *store.AgentCodexBindingStore
+
+	// 子 agent 持久化 (重启恢复)。
+	agentThreadStore *store.AgentThreadStore
 }

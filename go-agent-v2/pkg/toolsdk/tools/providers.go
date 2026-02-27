@@ -75,6 +75,8 @@ type OrchestrationProvider interface {
 	SubmitPrompt(agentID, prompt string, images, files []string) error
 	RememberReportRequest(senderID, workerID string)
 	NextThreadSeq() int64
+	SaveSubAgent(id, name, cwd string)
+	DeleteSubAgent(id string)
 }
 
 // AgentRuntimeProvider exposes cross-tool agent runtime state.

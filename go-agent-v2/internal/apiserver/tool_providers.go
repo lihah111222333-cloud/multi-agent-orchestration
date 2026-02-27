@@ -7,12 +7,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
+	"github.com/multi-agent/go-agent-v2/internal/store"
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tooladapter"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
-	"github.com/multi-agent/go-agent-v2/internal/uistate"
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 func (s *Server) RegisterRuntimeTool(name string, handler tooladapter.RuntimeToolHandler) {
@@ -108,6 +109,28 @@ func (s *Server) RememberReportRequest(senderID, workerID string) {
 
 func (s *Server) NextThreadSeq() int64 {
 	return nextThreadSeqState(s)
+}
+
+func (s *Server) SaveSubAgent(id, name, cwd string) {
+	if s == nil || s.agentThreadStore == nil {
+		return
+	}
+	now := time.Now().UnixMilli()
+	if err := s.agentThreadStore.Upsert(context.Background(), store.AgentThread{
+		ThreadID: id, Prompt: name, Cwd: cwd, Status: "running",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		logger.Warn("orchestration: save sub-agent failed", logger.FieldAgentID, id, logger.FieldError, err)
+	}
+}
+
+func (s *Server) DeleteSubAgent(id string) {
+	if s == nil || s.agentThreadStore == nil {
+		return
+	}
+	if err := s.agentThreadStore.Delete(context.Background(), id); err != nil {
+		logger.Warn("orchestration: delete sub-agent failed", logger.FieldAgentID, id, logger.FieldError, err)
+	}
 }
 
 func (s *Server) CancelCodeRuns(agentID string) int {

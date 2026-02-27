@@ -10,11 +10,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	appconfig "github.com/multi-agent/go-agent-v2/internal/config"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
-	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 )
 
 func initRuntimeWiring(s *Server) {
@@ -83,6 +83,7 @@ func initStores(s *Server, db *pgxpool.Pool) {
 	s.taskAckStore = store.NewTaskAckStore(db)
 	s.taskTraceStore = store.NewTaskTraceStore(db)
 	s.bindingStore = store.NewAgentCodexBindingStore(db)
+	s.agentThreadStore = store.NewAgentThreadStore(db)
 
 	if s.cfg != nil {
 		maxFileBytes := int64(s.cfg.OrchestrationWorkspaceMaxFileBytes)
@@ -102,7 +103,39 @@ func initStores(s *Server, db *pgxpool.Pool) {
 		}
 	}
 	logger.Info("app-server: resource tools + dashboard enabled")
+
+	// 恢复上次持久化的子 agent
+	recoverSubAgents(s)
 }
+
+func recoverSubAgents(s *Server) {
+	if s == nil || s.agentThreadStore == nil || s.mgr == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	agents, err := s.agentThreadStore.ListRunningFull(ctx)
+	if err != nil {
+		logger.Warn("orchestration: recover sub-agents query failed", logger.FieldError, err)
+		return
+	}
+	if len(agents) == 0 {
+		return
+	}
+	logger.Info("orchestration: recovering sub-agents", "count", len(agents))
+	for _, a := range agents {
+		launchCtx, launchCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if launchErr := s.mgr.Launch(launchCtx, a.ThreadID, a.Prompt, "", a.Cwd, "", nil); launchErr != nil {
+			logger.Warn("orchestration: recover sub-agent failed",
+				logger.FieldAgentID, a.ThreadID, logger.FieldError, launchErr)
+			_ = s.agentThreadStore.Delete(context.Background(), a.ThreadID)
+		} else {
+			logger.Info("orchestration: sub-agent recovered", logger.FieldAgentID, a.ThreadID, logger.FieldName, a.Prompt)
+		}
+		launchCancel()
+	}
+}
+
 func ensureSkillsCacheDir(path string) string {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		logger.Warn("skills directory: ensure local fallback failed", logger.FieldError, err, logger.FieldPath, path)

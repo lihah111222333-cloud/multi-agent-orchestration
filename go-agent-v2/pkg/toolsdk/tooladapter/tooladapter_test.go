@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 )
 
@@ -77,20 +78,22 @@ func (fakeDAGManager) ListNodes(context.Context, string) ([]tools.TaskDAGNode, e
 }
 
 func (fakeSharedProviders) CodeRunner() tools.CodeExecRunner { return fakeCodeRunner{} }
-func (fakeSharedProviders) AuditLogger() tools.AuditLogger    { return nil }
+func (fakeSharedProviders) AuditLogger() tools.AuditLogger   { return nil }
 func (fakeSharedProviders) AwaitApproval(string, string, string, string, bool) bool {
 	return true
 }
-func (fakeSharedProviders) DAGManager() tools.DAGManager                      { return fakeDAGManager{} }
-func (fakeSharedProviders) CommandCardStore() tools.CardStore                 { return nil }
-func (fakeSharedProviders) PromptTemplateStore() tools.TemplateStore          { return nil }
-func (fakeSharedProviders) SharedFileStore() tools.FileStore                  { return nil }
-func (fakeSharedProviders) WorkspaceOps() tools.WorkspaceOps                  { return nil }
+func (fakeSharedProviders) DAGManager() tools.DAGManager                          { return fakeDAGManager{} }
+func (fakeSharedProviders) CommandCardStore() tools.CardStore                     { return nil }
+func (fakeSharedProviders) PromptTemplateStore() tools.TemplateStore              { return nil }
+func (fakeSharedProviders) SharedFileStore() tools.FileStore                      { return nil }
+func (fakeSharedProviders) WorkspaceOps() tools.WorkspaceOps                      { return nil }
 func (fakeSharedProviders) NotifyEvent(string, any)                               {}
 func (fakeSharedProviders) AgentLauncher() tools.AgentLauncher                    { return nil }
 func (fakeSharedProviders) SubmitPrompt(string, string, []string, []string) error { return nil }
 func (fakeSharedProviders) RememberReportRequest(string, string)                  {}
 func (fakeSharedProviders) NextThreadSeq() int64                                  { return 1 }
+func (fakeSharedProviders) SaveSubAgent(string, string, string)                   {}
+func (fakeSharedProviders) DeleteSubAgent(string)                                 {}
 func (fakeSharedProviders) CancelCodeRuns(string) int                             { return 0 }
 func (fakeSharedProviders) SetAgentWorkDir(string, string)                        {}
 func (fakeSharedProviders) ClearAgentWorkDir(string)                              {}

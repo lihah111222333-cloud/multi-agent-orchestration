@@ -63,8 +63,29 @@ func (s *AgentThreadStore) ListRunning(ctx context.Context) ([]discovery.Running
 	return collectRows[discovery.RunningAgent](rows)
 }
 
+// ListRunningFull 列出所有运行中的完整 agent 记录（用于重启恢复）。
+func (s *AgentThreadStore) ListRunningFull(ctx context.Context) ([]AgentThread, error) {
+	rows, err := s.pool.Query(ctx,
+		"SELECT "+atCols+" FROM agent_threads WHERE status = 'running' ORDER BY created_at ASC")
+	if err != nil {
+		return nil, err
+	}
+	return collectRows[AgentThread](rows)
+}
+
 // Delete 删除线程记录。
 func (s *AgentThreadStore) Delete(ctx context.Context, threadID string) error {
 	_, err := s.pool.Exec(ctx, "DELETE FROM agent_threads WHERE thread_id=$1", threadID)
+	return err
+}
+
+// Upsert 插入或更新子 agent 记录 (用于持久化动态创建的子 agent)。
+func (s *AgentThreadStore) Upsert(ctx context.Context, t AgentThread) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO agent_threads (thread_id, prompt, model, cwd, status, port, pid, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		 ON CONFLICT (thread_id) DO UPDATE SET status=$5, cwd=$4, updated_at=$9`,
+		t.ThreadID, t.Prompt, t.Model, t.Cwd, t.Status, t.Port, t.PID,
+		t.CreatedAt, t.UpdatedAt)
 	return err
 }

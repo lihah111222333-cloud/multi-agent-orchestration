@@ -42,14 +42,14 @@ func (a *Adapter) ThreadResume(ctx context.Context, threadID, path, cwd, model s
 		return lifecyclesvc.ThreadResumeResult{}, err
 	}
 	return withProcess(a, "Server.threadResume", id, func(proc *codexsdk.AgentProcess) (lifecyclesvc.ThreadResumeResult, error) {
-		return lifecyclesvc.RunThreadResume(ctx, id, path, cwd, model, proc, a.ResolveCodexThreadCandidates, lifecyclesvc.NormalizeCodexThreadID, a.resumeThreadFromAny)
+		return lifecyclesvc.RunThreadResume(ctx, id, path, cwd, model, proc, a.ResolveCodexThreadCandidates, lifecyclesvc.NormalizeCodexThreadID, a.ResumeThread)
 	})
 }
 
 func (a *Adapter) ThreadFork(threadID string) (lifecyclesvc.ThreadForkResult, error) {
 	sourceThreadID := strings.TrimSpace(threadID)
 	return withProcess(a, "Server.threadFork", sourceThreadID, func(proc *codexsdk.AgentProcess) (lifecyclesvc.ThreadForkResult, error) {
-		return lifecyclesvc.RunThreadFork(sourceThreadID, proc, a.forkThreadFromAny, a.nowUnixMilli)
+		return lifecyclesvc.RunThreadFork(sourceThreadID, proc, a.ForkThread, a.nowUnixMilli)
 	})
 }
 
@@ -63,7 +63,7 @@ func (a *Adapter) ReviewStart(threadID, reviewArgs string) (map[string]any, erro
 
 func (a *Adapter) sendThreadCommand(methodName, threadID, command, args, wrapMsg string) (map[string]any, error) {
 	return withProcess(a, methodName, threadID, func(proc *codexsdk.AgentProcess) (map[string]any, error) {
-		return lifecyclesvc.RunThreadCommand(proc, methodName, command, args, wrapMsg, a.sendCommandFromAny)
+		return lifecyclesvc.RunThreadCommand(proc, methodName, command, args, wrapMsg, a.SendCommand)
 	})
 }
 
@@ -95,7 +95,7 @@ func (a *Adapter) ThreadNameSet(ctx context.Context, threadID, name string) (map
 
 func (a *Adapter) ThreadRead(_ context.Context, threadID string) (map[string]any, error) {
 	return withProcess(a, "Server.threadRead", threadID, func(proc *codexsdk.AgentProcess) (map[string]any, error) {
-		return lifecyclesvc.RunThreadRead(proc, a.listThreadsFromAny)
+		return lifecyclesvc.RunThreadRead(proc, a.ListThreads)
 	})
 }
 

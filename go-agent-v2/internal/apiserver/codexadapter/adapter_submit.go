@@ -110,9 +110,7 @@ func (a *Adapter) resolveThreadFromSlashCommand(
 	threadID string,
 	requireThreadID bool,
 ) (string, error) {
-	return commandsvc.ResolveThreadForSlashCommandLogic(ctx, threadID, requireThreadID, func(ctx context.Context) ([]commandsvc.ThreadListItem, error) {
-		return a.ThreadList(ctx)
-	})
+	return commandsvc.ResolveThreadForSlashCommandLogic(ctx, threadID, requireThreadID, a.ThreadList)
 }
 
 func (a *Adapter) withProcessMap(methodName string, threadID string, fn func(any) (map[string]any, error)) (map[string]any, error) {

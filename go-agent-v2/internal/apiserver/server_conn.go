@@ -177,10 +177,7 @@ func broadcastNotification(s *Server, method string, params any) {
 }
 
 func enqueueConnMessage(s *Server, connID string, entry *connEntry, msgType int, data []byte, reason string) bool {
-	if s == nil {
-		return false
-	}
-	if entry == nil {
+	if s == nil || entry == nil {
 		return false
 	}
 	if entry.enqueue(msgType, data) {
@@ -197,11 +194,8 @@ func enqueueConnMessage(s *Server, connID string, entry *connEntry, msgType int,
 }
 
 func disconnectConn(s *Server, connID string) {
-	if s == nil {
-		return
-	}
 	id := strings.TrimSpace(connID)
-	if id == "" {
+	if s == nil || id == "" {
 		return
 	}
 	entry, ok := removeConnState(s, id)
@@ -498,13 +492,12 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 		// 单次 Unmarshal: 路由 + 延迟解析
 		var env rpcEnvelope
 		var resp *Response
-		reason := ""
-		mustSend := true
+		var reason string
 		if err := json.Unmarshal(message, &env); err != nil {
-			resp = newError(nil, CodeParseError, "parse error: "+err.Error())
-			reason = "parse_error_response"
-			mustSend = false
-		} else if !validIncomingJSONRPCVersion(env.JSONRPC) {
+			_ = sendResponseViaOutbox(s, connID, entry, newError(nil, CodeParseError, "parse error: "+err.Error()), "parse_error_response")
+			continue
+		}
+		if !validIncomingJSONRPCVersion(env.JSONRPC) {
 			resp = newError(rawIDtoAny(env.ID), CodeInvalidRequest, "invalid request: jsonrpc must be \"2.0\"")
 			reason = "invalid_jsonrpc_version"
 		} else if handleClientResponse(s, env) {
@@ -521,7 +514,7 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 			}
 			reason = "request_response"
 		}
-		if !sendResponseViaOutbox(s, connID, entry, resp, reason) && mustSend {
+		if !sendResponseViaOutbox(s, connID, entry, resp, reason) {
 			return
 		}
 	}

@@ -48,11 +48,9 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 		deadline = d
 	}
 	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
+		if err := ctx.Err(); err != nil {
 			_ = c.Kill()
-			return apperrors.Wrap(ctx.Err(), "AppServerClient.Spawn", "spawn cancelled")
-		default:
+			return apperrors.Wrap(err, "AppServerClient.Spawn", "spawn cancelled")
 		}
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", c.Port), 500*time.Millisecond)
 		if err == nil {
@@ -66,7 +64,6 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 	return apperrors.Newf("AppServerClient.Spawn", "app-server startup timeout on port %d", c.Port)
 }
 
-// connectWS 连接 WebSocket 并启动 readLoop。
 func (c *AppServerClient) connectWS() error {
 	conn, err := c.dialWS(c.ctx)
 	if err != nil {
@@ -126,8 +123,6 @@ func (c *AppServerClient) replaceWSConnAndStartLoops(conn *websocket.Conn, reset
 	util.SafeGo(func() { c.pingLoop(conn) })
 }
 
-// appServerReconnectBackoff 创建预配置的指数退避器。
-// 首次无延迟 (由调用方控制), 后续: 300ms → 600ms → 1.2s → 2.4s → 3s (capped)。
 func appServerReconnectBackoff() backofflib.BackOff {
 	b := backofflib.NewExponentialBackOff()
 	b.InitialInterval = appServerReconnectBaseDelay
@@ -209,7 +204,6 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 		if c.stopped.Load() {
 			return false
 		}
-		// 子进程已退出则无需重连 — 避免无效 dial 浪费时间。
 		if !c.Running() {
 			logger.Warn("codex: reconnect aborted — process exited",
 				logger.FieldAgentID, c.AgentID,
@@ -239,8 +233,6 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 	return false
 }
 
-// attemptSingleReconnect tries a single WebSocket reconnection.
-// Returns true if reconnection succeeded.
 func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, attempt, maxRetries int) bool {
 	c.noteReconnectAttempt()
 	c.emitBackgroundEvent(
@@ -434,7 +426,6 @@ func (c *AppServerClient) recoverByRespawn(trigger, activeTurnID, reason string,
 	return true
 }
 
-// RecoverConnection forces a process restart recovery flow for manual UI recovery.
 func (c *AppServerClient) RecoverConnection(reason string) error {
 	switch {
 	case c == nil:
@@ -454,11 +445,6 @@ func (c *AppServerClient) RecoverConnection(reason string) error {
 	return nil
 }
 
-// emitReconnectResolved 在重连成功后显式清除残留的 stream error 状态。
-//
-// 快速重连周期中 (read_error→reconnect→read_error→reconnect), handleReadLoopReadError
-// 可能在 background_event(done=true) 之后再次设置 streamErrorText。
-// 此方法通过 handler callback 直接发送一个无害事件来触发 UI 层清除逻辑。
 func (c *AppServerClient) emitReconnectResolved() {
 	c.handlerMu.RLock()
 	handler := c.handler
@@ -475,7 +461,6 @@ func (c *AppServerClient) emitReconnectResolved() {
 	handler(Event{Type: EventBackgroundEvent, Data: payload})
 }
 
-// handleReconnectExhausted emits failure events after all reconnection attempts are exhausted.
 func (c *AppServerClient) handleReconnectExhausted(trigger, activeTurnID string, maxRetries int, lastErr error) {
 	_, health := c.circuitRemaining(time.Now())
 	exhausted := map[string]any{
@@ -508,7 +493,6 @@ func (c *AppServerClient) handleReconnectExhausted(trigger, activeTurnID string,
 // JSON-RPC 请求/响应
 // ========================================
 
-// call 发送 JSON-RPC 请求并等待响应。
 func (c *AppServerClient) call(method string, params any, timeout time.Duration) (json.RawMessage, error) {
 	rpcID := newJSONRPCIntID(c.nextID.Add(1))
 	pc := &pendingCall{done: make(chan struct{})}
@@ -536,7 +520,6 @@ func (c *AppServerClient) call(method string, params any, timeout time.Duration)
 	}
 }
 
-// notify 发送 JSON-RPC 通知 (无需响应)。
 func (c *AppServerClient) notify(method string, params any) error {
 	return c.asWriteJSON(jsonRPCNotification{
 		JSONRPC: "2.0",
@@ -545,7 +528,6 @@ func (c *AppServerClient) notify(method string, params any) error {
 	})
 }
 
-// respond 发送 JSON-RPC 响应 (回复 server request)。
 func (c *AppServerClient) respond(id int64, result any) error {
 	return c.respondWithID(newJSONRPCIntID(id), result)
 }
@@ -563,7 +545,6 @@ func (c *AppServerClient) respondWithID(id jsonRPCID, result any) error {
 	return c.writeRPCResponse(id, result, nil)
 }
 
-// RespondError 向 codex 发送 JSON-RPC 错误响应 (用于 server request 失败场景)。
 func (c *AppServerClient) RespondError(id int64, code int, message string) error {
 	return c.respondErrorWithID(newJSONRPCIntID(id), code, message)
 }

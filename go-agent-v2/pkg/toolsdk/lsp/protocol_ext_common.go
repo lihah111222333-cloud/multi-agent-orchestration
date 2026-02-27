@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-// LocationLink 是 definition/implementation/typeDefinition 的联合返回类型之一。
-// 坐标保持 LSP 0-based，不在服务端做转换。
 type LocationLink struct {
 	OriginSelectionRange *Range `json:"originSelectionRange,omitempty"`
 	TargetURI            string `json:"targetUri"`
@@ -16,14 +14,12 @@ type LocationLink struct {
 	TargetSelectionRange Range  `json:"targetSelectionRange"`
 }
 
-// Command 是 textDocument/codeAction 联合返回类型之一。
 type Command struct {
 	Title     string `json:"title"`
 	Command   string `json:"command"`
 	Arguments []any  `json:"arguments,omitempty"`
 }
 
-// SymbolInformation 是 workspace/symbol 旧形态。
 type SymbolInformation struct {
 	Name          string     `json:"name"`
 	Kind          SymbolKind `json:"kind"`
@@ -31,12 +27,10 @@ type SymbolInformation struct {
 	ContainerName string     `json:"containerName,omitempty"`
 }
 
-// WorkspaceSymbolLocation 是 workspace/symbol 新形态 location。
 type WorkspaceSymbolLocation struct {
 	URI string `json:"uri"`
 }
 
-// WorkspaceSymbol 是 workspace/symbol 新形态。
 type WorkspaceSymbol struct {
 	Name          string `json:"name"`
 	Kind          int    `json:"kind"`
@@ -45,12 +39,10 @@ type WorkspaceSymbol struct {
 	Data          any    `json:"data,omitempty"`
 }
 
-// WorkspaceSymbolParams workspace/symbol 请求参数。
 type WorkspaceSymbolParams struct {
 	Query string `json:"query"`
 }
 
-// CodeAction 是 textDocument/codeAction 联合返回类型之一。
 type CodeAction struct {
 	Title       string         `json:"title"`
 	Kind        string         `json:"kind,omitempty"`
@@ -60,21 +52,18 @@ type CodeAction struct {
 	Data        any            `json:"data,omitempty"`
 }
 
-// CodeActionContext code action 请求上下文。
 type CodeActionContext struct {
 	Diagnostics []Diagnostic `json:"diagnostics"`
 	Only        []string     `json:"only,omitempty"`
 	TriggerKind int          `json:"triggerKind,omitempty"`
 }
 
-// CodeActionParams textDocument/codeAction 请求参数。
 type CodeActionParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
 	Range        Range                  `json:"range"`
 	Context      CodeActionContext      `json:"context"`
 }
 
-// CallHierarchyItem prepareCallHierarchy 返回项。
 type CallHierarchyItem struct {
 	Name           string `json:"name"`
 	Kind           int    `json:"kind"`
@@ -84,7 +73,6 @@ type CallHierarchyItem struct {
 	Data           any    `json:"data,omitempty"`
 }
 
-// TypeHierarchyItem prepareTypeHierarchy 返回项。
 type TypeHierarchyItem struct {
 	Name           string `json:"name"`
 	Kind           int    `json:"kind"`
@@ -94,25 +82,21 @@ type TypeHierarchyItem struct {
 	Data           any    `json:"data,omitempty"`
 }
 
-// SemanticTokensLegend 语义高亮 legend。
 type SemanticTokensLegend struct {
 	TokenTypes     []string `json:"tokenTypes"`
 	TokenModifiers []string `json:"tokenModifiers"`
 }
 
-// SemanticTokensOptions semanticTokensProvider 对象形态。
 type SemanticTokensOptions struct {
 	Legend SemanticTokensLegend `json:"legend"`
 }
 
-// LocationResult 是 Location/LocationLink 的统一封装。
 type LocationResult struct {
 	Location     *Location     `json:"location,omitempty"`
 	LocationLink *LocationLink `json:"locationLink,omitempty"`
 	Canonical    *Location     `json:"canonical,omitempty"`
 }
 
-// PrimaryLocation 返回最适合作为兼容输出的位置。
 func (r LocationResult) PrimaryLocation() *Location {
 	if r.Location != nil {
 		return r.Location
@@ -120,13 +104,11 @@ func (r LocationResult) PrimaryLocation() *Location {
 	return r.Canonical
 }
 
-// WorkspaceSymbolResult 是 workspace/symbol 新旧返回的统一封装。
 type WorkspaceSymbolResult struct {
 	SymbolInformation *SymbolInformation `json:"symbolInformation,omitempty"`
 	WorkspaceSymbol   *WorkspaceSymbol   `json:"workspaceSymbol,omitempty"`
 }
 
-// CodeActionResult 是 CodeAction|Command 的统一封装。
 type CodeActionResult struct {
 	CodeAction *CodeAction `json:"codeAction,omitempty"`
 	Command    *Command    `json:"command,omitempty"`
@@ -194,8 +176,6 @@ func decodeRawObject(item json.RawMessage, errPrefix string) (map[string]json.Ra
 	return obj, nil
 }
 
-// decodeLocationsLike 兼容解码:
-// Location | []Location | []LocationLink | null
 func decodeLocationsLike(raw json.RawMessage) ([]LocationResult, error) {
 	return decodeArrayLike(raw, "decode location-like", true, decodeLocationLikeOne)
 }
@@ -238,8 +218,6 @@ func decodeLocationLikeOne(raw json.RawMessage) (LocationResult, error) {
 	return LocationResult{}, fmt.Errorf("decode location-like: unsupported payload")
 }
 
-// decodeWorkspaceSymbols 兼容解码:
-// []SymbolInformation | []WorkspaceSymbol | null
 func decodeWorkspaceSymbols(raw json.RawMessage) ([]WorkspaceSymbolResult, error) {
 	return decodeArrayLike(raw, "decode workspace symbols", false, decodeWorkspaceSymbolOne)
 }
@@ -268,8 +246,6 @@ func decodeWorkspaceSymbolOne(item json.RawMessage) (WorkspaceSymbolResult, erro
 	return WorkspaceSymbolResult{WorkspaceSymbol: &modern}, nil
 }
 
-// decodeCodeActions 兼容解码:
-// (CodeAction | Command)[] | null
 func decodeCodeActions(raw json.RawMessage) ([]CodeActionResult, error) {
 	return decodeArrayLike(raw, "decode code actions", false, decodeCodeActionOne)
 }
@@ -317,8 +293,6 @@ func isCodeActionLike(obj map[string]json.RawMessage) bool {
 	return false
 }
 
-// decodeCompletionItems 兼容解码:
-// []CompletionItem | CompletionList | null
 func decodeCompletionItems(raw json.RawMessage) ([]CompletionItem, error) {
 	var list CompletionList
 	if err := json.Unmarshal(raw, &list); err == nil && list.Items != nil {
@@ -333,8 +307,6 @@ func decodeCompletionItems(raw json.RawMessage) ([]CompletionItem, error) {
 	return nil, fmt.Errorf("decode completion: unsupported payload")
 }
 
-// decodeDocumentSymbols 兼容解码:
-// []DocumentSymbol | []SymbolInformation | null
 func decodeDocumentSymbols(raw json.RawMessage) ([]DocumentSymbol, error) {
 	return decodeArrayLike(raw, "decode document symbols", false, decodeDocumentSymbolOne)
 }
@@ -365,14 +337,10 @@ func decodeDocumentSymbolOne(item json.RawMessage) (DocumentSymbol, error) {
 	return symbol, nil
 }
 
-// decodePrepareCallHierarchyItems 兼容解码:
-// []CallHierarchyItem | null
 func decodePrepareCallHierarchyItems(raw json.RawMessage) ([]CallHierarchyItem, error) {
 	return decodeNullableSlice[CallHierarchyItem](raw, "decode prepareCallHierarchy")
 }
 
-// decodePrepareTypeHierarchyItems 兼容解码:
-// []TypeHierarchyItem | null
 func decodePrepareTypeHierarchyItems(raw json.RawMessage) ([]TypeHierarchyItem, error) {
 	return decodeNullableSlice[TypeHierarchyItem](raw, "decode prepareTypeHierarchy")
 }
@@ -399,64 +367,50 @@ type itemRequest[T any] struct {
 	Item T `json:"item"`
 }
 
-// PrepareCallHierarchyParams textDocument/prepareCallHierarchy 请求参数。
 type PrepareCallHierarchyParams = TextDocumentPositionParams
 
-// CallHierarchyIncomingCallsParams callHierarchy/incomingCalls 请求参数。
 type CallHierarchyIncomingCallsParams = itemRequest[CallHierarchyItem]
 
-// CallHierarchyOutgoingCallsParams callHierarchy/outgoingCalls 请求参数。
 type CallHierarchyOutgoingCallsParams = itemRequest[CallHierarchyItem]
 
-// CallHierarchyIncomingCall incoming 调用边。
 type CallHierarchyIncomingCall struct {
 	From       CallHierarchyItem `json:"from"`
 	FromRanges []Range           `json:"fromRanges"`
 }
 
-// CallHierarchyOutgoingCall outgoing 调用边。
 type CallHierarchyOutgoingCall struct {
 	To         CallHierarchyItem `json:"to"`
 	FromRanges []Range           `json:"fromRanges"`
 }
 
-// PrepareTypeHierarchyParams textDocument/prepareTypeHierarchy 请求参数。
 type PrepareTypeHierarchyParams = TextDocumentPositionParams
 
-// TypeHierarchySupertypesParams typeHierarchy/supertypes 请求参数。
 type TypeHierarchySupertypesParams = itemRequest[TypeHierarchyItem]
 
-// TypeHierarchySubtypesParams typeHierarchy/subtypes 请求参数。
 type TypeHierarchySubtypesParams = itemRequest[TypeHierarchyItem]
 
-// CallHierarchyResult 是稳定字段输出结构。
 type CallHierarchyResult struct {
 	Item     CallHierarchyItem           `json:"item"`
 	Incoming []CallHierarchyIncomingCall `json:"incoming,omitempty"`
 	Outgoing []CallHierarchyOutgoingCall `json:"outgoing,omitempty"`
 }
 
-// TypeHierarchyResult 是稳定字段输出结构。
 type TypeHierarchyResult struct {
 	Item       TypeHierarchyItem   `json:"item"`
 	Supertypes []TypeHierarchyItem `json:"supertypes,omitempty"`
 	Subtypes   []TypeHierarchyItem `json:"subtypes,omitempty"`
 }
 
-// XRefResultLimit 是 XRef 类工具的返回上限。
 const XRefResultLimit = 50
 
-// SignatureHelpParams textDocument/signatureHelp 请求参数。
 type SignatureHelpParams = TextDocumentPositionParams
 
-// SignatureHelpResult 是容错后的稳定签名帮助结构。
 type SignatureHelpResult struct {
 	Signatures      []SignatureInformationResult `json:"signatures,omitempty"`
 	ActiveSignature *int                         `json:"activeSignature,omitempty"`
 	ActiveParameter *int                         `json:"activeParameter,omitempty"`
 }
 
-// SignatureInformationResult 是单个签名信息。
 type SignatureInformationResult struct {
 	Label             string                       `json:"label"`
 	Documentation     string                       `json:"documentation,omitempty"`
@@ -464,7 +418,6 @@ type SignatureInformationResult struct {
 	Parameters        []ParameterInformationResult `json:"parameters,omitempty"`
 }
 
-// ParameterInformationResult 是签名参数信息。
 type ParameterInformationResult struct {
 	Label             string `json:"label,omitempty"`
 	LabelOffsets      []int  `json:"labelOffsets,omitempty"`
@@ -472,20 +425,16 @@ type ParameterInformationResult struct {
 	DocumentationKind string `json:"documentationKind,omitempty"`
 }
 
-// DocumentFormattingParams textDocument/formatting 请求参数。
 type DocumentFormattingParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
 	Options      FormattingOptions      `json:"options"`
 }
 
-// FormattingOptions 格式化选项。
 type FormattingOptions struct {
 	TabSize      int  `json:"tabSize"`
 	InsertSpaces bool `json:"insertSpaces"`
 }
 
-// decodeSignatureHelp 兼容解码 signatureHelp:
-// SignatureHelp | null，其中 documentation 与 label 支持联合类型容错。
 func decodeSignatureHelp(raw json.RawMessage) (*SignatureHelpResult, error) {
 	if isNullRaw(raw) {
 		return nil, nil
@@ -593,25 +542,19 @@ func decodeParameterLabel(raw json.RawMessage) (string, []int) {
 	return string(bytes.TrimSpace(raw)), nil
 }
 
-// decodeTextEdits 兼容解码 formatting 返回:
-// []TextEdit | null
 func decodeTextEdits(raw json.RawMessage) ([]TextEdit, error) {
 	return decodeNullableSlice[TextEdit](raw, "decode text edits")
 }
 
-// SemanticTokenResultLimit 是 semantic_tokens decoded 输出上限。
 const SemanticTokenResultLimit = 200
 
-// SemanticTokensParams textDocument/semanticTokens/full 请求参数。
 type SemanticTokensParams = DocumentSymbolParams
 
-// SemanticTokens textDocument/semanticTokens/full 原始返回。
 type SemanticTokens struct {
 	ResultID string `json:"resultId,omitempty"`
 	Data     []int  `json:"data"`
 }
 
-// DecodedSemanticToken 是相对编码展开后的语义 token。
 type DecodedSemanticToken struct {
 	Line           int      `json:"line"`
 	StartCharacter int      `json:"startCharacter"`
@@ -620,17 +563,14 @@ type DecodedSemanticToken struct {
 	TokenModifiers []string `json:"tokenModifiers,omitempty"`
 }
 
-// SemanticTokensResult 是稳定输出结构，包含原始与解码结果。
 type SemanticTokensResult struct {
 	ResultID string                 `json:"resultId,omitempty"`
 	Data     []int                  `json:"data,omitempty"`
 	Decoded  []DecodedSemanticToken `json:"decoded,omitempty"`
 }
 
-// FoldingRangeParams textDocument/foldingRange 请求参数。
 type FoldingRangeParams = DocumentSymbolParams
 
-// FoldingRange 是折叠区间。
 type FoldingRange struct {
 	StartLine      int    `json:"startLine"`
 	StartCharacter *int   `json:"startCharacter,omitempty"`
@@ -640,8 +580,6 @@ type FoldingRange struct {
 	CollapsedText  string `json:"collapsedText,omitempty"`
 }
 
-// decodeSemanticTokens 兼容解码:
-// SemanticTokens | int[] | null
 func decodeSemanticTokens(raw json.RawMessage) (*SemanticTokens, error) {
 	if isNullRaw(raw) {
 		return nil, nil
@@ -671,7 +609,7 @@ func decodeSemanticTokenData(data []int, legend *SemanticTokensLegend, limit int
 		limit = SemanticTokenResultLimit
 	}
 
-	out := make([]DecodedSemanticToken, 0, minInt(len(data)/5, limit))
+	out := make([]DecodedSemanticToken, 0, len(data)/5)
 	state := semanticTokenDecodeState{}
 	for i := 0; i+4 < len(data); i += 5 {
 		token, err := decodeSemanticTokenChunk(data[i:i+5], &state, legend)
@@ -740,8 +678,6 @@ func decodeTokenModifiers(bits int, modifierNames []string) []string {
 	return out
 }
 
-// decodeFoldingRanges 兼容解码:
-// []FoldingRange | null，并做空值与边界过滤。
 func decodeFoldingRanges(raw json.RawMessage) ([]FoldingRange, error) {
 	if isNullRaw(raw) {
 		return nil, nil
@@ -776,11 +712,4 @@ func validFoldingRange(item FoldingRange) bool {
 		return false
 	}
 	return true
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

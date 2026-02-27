@@ -154,7 +154,7 @@ func (c *Client) CallHierarchy(ctx context.Context, uri string, line, character 
 		return nil, err
 	}
 
-	items, err := c.prepareCallHierarchy(ctx, uri, line, character)
+	items, err := prepareHierarchyItems(c, "textDocument/prepareCallHierarchy", uri, line, character, decodePrepareCallHierarchyItems)
 	if err != nil {
 		return nil, err
 	}
@@ -166,14 +166,14 @@ func (c *Client) CallHierarchy(ctx context.Context, uri string, line, character 
 	for _, item := range items {
 		entry := CallHierarchyResult{Item: item}
 		if direction == "incoming" || direction == "both" {
-			incoming, err := c.callHierarchyIncoming(ctx, item)
+			incoming, err := callNullableSlice[CallHierarchyIncomingCall](c, "callHierarchy/incomingCalls", CallHierarchyIncomingCallsParams{Item: item}, "decode callHierarchy incoming")
 			if err != nil {
 				return nil, err
 			}
 			entry.Incoming = incoming
 		}
 		if direction == "outgoing" || direction == "both" {
-			outgoing, err := c.callHierarchyOutgoing(ctx, item)
+			outgoing, err := callNullableSlice[CallHierarchyOutgoingCall](c, "callHierarchy/outgoingCalls", CallHierarchyOutgoingCallsParams{Item: item}, "decode callHierarchy outgoing")
 			if err != nil {
 				return nil, err
 			}
@@ -185,25 +185,13 @@ func (c *Client) CallHierarchy(ctx context.Context, uri string, line, character 
 	return out, nil
 }
 
-func (c *Client) prepareCallHierarchy(_ context.Context, uri string, line, character int) ([]CallHierarchyItem, error) {
-	return prepareHierarchyItems(c, "textDocument/prepareCallHierarchy", uri, line, character, decodePrepareCallHierarchyItems)
-}
-
-func (c *Client) callHierarchyIncoming(_ context.Context, item CallHierarchyItem) ([]CallHierarchyIncomingCall, error) {
-	return callNullableSlice[CallHierarchyIncomingCall](c, "callHierarchy/incomingCalls", CallHierarchyIncomingCallsParams{Item: item}, "decode callHierarchy incoming")
-}
-
-func (c *Client) callHierarchyOutgoing(_ context.Context, item CallHierarchyItem) ([]CallHierarchyOutgoingCall, error) {
-	return callNullableSlice[CallHierarchyOutgoingCall](c, "callHierarchy/outgoingCalls", CallHierarchyOutgoingCallsParams{Item: item}, "decode callHierarchy outgoing")
-}
-
 // TypeHierarchy 查询类型层级。
 func (c *Client) TypeHierarchy(ctx context.Context, uri string, line, character int, direction string) ([]TypeHierarchyResult, error) {
 	if err := c.ensureRunning(); err != nil {
 		return nil, err
 	}
 
-	items, err := c.prepareTypeHierarchy(ctx, uri, line, character)
+	items, err := prepareHierarchyItems(c, "textDocument/prepareTypeHierarchy", uri, line, character, decodePrepareTypeHierarchyItems)
 	if err != nil {
 		return nil, err
 	}
@@ -215,14 +203,14 @@ func (c *Client) TypeHierarchy(ctx context.Context, uri string, line, character 
 	for _, item := range items {
 		entry := TypeHierarchyResult{Item: item}
 		if direction == "supertypes" || direction == "both" {
-			supertypes, err := c.typeHierarchySupertypes(ctx, item)
+			supertypes, err := callNullableSlice[TypeHierarchyItem](c, "typeHierarchy/supertypes", TypeHierarchySupertypesParams{Item: item}, "decode typeHierarchy supertypes")
 			if err != nil {
 				return nil, err
 			}
 			entry.Supertypes = supertypes
 		}
 		if direction == "subtypes" || direction == "both" {
-			subtypes, err := c.typeHierarchySubtypes(ctx, item)
+			subtypes, err := callNullableSlice[TypeHierarchyItem](c, "typeHierarchy/subtypes", TypeHierarchySubtypesParams{Item: item}, "decode typeHierarchy subtypes")
 			if err != nil {
 				return nil, err
 			}
@@ -232,18 +220,6 @@ func (c *Client) TypeHierarchy(ctx context.Context, uri string, line, character 
 	}
 
 	return out, nil
-}
-
-func (c *Client) prepareTypeHierarchy(_ context.Context, uri string, line, character int) ([]TypeHierarchyItem, error) {
-	return prepareHierarchyItems(c, "textDocument/prepareTypeHierarchy", uri, line, character, decodePrepareTypeHierarchyItems)
-}
-
-func (c *Client) typeHierarchySupertypes(_ context.Context, item TypeHierarchyItem) ([]TypeHierarchyItem, error) {
-	return callNullableSlice[TypeHierarchyItem](c, "typeHierarchy/supertypes", TypeHierarchySupertypesParams{Item: item}, "decode typeHierarchy supertypes")
-}
-
-func (c *Client) typeHierarchySubtypes(_ context.Context, item TypeHierarchyItem) ([]TypeHierarchyItem, error) {
-	return callNullableSlice[TypeHierarchyItem](c, "typeHierarchy/subtypes", TypeHierarchySubtypesParams{Item: item}, "decode typeHierarchy subtypes")
 }
 
 func (c *Client) callPositionRaw(method, uri string, line, character int) (json.RawMessage, error) {

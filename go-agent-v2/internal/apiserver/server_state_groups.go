@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,16 +15,13 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 )
 
-// connManagerState 聚合 WebSocket 连接与 Server->Client 请求跟踪状态。
 type connManagerState struct {
-	// 连接管理 (支持多 IDE 同时连接)
 	mu     sync.RWMutex
-	conns  map[string]*connEntry // connID -> entry
+	conns  map[string]*connEntry
 	nextID atomic.Int64
 
-	// Server -> Client 请求: 服务端发起请求, 等待客户端响应。
 	pendingMu sync.Mutex
-	pending   map[int64]chan *Response // requestID -> response channel
+	pending   map[int64]chan *Response
 	nextReqID atomic.Int64
 }
 
@@ -62,9 +60,7 @@ func (s *connManagerState) connsSnapshot() map[string]*connEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	snapshot := make(map[string]*connEntry, len(s.conns))
-	for id, entry := range s.conns {
-		snapshot[id] = entry
-	}
+	maps.Copy(snapshot, s.conns)
 	return snapshot
 }
 
@@ -146,20 +142,18 @@ func (s *connManagerState) deliverPendingResponse(reqID int64, resp *Response) (
 	}
 }
 
-// diagnosticsCacheState 聚合 LSP 诊断缓存。
 type diagnosticsCacheState struct {
 	diagMu    sync.RWMutex
-	diagCache map[string][]lsp.Diagnostic // uri -> diagnostics
+	diagCache map[string][]lsp.Diagnostic
 }
 
-// codeRunState 聚合 code_run 执行状态与 agent 工作目录缓存。
 type codeRunState struct {
 	codeRunMu      sync.Mutex
-	activeCodeRuns map[string]map[string]context.CancelFunc // agentID -> runKey -> cancel
+	activeCodeRuns map[string]map[string]context.CancelFunc
 	codeRunSeq     atomic.Int64
 
 	agentWorkDirMu sync.RWMutex
-	agentWorkDirs  map[string]string // agentID -> abs cwd
+	agentWorkDirs  map[string]string
 }
 
 func (s *codeRunState) normalizeAgentID(agentID string) string {
@@ -216,6 +210,37 @@ func (s *codeRunState) clearAllAgentWorkDirs() {
 	s.agentWorkDirMu.Unlock()
 }
 
+func (s *codeRunState) withCodeRunsByAgentID(id string, create bool, fn func(runs map[string]context.CancelFunc)) {
+	s.codeRunMu.Lock()
+	defer s.codeRunMu.Unlock()
+	if s.activeCodeRuns == nil {
+		if !create {
+			return
+		}
+		s.activeCodeRuns = make(map[string]map[string]context.CancelFunc)
+	}
+	runs := s.activeCodeRuns[id]
+	if runs == nil {
+		if !create {
+			return
+		}
+		runs = make(map[string]context.CancelFunc)
+		s.activeCodeRuns[id] = runs
+	}
+	fn(runs)
+	if !create && len(runs) == 0 {
+		delete(s.activeCodeRuns, id)
+	}
+}
+
+func (s *codeRunState) takeCodeRunsByAgentID(id string) map[string]context.CancelFunc {
+	s.codeRunMu.Lock()
+	defer s.codeRunMu.Unlock()
+	runs := s.activeCodeRuns[id]
+	delete(s.activeCodeRuns, id)
+	return runs
+}
+
 func (s *codeRunState) registerCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string {
 	if cancel == nil {
 		return ""
@@ -225,17 +250,9 @@ func (s *codeRunState) registerCodeRunCancel(agentID, callID string, cancel cont
 		return ""
 	}
 	key := fmt.Sprintf("%s#%d", strings.TrimSpace(callID), s.codeRunSeq.Add(1))
-	s.codeRunMu.Lock()
-	if s.activeCodeRuns == nil {
-		s.activeCodeRuns = make(map[string]map[string]context.CancelFunc)
-	}
-	runs := s.activeCodeRuns[id]
-	if runs == nil {
-		runs = make(map[string]context.CancelFunc)
-		s.activeCodeRuns[id] = runs
-	}
-	runs[key] = cancel
-	s.codeRunMu.Unlock()
+	s.withCodeRunsByAgentID(id, true, func(runs map[string]context.CancelFunc) {
+		runs[key] = cancel
+	})
 	return key
 }
 
@@ -244,14 +261,9 @@ func (s *codeRunState) unregisterCodeRunCancel(agentID, runKey string) {
 	if id == "" || key == "" {
 		return
 	}
-	s.codeRunMu.Lock()
-	if runs := s.activeCodeRuns[id]; runs != nil {
+	s.withCodeRunsByAgentID(id, false, func(runs map[string]context.CancelFunc) {
 		delete(runs, key)
-		if len(runs) == 0 {
-			delete(s.activeCodeRuns, id)
-		}
-	}
-	s.codeRunMu.Unlock()
+	})
 }
 
 func (s *codeRunState) cancelCodeRuns(agentID string) int {
@@ -259,10 +271,7 @@ func (s *codeRunState) cancelCodeRuns(agentID string) int {
 	if id == "" {
 		return 0
 	}
-	s.codeRunMu.Lock()
-	runs := s.activeCodeRuns[id]
-	delete(s.activeCodeRuns, id)
-	s.codeRunMu.Unlock()
+	runs := s.takeCodeRunsByAgentID(id)
 	if len(runs) == 0 {
 		return 0
 	}
@@ -290,15 +299,14 @@ func (s *codeRunState) cancelAllCodeRuns() int {
 	return total
 }
 
-// turnTrackingState 聚合 turn 序列与回报/文件变更追踪。
 type turnTrackingState struct {
-	threadSeq atomic.Int64 // thread/start 唯一序号
+	threadSeq atomic.Int64
 
 	fileChangeMu       sync.Mutex
-	fileChangeByThread map[string][]string // threadID -> changed files
+	fileChangeByThread map[string][]string
 
 	orchestrationReportMu       sync.Mutex
-	orchestrationPendingReports map[string]map[string]time.Time // workerID -> requesterID -> createdAt
+	orchestrationPendingReports map[string]map[string]time.Time
 	orchestrationReportTTL      time.Duration
 }
 
@@ -401,10 +409,9 @@ func (s *turnTrackingState) takeReportRequesters(workerID string, now time.Time)
 	return requesters
 }
 
-// uiThrottleState 聚合 ui/state/changed 节流状态。
 type uiThrottleState struct {
 	uiThrottleMu      sync.Mutex
-	uiThrottleEntries map[string]*uiStateThrottleEntry // key: threadID or agentID
+	uiThrottleEntries map[string]*uiStateThrottleEntry
 }
 
 func (s *uiThrottleState) stageUIStateChanged(key string, payload map[string]any, now time.Time, interval time.Duration, onFlush func()) (map[string]any, bool) {
@@ -468,7 +475,6 @@ func (s *uiThrottleState) flushUIStateChanged(key string, now time.Time) (map[st
 	return pending, true
 }
 
-// stopAllTimers 停止所有 uiThrottle 定时器并清空 map, 防止 server 关闭后 timer 泄漏。
 func (s *uiThrottleState) stopAllTimers() {
 	if s == nil {
 		return
@@ -483,10 +489,9 @@ func (s *uiThrottleState) stopAllTimers() {
 	clear(s.uiThrottleEntries)
 }
 
-// toolCallState 聚合动态工具调用计数(可观测性)。
 type toolCallState struct {
 	toolCallMu    sync.RWMutex
-	toolCallCount map[string]int64 // toolName -> count
+	toolCallCount map[string]int64
 }
 
 type safeSet[T comparable] struct {
@@ -525,20 +530,17 @@ func (s *safeSet[T]) snapshot() []T {
 	return out
 }
 
-// sseState 聚合 SSE 推送客户端集合。
 type sseState struct {
 	clients safeSet[chan []byte]
 }
 
-// notifyHookState 聚合桌面端通知钩子状态。
 type notifyHookState struct {
 	notifyHookMu sync.RWMutex
 	notifyHook   func(method string, params any)
 }
 
-// runtimeGuardState 聚合运行时清理与审批去重状态。
 type runtimeGuardState struct {
-	approvalInFlight sync.Map // key: "agentID:method"
+	approvalInFlight sync.Map
 	cleanupOnce      sync.Once
 }
 
@@ -579,7 +581,6 @@ func (s *runtimeGuardState) doCleanup(fn func()) {
 	})
 }
 
-// threadAliasState 聚合 thread alias 写入串行化锁。
 type threadAliasState struct {
 	threadAliasMu sync.Mutex
 }
@@ -598,9 +599,7 @@ func (s *threadAliasState) withLock(fn func()) {
 	}
 }
 
-// storeBundle 聚合 apiserver 资源/仪表盘相关存储依赖。
 type storeBundle struct {
-	// 资源 Store (编排工具依赖)
 	dagStore          *store.TaskDAGStore
 	cmdStore          *store.CommandCardStore
 	promptStore       *store.PromptTemplateStore
@@ -608,7 +607,6 @@ type storeBundle struct {
 	workspaceRunStore *store.WorkspaceRunStore
 	sysLogStore       *store.SystemLogStore
 
-	// Dashboard Store (JSON-RPC dashboard/* 方法)
 	agentStatusStore *store.AgentStatusStore
 	auditLogStore    *store.AuditLogStore
 	aiLogStore       *store.AILogStore
@@ -616,9 +614,7 @@ type storeBundle struct {
 	taskAckStore     *store.TaskAckStore
 	taskTraceStore   *store.TaskTraceStore
 
-	// Agent <-> Codex Thread 1:1 共生绑定 (根基约束, 不允许绕过)。
 	bindingStore *store.AgentCodexBindingStore
 
-	// 子 agent 持久化 (重启恢复)。
 	agentThreadStore *store.AgentThreadStore
 }

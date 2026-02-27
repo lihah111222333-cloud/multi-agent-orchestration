@@ -1,13 +1,15 @@
 package tracker
+
 import (
 	"fmt"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
-	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
+
 const (
 	DefaultTurnWatchdogTimeout        = 10 * time.Minute
 	DefaultTrackedTurnSummaryTTL      = 30 * time.Minute
@@ -19,6 +21,7 @@ const (
 	defaultStallThreshold = DefaultStallThreshold
 	defaultStallHeartbeat = DefaultStallHeartbeat
 )
+
 type TrackedTurn struct {
 	ID                   string
 	ThreadID             string
@@ -57,28 +60,32 @@ type TrackedTurnTransitionResult struct {
 	InterruptRequested bool
 	StallHintLogged    bool
 	StallHintApplied   bool
-	Finalized      bool
-	FinalStatus    string
-	FinalReason    string
-	Completion     map[string]any
-	ExpectedTurnID string
-	TurnIDMismatch bool
+	Finalized          bool
+	FinalStatus        string
+	FinalReason        string
+	Completion         map[string]any
+	ExpectedTurnID     string
+	TurnIDMismatch     bool
 }
 type trackedTurnTransitionResult = TrackedTurnTransitionResult
 type TrackedTurnStallAction int
+
 const (
 	TrackedTurnStallNoop TrackedTurnStallAction = iota
 	TrackedTurnStallRescheduled
 	TrackedTurnStallEnterGrace
 	TrackedTurnStallAutoInterrupt
 )
+
 type trackedTurnStallAction = TrackedTurnStallAction
+
 const (
 	trackedTurnStallNoop          trackedTurnStallAction = TrackedTurnStallNoop
 	trackedTurnStallRescheduled   trackedTurnStallAction = TrackedTurnStallRescheduled
 	trackedTurnStallEnterGrace    trackedTurnStallAction = TrackedTurnStallEnterGrace
 	trackedTurnStallAutoInterrupt trackedTurnStallAction = TrackedTurnStallAutoInterrupt
 )
+
 type TrackedTurnStallDecision struct {
 	Action    TrackedTurnStallAction
 	ThreadID  string
@@ -103,6 +110,7 @@ type TurnTrackerState struct {
 	StallHeartbeat      *time.Duration
 }
 type turnTrackerState = TurnTrackerState
+
 func EnsureTurnTrackerStateLocked(state turnTrackerState) {
 	if state.ActiveTurns != nil && *state.ActiveTurns == nil {
 		*state.ActiveTurns = make(map[string]*trackedTurn)
@@ -129,6 +137,62 @@ func TrackerDurationOrDefault(value *time.Duration, fallback time.Duration) time
 	}
 	return fallback
 }
+
+func ApprovalStallHeartbeatInterval(stallThreshold, fallback, defaultThreshold time.Duration) time.Duration {
+	base := defaultThreshold
+	if fallback > 0 {
+		base = fallback
+	}
+	if stallThreshold > 0 {
+		base = stallThreshold
+	}
+	interval := base / 3
+	if interval < 5*time.Second {
+		interval = 5 * time.Second
+	}
+	return interval
+}
+
+func StartStallHeartbeat(threadID string, stallThreshold, fallback, defaultThreshold time.Duration, touch func(string)) func() {
+	id := strings.TrimSpace(threadID)
+	interval := ApprovalStallHeartbeatInterval(stallThreshold, fallback, defaultThreshold)
+	ticker := time.NewTicker(interval)
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				if touch != nil {
+					touch(id)
+				}
+			case <-stop:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+	return func() {
+		select {
+		case <-stop:
+		default:
+			close(stop)
+		}
+	}
+}
+
+func TrackerInterruptSender(getProcess func(string) any, sendCommand func(any, string, string) error) func(string) (bool, error) {
+	if getProcess == nil || sendCommand == nil {
+		return nil
+	}
+	return func(threadID string) (bool, error) {
+		proc := getProcess(threadID)
+		if proc == nil {
+			return false, nil
+		}
+		return true, sendCommand(proc, "/interrupt", "")
+	}
+}
+
 func threadLogFields(threadID string) []any {
 	id := strings.TrimSpace(threadID)
 	return []any{
@@ -260,22 +324,117 @@ func ThreadStatusTerminalFromPayload(payload map[string]any) (status string, rea
 		return "", "", false
 	}
 }
+
+func trackedTurnStringSet(values ...string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		key := strings.ToLower(strings.TrimSpace(value))
+		if key == "" {
+			continue
+		}
+		set[key] = struct{}{}
+	}
+	return set
+}
+
+func trackedTurnContains(set map[string]struct{}, key string) bool {
+	if len(set) == 0 || key == "" {
+		return false
+	}
+	_, ok := set[key]
+	return ok
+}
+
+func trackedTurnMatchesEventOrMethod(eventKey, methodKey string, events map[string]struct{}, methods map[string]struct{}) bool {
+	return trackedTurnContains(events, eventKey) || trackedTurnContains(methods, methodKey)
+}
+
+func trackedTurnEventMethodKeys(eventType, method string) (string, string) {
+	return strings.ToLower(strings.TrimSpace(eventType)), strings.ToLower(strings.TrimSpace(method))
+}
+
+var (
+	trackedTurnAbortedEvents  = trackedTurnStringSet("turn_aborted")
+	trackedTurnAbortedMethods = trackedTurnStringSet(
+		"turn/aborted",
+	)
+	trackedTurnCompletedEvents = trackedTurnStringSet(
+		"turn_complete",
+		"turn/completed",
+		"idle",
+		"codex/event/task_complete",
+	)
+	trackedTurnCompletedMethods = trackedTurnStringSet(
+		"turn/completed",
+		"codex/event/task_complete",
+	)
+	trackedTurnConnectionDeadEvents   = trackedTurnStringSet("connection_dead")
+	trackedTurnShutdownCompleteEvents = trackedTurnStringSet(
+		"shutdown_complete",
+	)
+	trackedTurnStreamErrorEvents = trackedTurnStringSet(
+		"stream_error",
+		"error",
+	)
+	trackedTurnStreamErrorMethods = trackedTurnStringSet(
+		"error",
+		"codex/event/stream_error",
+	)
+	trackedTurnStatusChangedEvents  = trackedTurnStringSet("thread/status/changed")
+	trackedTurnStatusChangedMethods = trackedTurnStringSet(
+		"thread/status/changed",
+	)
+	trackedTurnTerminalEvents = trackedTurnStringSet(
+		"turn_complete",
+		"turn/completed",
+		"idle",
+		"turn_aborted",
+		"codex/event/task_complete",
+		"shutdown_complete",
+		"connection_dead",
+		"error",
+		"stream_error",
+		"thread/status/changed",
+	)
+	trackedTurnTerminalMethods = trackedTurnStringSet(
+		"turn/completed",
+		"turn/aborted",
+		"codex/event/task_complete",
+		"thread/status/changed",
+		"error",
+		"codex/event/stream_error",
+	)
+	trackedTurnCompletionPayloadKeys = []string{"threadId", "status", "reason", "summary"}
+	trackedTurnCompletionTurnKeys    = []string{
+		"id",
+		"status",
+		"reason",
+		"summary",
+	}
+)
+
+func BuildTrackedTurnCompletionPayload(threadID, turnID, status, reason string) map[string]any {
+	return map[string]any{
+		"threadId": threadID,
+		"turn": map[string]any{
+			"id":     turnID,
+			"status": status,
+		},
+		"status": status,
+		"reason": reason,
+	}
+}
+
 func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]any) (string, string, string, bool, bool) {
-	eventKey := strings.ToLower(strings.TrimSpace(eventType))
-	methodKey := strings.ToLower(strings.TrimSpace(method))
+	eventKey, methodKey := trackedTurnEventMethodKeys(eventType, method)
 	switch {
-	case eventKey == "turn_aborted", methodKey == "turn/aborted":
+	case trackedTurnMatchesEventOrMethod(eventKey, methodKey, trackedTurnAbortedEvents, trackedTurnAbortedMethods):
 		reason := ExtractTrackedTurnReason(payload)
 		if reason == "" {
 			reason = "turn_aborted"
 		}
 		return ExtractTrackedTurnID(payload), "interrupted", reason, true, false
-	case methodKey == "turn/completed",
-		eventKey == "turn_complete",
-		eventKey == "turn/completed",
-		eventKey == "idle",
-		eventKey == "codex/event/task_complete",
-		methodKey == "codex/event/task_complete":
+	case trackedTurnMatchesEventOrMethod(eventKey, methodKey, trackedTurnCompletedEvents, trackedTurnCompletedMethods):
 		status := ExtractTrackedTurnStatus(payload)
 		if status == "" {
 			status = "completed"
@@ -285,22 +444,19 @@ func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]a
 			reason = "turn_complete"
 		}
 		return ExtractTrackedTurnID(payload), status, reason, true, false
-	case eventKey == "connection_dead":
+	case trackedTurnMatchesEventOrMethod(eventKey, methodKey, trackedTurnConnectionDeadEvents, nil):
 		reason := ExtractTrackedTurnReason(payload)
 		if reason == "" {
 			reason = "connection_dead"
 		}
 		return ExtractTrackedTurnID(payload), "failed", reason, true, true
-	case eventKey == "shutdown_complete":
+	case trackedTurnMatchesEventOrMethod(eventKey, methodKey, trackedTurnShutdownCompleteEvents, nil):
 		reason := ExtractTrackedTurnReason(payload)
 		if reason == "" {
 			reason = "shutdown_complete"
 		}
 		return ExtractTrackedTurnID(payload), "completed", reason, true, true
-	case eventKey == "stream_error",
-		eventKey == "error",
-		methodKey == "error",
-		methodKey == "codex/event/stream_error":
+	case trackedTurnMatchesEventOrMethod(eventKey, methodKey, trackedTurnStreamErrorEvents, trackedTurnStreamErrorMethods):
 		retryable, known := extractTrackedRetryable(payload)
 		if known && retryable {
 			return "", "", "", false, false
@@ -318,7 +474,7 @@ func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]a
 			)
 		}
 		return ExtractTrackedTurnID(payload), "failed", reason, true, true
-	case methodKey == "thread/status/changed", eventKey == "thread/status/changed":
+	case trackedTurnMatchesEventOrMethod(eventKey, methodKey, trackedTurnStatusChangedEvents, trackedTurnStatusChangedMethods):
 		status, reason, ok := ThreadStatusTerminalFromPayload(payload)
 		if !ok {
 			return "", "", "", false, false
@@ -328,23 +484,10 @@ func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]a
 		return "", "", "", false, false
 	}
 }
+
 func IsTerminalEventType(eventType, method string) bool {
-	eventKey := strings.ToLower(strings.TrimSpace(eventType))
-	methodKey := strings.ToLower(strings.TrimSpace(method))
-	switch {
-	case eventKey == "turn_complete" || eventKey == "turn/completed" || eventKey == "idle" ||
-		eventKey == "turn_aborted" || eventKey == "codex/event/task_complete" ||
-		eventKey == "shutdown_complete" || eventKey == "connection_dead":
-		return true
-	case methodKey == "turn/completed" || methodKey == "turn/aborted" ||
-		methodKey == "codex/event/task_complete" || methodKey == "thread/status/changed":
-		return true
-	case eventKey == "error" || eventKey == "stream_error" ||
-		methodKey == "error" || methodKey == "codex/event/stream_error":
-		return true
-	default:
-		return false
-	}
+	eventKey, methodKey := trackedTurnEventMethodKeys(eventType, method)
+	return trackedTurnMatchesEventOrMethod(eventKey, methodKey, trackedTurnTerminalEvents, trackedTurnTerminalMethods)
 }
 func TrackedTurnSummaryCacheKey(threadID, turnID string) string {
 	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID)
@@ -430,7 +573,9 @@ func LookupTrackedTurnSummary(state turnTrackerState, turnMu *sync.Mutex, thread
 	}
 	return strings.TrimSpace(entry.Summary)
 }
+
 var trackedTurnSummaryKeys = []string{"lastAgentMessage", "last_agent_message", "summary", "result", "message"}
+
 func TrackedTurnSummaryFromPayload(payload map[string]any) string {
 	if payload == nil {
 		return ""
@@ -480,7 +625,7 @@ func MergeTrackedTurnCompletionPayload(target map[string]any, completion map[str
 	if target == nil || completion == nil {
 		return
 	}
-	for _, key := range []string{"threadId", "status", "reason", "summary"} {
+	for _, key := range trackedTurnCompletionPayloadKeys {
 		if value, ok := completion[key]; ok {
 			target[key] = value
 		}
@@ -491,7 +636,7 @@ func MergeTrackedTurnCompletionPayload(target map[string]any, completion map[str
 			targetTurn = map[string]any{}
 			target["turn"] = targetTurn
 		}
-		for _, key := range []string{"id", "status", "reason", "summary"} {
+		for _, key := range trackedTurnCompletionTurnKeys {
 			if value, ok := completionTurn[key]; ok {
 				targetTurn[key] = value
 			}
@@ -611,15 +756,7 @@ func ApplyTrackedTurnTransitionCore(state turnTrackerState, threadID string, req
 		result.Finalized = true
 		result.FinalStatus = finalStatus
 		result.FinalReason = reasonText
-		result.Completion = map[string]any{
-			"threadId": id,
-			"turn": map[string]any{
-				"id":     result.TurnID,
-				"status": finalStatus,
-			},
-			"status": finalStatus,
-			"reason": reasonText,
-		}
+		result.Completion = BuildTrackedTurnCompletionPayload(id, result.TurnID, finalStatus, reasonText)
 	}
 	return result
 }
@@ -693,15 +830,7 @@ func SupersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurn
 		"prev_stall_auto_interrupted", prev.StallAutoInterrupted,
 	)
 	logFn("turn tracker: superseding active turn", fields...)
-	payload := map[string]any{
-		"threadId": threadID,
-		"turn": map[string]any{
-			"id":     prev.ID,
-			"status": "failed",
-		},
-		"status": "failed",
-		"reason": "superseded_by_new_turn",
-	}
+	payload := BuildTrackedTurnCompletionPayload(threadID, prev.ID, "failed", "superseded_by_new_turn")
 	return payload, prev.ID, true
 }
 func BeginTrackedTurnCore(
@@ -941,10 +1070,12 @@ func HandleStallGracePeriodCore(
 		return true
 	})
 }
+
 type TrackerAlertRuntime interface {
 	PushAlert(threadID, category, message string)
 }
 type trackerAlertRuntime = TrackerAlertRuntime
+
 func TrackerRuntimePushAlert(runtime trackerAlertRuntime) func(threadID, category, message string) {
 	if runtime == nil {
 		return nil

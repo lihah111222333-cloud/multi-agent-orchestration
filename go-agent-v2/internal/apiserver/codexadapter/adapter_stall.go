@@ -56,24 +56,12 @@ func (a *Adapter) beginTrackedTurn(threadID, turnID string) string {
 	return trackersvc.BeginTrackedTurnCore(state, threadID, turnID, a.completeTrackedTurnByID, notify, a.checkTurnStall, a.recoverProcess)
 }
 
-func (a *Adapter) trackerDuration(getter func(turnTrackerState) *time.Duration, fallback time.Duration) time.Duration {
-	return trackersvc.TrackerDurationCore(a.trackerState(), getter, fallback)
-}
-
-func (a *Adapter) setTrackerDuration(getter func(turnTrackerState) *time.Duration, value time.Duration) {
-	trackersvc.SetTrackerDurationCore(a.trackerState(), getter, value)
-}
-
 func (a *Adapter) SetStallThreshold(threshold time.Duration) {
-	a.setTrackerDuration(func(state turnTrackerState) *time.Duration { return state.StallThreshold }, threshold)
+	trackersvc.SetTrackerDurationCore(a.trackerState(), func(state turnTrackerState) *time.Duration { return state.StallThreshold }, threshold)
 }
 
 func (a *Adapter) SetStallHeartbeat(interval time.Duration) {
-	a.setTrackerDuration(func(state turnTrackerState) *time.Duration { return state.StallHeartbeat }, interval)
-}
-
-func (a *Adapter) touchTrackedTurnLastEvent(threadID string) {
-	trackersvc.TouchTrackedTurnLastEventCore(a.trackerState(), threadID)
+	trackersvc.SetTrackerDurationCore(a.trackerState(), func(state turnTrackerState) *time.Duration { return state.StallHeartbeat }, interval)
 }
 
 func (a *Adapter) StartApprovalStallHeartbeat(threadID string) func() {
@@ -81,7 +69,10 @@ func (a *Adapter) StartApprovalStallHeartbeat(threadID string) func() {
 }
 
 func (a *Adapter) StartDynamicToolStallHeartbeat(threadID string) func() {
-	return trackersvc.StartStallHeartbeat(threadID, a.trackerDuration(func(state turnTrackerState) *time.Duration { return state.StallThreshold }, defaultStallThreshold), defaultStallThreshold, defaultStallThreshold, a.touchTrackedTurnLastEvent)
+	threshold := trackersvc.TrackerDurationCore(a.trackerState(), func(state turnTrackerState) *time.Duration { return state.StallThreshold }, defaultStallThreshold)
+	return trackersvc.StartStallHeartbeat(threadID, threshold, defaultStallThreshold, defaultStallThreshold, func(tid string) {
+		trackersvc.TouchTrackedTurnLastEventCore(a.trackerState(), tid)
+	})
 }
 
 func (a *Adapter) checkTurnStall(threadID string, turnID string) {

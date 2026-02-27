@@ -15,162 +15,122 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-type runtimeRegistryProvider struct {
-	s *Server
+func (s *Server) RegisterRuntimeTool(name string, handler tooladapter.RuntimeToolHandler) {
+	setRuntimeTool(s, name, handler)
 }
 
-func (p runtimeRegistryProvider) RegisterRuntimeTool(name string, handler tooladapter.RuntimeToolHandler) {
-	setRuntimeTool(p.s, name, handler)
+func (s *Server) LookupRuntimeTool(name string) (tooladapter.RuntimeToolHandler, bool) {
+	return lookupRuntimeTool(s, name)
 }
 
-type runtimeLookupProvider struct {
-	s *Server
+func (s *Server) IncrementToolCall(name string) int64 {
+	return incrementToolCallState(s, name)
 }
 
-func (p runtimeLookupProvider) LookupRuntimeTool(name string) (tooladapter.RuntimeToolHandler, bool) {
-	return lookupRuntimeTool(p.s, name)
+func (s *Server) RegisterCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string {
+	return registerCodeRunCancelState(s, agentID, callID, cancel)
 }
 
-type toolCallCounterProvider struct {
-	s *Server
+func (s *Server) UnregisterCodeRunCancel(agentID, runKey string) {
+	unregisterCodeRunCancelState(s, agentID, runKey)
 }
 
-func (p toolCallCounterProvider) IncrementToolCall(name string) int64 {
-	return incrementToolCall(p.s, name)
-}
-
-type codeRunTrackerProvider struct {
-	s *Server
-}
-
-func (p codeRunTrackerProvider) RegisterCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string {
-	return registerCodeRunCancelState(p.s, agentID, callID, cancel)
-}
-
-func (p codeRunTrackerProvider) UnregisterCodeRunCancel(agentID, runKey string) {
-	unregisterCodeRunCancelState(p.s, agentID, runKey)
-}
-
-type codeRunProvider struct {
-	s *Server
-}
-
-func (p codeRunProvider) CodeRunner() tools.CodeExecRunner {
-	if p.s == nil {
+func (s *Server) CodeRunner() tools.CodeExecRunner {
+	if s == nil {
 		return nil
 	}
-	return adaptCodeExecRunner(p.s.codeRunner)
+	return adaptCodeExecRunner(s.codeRunner)
 }
 
-func (p codeRunProvider) AuditLogger() tools.AuditLogger {
-	if p.s == nil {
+func (s *Server) AuditLogger() tools.AuditLogger {
+	if s == nil {
 		return nil
 	}
-	return adaptAuditLogger(p.s.auditLogStore)
+	return adaptAuditLogger(s.auditLogStore)
 }
 
-type resourceProvider struct {
-	s *Server
-}
-
-func (p resourceProvider) DAGManager() tools.DAGManager {
-	if p.s == nil {
+func (s *Server) DAGManager() tools.DAGManager {
+	if s == nil {
 		return nil
 	}
-	return adaptDAGManager(p.s.dagStore)
+	return adaptDAGManager(s.dagStore)
 }
 
-func (p resourceProvider) CommandCardStore() tools.CardStore {
-	if p.s == nil {
+func (s *Server) CommandCardStore() tools.CardStore {
+	if s == nil {
 		return nil
 	}
-	return adaptCardStore(p.s.cmdStore)
+	return adaptCardStore(s.cmdStore)
 }
 
-func (p resourceProvider) PromptTemplateStore() tools.TemplateStore {
-	if p.s == nil {
+func (s *Server) PromptTemplateStore() tools.TemplateStore {
+	if s == nil {
 		return nil
 	}
-	return adaptTemplateStore(p.s.promptStore)
+	return adaptTemplateStore(s.promptStore)
 }
 
-func (p resourceProvider) SharedFileStore() tools.FileStore {
-	if p.s == nil {
+func (s *Server) SharedFileStore() tools.FileStore {
+	if s == nil {
 		return nil
 	}
-	return adaptFileStore(p.s.fileStore)
+	return adaptFileStore(s.fileStore)
 }
 
-func (p resourceProvider) WorkspaceOps() tools.WorkspaceOps {
-	if p.s == nil {
+func (s *Server) WorkspaceOps() tools.WorkspaceOps {
+	if s == nil {
 		return nil
 	}
-	return adaptWorkspaceOps(p.s.workspaceMgr)
+	return adaptWorkspaceOps(s.workspaceMgr)
 }
 
-func (p resourceProvider) NotifyEvent(method string, params any) {
-	if p.s == nil {
+func (s *Server) NotifyEvent(method string, params any) {
+	if s == nil {
 		return
 	}
-	notify(p.s, method, params)
+	notify(s, method, params)
 }
 
-type orchestrationProvider struct {
-	s *Server
-}
-
-func (p orchestrationProvider) AgentLauncher() tools.AgentLauncher {
-	if p.s == nil {
+func (s *Server) AgentLauncher() tools.AgentLauncher {
+	if s == nil {
 		return nil
 	}
-	return adaptAgentLauncher(p.s.mgr)
+	return adaptAgentLauncher(s.mgr)
 }
 
-func (p orchestrationProvider) WorkspaceOps() tools.WorkspaceOps {
-	if p.s == nil {
+func (s *Server) SubmitPrompt(agentID, prompt string, images, files []string) error {
+	return submitPrompt(s, agentID, prompt, images, files)
+}
+
+func (s *Server) RememberReportRequest(senderID, workerID string) {
+	rememberReportRequest(s, senderID, workerID)
+}
+
+func (s *Server) NextThreadSeq() int64 {
+	return nextThreadSeqState(s)
+}
+
+func (s *Server) CancelCodeRuns(agentID string) int {
+	return cancelCodeRunsState(s, agentID)
+}
+
+func (s *Server) SetAgentWorkDir(agentID, cwd string) {
+	setAgentWorkDirState(s, agentID, cwd)
+}
+
+func (s *Server) ClearAgentWorkDir(agentID string) {
+	clearAgentWorkDirState(s, agentID)
+}
+
+func (s *Server) GetAgentWorkDir(agentID string) string {
+	return getAgentWorkDirState(s, agentID)
+}
+
+func (s *Server) AllSchemas() []agentcore.DynamicTool {
+	if s == nil {
 		return nil
 	}
-	return adaptWorkspaceOps(p.s.workspaceMgr)
-}
-
-func (p orchestrationProvider) SubmitPrompt(agentID, prompt string, images, files []string) error {
-	return submitPrompt(p.s, agentID, prompt, images, files)
-}
-
-func (p orchestrationProvider) RememberReportRequest(senderID, workerID string) {
-	rememberReportRequest(p.s, senderID, workerID)
-}
-
-func (p orchestrationProvider) NextThreadSeq() int64 {
-	return nextThreadSeq(p.s)
-}
-
-type agentRuntimeProvider struct {
-	s *Server
-}
-
-func (p agentRuntimeProvider) CancelCodeRuns(agentID string) int {
-	return cancelCodeRunsState(p.s, agentID)
-}
-
-func (p agentRuntimeProvider) SetAgentWorkDir(agentID, cwd string) {
-	setAgentWorkDirState(p.s, agentID, cwd)
-}
-
-func (p agentRuntimeProvider) ClearAgentWorkDir(agentID string) {
-	clearAgentWorkDirState(p.s, agentID)
-}
-
-func (p agentRuntimeProvider) GetAgentWorkDir(agentID string) string {
-	return getAgentWorkDirState(p.s, agentID)
-}
-
-type schemaProvider struct {
-	s *Server
-}
-
-func (p schemaProvider) AllSchemas() []agentcore.DynamicTool {
-	return allSchemas(p.s)
+	return tooladapter.AllSchemas(toolAdapterProviders(s))
 }
 
 func setRuntimeTool(s *Server, name string, handler tooladapter.RuntimeToolHandler) {
@@ -188,27 +148,6 @@ func lookupRuntimeTool(s *Server, name string) (tooladapter.RuntimeToolHandler, 
 		return nil, false
 	}
 	return tooladapter.GetRuntimeTool(s.dynTools, name)
-}
-
-func incrementToolCall(s *Server, name string) int64 {
-	if s == nil {
-		return 0
-	}
-	return incrementToolCallState(s, name)
-}
-
-func allSchemas(s *Server) []agentcore.DynamicTool {
-	if s == nil {
-		return nil
-	}
-	return tooladapter.AllSchemas(toolAdapterProviders(s))
-}
-
-func nextThreadSeq(s *Server) int64 {
-	if s == nil {
-		return 0
-	}
-	return nextThreadSeqState(s)
 }
 
 // codeRunApprovalNonce 用于生成审批 ID (code_run 执行审批)。

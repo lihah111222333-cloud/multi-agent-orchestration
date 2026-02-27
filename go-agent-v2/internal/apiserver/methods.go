@@ -42,26 +42,54 @@ func (s *Server) registerMethods() {
 	s.methods["thread/resume"] = typedHandler(s.threadResumeTyped)
 	s.methods["thread/recover"] = typedHandler(s.threadRecoverTyped)
 	s.methods["thread/fork"] = typedHandler(s.threadForkTyped)
-	s.methods["thread/archive"] = typedHandler(s.threadArchiveTyped)
-	s.methods["thread/unarchive"] = typedHandler(s.threadUnarchiveTyped)
-	s.methods["thread/name/set"] = typedHandler(s.threadNameSetTyped)
-	s.methods["thread/compact/start"] = s.threadCompact
+	s.methods["thread/archive"] = typedHandler(func(ctx context.Context, p threadIDParams) (any, error) {
+		return s.codexAdapter.ThreadArchive(ctx, p.ThreadID)
+	})
+	s.methods["thread/unarchive"] = typedHandler(func(ctx context.Context, p threadIDParams) (any, error) {
+		return s.codexAdapter.ThreadUnarchive(ctx, p.ThreadID)
+	})
+	s.methods["thread/name/set"] = typedHandler(func(ctx context.Context, p threadNameSetParams) (any, error) {
+		return s.codexAdapter.ThreadNameSet(ctx, p.ThreadID, p.Name)
+	})
+	s.methods["thread/compact/start"] = func(ctx context.Context, params json.RawMessage) (any, error) {
+		return s.codexAdapter.SendSlashCommandFromRawParamsRequireThreadID(ctx, params, "/compact")
+	}
 	s.methods["thread/rollback"] = typedHandler(s.threadRollbackTyped)
 	s.methods["thread/list"] = s.threadList
 	s.methods["thread/loaded/list"] = s.threadLoadedList
-	s.methods["thread/read"] = typedHandler(s.threadReadTyped)
-	s.methods["thread/resolve"] = typedHandler(s.threadResolveTyped)
-	s.methods["thread/messages"] = typedHandler(s.threadMessagesTyped)
-	s.methods["thread/backgroundTerminals/clean"] = s.threadBgTerminalsClean
+	s.methods["thread/read"] = typedHandler(func(ctx context.Context, p threadIDParams) (any, error) {
+		return s.codexAdapter.ThreadRead(ctx, p.ThreadID)
+	})
+	s.methods["thread/resolve"] = typedHandler(func(ctx context.Context, p threadIDParams) (any, error) {
+		return s.codexAdapter.ThreadResolve(ctx, p.ThreadID)
+	})
+	s.methods["thread/messages"] = typedHandler(func(ctx context.Context, p threadMessagesParams) (any, error) {
+		return s.codexAdapter.ThreadMessages(ctx, p.ThreadID, p.Limit, p.Before)
+	})
+	s.methods["thread/backgroundTerminals/clean"] = func(ctx context.Context, params json.RawMessage) (any, error) {
+		return s.codexAdapter.SendSlashCommandFromRawParamsRequireThreadID(ctx, params, "/clean")
+	}
 
 	s.methods["turn/start"] = typedHandler(s.turnStartTyped)
 	s.methods["turn/steer"] = typedHandler(s.turnSteerTyped)
-	s.methods["turn/interrupt"] = typedHandler(s.turnInterrupt)
-	s.methods["turn/forceComplete"] = typedHandler(s.turnForceComplete)
-	s.methods["thread/realtime/start"] = typedHandler(s.threadRealtimeStartTyped)
-	s.methods["thread/realtime/appendAudio"] = typedHandler(s.threadRealtimeAppendAudioTyped)
-	s.methods["thread/realtime/appendText"] = typedHandler(s.threadRealtimeAppendTextTyped)
-	s.methods["thread/realtime/stop"] = typedHandler(s.threadRealtimeStopTyped)
+	s.methods["turn/interrupt"] = typedHandler(func(_ context.Context, p turnInterruptParams) (any, error) {
+		return s.codexAdapter.TurnInterrupt(p.ThreadID)
+	})
+	s.methods["turn/forceComplete"] = typedHandler(func(_ context.Context, p turnForceCompleteParams) (any, error) {
+		return s.codexAdapter.TurnForceComplete(p.ThreadID)
+	})
+	s.methods["thread/realtime/start"] = typedHandler(func(_ context.Context, p threadRealtimeStartParams) (any, error) {
+		return s.codexAdapter.ThreadRealtimeStart(p.ThreadID, p.Prompt, p.SessionID)
+	})
+	s.methods["thread/realtime/appendAudio"] = typedHandler(func(_ context.Context, p threadRealtimeAppendAudioParams) (any, error) {
+		return s.codexAdapter.ThreadRealtimeAppendAudio(p.ThreadID, p.Audio)
+	})
+	s.methods["thread/realtime/appendText"] = typedHandler(func(_ context.Context, p threadRealtimeAppendTextParams) (any, error) {
+		return s.codexAdapter.ThreadRealtimeAppendText(p.ThreadID, p.Text)
+	})
+	s.methods["thread/realtime/stop"] = typedHandler(func(_ context.Context, p threadRealtimeStopParams) (any, error) {
+		return s.codexAdapter.ThreadRealtimeStop(p.ThreadID)
+	})
 	s.methods["review/start"] = typedHandler(s.reviewStartTyped)
 
 	s.methods["fuzzyFileSearch"] = bindTyped(s, fuzzyFileSearchTyped)
@@ -112,12 +140,24 @@ func (s *Server) registerMethods() {
 	s.methods["approval/respond"] = bindTyped(s, approvalRespondTyped)
 	s.methods["feedback/upload"] = noop
 
-	s.methods["thread/undo"] = s.threadUndo
-	s.methods["thread/model/set"] = s.threadModelSet
-	s.methods["thread/personality/set"] = s.threadPersonality
-	s.methods["thread/approvals/set"] = s.threadApprovals
-	s.methods["thread/mcp/list"] = s.threadMCPList
-	s.methods["thread/skills/list"] = s.threadSkillsList
+	s.methods["thread/undo"] = func(ctx context.Context, params json.RawMessage) (any, error) {
+		return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/undo")
+	}
+	s.methods["thread/model/set"] = func(_ context.Context, params json.RawMessage) (any, error) {
+		return s.codexAdapter.SendSlashCommandWithArgs(params, "/model", "model")
+	}
+	s.methods["thread/personality/set"] = func(_ context.Context, params json.RawMessage) (any, error) {
+		return s.codexAdapter.SendSlashCommandWithArgs(params, "/personality", "personality")
+	}
+	s.methods["thread/approvals/set"] = func(_ context.Context, params json.RawMessage) (any, error) {
+		return s.codexAdapter.SendSlashCommandWithArgs(params, "/approvals", "policy")
+	}
+	s.methods["thread/mcp/list"] = func(ctx context.Context, params json.RawMessage) (any, error) {
+		return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/mcp")
+	}
+	s.methods["thread/skills/list"] = func(_ context.Context, _ json.RawMessage) (any, error) {
+		return s.codexAdapter.ThreadSkillsList()
+	}
 	s.methods["thread/debugMemory"] = s.threadDebugMemory
 	s.methods["mock/experimentalMethod"] = stubHandler(map[string]any{})
 
@@ -310,41 +350,6 @@ func offline52MethodList() []string {
 		"debug/runtime",
 		"debug/gc",
 	}
-}
-
-// threadBgTerminalsClean 清理后台终端 (experimental, threadId 必填)。
-func (s *Server) threadBgTerminalsClean(ctx context.Context, params json.RawMessage) (any, error) {
-	return s.codexAdapter.SendSlashCommandFromRawParamsRequireThreadID(ctx, params, "/clean")
-}
-
-// threadUndo 撤销上一步 (/undo)。
-func (s *Server) threadUndo(ctx context.Context, params json.RawMessage) (any, error) {
-	return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/undo")
-}
-
-// threadModelSet 切换模型 (/model <name>)。
-func (s *Server) threadModelSet(_ context.Context, params json.RawMessage) (any, error) {
-	return s.codexAdapter.SendSlashCommandWithArgs(params, "/model", "model")
-}
-
-// threadPersonality 设置人格 (/personality <type>)。
-func (s *Server) threadPersonality(_ context.Context, params json.RawMessage) (any, error) {
-	return s.codexAdapter.SendSlashCommandWithArgs(params, "/personality", "personality")
-}
-
-// threadApprovals 设置审批策略 (/approvals <policy>)。
-func (s *Server) threadApprovals(_ context.Context, params json.RawMessage) (any, error) {
-	return s.codexAdapter.SendSlashCommandWithArgs(params, "/approvals", "policy")
-}
-
-// threadMCPList 列出 MCP 工具 (/mcp)。
-func (s *Server) threadMCPList(ctx context.Context, params json.RawMessage) (any, error) {
-	return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/mcp")
-}
-
-// threadSkillsList 列出 Skills（透传 /skills）。
-func (s *Server) threadSkillsList(_ context.Context, _ json.RawMessage) (any, error) {
-	return s.codexAdapter.ThreadSkillsList()
 }
 
 type threadDebugMemoryParams struct {

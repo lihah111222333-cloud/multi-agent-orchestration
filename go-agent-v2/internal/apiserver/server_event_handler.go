@@ -160,7 +160,7 @@ func enrichReadCommandPayload(s *Server, eventType string, payload map[string]an
 	}
 	payload["isReadCommand"] = true
 	payload["lspHint"] = lspPreferenceHint
-	incrementToolCall(s, "shell_read:"+cmd)
+	incrementToolCallState(s, "shell_read:"+cmd)
 	logger.Info("codex shell: read command detected",
 		logger.FieldCommand, cmd,
 	)

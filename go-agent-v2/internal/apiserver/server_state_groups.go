@@ -152,45 +152,6 @@ type diagnosticsCacheState struct {
 	diagCache map[string][]lsp.Diagnostic // uri -> diagnostics
 }
 
-func (s *diagnosticsCacheState) setDiagnostics(uri string, diagnostics []lsp.Diagnostic) {
-	if s == nil {
-		return
-	}
-	s.diagMu.Lock()
-	defer s.diagMu.Unlock()
-	if s.diagCache == nil {
-		s.diagCache = map[string][]lsp.Diagnostic{}
-	}
-	copied := cloneDiagnostics(diagnostics)
-	if len(copied) == 0 {
-		delete(s.diagCache, uri)
-		return
-	}
-	s.diagCache[uri] = copied
-}
-
-func (s *diagnosticsCacheState) getDiagnostics(uri string) []lsp.Diagnostic {
-	if s == nil {
-		return nil
-	}
-	s.diagMu.RLock()
-	defer s.diagMu.RUnlock()
-	return cloneDiagnostics(s.diagCache[uri])
-}
-
-func (s *diagnosticsCacheState) allDiagnostics() map[string][]lsp.Diagnostic {
-	if s == nil {
-		return map[string][]lsp.Diagnostic{}
-	}
-	s.diagMu.RLock()
-	defer s.diagMu.RUnlock()
-	out := make(map[string][]lsp.Diagnostic, len(s.diagCache))
-	for uri, diagnostics := range s.diagCache {
-		out[uri] = cloneDiagnostics(diagnostics)
-	}
-	return out
-}
-
 // codeRunState 聚合 code_run 执行状态与 agent 工作目录缓存。
 type codeRunState struct {
 	codeRunMu      sync.Mutex
@@ -528,93 +489,45 @@ type toolCallState struct {
 	toolCallCount map[string]int64 // toolName -> count
 }
 
-func (s *toolCallState) increment(name string) int64 {
-	if s == nil {
-		return 0
-	}
-	toolName := strings.TrimSpace(name)
-	if toolName == "" {
-		return 0
-	}
-	s.toolCallMu.Lock()
-	defer s.toolCallMu.Unlock()
-	if s.toolCallCount == nil {
-		s.toolCallCount = make(map[string]int64)
-	}
-	s.toolCallCount[toolName]++
-	return s.toolCallCount[toolName]
+type safeSet[T comparable] struct {
+	mu    sync.RWMutex
+	items map[T]struct{}
 }
 
-func (s *toolCallState) get(name string) int64 {
-	if s == nil {
-		return 0
+func (s *safeSet[T]) add(item T) {
+	s.mu.Lock()
+	if s.items == nil {
+		s.items = make(map[T]struct{})
 	}
-	toolName := strings.TrimSpace(name)
-	if toolName == "" {
-		return 0
-	}
-	s.toolCallMu.RLock()
-	defer s.toolCallMu.RUnlock()
-	return s.toolCallCount[toolName]
+	s.items[item] = struct{}{}
+	s.mu.Unlock()
 }
 
-// clearAll 清空工具调用计数, 防止无限增长。
-func (s *toolCallState) clearAll() {
-	if s == nil {
-		return
+func (s *safeSet[T]) remove(item T) {
+	s.mu.Lock()
+	delete(s.items, item)
+	s.mu.Unlock()
+}
+
+func (s *safeSet[T]) count() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.items)
+}
+
+func (s *safeSet[T]) snapshot() []T {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]T, 0, len(s.items))
+	for item := range s.items {
+		out = append(out, item)
 	}
-	s.toolCallMu.Lock()
-	clear(s.toolCallCount)
-	s.toolCallMu.Unlock()
+	return out
 }
 
 // sseState 聚合 SSE 推送客户端集合。
 type sseState struct {
-	sseMu      sync.RWMutex
-	sseClients map[chan []byte]struct{}
-}
-
-func (s *sseState) addClient(ch chan []byte) {
-	if s == nil || ch == nil {
-		return
-	}
-	s.sseMu.Lock()
-	if s.sseClients == nil {
-		s.sseClients = make(map[chan []byte]struct{})
-	}
-	s.sseClients[ch] = struct{}{}
-	s.sseMu.Unlock()
-}
-
-func (s *sseState) removeClient(ch chan []byte) {
-	if s == nil || ch == nil {
-		return
-	}
-	s.sseMu.Lock()
-	delete(s.sseClients, ch)
-	s.sseMu.Unlock()
-}
-
-func (s *sseState) clientCount() int {
-	if s == nil {
-		return 0
-	}
-	s.sseMu.RLock()
-	defer s.sseMu.RUnlock()
-	return len(s.sseClients)
-}
-
-func (s *sseState) snapshotClients() []chan []byte {
-	if s == nil {
-		return nil
-	}
-	s.sseMu.RLock()
-	defer s.sseMu.RUnlock()
-	out := make([]chan []byte, 0, len(s.sseClients))
-	for ch := range s.sseClients {
-		out = append(out, ch)
-	}
-	return out
+	clients safeSet[chan []byte]
 }
 
 // notifyHookState 聚合桌面端通知钩子状态。
@@ -622,27 +535,6 @@ type notifyHookState struct {
 	notifyHookMu sync.RWMutex
 	notifyHook   func(method string, params any)
 }
-
-func (s *notifyHookState) setHook(h func(method string, params any)) {
-	if s == nil {
-		return
-	}
-	s.notifyHookMu.Lock()
-	s.notifyHook = h
-	s.notifyHookMu.Unlock()
-}
-
-func (s *notifyHookState) hook() func(method string, params any) {
-	if s == nil {
-		return nil
-	}
-	s.notifyHookMu.RLock()
-	h := s.notifyHook
-	s.notifyHookMu.RUnlock()
-	return h
-}
-
-func (s *notifyHookState) hasHook() bool { return s.hook() != nil }
 
 // runtimeGuardState 聚合运行时清理与审批去重状态。
 type runtimeGuardState struct {

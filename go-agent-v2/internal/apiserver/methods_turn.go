@@ -134,22 +134,6 @@ type threadRealtimeStopParams struct {
 	ThreadID string `json:"threadId"`
 }
 
-func (s *Server) threadRealtimeStartTyped(_ context.Context, p threadRealtimeStartParams) (any, error) {
-	return s.codexAdapter.ThreadRealtimeStart(p.ThreadID, p.Prompt, p.SessionID)
-}
-
-func (s *Server) threadRealtimeAppendAudioTyped(_ context.Context, p threadRealtimeAppendAudioParams) (any, error) {
-	return s.codexAdapter.ThreadRealtimeAppendAudio(p.ThreadID, p.Audio)
-}
-
-func (s *Server) threadRealtimeAppendTextTyped(_ context.Context, p threadRealtimeAppendTextParams) (any, error) {
-	return s.codexAdapter.ThreadRealtimeAppendText(p.ThreadID, p.Text)
-}
-
-func (s *Server) threadRealtimeStopTyped(_ context.Context, p threadRealtimeStopParams) (any, error) {
-	return s.codexAdapter.ThreadRealtimeStop(p.ThreadID)
-}
-
 // reviewStartParams review/start 请求参数。
 type reviewTarget struct {
 	Type         string `json:"type"`

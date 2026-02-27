@@ -134,17 +134,20 @@ func mustHaveFields(t *testing.T, st reflect.Type, required []string) {
 func TestToolCallStateIncrementAndGet(t *testing.T) {
 	t.Parallel()
 
-	var st toolCallState
-	if got := st.increment("lsp.open_file"); got != 1 {
+	var s Server
+	if got := incrementToolCallState(&s, "lsp.open_file"); got != 1 {
 		t.Fatalf("first increment mismatch: got %d want 1", got)
 	}
-	if got := st.increment("lsp.open_file"); got != 2 {
+	if got := incrementToolCallState(&s, "lsp.open_file"); got != 2 {
 		t.Fatalf("second increment mismatch: got %d want 2", got)
 	}
-	if got := st.get("lsp.open_file"); got != 2 {
+	s.toolCallState.toolCallMu.RLock()
+	got := s.toolCallState.toolCallCount["lsp.open_file"]
+	s.toolCallState.toolCallMu.RUnlock()
+	if got != 2 {
 		t.Fatalf("get mismatch: got %d want 2", got)
 	}
-	if got := st.increment("   "); got != 0 {
+	if got := incrementToolCallState(&s, "   "); got != 0 {
 		t.Fatalf("blank name should return 0, got %d", got)
 	}
 }
@@ -325,19 +328,19 @@ func TestSSEStateClientLifecycle(t *testing.T) {
 func TestNotifyHookStateSetAndHasHook(t *testing.T) {
 	t.Parallel()
 
-	var st notifyHookState
-	if st.hasHook() {
+	var s Server
+	if hasNotifyHookState(&s) {
 		t.Fatalf("hasHook should be false by default")
 	}
 
 	called := 0
-	st.setHook(func(method string, params any) {
+	setNotifyHookState(&s, func(method string, params any) {
 		called++
 	})
-	if !st.hasHook() {
+	if !hasNotifyHookState(&s) {
 		t.Fatalf("hasHook should be true after setHook")
 	}
-	h := st.hook()
+	h := notifyHookFuncState(&s)
 	if h == nil {
 		t.Fatalf("hook should not be nil after setHook")
 	}
@@ -346,8 +349,8 @@ func TestNotifyHookStateSetAndHasHook(t *testing.T) {
 		t.Fatalf("hook call mismatch: got %d want 1", called)
 	}
 
-	st.setHook(nil)
-	if st.hasHook() {
+	setNotifyHookState(&s, nil)
+	if hasNotifyHookState(&s) {
 		t.Fatalf("hasHook should be false after clearing hook")
 	}
 }

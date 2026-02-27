@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
@@ -31,7 +32,7 @@ func (h codexAdapterHooks) getAgentSkills(agentID string) []string {
 }
 
 func (h codexAdapterHooks) allSchemas() []codexsdk.DynamicTool {
-	return allSchemas(h.server)
+	return h.server.AllSchemas()
 }
 
 func (h codexAdapterHooks) notify(method string, params any) {
@@ -132,7 +133,11 @@ func cancelAllCodeRuns(s *Server) int {
 
 func notifyHookFuncState(s *Server) func(method string, params any) {
 	return serverValue(s, nil, func(s *Server) func(method string, params any) {
-		return s.notifyHookState.hook()
+		state := &s.notifyHookState
+		state.notifyHookMu.RLock()
+		h := state.notifyHook
+		state.notifyHookMu.RUnlock()
+		return h
 	})
 }
 
@@ -198,21 +203,47 @@ func addConnState(s *Server, connID string, entry *connEntry) {
 }
 
 func setDiagnosticsCacheState(s *Server, uri string, diagnostics []lsp.Diagnostic) {
-	withServer(s, func(s *Server) {
-		s.diagnosticsCacheState.setDiagnostics(uri, diagnostics)
-	})
+	if s == nil {
+		return
+	}
+	state := &s.diagnosticsCacheState
+	state.diagMu.Lock()
+	if state.diagCache == nil {
+		state.diagCache = map[string][]lsp.Diagnostic{}
+	}
+	copied := cloneDiagnostics(diagnostics)
+	if len(copied) == 0 {
+		delete(state.diagCache, uri)
+		state.diagMu.Unlock()
+		return
+	}
+	state.diagCache[uri] = copied
+	state.diagMu.Unlock()
 }
 
 func getDiagnosticsCacheState(s *Server, uri string) []lsp.Diagnostic {
-	return serverValue(s, nil, func(s *Server) []lsp.Diagnostic {
-		return s.diagnosticsCacheState.getDiagnostics(uri)
-	})
+	if s == nil {
+		return nil
+	}
+	state := &s.diagnosticsCacheState
+	state.diagMu.RLock()
+	diagnostics := cloneDiagnostics(state.diagCache[uri])
+	state.diagMu.RUnlock()
+	return diagnostics
 }
 
 func allDiagnosticsCacheState(s *Server) map[string][]lsp.Diagnostic {
-	return serverValue(s, map[string][]lsp.Diagnostic{}, func(s *Server) map[string][]lsp.Diagnostic {
-		return s.diagnosticsCacheState.allDiagnostics()
-	})
+	if s == nil {
+		return map[string][]lsp.Diagnostic{}
+	}
+	state := &s.diagnosticsCacheState
+	state.diagMu.RLock()
+	out := make(map[string][]lsp.Diagnostic, len(state.diagCache))
+	for uri, diagnostics := range state.diagCache {
+		out[uri] = cloneDiagnostics(diagnostics)
+	}
+	state.diagMu.RUnlock()
+	return out
 }
 
 func rememberReportRequesterState(s *Server, workerID, requesterID string, now time.Time) int {
@@ -228,9 +259,13 @@ func takeReportRequestersState(s *Server, workerID string, now time.Time) []stri
 }
 
 func setNotifyHookState(s *Server, h func(method string, params any)) {
-	withServer(s, func(s *Server) {
-		s.notifyHookState.setHook(h)
-	})
+	if s == nil {
+		return
+	}
+	state := &s.notifyHookState
+	state.notifyHookMu.Lock()
+	state.notifyHook = h
+	state.notifyHookMu.Unlock()
 }
 
 func stageUIStateChangedState(s *Server, key string, payload map[string]any, now time.Time, interval time.Duration, onFlush func()) (map[string]any, bool) {
@@ -292,9 +327,7 @@ func endApprovalState(s *Server, key string) {
 }
 
 func hasNotifyHookState(s *Server) bool {
-	return serverValue(s, false, func(s *Server) bool {
-		return s.notifyHookState.hasHook()
-	})
+	return notifyHookFuncState(s) != nil
 }
 
 func stopAllUIThrottleTimersState(s *Server) {
@@ -304,15 +337,32 @@ func stopAllUIThrottleTimersState(s *Server) {
 }
 
 func clearAllToolCallState(s *Server) {
-	withServer(s, func(s *Server) {
-		s.toolCallState.clearAll()
-	})
+	if s == nil {
+		return
+	}
+	state := &s.toolCallState
+	state.toolCallMu.Lock()
+	clear(state.toolCallCount)
+	state.toolCallMu.Unlock()
 }
 
 func incrementToolCallState(s *Server, name string) int64 {
-	return serverValue(s, int64(0), func(s *Server) int64 {
-		return s.toolCallState.increment(name)
-	})
+	if s == nil {
+		return 0
+	}
+	toolName := strings.TrimSpace(name)
+	if toolName == "" {
+		return 0
+	}
+	state := &s.toolCallState
+	state.toolCallMu.Lock()
+	if state.toolCallCount == nil {
+		state.toolCallCount = make(map[string]int64)
+	}
+	state.toolCallCount[toolName]++
+	count := state.toolCallCount[toolName]
+	state.toolCallMu.Unlock()
+	return count
 }
 
 func nextThreadSeqState(s *Server) int64 {

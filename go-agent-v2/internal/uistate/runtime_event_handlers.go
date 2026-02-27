@@ -111,6 +111,7 @@ func (m *RuntimeManager) applyAgentEventLocked(threadID string, normalized Norma
 	m.markAgentActiveLocked(threadID, ts)
 	rt := m.runtime[threadID]
 	rt.hasDerivedState = true
+	rt.lastEventAt = ts // Fix 2: track last event time for stale turn detection
 	fields := resolveEventFields(normalized, payload)
 	m.applyLifecycleStateLocked(threadID, normalized, payload, fields, ts)
 	if handler, ok := runtimeEventHandlers[normalized.UIType]; ok {
@@ -269,6 +270,18 @@ func (m *RuntimeManager) applyUITypeDepthsLocked(threadID string, rt *threadRunt
 }
 
 func handleTurnStartedDepth(m *RuntimeManager, threadID string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
+	// Fix 2 & 3: 检测上一个 turn 的残留状态 — 如果 depth 计数器还没归零就收到新 turn,
+	// 说明事件丢失（WS 丢帧/乱序），强制重置以防状态永久卡住。
+	if rt.turnDepth > 0 || rt.commandDepth > 0 || rt.fileEditDepth > 0 || rt.toolCallDepth > 0 || rt.approvalDepth > 0 {
+		logger.Warn("uistate: stale turn detected on new turn_started — forcibly resetting depth counters",
+			logger.FieldThreadID, threadID,
+			"prev_turn", rt.turnDepth,
+			"prev_cmd", rt.commandDepth,
+			"prev_edit", rt.fileEditDepth,
+			"prev_tool", rt.toolCallDepth,
+			"prev_approval", rt.approvalDepth,
+		)
+	}
 	m.clearTurnLifecycleLocked(threadID)
 	rt.turnDepth = 1
 	rt.approvalDepth = 0
@@ -276,6 +289,7 @@ func handleTurnStartedDepth(m *RuntimeManager, threadID string, rt *threadRuntim
 	rt.terminalWaitOverlay = false
 	rt.terminalWaitLabel = ""
 	rt.statusHeader = "工作中"
+	rt.approvalContext = "" // 清空上一轮的审批上下文
 }
 
 func handleTurnCompleteDepth(m *RuntimeManager, threadID string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
@@ -328,8 +342,40 @@ func handleFileEditDoneDepth(_ *RuntimeManager, _ string, rt *threadRuntime, _, 
 	rt.fileEditDepth = max(0, rt.fileEditDepth-1)
 }
 
-func handleApprovalRequestDepth(_ *RuntimeManager, _ string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
+func handleApprovalRequestDepth(_ *RuntimeManager, _ string, rt *threadRuntime, _, _, _ string, payload map[string]any) {
 	rt.approvalDepth += 1
+	// Fix 4: 缓存审批内容，在 statusHeader 中展示具体信息。
+	rt.approvalContext = extractApprovalContext(payload)
+}
+
+// extractApprovalContext 从审批请求 payload 中提取可展示的描述文本。
+func extractApprovalContext(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	// 命令审批: 提取 command
+	for _, key := range []string{"command", "displayCommand", "command_display"} {
+		if v, ok := payload[key].(string); ok && strings.TrimSpace(v) != "" {
+			cmd := compactOneLine(v, 60)
+			return "执行: " + cmd
+		}
+	}
+	// 文件审批: 提取 file/path
+	for _, key := range []string{"file", "path", "filePath"} {
+		if v, ok := payload[key].(string); ok && strings.TrimSpace(v) != "" {
+			return "编辑: " + compactOneLine(v, 60)
+		}
+	}
+	// 嵌套提取
+	for _, wrapper := range []string{"msg", "data", "item"} {
+		if nested, ok := payload[wrapper].(map[string]any); ok {
+			result := extractApprovalContext(nested)
+			if result != "" {
+				return result
+			}
+		}
+	}
+	return ""
 }
 
 func handleToolCallDepth(m *RuntimeManager, threadID string, rt *threadRuntime, eventType, _, text string, payload map[string]any) {
@@ -388,6 +434,7 @@ func (m *RuntimeManager) clearTurnLifecycleLocked(threadID string) {
 	rt.streamErrorDetails = ""
 	rt.statusHeader = ""
 	rt.reasoningHeaderBuf = ""
+	rt.approvalContext = "" // Fix 4: 清空审批上下文
 }
 
 func normalizeActivityToolName(name string) string {
@@ -526,6 +573,10 @@ func (m *RuntimeManager) deriveThreadStatusHeaderLocked(threadID, state string) 
 	case rt.userInputDepth > 0:
 		return "等待输入"
 	case rt.approvalDepth > 0:
+		// Fix 4: 展示具体的审批上下文，而不是笼统的 "等待确认"。
+		if strings.TrimSpace(rt.approvalContext) != "" {
+			return "等待确认 · " + rt.approvalContext
+		}
 		return "等待确认"
 	case shouldUseReasoningHeader(rt):
 		return rt.statusHeader

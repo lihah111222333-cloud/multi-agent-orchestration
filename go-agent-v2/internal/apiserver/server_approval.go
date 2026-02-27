@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -293,6 +293,27 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	if s == nil {
 		return
 	}
+
+	// Fix 1: 子 agent 自动审批 — 多 agent 编排场景中，子 agent 不应阻塞等待人类审批。
+	// 仅主 agent 的审批请求走正常的交互式流程。
+	if s.uiRuntime != nil && !s.uiRuntime.IsMainAgent(agentID) {
+		logger.Info("app-server: sub-agent auto-approved",
+			logger.FieldAgentID, agentID, logger.FieldMethod, method)
+		autoApprovePayload := approvalDecisionPayload(method, true)
+		if event.RespondResultFunc != nil {
+			if err := event.RespondResultFunc(autoApprovePayload); err != nil {
+				logger.Warn("app-server: sub-agent auto-approve respond failed",
+					logger.FieldAgentID, agentID, logger.FieldMethod, method, logger.FieldError, err)
+				denyApprovalSafely(event, agentID)
+			}
+		} else if s.mgr != nil {
+			if proc := s.mgr.Get(agentID); proc != nil {
+				_ = s.codexAdapter.Submit(proc, "yes", nil, nil, nil)
+			}
+		}
+		return
+	}
+
 	// 去重: 同一 agentID+method 正在处理中 → 跳过重复调用
 	inflightKey := agentID + ":" + method
 	if !tryBeginApprovalState(s, inflightKey) {

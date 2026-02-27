@@ -127,6 +127,12 @@ type threadRuntime struct {
 	statusHeader        string
 	reasoningHeaderBuf  string
 	hasDerivedState     bool
+
+	// Fix 2: 用于检测过期 turn — 如果上一个 turn 的 depth 计数器未归零，
+	// 新 turn 开始时强制重置。
+	lastEventAt time.Time
+	// Fix 4: 缓存审批请求的描述文本，用于 statusHeader 展示具体审批内容。
+	approvalContext string
 }
 
 func newThreadRuntime() *threadRuntime {

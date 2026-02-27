@@ -197,6 +197,34 @@ func (m *RuntimeManager) SetMainAgent(threadID string) {
 	}
 }
 
+// IsMainAgent reports whether the given agent is the designated main agent.
+// Returns true if no main agent is set (fallback: treat all as main for safety).
+func (m *RuntimeManager) IsMainAgent(threadID string) bool {
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return true
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// 如果没有任何 agent 被标记为 main，则全部视为 main（安全兜底）。
+	hasAnyMain := false
+	for _, meta := range m.snapshot.AgentMetaByID {
+		if meta.IsMain {
+			hasAnyMain = true
+			break
+		}
+	}
+	if !hasAnyMain {
+		return true
+	}
+	meta, ok := m.snapshot.AgentMetaByID[id]
+	if !ok {
+		return false
+	}
+	return meta.IsMain
+}
+
 // AppendUserMessage appends a user message into timeline.
 func (m *RuntimeManager) AppendUserMessage(threadID, text string, attachments []TimelineAttachment) {
 	id := strings.TrimSpace(threadID)

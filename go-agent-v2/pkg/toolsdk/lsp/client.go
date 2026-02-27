@@ -445,42 +445,56 @@ func (c *Client) clearPendingLocked() {
 // JSON-RPC 传输层
 // ========================================
 
+const defaultCallTimeout = 30 * time.Second
+
 // call 发送请求并等待响应 (30 秒超时防止 goroutine 泄漏)。
 func (c *Client) call(method string, params any, result any) error {
-	return c.callWithTimeout(method, params, result, 30*time.Second)
+	return c.callWithTimeout(method, params, result, defaultCallTimeout)
 }
 
 func (c *Client) callWithTimeout(method string, params any, result any, timeout time.Duration) error {
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-
 	id := int(c.nextID.Add(1))
-	ch := make(chan *Response, 1)
-
-	c.mu.Lock()
-	c.pending[id] = ch
-	c.mu.Unlock()
-
-	defer func() {
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
-	}()
+	ch := c.registerPending(id)
+	defer c.removePending(id)
 
 	if err := c.writeRequest(id, method, params); err != nil {
 		return err
 	}
 
+	return c.awaitResponse(method, ch, result, normalizeCallTimeout(timeout))
+}
+
+func normalizeCallTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return defaultCallTimeout
+	}
+	return timeout
+}
+
+func (c *Client) registerPending(id int) chan *Response {
+	ch := make(chan *Response, 1)
+	c.mu.Lock()
+	c.pending[id] = ch
+	c.mu.Unlock()
+	return ch
+}
+
+func (c *Client) removePending(id int) {
+	c.mu.Lock()
+	delete(c.pending, id)
+	c.mu.Unlock()
+}
+
+func (c *Client) awaitResponse(method string, ch <-chan *Response, result any, timeout time.Duration) error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case resp, ok := <-ch:
 		if !ok {
-			return apperrors.Newf("LSP.call", "connection closed while waiting for %s", method)
+			return callErrorf("connection closed while waiting for %s", method)
 		}
-		if resp.Error != nil {
-			return apperrors.Newf("LSP.call", "%s error %d: %s", method, resp.Error.Code, resp.Error.Message)
+		if err := responseError(method, resp); err != nil {
+			return err
 		}
 		if result != nil && resp.Result != nil {
 			return json.Unmarshal(resp.Result, result)
@@ -488,33 +502,43 @@ func (c *Client) callWithTimeout(method string, params any, result any, timeout 
 		return nil
 	case <-timer.C:
 		logger.Warn("lsp: call timeout", logger.FieldMethod, method, logger.FieldLanguage, c.language)
-		return apperrors.Newf("LSP.call", "%s timeout (%s)", method, timeout)
+		return callErrorf("%s timeout (%s)", method, timeout)
 	}
+}
+
+func callErrorf(format string, args ...any) error {
+	return apperrors.Newf("LSP.call", format, args...)
+}
+
+func responseError(method string, resp *Response) error {
+	if resp.Error == nil {
+		return nil
+	}
+	return callErrorf("%s error %d: %s", method, resp.Error.Code, resp.Error.Message)
 }
 
 // notify 发送通知 (无响应)。
 func (c *Client) notify(method string, params any) error {
-	msg := map[string]any{
-		"jsonrpc": "2.0",
-		"method":  method,
-	}
-	if params != nil {
-		msg["params"] = params
-	}
-	return c.writeMessage(msg)
+	return c.writeMessage(buildRPCRequest(method, params, nil))
 }
 
 // writeRequest 编码并写入请求。
 func (c *Client) writeRequest(id int, method string, params any) error {
+	return c.writeMessage(buildRPCRequest(method, params, &id))
+}
+
+func buildRPCRequest(method string, params any, id *int) map[string]any {
 	msg := map[string]any{
 		"jsonrpc": "2.0",
-		"id":      id,
 		"method":  method,
+	}
+	if id != nil {
+		msg["id"] = *id
 	}
 	if params != nil {
 		msg["params"] = params
 	}
-	return c.writeMessage(msg)
+	return msg
 }
 
 // writeMessage 编码 JSON 并加 Content-Length 头写入 stdin。

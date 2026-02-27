@@ -366,12 +366,12 @@ func extractApprovalContext(payload map[string]any) string {
 }
 
 func handleToolCallDepth(m *RuntimeManager, threadID string, rt *threadRuntime, eventType, _, text string, payload map[string]any) {
-	if eventType == "mcp_tool_call_begin" {
+	switch eventType {
+	case "mcp_tool_call_begin":
 		rt.toolCallDepth += 1
 		toolName := resolveActivityToolName(text, payload)
 		m.incrActivityStatLocked(threadID, "toolCall", toolName)
-	}
-	if eventType == "mcp_tool_call_end" {
+	case "mcp_tool_call_end":
 		rt.toolCallDepth = max(0, rt.toolCallDepth-1)
 	}
 }
@@ -447,8 +447,6 @@ func isLSPActivityToolName(name string) bool {
 	return strings.HasPrefix(normalizeActivityToolName(name), "lsp_")
 }
 
-// incrActivityStatLocked increments a per-thread activity counter.
-// Must be called with m.mu held.
 func (m *RuntimeManager) incrActivityStatLocked(threadID, kind, toolName string) {
 	stats, ok := m.snapshot.ActivityStatsByThread[threadID]
 	if !ok {
@@ -475,23 +473,18 @@ func (m *RuntimeManager) incrActivityStatLocked(threadID, kind, toolName string)
 	m.snapshot.ActivityStatsByThread[threadID] = stats
 }
 
-// IncrActivityStat increments a per-thread activity counter (goroutine-safe).
-//
-// Used by apiserver for dynamic tool calls that bypass the normal event pipeline.
 func (m *RuntimeManager) IncrActivityStat(threadID, kind, toolName string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.incrActivityStatLocked(threadID, kind, toolName)
 }
 
-// PushAlert appends a high-priority alert for the given thread.
 func (m *RuntimeManager) PushAlert(threadID, level, message string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pushAlertLocked(threadID, level, message)
 }
 
-// pushAlertLocked appends an alert; must be called with m.mu held.
 func (m *RuntimeManager) pushAlertLocked(threadID, level, message string) {
 	alerts := m.snapshot.AlertsByThread[threadID]
 	entry := AlertEntry{
@@ -501,7 +494,6 @@ func (m *RuntimeManager) pushAlertLocked(threadID, level, message string) {
 		Message: message,
 	}
 	alerts = append(alerts, entry)
-	// 保留最近 20 条
 	if len(alerts) > 20 {
 		alerts = alerts[len(alerts)-20:]
 	}
@@ -516,9 +508,7 @@ func (m *RuntimeManager) deriveThreadStateLocked(threadID string) string {
 		return "error"
 	case rt.terminalWaitOverlay:
 		return "waiting"
-	case rt.userInputDepth > 0:
-		return "waiting"
-	case rt.approvalDepth > 0:
+	case rt.userInputDepth > 0 || rt.approvalDepth > 0:
 		return "waiting"
 	case rt.fileEditDepth > 0:
 		return "editing"
@@ -708,13 +698,11 @@ func (m *RuntimeManager) applyThreadStatusChangedLocked(threadID string, payload
 				rt.userInputDepth = 1
 			}
 		}
-	case "idle":
-		m.clearTurnLifecycleLocked(threadID)
 	case "systemerror", "system_error", "error":
 		m.clearTurnLifecycleLocked(threadID)
 		rt.streamErrorText = "系统异常"
 		rt.streamErrorDetails = "线程状态变为 systemError"
-	case "notloaded", "not_loaded":
+	case "idle", "notloaded", "not_loaded":
 		m.clearTurnLifecycleLocked(threadID)
 	}
 }
@@ -751,19 +739,22 @@ func isTerminalInteractionEvent(eventType, method string) bool {
 }
 
 func isMCPStartupUpdateEvent(eventType, method string) bool {
-	return eventType == "mcp_startup_update" ||
-		eventType == "codex/event/mcp_startup_update" ||
-		eventType == "agent/event/mcp_startup_update" ||
-		strings.EqualFold(method, "codex/event/mcp_startup_update") ||
-		strings.EqualFold(method, "agent/event/mcp_startup_update")
+	return isMCPStartupEvent(eventType, method, "update")
 }
 
 func isMCPStartupCompleteEvent(eventType, method string) bool {
-	return eventType == "mcp_startup_complete" ||
-		eventType == "codex/event/mcp_startup_complete" ||
-		eventType == "agent/event/mcp_startup_complete" ||
-		strings.EqualFold(method, "codex/event/mcp_startup_complete") ||
-		strings.EqualFold(method, "agent/event/mcp_startup_complete")
+	return isMCPStartupEvent(eventType, method, "complete")
+}
+
+func isMCPStartupEvent(eventType, method, kind string) bool {
+	base := "mcp_startup_" + kind
+	codex := "codex/event/" + base
+	agent := "agent/event/" + base
+	return eventType == base ||
+		eventType == codex ||
+		eventType == agent ||
+		strings.EqualFold(method, codex) ||
+		strings.EqualFold(method, agent)
 }
 
 func isTerminalWaitPayload(payload map[string]any) bool {

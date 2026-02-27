@@ -374,7 +374,7 @@ func handleTurnStartedLifecycleEvent(c *AppServerClient, event Event, method, ac
 		return
 	}
 	c.setActiveTurnID(turnID)
-	c.logTurnEvent(turnLogLevelWarn,
+	c.logTurnEvent(turnLogLevelDebug,
 		"DIAG: codex: active turn set (turn_started)",
 		event.Type,
 		method,
@@ -385,7 +385,7 @@ func handleTurnStartedLifecycleEvent(c *AppServerClient, event Event, method, ac
 
 func handleTurnTerminalLifecycleEvent(c *AppServerClient, event Event, method, activeTurnID string) {
 	if activeTurnID == "" {
-		c.logTurnEvent(turnLogLevelWarn,
+		c.logTurnEvent(turnLogLevelDebug,
 			"DIAG: codex: terminal event but no active turn to clear",
 			event.Type,
 			method,

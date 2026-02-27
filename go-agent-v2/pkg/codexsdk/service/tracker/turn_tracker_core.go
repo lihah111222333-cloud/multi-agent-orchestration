@@ -949,7 +949,12 @@ func beginTrackedTurnCore(
 	watchdogTurnID := tid
 	watchdogThreadID := id
 	watchdogStartedAt := turn.StartedAt
-	turn.Timer = time.AfterFunc(watchdogTimeout, func() {
+	// 首轮 turn 给予额外 grace period（初始化开销：进程启动、WS 建连、MCP 加载等）
+	effectiveWatchdog := watchdogTimeout
+	if !hadPrevTurn {
+		effectiveWatchdog = watchdogTimeout + watchdogTimeout/2 // 1.5x for first turn
+	}
+	turn.Timer = time.AfterFunc(effectiveWatchdog, func() {
 		logger.Warn("turn tracker: watchdog timeout reached", append(threadLogFields(watchdogThreadID),
 			logger.FieldTurnID, watchdogTurnID,
 			"watchdog_timeout_ms", watchdogTimeout.Milliseconds(),
@@ -1308,6 +1313,8 @@ func maybeFinalizeTrackedTurnCore(
 			reason,
 			payload,
 		)...)
+		// Fallback: use tracker's known turn_id to avoid mismatched cleanup
+		eventTurnID = turnID
 	}
 
 	completion, completed := completeTrackedTurnByIDCore(state, id, eventTurnID, status, reason)
@@ -1359,42 +1366,42 @@ func finalizeTrackedTurnEventCore(state turnTrackerState, threadID, eventType, m
 }
 
 var (
-	EnsureTurnTrackerStateLocked   = ensureTurnTrackerStateLocked
-	TrackerDurationOrDefault       = trackerDurationOrDefault
-	NormalizeTrackedTurnStatus     = normalizeTrackedTurnStatus
-	ThreadStatusTerminalFromPayload = threadStatusTerminalFromPayload
-	ExtractTrackedString           = extractTrackedString
-	ExtractTrackedTurnID           = extractTrackedTurnID
-	ExtractTrackedTurnStatus       = extractTrackedTurnStatus
-	ExtractTrackedTurnReason       = extractTrackedTurnReason
-	TrackedTurnTerminalFromEvent   = trackedTurnTerminalFromEvent
-	TrackedTurnSummaryFromPayload  = trackedTurnSummaryFromPayload
-	TrackedTurnSummaryCacheKey     = trackedTurnSummaryCacheKey
-	InjectTrackedTurnSummary       = injectTrackedTurnSummary
+	EnsureTurnTrackerStateLocked      = ensureTurnTrackerStateLocked
+	TrackerDurationOrDefault          = trackerDurationOrDefault
+	NormalizeTrackedTurnStatus        = normalizeTrackedTurnStatus
+	ThreadStatusTerminalFromPayload   = threadStatusTerminalFromPayload
+	ExtractTrackedString              = extractTrackedString
+	ExtractTrackedTurnID              = extractTrackedTurnID
+	ExtractTrackedTurnStatus          = extractTrackedTurnStatus
+	ExtractTrackedTurnReason          = extractTrackedTurnReason
+	TrackedTurnTerminalFromEvent      = trackedTurnTerminalFromEvent
+	TrackedTurnSummaryFromPayload     = trackedTurnSummaryFromPayload
+	TrackedTurnSummaryCacheKey        = trackedTurnSummaryCacheKey
+	InjectTrackedTurnSummary          = injectTrackedTurnSummary
 	MergeTrackedTurnCompletionPayload = mergeTrackedTurnCompletionPayload
-	IsTerminalEventType            = isTerminalEventType
-	RememberTrackedTurnSummary     = rememberTrackedTurnSummary
-	LookupTrackedTurnSummary       = lookupTrackedTurnSummary
-	WithTrackerStateLockCore       = withTrackerStateLockCore
-	TrackerDurationCore            = trackerDurationCore
-	SetTrackerDurationCore         = setTrackerDurationCore
-	TrackerStateCore               = trackerStateCore
-	ApplyTrackedTurnTransitionCore = applyTrackedTurnTransitionCore
-	WithActiveTurnCore             = withActiveTurnCore
-	WithActiveTurnByIDCore         = withActiveTurnByIDCore
-	SupersedeActiveTurn            = supersedeActiveTurn
-	BeginTrackedTurnCore           = beginTrackedTurnCore
-	WaitTrackedTurnTerminalCore    = waitTrackedTurnTerminalCore
-	CompleteTrackedTurnByIDCore    = completeTrackedTurnByIDCore
-	PeekTrackedTurnMetaCore        = peekTrackedTurnMetaCore
-	MarkTrackedTurnStallHintCore   = markTrackedTurnStallHintCore
-	TouchTrackedTurnLastEventCore  = touchTrackedTurnLastEventCore
-	NextTrackedTurnStallDecisionCore = nextTrackedTurnStallDecisionCore
-	CheckTurnStallCore             = checkTurnStallCore
-	HandleStallGracePeriodCore     = handleStallGracePeriodCore
-	TrackerRuntimePushAlert        = trackerRuntimePushAlert
-	ExecuteStallAutoInterruptCore  = executeStallAutoInterruptCore
-	CaptureAndInjectTurnSummaryCore = captureAndInjectTurnSummaryCore
-	MaybeFinalizeTrackedTurnCore   = maybeFinalizeTrackedTurnCore
-	FinalizeTrackedTurnEventCore   = finalizeTrackedTurnEventCore
+	IsTerminalEventType               = isTerminalEventType
+	RememberTrackedTurnSummary        = rememberTrackedTurnSummary
+	LookupTrackedTurnSummary          = lookupTrackedTurnSummary
+	WithTrackerStateLockCore          = withTrackerStateLockCore
+	TrackerDurationCore               = trackerDurationCore
+	SetTrackerDurationCore            = setTrackerDurationCore
+	TrackerStateCore                  = trackerStateCore
+	ApplyTrackedTurnTransitionCore    = applyTrackedTurnTransitionCore
+	WithActiveTurnCore                = withActiveTurnCore
+	WithActiveTurnByIDCore            = withActiveTurnByIDCore
+	SupersedeActiveTurn               = supersedeActiveTurn
+	BeginTrackedTurnCore              = beginTrackedTurnCore
+	WaitTrackedTurnTerminalCore       = waitTrackedTurnTerminalCore
+	CompleteTrackedTurnByIDCore       = completeTrackedTurnByIDCore
+	PeekTrackedTurnMetaCore           = peekTrackedTurnMetaCore
+	MarkTrackedTurnStallHintCore      = markTrackedTurnStallHintCore
+	TouchTrackedTurnLastEventCore     = touchTrackedTurnLastEventCore
+	NextTrackedTurnStallDecisionCore  = nextTrackedTurnStallDecisionCore
+	CheckTurnStallCore                = checkTurnStallCore
+	HandleStallGracePeriodCore        = handleStallGracePeriodCore
+	TrackerRuntimePushAlert           = trackerRuntimePushAlert
+	ExecuteStallAutoInterruptCore     = executeStallAutoInterruptCore
+	CaptureAndInjectTurnSummaryCore   = captureAndInjectTurnSummaryCore
+	MaybeFinalizeTrackedTurnCore      = maybeFinalizeTrackedTurnCore
+	FinalizeTrackedTurnEventCore      = finalizeTrackedTurnEventCore
 )

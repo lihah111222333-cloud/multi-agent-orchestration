@@ -18,65 +18,26 @@ func EnsureTurnSteerResultTurnID(result map[string]any, activeTurnID string) map
 	return result
 }
 
-func PrepareTurnSubmissionCommon(
-	a PrepareAdapter,
-	threadID string,
-	input []TurnInput,
-	selectedSkills []string,
-	manualSkillSelection bool,
-) PreparedSubmissionCommon {
+func PrepareTurnSubmissionCommon(a PrepareAdapter, threadID string, input []TurnInput, selectedSkills []string, manualSkillSelection bool) PreparedSubmissionCommon {
 	a = normalizePrepareAdapter(a)
 	parsed := ParseTurnInputs(input, a.FileContentInputText, a.BuildAttachmentName, a.BuildAttachmentPreviewURL)
-	skillPrompt, selectedSkillCount, autoMatchedSkillCount := BuildTurnSkillPrompt(
-		a,
-		threadID,
-		parsed.Prompt,
-		input,
-		selectedSkills,
-		manualSkillSelection,
-	)
-	return PreparedSubmissionCommon{
-		Parsed:                parsed,
-		SubmitPrompt:          a.MergePromptText(parsed.Prompt, skillPrompt),
-		SelectedSkillCount:    selectedSkillCount,
-		AutoMatchedSkillCount: autoMatchedSkillCount,
-	}
+	skillPrompt, selectedSkillCount, autoMatchedSkillCount := BuildTurnSkillPrompt(a, threadID, parsed.Prompt, input, selectedSkills, manualSkillSelection)
+	return PreparedSubmissionCommon{Parsed: parsed, SubmitPrompt: a.MergePromptText(parsed.Prompt, skillPrompt), SelectedSkillCount: selectedSkillCount, AutoMatchedSkillCount: autoMatchedSkillCount}
 }
 
-func PrepareTurnStartSubmission(
-	a PrepareAdapter,
-	threadID string,
-	input []TurnInput,
-	selectedSkills []string,
-	manualSkillSelection bool,
-) (TurnStartPreparedSubmission, error) {
+func PrepareTurnStartSubmission(a PrepareAdapter, threadID string, input []TurnInput, selectedSkills []string, manualSkillSelection bool) (TurnStartPreparedSubmission, error) {
 	a = normalizePrepareAdapter(a)
 	prepared := PrepareTurnSubmissionCommon(a, threadID, input, selectedSkills, manualSkillSelection)
 	return TurnStartPreparedSubmission{
-		Prompt:                prepared.Parsed.Prompt,
-		SubmitPrompt:          prepared.SubmitPrompt,
-		Images:                prepared.Parsed.Images,
-		Files:                 prepared.Parsed.Files,
-		TimelineAttachments:   prepared.Parsed.TimelineAttachments,
-		SelectedSkillCount:    prepared.SelectedSkillCount,
-		AutoMatchedSkillCount: prepared.AutoMatchedSkillCount,
+		Prompt: prepared.Parsed.Prompt, SubmitPrompt: prepared.SubmitPrompt, Images: prepared.Parsed.Images, Files: prepared.Parsed.Files,
+		TimelineAttachments: prepared.Parsed.TimelineAttachments, SelectedSkillCount: prepared.SelectedSkillCount, AutoMatchedSkillCount: prepared.AutoMatchedSkillCount,
 	}, nil
 }
 
-func PrepareTurnSteerSubmission(
-	a PrepareAdapter,
-	threadID string,
-	input []TurnInput,
-	selectedSkills []string,
-	manualSkillSelection bool,
-) (TurnSteerEntryPrepareResult, error) {
+func PrepareTurnSteerSubmission(a PrepareAdapter, threadID string, input []TurnInput, selectedSkills []string, manualSkillSelection bool) (TurnSteerEntryPrepareResult, error) {
 	a = normalizePrepareAdapter(a)
 	prepared := PrepareTurnSubmissionCommon(a, threadID, input, selectedSkills, manualSkillSelection)
-	return TurnSteerEntryPrepareResult{
-		SubmitPrompt: prepared.SubmitPrompt,
-		Images:       prepared.Parsed.Images,
-		Files:        prepared.Parsed.Files,
-	}, nil
+	return TurnSteerEntryPrepareResult{SubmitPrompt: prepared.SubmitPrompt, Images: prepared.Parsed.Images, Files: prepared.Parsed.Files}, nil
 }
 
 func ResolveTurnSteerAlignment(a PrepareAdapter, req TurnSteerRequest) (string, string, error) {
@@ -94,21 +55,12 @@ func ResolveTurnSteerAlignment(a PrepareAdapter, req TurnSteerRequest) (string, 
 		return "", "", a.NewError("Server.turnSteer", "no active turn to steer")
 	}
 	if !strings.EqualFold(expectedTurnID, activeTurnID) {
-		return "", "", a.NewErrorf(
-			"Server.turnSteer",
-			"expectedTurnId mismatch: expected %s, active %s",
-			expectedTurnID,
-			activeTurnID,
-		)
+		return "", "", a.NewErrorf("Server.turnSteer", "expectedTurnId mismatch: expected %s, active %s", expectedTurnID, activeTurnID)
 	}
 	return threadID, activeTurnID, nil
 }
 
-func TurnSteerFromInputAligned(
-	req TurnSteerRequest,
-	resolve func(TurnSteerRequest) (string, string, error),
-	turnSteerFromInput func(TurnSteerRequest) (map[string]any, error),
-) (map[string]any, error) {
+func TurnSteerFromInputAligned(req TurnSteerRequest, resolve func(TurnSteerRequest) (string, string, error), turnSteerFromInput func(TurnSteerRequest) (map[string]any, error)) (map[string]any, error) {
 	if resolve == nil {
 		return nil, nil
 	}
@@ -126,12 +78,7 @@ func TurnSteerFromInputAligned(
 	return EnsureTurnSteerResultTurnID(result, activeTurnID), nil
 }
 
-func AppendTurnStartUserTimeline(
-	a PrepareAdapter,
-	ctx context.Context,
-	attachments []TimelineAttachment,
-	opt TurnAppendUserTimelineOptions,
-) {
+func AppendTurnStartUserTimeline(a PrepareAdapter, ctx context.Context, attachments []TimelineAttachment, opt TurnAppendUserTimelineOptions) {
 	a = normalizePrepareAdapter(a)
 	uiRuntime := a.UIRuntime()
 	if uiRuntime == nil {
@@ -158,24 +105,14 @@ func ThreadTimelineAlreadyShowsInjectedPrompt(a PrepareAdapter, threadID string)
 	}
 	const marker = "\n已注入"
 	for _, item := range uiRuntime.ThreadTimeline(threadID) {
-		if item.Kind != "user" {
-			continue
-		}
-		if strings.Contains(item.Text, marker) {
+		if item.Kind == "user" && strings.Contains(item.Text, marker) {
 			return true
 		}
 	}
 	return false
 }
 
-func BuildTurnSkillPrompt(
-	a PrepareAdapter,
-	threadID,
-	prompt string,
-	input []TurnInput,
-	selectedSkills []string,
-	manualSkillSelection bool,
-) (string, int, int) {
+func BuildTurnSkillPrompt(a PrepareAdapter, threadID, prompt string, input []TurnInput, selectedSkills []string, manualSkillSelection bool) (string, int, int) {
 	a = normalizePrepareAdapter(a)
 	selectedSkillPrompt, selectedSkillCount := a.BuildSelectedSkillPrompt(selectedSkills)
 	if manualSkillSelection || selectedSkillCount > 0 {
@@ -185,37 +122,22 @@ func BuildTurnSkillPrompt(
 	return a.MergePromptText(selectedSkillPrompt, autoSkillPrompt), selectedSkillCount, autoSkillCount
 }
 
-func BuildForcedOrExplicitMatchedSkillPrompt(
-	a PrepareAdapter,
-	agentID,
-	prompt string,
-	input []TurnInput,
-) (string, int) {
+func BuildForcedOrExplicitMatchedSkillPrompt(a PrepareAdapter, agentID, prompt string, input []TurnInput) (string, int) {
 	a = normalizePrepareAdapter(a)
-	matches := CollectAutoMatchedSkillMatches(a, agentID, prompt, input, AutoSkillMatchOptions{
-		IncludeConfiguredExplicit: true,
-		IncludeConfiguredForce:    true,
-	})
+	matches := CollectAutoMatchedSkillMatches(a, agentID, prompt, input, AutoSkillMatchOptions{IncludeConfiguredExplicit: true, IncludeConfiguredForce: true})
 	if len(matches) == 0 {
 		return "", 0
 	}
 	filtered := make([]AutoMatchedSkillMatch, 0, len(matches))
 	for _, match := range matches {
-		switch match.MatchedBy {
-		case "force", "explicit":
+		if match.MatchedBy == "force" || match.MatchedBy == "explicit" {
 			filtered = append(filtered, match)
 		}
 	}
 	return RenderAutoMatchedSkillPrompt(a, agentID, filtered)
 }
 
-func CollectAutoMatchedSkillMatches(
-	a PrepareAdapter,
-	agentID,
-	prompt string,
-	input []TurnInput,
-	options AutoSkillMatchOptions,
-) []AutoMatchedSkillMatch {
+func CollectAutoMatchedSkillMatches(a PrepareAdapter, agentID, prompt string, input []TurnInput, options AutoSkillMatchOptions) []AutoMatchedSkillMatch {
 	a = normalizePrepareAdapter(a)
 	if strings.TrimSpace(prompt) == "" {
 		return nil
@@ -228,31 +150,15 @@ func CollectAutoMatchedSkillMatches(
 	if len(candidates) == 0 {
 		return nil
 	}
-	return a.CollectAutoMatchedSkillMatches(
-		prompt,
-		BuildAutoMatchInputs(input),
-		a.ListAgentSkills(agentID),
-		candidates,
-		options,
-	)
+	return a.CollectAutoMatchedSkillMatches(prompt, BuildAutoMatchInputs(input), a.ListAgentSkills(agentID), candidates, options)
 }
 
-func CollectAutoMatchedSkillMatchesForThread(
-	a PrepareAdapter,
-	threadID string,
-	prompt string,
-	input []TurnInput,
-	options AutoSkillMatchOptions,
-) []AutoMatchedSkillMatch {
+func CollectAutoMatchedSkillMatchesForThread(a PrepareAdapter, threadID string, prompt string, input []TurnInput, options AutoSkillMatchOptions) []AutoMatchedSkillMatch {
 	a = normalizePrepareAdapter(a)
 	return CollectAutoMatchedSkillMatches(a, threadID, prompt, input, options)
 }
 
-func RenderAutoMatchedSkillPrompt(
-	a PrepareAdapter,
-	agentID string,
-	matches []AutoMatchedSkillMatch,
-) (string, int) {
+func RenderAutoMatchedSkillPrompt(a PrepareAdapter, agentID string, matches []AutoMatchedSkillMatch) (string, int) {
 	a = normalizePrepareAdapter(a)
 	if len(matches) == 0 {
 		return "", 0
@@ -260,21 +166,11 @@ func RenderAutoMatchedSkillPrompt(
 	return a.RenderAutoMatchedSkillPrompt(agentID, matches)
 }
 
-func ParseTurnInputs(
-	inputs []TurnInput,
-	fileContentInputText func(string, string) string,
-	buildAttachmentName func(string) string,
-	buildAttachmentPreviewURL func(string) string,
-) ParsedTurnInputs {
+func ParseTurnInputs(inputs []TurnInput, fileContentInputText func(string, string) string, buildAttachmentName func(string) string, buildAttachmentPreviewURL func(string) string) ParsedTurnInputs {
 	if len(inputs) == 0 {
 		return ParsedTurnInputs{}
 	}
-	if buildAttachmentName == nil {
-		buildAttachmentName = func(path string) string { return strings.TrimSpace(path) }
-	}
-	if buildAttachmentPreviewURL == nil {
-		buildAttachmentPreviewURL = func(path string) string { return strings.TrimSpace(path) }
-	}
+	buildAttachmentName, buildAttachmentPreviewURL = normalizeAttachmentBuilders(buildAttachmentName, buildAttachmentPreviewURL)
 	texts := make([]string, 0, len(inputs))
 	images := make([]string, 0, len(inputs))
 	files := make([]string, 0, len(inputs))
@@ -348,86 +244,39 @@ func ParseTurnInputs(
 		}
 	}
 
-	return ParsedTurnInputs{
-		Prompt:              strings.Join(texts, "\n"),
-		Images:              images,
-		Files:               files,
-		TimelineAttachments: attachments,
-	}
+	return ParsedTurnInputs{Prompt: strings.Join(texts, "\n"), Images: images, Files: files, TimelineAttachments: attachments}
 }
 
-func appendImageTimelineAttachment(
-	attachments []TimelineAttachment,
-	buildAttachmentName func(string) string,
-	buildAttachmentPreviewURL func(string) string,
-	nameSource string,
-	path string,
-	preview string,
-) []TimelineAttachment {
-	previewURL := buildAttachmentPreviewURL(preview)
-	return append(attachments, TimelineAttachment{
-		Kind:       "image",
-		Name:       buildAttachmentName(nameSource),
-		Path:       path,
-		PreviewURL: previewURL,
-	})
+func appendImageTimelineAttachment(attachments []TimelineAttachment, buildAttachmentName func(string) string, buildAttachmentPreviewURL func(string) string, nameSource string, path string, preview string) []TimelineAttachment {
+	return append(attachments, TimelineAttachment{Kind: "image", Name: buildAttachmentName(nameSource), Path: path, PreviewURL: buildAttachmentPreviewURL(preview)})
 }
 
-func appendFileTimelineAttachment(
-	attachments []TimelineAttachment,
-	name string,
-	path string,
-) []TimelineAttachment {
-	return append(attachments, TimelineAttachment{
-		Kind: "file",
-		Name: name,
-		Path: path,
-	})
+func appendFileTimelineAttachment(attachments []TimelineAttachment, name string, path string) []TimelineAttachment {
+	return append(attachments, TimelineAttachment{Kind: "file", Name: name, Path: path})
 }
 
-func ExtractTurnInputs(
-	inputs []TurnInput,
-	fileContentInputText func(string, string) string,
-) (prompt string, images, files []string) {
+func ExtractTurnInputs(inputs []TurnInput, fileContentInputText func(string, string) string) (prompt string, images, files []string) {
 	parsed := ParseTurnInputs(inputs, fileContentInputText, nil, nil)
 	return parsed.Prompt, parsed.Images, parsed.Files
 }
 
-func BuildUserTimelineAttachments(
-	images, files []string,
-	buildAttachmentName func(string) string,
-	buildAttachmentPreviewURL func(string) string,
-) []TimelineAttachment {
-	if buildAttachmentName == nil {
-		buildAttachmentName = func(path string) string { return strings.TrimSpace(path) }
-	}
-	if buildAttachmentPreviewURL == nil {
-		buildAttachmentPreviewURL = func(path string) string { return strings.TrimSpace(path) }
-	}
+func BuildUserTimelineAttachments(images, files []string, buildAttachmentName func(string) string, buildAttachmentPreviewURL func(string) string) []TimelineAttachment {
+	buildAttachmentName, buildAttachmentPreviewURL = normalizeAttachmentBuilders(buildAttachmentName, buildAttachmentPreviewURL)
 	attachments := make([]TimelineAttachment, 0, len(images)+len(files))
 	for _, raw := range images {
-		path := strings.TrimSpace(raw)
-		if path == "" {
-			continue
+		if path := strings.TrimSpace(raw); path != "" {
+			attachments = appendImageTimelineAttachment(attachments, buildAttachmentName, buildAttachmentPreviewURL, path, path, path)
 		}
-		attachments = appendImageTimelineAttachment(attachments, buildAttachmentName, buildAttachmentPreviewURL, path, path, path)
 	}
 	for _, raw := range files {
-		path := strings.TrimSpace(raw)
-		if path == "" {
-			continue
+		if path := strings.TrimSpace(raw); path != "" {
+			attachments = appendFileTimelineAttachment(attachments, buildAttachmentName(path), path)
 		}
-		attachments = appendFileTimelineAttachment(attachments, buildAttachmentName(path), path)
 	}
 	return attachments
 }
 
-func BuildUserTimelineAttachmentsFromInputs(
-	inputs []TurnInput,
-	fileContentInputText func(string, string) string,
-	buildAttachmentName func(string) string,
-	buildAttachmentPreviewURL func(string) string,
-) []TimelineAttachment {
+func BuildUserTimelineAttachmentsFromInputs(inputs []TurnInput, fileContentInputText func(string, string) string, buildAttachmentName func(string) string, buildAttachmentPreviewURL func(string) string) []TimelineAttachment {
 	parsed := ParseTurnInputs(inputs, fileContentInputText, buildAttachmentName, buildAttachmentPreviewURL)
 	if len(parsed.TimelineAttachments) == 0 {
 		return nil
@@ -464,4 +313,14 @@ func BuildAutoMatchInputs(input []TurnInput) []AutoMatchInput {
 		out = append(out, AutoMatchInput{Type: item.Type, Name: item.Name})
 	}
 	return out
+}
+
+func normalizeAttachmentBuilders(buildAttachmentName func(string) string, buildAttachmentPreviewURL func(string) string) (func(string) string, func(string) string) {
+	if buildAttachmentName == nil {
+		buildAttachmentName = func(path string) string { return strings.TrimSpace(path) }
+	}
+	if buildAttachmentPreviewURL == nil {
+		buildAttachmentPreviewURL = func(path string) string { return strings.TrimSpace(path) }
+	}
+	return buildAttachmentName, buildAttachmentPreviewURL
 }

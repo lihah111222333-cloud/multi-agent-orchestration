@@ -1,7 +1,3 @@
-// client.go — 零依赖 LSP JSON-RPC 2.0 over stdio 客户端。
-//
-// 协议: Content-Length: N\r\n\r\n{json} — 标准 LSP Base Protocol。
-// 生命周期: Start → initialize → initialized → (didOpen/hover/...) → shutdown → exit。
 package lsp
 
 import (
@@ -23,11 +19,8 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-// DiagnosticHandler 诊断回调。
 type DiagnosticHandler func(uri string, diagnostics []Diagnostic)
 
-// Client 是一个 LSP 语言服务器的 JSON-RPC 2.0 客户端。
-// 通过 stdio (stdin/stdout) 与子进程通信。
 type Client struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -50,7 +43,6 @@ type Client struct {
 	semanticTokensLegend *SemanticTokensLegend
 }
 
-// NewClient 创建客户端 (不启动进程)。
 func NewClient(language string) *Client {
 	return &Client{
 		language: language,
@@ -58,17 +50,14 @@ func NewClient(language string) *Client {
 	}
 }
 
-// Language 返回此客户端服务的语言标识。
 func (c *Client) Language() string { return c.language }
 
-// SetDiagnosticHandler 注册诊断回调。
 func (c *Client) SetDiagnosticHandler(h DiagnosticHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onDiag = h
 }
 
-// Start 启动语言服务器进程并完成 initialize 握手。
 func (c *Client) Start(ctx context.Context, command string, args []string, rootURI string) error {
 	c.cmd = exec.CommandContext(ctx, command, args...)
 	c.cmd.Env = os.Environ()
@@ -179,14 +168,12 @@ func (c *Client) stopAfterStartFailure(stage string, err error) error {
 	return apperrors.Wrap(err, "LSP.Start", stage)
 }
 
-// InitializeResult 返回 initialize 响应缓存。
 func (c *Client) InitializeResult() InitializeResult {
 	c.capsMu.RLock()
 	defer c.capsMu.RUnlock()
 	return c.initializeResult
 }
 
-// SemanticTokensLegend 返回 initialize 缓存的 semantic tokens legend。
 func (c *Client) SemanticTokensLegend() *SemanticTokensLegend {
 	c.capsMu.RLock()
 	defer c.capsMu.RUnlock()
@@ -199,7 +186,6 @@ func (c *Client) SemanticTokensLegend() *SemanticTokensLegend {
 	return &legend
 }
 
-// Running 返回客户端是否正在运行。
 func (c *Client) Running() bool {
 	return !c.stopped.Load() && c.cmd != nil && c.cmd.Process != nil
 }

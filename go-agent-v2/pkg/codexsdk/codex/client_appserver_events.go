@@ -100,18 +100,20 @@ func (c *AppServerClient) handleReadLoopReadError(err error) ([]byte, bool, bool
 
 	if !c.stopped.Load() {
 		willRetry := appServerStreamMaxRetries > 0
-		reconnectingMessage := "Reconnecting..."
 		if !willRetry {
-			reconnectingMessage = "Stream disconnected"
+			// 不可恢复的断连，发射 stream_error 通知 UI。
+			details := map[string]any{
+				"message":     "Stream disconnected",
+				"attempt":     0,
+				"max_retries": appServerStreamMaxRetries,
+				"trigger":     "read_error",
+			}
+			maps.Copy(details, health.asDetailsMap())
+			c.emitStreamError(readErr, "read", isIdleTimeoutError(err), false, details)
 		}
-		details := map[string]any{
-			"message":     reconnectingMessage,
-			"attempt":     0,
-			"max_retries": appServerStreamMaxRetries,
-			"trigger":     "read_error",
-		}
-		maps.Copy(details, health.asDetailsMap())
-		c.emitStreamError(readErr, "read", isIdleTimeoutError(err), willRetry, details)
+		// willRetry=true 时不发射 stream_error：
+		// 重连状态通过 attemptSingleReconnect 中的 background_event 展示，
+		// 避免 stream_error → "Reconnecting..." 在 UI 永久残留。
 	}
 
 	if c.stopped.Load() && isShutdownReadError(err) {

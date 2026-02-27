@@ -8,16 +8,13 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 )
 
-// DynamicTool is the tools-layer alias for dynamic tool schema.
 type DynamicTool = agentcore.DynamicTool
 
-// Tool is a dynamic tool schema paired with its runtime handler.
 type Tool struct {
 	Schema  DynamicTool
 	Handler func(ctx ToolCallContext, args json.RawMessage) string
 }
 
-// ToolCallContext carries dynamic tool call runtime metadata.
 type ToolCallContext struct {
 	AgentID   string
 	CallID    string
@@ -25,7 +22,6 @@ type ToolCallContext struct {
 	Ctx       context.Context
 }
 
-// Schemas extracts schemas from tool definitions.
 func Schemas(list []Tool) []DynamicTool {
 	if len(list) == 0 {
 		return nil
@@ -37,7 +33,6 @@ func Schemas(list []Tool) []DynamicTool {
 	return out
 }
 
-// FindTool finds a tool by schema name.
 func FindTool(list []Tool, name string) (Tool, bool) {
 	for _, tool := range list {
 		if tool.Schema.Name == name {
@@ -47,18 +42,15 @@ func FindTool(list []Tool, name string) (Tool, bool) {
 	return Tool{}, false
 }
 
-// CodeRunProvider exposes runtime dependencies for code_run tools.
 type CodeRunProvider interface {
 	CodeRunner() CodeExecRunner
 	AuditLogger() AuditLogger
 }
 
-// ApprovalProvider exposes approval flow without transport coupling.
 type ApprovalProvider interface {
 	AwaitApproval(agentID, callID, mode, command string, isDangerous bool) bool
 }
 
-// ResourceProvider exposes resource stores and event notification hooks.
 type ResourceProvider interface {
 	DAGManager() DAGManager
 	CommandCardStore() CardStore
@@ -68,7 +60,6 @@ type ResourceProvider interface {
 	NotifyEvent(method string, params any)
 }
 
-// OrchestrationProvider exposes orchestration runtime dependencies.
 type OrchestrationProvider interface {
 	AgentLauncher() AgentLauncher
 	WorkspaceOps() WorkspaceOps
@@ -79,7 +70,6 @@ type OrchestrationProvider interface {
 	DeleteSubAgent(id string)
 }
 
-// AgentRuntimeProvider exposes cross-tool agent runtime state.
 type AgentRuntimeProvider interface {
 	CancelCodeRuns(agentID string) int
 	SetAgentWorkDir(agentID, cwd string)
@@ -87,22 +77,18 @@ type AgentRuntimeProvider interface {
 	GetAgentWorkDir(agentID string) string
 }
 
-// SchemaProvider exposes all dynamic tool schemas for recursive orchestration dependencies.
 type SchemaProvider interface {
 	AllSchemas() []DynamicTool
 }
 
-// CodeExecRunner abstracts code execution behavior.
 type CodeExecRunner interface {
 	Run(ctx context.Context, req CodeRunRequest) (*CodeRunResult, error)
 }
 
-// AuditLogger abstracts audit event persistence behavior.
 type AuditLogger interface {
 	Append(ctx context.Context, e *AuditEvent) error
 }
 
-// TaskDAG is tools-layer DAG DTO.
 type TaskDAG struct {
 	ID          int        `json:"id"`
 	DagKey      string     `json:"dag_key"`
@@ -117,7 +103,6 @@ type TaskDAG struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
-// TaskDAGNode is tools-layer DAG node DTO.
 type TaskDAGNode struct {
 	ID         int        `json:"id"`
 	DagKey     string     `json:"dag_key"`
@@ -136,7 +121,6 @@ type TaskDAGNode struct {
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
-// DAGManager abstracts DAG persistence behavior.
 type DAGManager interface {
 	SaveDAG(ctx context.Context, d *TaskDAG) (*TaskDAG, error)
 	ListDAGs(ctx context.Context, keyword, status string, limit int) ([]TaskDAG, error)
@@ -146,7 +130,6 @@ type DAGManager interface {
 	ListNodes(ctx context.Context, dagKey string) ([]TaskDAGNode, error)
 }
 
-// CardStore abstracts command card persistence behavior.
 type CardStore interface {
 	Save(ctx context.Context, c any) (any, error)
 	Get(ctx context.Context, cardKey string) (any, error)
@@ -155,7 +138,6 @@ type CardStore interface {
 	Delete(ctx context.Context, cardKey string) error
 }
 
-// TemplateStore abstracts prompt template persistence behavior.
 type TemplateStore interface {
 	Save(ctx context.Context, t any) (any, error)
 	Get(ctx context.Context, promptKey string) (any, error)
@@ -164,7 +146,6 @@ type TemplateStore interface {
 	Delete(ctx context.Context, promptKey string) error
 }
 
-// FileStore abstracts shared file persistence behavior.
 type FileStore interface {
 	Write(ctx context.Context, path, content, actor string) (any, error)
 	Read(ctx context.Context, path string) (any, error)
@@ -172,7 +153,6 @@ type FileStore interface {
 	Delete(ctx context.Context, path, actor string) (bool, error)
 }
 
-// WorkspaceCreateRunRequest is tools-layer workspace create request.
 type WorkspaceCreateRunRequest struct {
 	RunKey     string   `json:"run_key"`
 	DagKey     string   `json:"dag_key"`
@@ -182,7 +162,6 @@ type WorkspaceCreateRunRequest struct {
 	Metadata   any      `json:"metadata"`
 }
 
-// WorkspaceMergeRunRequest is tools-layer workspace merge request.
 type WorkspaceMergeRunRequest struct {
 	RunKey        string `json:"run_key"`
 	UpdatedBy     string `json:"updated_by"`
@@ -190,7 +169,6 @@ type WorkspaceMergeRunRequest struct {
 	DeleteRemoved bool   `json:"delete_removed"`
 }
 
-// WorkspaceOps abstracts workspace run lifecycle behavior.
 type WorkspaceOps interface {
 	CreateRun(ctx context.Context, req WorkspaceCreateRunRequest) (any, error)
 	GetRun(ctx context.Context, runKey string) (any, error)
@@ -200,7 +178,6 @@ type WorkspaceOps interface {
 	MergeRun(ctx context.Context, req WorkspaceMergeRunRequest) (any, error)
 }
 
-// AgentLauncher abstracts agent process lifecycle behavior.
 type AgentLauncher interface {
 	Launch(ctx context.Context, id, name, prompt, cwd, instructions string, dynamicTools []DynamicTool) error
 	Submit(id, prompt string, images, files []string) error

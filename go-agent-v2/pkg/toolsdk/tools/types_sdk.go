@@ -2,7 +2,6 @@ package tools
 
 import "time"
 
-// CodeRunRequest describes a code execution request in the tools SDK boundary.
 type CodeRunRequest struct {
 	Mode     string        `json:"mode"`
 	Language string        `json:"language"`
@@ -15,7 +14,6 @@ type CodeRunRequest struct {
 	Timeout  time.Duration `json:"timeout,omitempty"`
 }
 
-// CodeRunResult describes a code execution result in the tools SDK boundary.
 type CodeRunResult struct {
 	Success   bool          `json:"success"`
 	Output    string        `json:"output"`
@@ -26,7 +24,6 @@ type CodeRunResult struct {
 	Truncated bool          `json:"truncated"`
 }
 
-// AuditEvent describes an audit event in the tools SDK boundary.
 type AuditEvent struct {
 	Ts        time.Time `json:"ts"`
 	EventType string    `json:"event_type"`

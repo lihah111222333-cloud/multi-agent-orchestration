@@ -109,7 +109,7 @@ func (m *RuntimeManager) applyAgentEventLocked(threadID string, normalized Norma
 	m.markAgentActiveLocked(threadID, ts)
 	rt := m.runtime[threadID]
 	rt.hasDerivedState = true
-	rt.lastEventAt = ts // Fix 2: track last event time for stale turn detection
+	rt.lastEventAt = ts
 	fields := resolveEventFields(normalized, payload)
 	m.applyLifecycleStateLocked(threadID, normalized, payload, fields, ts)
 	if handler, ok := runtimeEventHandlers[normalized.UIType]; ok {

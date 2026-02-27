@@ -83,6 +83,22 @@ func OrchestrationTools(provider OrchestrationProvider, runtime AgentRuntimeProv
 				return orchestrationStopAgent(provider, runtime, args)
 			},
 		},
+		{
+			Schema: agentcore.DynamicTool{
+				Name:        "orchestration_get_agent_report",
+				Description: "Get the last completion report from a running agent. Returns the agent's last response/summary after it finished a task. Empty string means the agent has not completed any task yet.",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"agent_id": map[string]any{"type": "string", "description": "Agent ID to get report from"},
+					},
+					"required": []string{"agent_id"},
+				},
+			},
+			Handler: func(_ ToolCallContext, args json.RawMessage) string {
+				return orchestrationGetAgentReport(provider, args)
+			},
+		},
 	}
 }
 
@@ -257,6 +273,23 @@ func orchestrationStopAgent(provider OrchestrationProvider, runtime AgentRuntime
 
 	logger.Info("orchestration: agent stopped", logger.FieldID, p.AgentID)
 	return ToolJSON(map[string]any{"success": true, "agent_id": p.AgentID})
+}
+
+func orchestrationGetAgentReport(provider OrchestrationProvider, args json.RawMessage) string {
+	var p struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return ToolError(apperrors.Wrap(err, "orchestrationGetAgentReport", "unmarshal args"))
+	}
+	if p.AgentID == "" {
+		return `{"error":"agent_id is required"}`
+	}
+	if provider == nil || provider.AgentLauncher() == nil {
+		return ToolError(apperrors.New("orchestrationGetAgentReport", "agent manager not initialized"))
+	}
+	report := provider.AgentLauncher().GetReport(p.AgentID)
+	return ToolJSON(map[string]any{"agent_id": p.AgentID, "report": report})
 }
 
 func orchestrationListLen(v any) int {

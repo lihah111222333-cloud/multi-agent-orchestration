@@ -204,4 +204,5 @@ type AgentLauncher interface {
 	Submit(id, prompt string, images, files []string) error
 	Stop(id string) error
 	List() any
+	GetReport(id string) string
 }

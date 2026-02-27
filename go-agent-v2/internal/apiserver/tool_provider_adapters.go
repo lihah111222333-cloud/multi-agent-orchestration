@@ -318,6 +318,9 @@ func (a agentLauncherAdapter) Stop(id string) error {
 func (a agentLauncherAdapter) List() any {
 	return a.manager.List()
 }
+func (a agentLauncherAdapter) GetReport(id string) string {
+	return a.manager.GetReport(id)
+}
 
 func saveStoreValue[T any](
 	ctx context.Context,

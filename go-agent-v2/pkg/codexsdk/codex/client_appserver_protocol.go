@@ -41,7 +41,6 @@ type asThreadStartParams struct {
 }
 
 func (c *AppServerClient) ThreadStart(cwd, model, instructions string, dynamicTools []DynamicTool) (string, error) {
-	const errSource = "AppServerClient.ThreadStart"
 	policy := strings.TrimSpace(c.ApprovalPolicy)
 	logger.Info("codex: thread/start with approval policy",
 		logger.FieldAgentID, c.AgentID,
@@ -57,9 +56,8 @@ func (c *AppServerClient) ThreadStart(cwd, model, instructions string, dynamicTo
 	}, 30*time.Second)
 	if err != nil {
 		logger.Error("codex: thread/start FAILED", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldError, err)
-		return "", apperrors.Wrap(err, errSource, "thread/start")
+		return "", apperrors.Wrap(err, "AppServerClient.ThreadStart", "thread/start")
 	}
-
 	var resp struct {
 		Thread struct {
 			ID string `json:"id"`
@@ -67,11 +65,11 @@ func (c *AppServerClient) ThreadStart(cwd, model, instructions string, dynamicTo
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
 		logger.Error("codex: thread/start decode FAILED", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldRaw, string(result), logger.FieldError, err)
-		return "", apperrors.Wrapf(err, errSource, "thread/start decode (raw: %s)", result)
+		return "", apperrors.Wrapf(err, "AppServerClient.ThreadStart", "thread/start decode (raw: %s)", result)
 	}
 	if resp.Thread.ID == "" {
 		logger.Error("codex: thread/start returned empty thread ID", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldRaw, string(result))
-		return "", apperrors.Newf(errSource, "thread/start returned empty thread ID (raw: %s)", result)
+		return "", apperrors.Newf("AppServerClient.ThreadStart", "thread/start returned empty thread ID (raw: %s)", result)
 	}
 	c.ThreadID = resp.Thread.ID
 	c.listenerEnsureNeeded.Store(false)
@@ -127,8 +125,7 @@ func (c *AppServerClient) ensureListenerIfNeededAsync(
 
 func (c *AppServerClient) Submit(prompt string, images, files []string, outputSchema json.RawMessage) error {
 	c.ensureListenerIfNeeded(c.call)
-	inputs := buildTurnStartInputs(prompt, images, files)
-	params := withThreadIDParam(strings.TrimSpace(c.ThreadID), map[string]any{"input": inputs})
+	params := withThreadIDParam(strings.TrimSpace(c.ThreadID), map[string]any{"input": buildTurnStartInputs(prompt, images, files)})
 	if len(outputSchema) > 0 {
 		params["outputSchema"] = json.RawMessage(outputSchema)
 	}
@@ -144,11 +141,9 @@ func (c *AppServerClient) Submit(prompt string, images, files []string, outputSc
 
 func (c *AppServerClient) SendCommand(cmd, args string) error {
 	if strings.TrimSpace(cmd) == CmdInterrupt {
-		handled, err := c.tryInterruptCommand()
-		if err != nil {
+		if handled, err := c.tryInterruptCommand(); err != nil {
 			return err
-		}
-		if handled {
+		} else if handled {
 			return nil
 		}
 	}
@@ -162,11 +157,8 @@ func (c *AppServerClient) tryInterruptCommand() (bool, error) {
 	}
 	turnID := strings.TrimSpace(c.getActiveTurnID())
 	callTurnInterrupt := func(turnID, turnScope string) error {
-		return c.callWithInitializeRecovery(
-			"turn/interrupt",
-			buildTurnInterruptParams(threadID, turnID, turnScope),
-			appServerInterruptTimeout,
-		)
+		_, _, err := callWithNotInitializedRecovery(c.call, c.Initialize, "turn/interrupt", buildTurnInterruptParams(threadID, turnID, turnScope), appServerInterruptTimeout)
+		return err
 	}
 	if turnID != "" {
 		if err := callTurnInterrupt(turnID, "with_turn_id"); err == nil || (isInterruptTurnIDMismatchError(err) && callTurnInterrupt(turnID, "thread_scoped") == nil) {
@@ -175,19 +167,10 @@ func (c *AppServerClient) tryInterruptCommand() (bool, error) {
 	} else if callTurnInterrupt("", "thread_scoped") == nil {
 		return true, nil
 	}
-	if c.callWithInitializeRecovery(
-		"interruptConversation",
-		map[string]any{"conversationId": threadID},
-		appServerInterruptTimeout,
-	) == nil {
+	if _, _, err := callWithNotInitializedRecovery(c.call, c.Initialize, "interruptConversation", map[string]any{"conversationId": threadID}, appServerInterruptTimeout); err == nil {
 		return true, nil
 	}
 	return false, nil
-}
-
-func (c *AppServerClient) callWithInitializeRecovery(method string, params any, timeout time.Duration) error {
-	_, _, err := callWithNotInitializedRecovery(c.call, c.Initialize, method, params, timeout)
-	return err
 }
 
 func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID *int64) error {

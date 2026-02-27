@@ -1,4 +1,3 @@
-// server_transport.go — HTTP JSON-RPC / SSE 传输层。
 package apiserver
 
 import (
@@ -9,13 +8,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-// ========================================
-// HTTP JSON-RPC (调试模式)
-// ========================================
-
-// handleHTTPRPC 处理 HTTP POST /rpc 请求 (调试模式用)。
-//
-// 接收标准 JSON-RPC 2.0 请求，复用 dispatchRequest 分发，返回 JSON-RPC 响应。
 func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		http.Error(w, "server not ready", http.StatusServiceUnavailable)
@@ -50,7 +42,6 @@ func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 如果 params 为 null, 用空对象
 	params := req.Params
 	if len(params) == 0 || string(params) == "null" {
 		params = json.RawMessage("{}")
@@ -77,7 +68,6 @@ func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeJSONRPCError 写 JSON-RPC 错误响应。
 func writeJSONRPCError(w http.ResponseWriter, id any, code int, message string) {
 	resp := map[string]any{
 		"jsonrpc": jsonrpcVersion,
@@ -88,13 +78,12 @@ func writeJSONRPCError(w http.ResponseWriter, id any, code int, message string) 
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK) // JSON-RPC 错误仍返回 200
+	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		logger.Warn("http-rpc: encode error response failed", logger.FieldError, err)
 	}
 }
 
-// recoveryMiddleware 捕获 HTTP handler panic，防止单个请求崩溃导致整个服务端退出。
 func recoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -112,7 +101,6 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// corsMiddleware 添加 CORS 头 (调试模式允许跨域)。
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -126,7 +114,6 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// handleSSE 处理 SSE 事件流 (debug 模式浏览器实时接收 agent 事件)。
 func handleSSE(s *Server, w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		http.Error(w, "server not ready", http.StatusServiceUnavailable)

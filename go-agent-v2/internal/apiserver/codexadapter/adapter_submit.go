@@ -88,28 +88,18 @@ func wrapProcess(proc *codexsdk.AgentProcess) agentcore.Process {
 	if proc == nil {
 		return nil
 	}
-	return processAdapter{proc: proc}
+	return &processAdapter{proc: proc}
 }
 
 func unwrapProcess(proc agentcore.Process) *codexsdk.AgentProcess {
-	switch p := proc.(type) {
-	case processAdapter:
-		return p.proc
-	case *processAdapter:
-		if p == nil {
-			return nil
-		}
-		return p.proc
-	default:
+	p, _ := proc.(*processAdapter)
+	if p == nil {
 		return nil
 	}
+	return p.proc
 }
 
-func (a *Adapter) resolveThreadFromSlashCommand(
-	ctx context.Context,
-	threadID string,
-	requireThreadID bool,
-) (string, error) {
+func (a *Adapter) resolveThreadFromSlashCommand(ctx context.Context, threadID string, requireThreadID bool) (string, error) {
 	return commandsvc.ResolveThreadForSlashCommandLogic(ctx, threadID, requireThreadID, a.ThreadList)
 }
 
@@ -175,18 +165,12 @@ func (a *Adapter) ResolveLSPUsagePromptHint(ctx context.Context, defaultHint str
 	return promptsvc.ResolveLSPUsagePromptHint(ctx, defaultHint, maxHintLen, a.storeGetter())
 }
 
-func (a *Adapter) resolveCodexThreadCandidatesForRuntime(ctx context.Context, agentID string) []string {
-	return a.ResolveCodexThreadCandidates(ctx, agentID, commonsvc.AppendUniqueThreadIDFallback, lifecyclesvc.PreviewResumeCandidates)
-}
-
 func (a *Adapter) runtimeServiceAdapter() runtimesvc.RuntimeAdapter {
 	if a == nil {
 		return runtimesvc.RuntimeAdapter{}
 	}
 	ctxDeps := a.depsOrDefault()
 	prepare := runtimesvc.PrepareAdapter{
-		MergePromptText:                commonadapter.MergePromptText,
-		FileContentInputText:           commonadapter.FileContentInputText,
 		BuildAttachmentName:            util.BuildAttachmentName,
 		BuildAttachmentPreviewURL:      util.BuildAttachmentPreviewURL,
 		BuildSelectedSkillPrompt:       a.buildSelectedSkillPrompt,
@@ -197,8 +181,6 @@ func (a *Adapter) runtimeServiceAdapter() runtimesvc.RuntimeAdapter {
 		ActiveTrackedTurnID:            a.activeTrackedTurnID,
 		ShowInjectedPromptInChat:       a.showInjectedPromptInChat,
 		ResolveLSPUsagePromptHint:      a.ResolveLSPUsagePromptHint,
-		DefaultLSPUsagePromptHint:      func() string { return defaultLSPUsagePromptHint },
-		MaxLSPUsagePromptHintLen:       func() int { return maxLSPUsagePromptHintLen },
 	}
 	if runtime := a.uiRuntime(); runtime != nil {
 		prepare.UIRuntime = func() agentcore.TimelineRuntime { return uiRuntimeAdapter{runtime: runtime} }
@@ -209,16 +191,17 @@ func (a *Adapter) runtimeServiceAdapter() runtimesvc.RuntimeAdapter {
 		AllDynamicToolSchemas:             a.allDynamicToolSchemas,
 		ResolveStartInstructionsForLaunch: a.resolveStartInstructionsForLaunch,
 		SetAgentWorkDir:                   a.setAgentWorkDir,
-		ThreadLogFields:                   threadLogFields,
 		CancelCodeRuns:                    a.cancelCodeRuns,
-		ResolveCodexThreadCandidates:      a.resolveCodexThreadCandidatesForRuntime,
-		IsCodexProcessCrashError:          lifecyclesvc.IsCodexProcessCrashError,
-		IsHistoricalResumeCandidateError:  lifecyclesvc.IsHistoricalResumeCandidateError,
-		PreviewResumeCandidates:           lifecyclesvc.PreviewResumeCandidates,
-		Notify:                            a.notify,
-		NormalizeSkillNames:               commonadapter.NormalizeSkillNames,
-		BeginTrackedTurn:                  a.beginTrackedTurn,
-		TurnSteer:                         a.TurnSteer,
+		ResolveCodexThreadCandidates: func(ctx context.Context, agentID string) []string {
+			return a.ResolveCodexThreadCandidates(ctx, agentID, commonsvc.AppendUniqueThreadIDFallback, lifecyclesvc.PreviewResumeCandidates)
+		},
+		IsCodexProcessCrashError:         lifecyclesvc.IsCodexProcessCrashError,
+		IsHistoricalResumeCandidateError: lifecyclesvc.IsHistoricalResumeCandidateError,
+		PreviewResumeCandidates:          lifecyclesvc.PreviewResumeCandidates,
+		Notify:                           a.notify,
+		NormalizeSkillNames:              commonadapter.NormalizeSkillNames,
+		BeginTrackedTurn:                 a.beginTrackedTurn,
+		TurnSteer:                        a.TurnSteer,
 		GetThreadID: func(proc agentcore.Process) string {
 			return a.GetThreadID(unwrapProcess(proc))
 		},
@@ -236,30 +219,21 @@ func (a *Adapter) runtimeServiceAdapter() runtimesvc.RuntimeAdapter {
 			return a.Submit(unwrapProcess(proc), prompt, images, files, outputSchema)
 		},
 		ResolveClientActiveTurnID: func(proc agentcore.Process) string {
-			return a.resolveClientActiveTurnIDForRuntime(unwrapProcess(proc))
+			typed := unwrapProcess(proc)
+			if typed == nil || typed.Client == nil {
+				return ""
+			}
+			reader, ok := typed.Client.(interface{ GetActiveTurnID() string })
+			if !ok {
+				return ""
+			}
+			return strings.TrimSpace(reader.GetActiveTurnID())
 		},
 	}
 	if manager := a.manager(); manager != nil {
 		adapter.Manager = func() agentcore.Manager { return managerAdapter{manager: manager} }
 	}
 	return adapter
-}
-
-func (a *Adapter) resolveClientActiveTurnIDForRuntime(proc *codexsdk.AgentProcess) string {
-	if proc == nil || proc.Client == nil {
-		return ""
-	}
-	reader, ok := proc.Client.(interface{ GetActiveTurnID() string })
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(reader.GetActiveTurnID())
-}
-
-func (a *Adapter) resolveProcess(caller, threadID string) (*codexsdk.AgentProcess, error) {
-	return withProcess(a, caller, threadID, func(proc *codexsdk.AgentProcess) (*codexsdk.AgentProcess, error) {
-		return proc, nil
-	})
 }
 
 func withProcess[T any](a *Adapter, caller string, threadID string, fn func(*codexsdk.AgentProcess) (T, error)) (T, error) {
@@ -314,8 +288,7 @@ func (a *Adapter) SendSlashCommandWithArgs(params json.RawMessage, command, argK
 }
 
 func (a *Adapter) ThreadSkillsList() (any, error) {
-	result, err := a.sendSlashCommand(context.Background(), "Server.threadSkillsList", "", "/skills", "", false)
-	return commandsvc.ThreadSkillsListResult(result, err)
+	return commandsvc.ThreadSkillsListResult(a.sendSlashCommand(context.Background(), "Server.threadSkillsList", "", "/skills", "", false))
 }
 
 func (a *Adapter) sendSlashCommand(ctx context.Context, methodName, threadID, command, args string, requireThreadID bool) (map[string]any, error) {

@@ -108,11 +108,45 @@ func (a *Adapter) ResolveCodexThreadCandidates(ctx context.Context, agentID stri
 	if preview == nil {
 		preview = lifecyclesvc.PreviewResumeCandidates
 	}
-	return historysvc.ResolveCodexThreadCandidates(ctx, agentID, 0, appendUniqueThreadID, a.bindingCodexThreadID, a.statusSessionID, preview)
+	return historysvc.ResolveCodexThreadCandidates(
+		ctx,
+		agentID,
+		0,
+		appendUniqueThreadID,
+		func(ctx context.Context, agentID string) (string, error) {
+			binding, err := a.findBindingByAgentID(ctx, agentID)
+			if err != nil || binding == nil {
+				return "", err
+			}
+			return binding.CodexThreadID, nil
+		},
+		func(ctx context.Context, agentID string) (string, error) {
+			status, err := a.findStatusByAgentID(ctx, agentID)
+			if err != nil || status == nil {
+				return "", err
+			}
+			return status.SessionID, nil
+		},
+		preview,
+	)
 }
 
 func (a *Adapter) ThreadExistsInHistory(ctx context.Context, threadID string) bool {
-	return historysvc.ThreadExistsInHistory(ctx, threadID, 0, lifecyclesvc.IsLikelyCodexThreadID, a.bindingExists, a.agentStatusExists, a.loadThreadArchiveMap)
+	return historysvc.ThreadExistsInHistory(
+		ctx,
+		threadID,
+		0,
+		lifecyclesvc.IsLikelyCodexThreadID,
+		func(ctx context.Context, agentID string) (bool, error) {
+			binding, err := a.findBindingByAgentID(ctx, agentID)
+			return binding != nil, err
+		},
+		func(ctx context.Context, agentID string) (bool, error) {
+			status, err := a.findStatusByAgentID(ctx, agentID)
+			return status != nil, err
+		},
+		a.loadThreadArchiveMap,
+	)
 }
 
 func (a *Adapter) firstResolvedCodexThreadID(ctx context.Context, threadID string) string {

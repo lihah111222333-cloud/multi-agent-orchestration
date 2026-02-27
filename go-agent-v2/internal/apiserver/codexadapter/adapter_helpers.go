@@ -83,7 +83,7 @@ func threadExistsInRuntime(threadID string, runtime *uistate.RuntimeManager) boo
 
 func fuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern string) bool) []map[string]any {
 	pattern := strings.ToLower(strings.TrimSpace(query))
-	results := make([]map[string]any, 0)
+	var results []map[string]any
 	if pattern == "" || fuzzyMatch == nil {
 		return results
 	}
@@ -116,9 +116,9 @@ func mapSlice[T any, R any](src []T, mapper func(T) R) []R {
 	if len(src) == 0 {
 		return nil
 	}
-	out := make([]R, 0, len(src))
-	for _, item := range src {
-		out = append(out, mapper(item))
+	out := make([]R, len(src))
+	for i, item := range src {
+		out[i] = mapper(item)
 	}
 	return out
 }

@@ -127,16 +127,9 @@ func initializeTrackerState(a *Adapter) {
 	}
 }
 
-func (a *Adapter) Context() *Deps {
-	if a == nil {
-		return nil
-	}
-	return a.ctx
-}
-
 func (a *Adapter) depsOrDefault() *Deps {
-	if deps := a.Context(); deps != nil {
-		return deps
+	if a != nil && a.ctx != nil {
+		return a.ctx
 	}
 	return normalizeDeps(Deps{})
 }
@@ -182,32 +175,6 @@ func (a *Adapter) findStatusByAgentID(ctx context.Context, agentID string) (*sto
 	return nil, nil
 }
 
-func (a *Adapter) bindingExists(ctx context.Context, agentID string) (bool, error) {
-	binding, err := a.findBindingByAgentID(ctx, agentID)
-	return binding != nil, err
-}
-
-func (a *Adapter) agentStatusExists(ctx context.Context, agentID string) (bool, error) {
-	status, err := a.findStatusByAgentID(ctx, agentID)
-	return status != nil, err
-}
-
-func (a *Adapter) bindingCodexThreadID(ctx context.Context, agentID string) (string, error) {
-	binding, err := a.findBindingByAgentID(ctx, agentID)
-	if err != nil || binding == nil {
-		return "", err
-	}
-	return binding.CodexThreadID, nil
-}
-
-func (a *Adapter) statusSessionID(ctx context.Context, agentID string) (string, error) {
-	status, err := a.findStatusByAgentID(ctx, agentID)
-	if err != nil || status == nil {
-		return "", err
-	}
-	return status.SessionID, nil
-}
-
 func (a *Adapter) storeGetter() func(context.Context, string) (any, error) {
 	if store := a.store(); store != nil {
 		return store.Get
@@ -219,8 +186,8 @@ func (a *Adapter) readSkillContent(skillName string) (string, error) {
 	if strings.TrimSpace(skillName) == "" {
 		return "", appErrors.New("codexadapter.readSkillContent", "skill name is required")
 	}
-	if deps := a.Context(); deps != nil {
-		return deps.ReadSkillContent(skillName)
+	if a != nil && a.ctx != nil {
+		return a.ctx.ReadSkillContent(skillName)
 	}
 	return "", appErrors.New("codexadapter.readSkillContent", "server context is not configured")
 }
@@ -246,66 +213,59 @@ func toListingAgentInfos(items []codexsdk.AgentInfo) []listingsvc.AgentInfo {
 	})
 }
 
+func (a *Adapter) listBindingAgentIDs(ctx context.Context) ([]listingsvc.AgentCodexBinding, error) {
+	bindingStore := a.bindingStore()
+	if bindingStore == nil {
+		return nil, nil
+	}
+	items, err := bindingStore.ListAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(items, func(item store.AgentCodexBinding) listingsvc.AgentCodexBinding {
+		return listingsvc.AgentCodexBinding{AgentID: item.AgentID}
+	}), nil
+}
+
+func (a *Adapter) listStatusAgentIDs(ctx context.Context) ([]listingsvc.AgentStatus, error) {
+	statusStore := a.statusStore()
+	if statusStore == nil {
+		return nil, nil
+	}
+	items, err := statusStore.List(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(items, func(item store.AgentStatus) listingsvc.AgentStatus {
+		return listingsvc.AgentStatus{AgentID: item.AgentID, AgentName: item.AgentName}
+	}), nil
+}
+
 func (a *Adapter) ThreadList(ctx context.Context) ([]contracts.ThreadListItem, error) {
 	runningAgents := toListingAgentInfos(a.runningAgents())
-	appendBinding := func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
-		return listingsvc.AppendHistoryFromBindingStore(ctx, threads, seen, methodName, func(ctx context.Context) ([]listingsvc.AgentCodexBinding, error) {
-			bindingStore := a.bindingStore()
-			if bindingStore == nil {
-				return nil, nil
-			}
-			items, err := bindingStore.ListAll(ctx)
-			if err != nil {
-				return nil, err
-			}
-			return mapSlice(items, func(item store.AgentCodexBinding) listingsvc.AgentCodexBinding {
-				return listingsvc.AgentCodexBinding{AgentID: item.AgentID}
-			}), nil
-		})
-	}
-	appendStatus := func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
-		return listingsvc.AppendHistoryFromStatusStore(ctx, threads, seen, methodName, func(ctx context.Context) ([]listingsvc.AgentStatus, error) {
-			statusStore := a.statusStore()
-			if statusStore == nil {
-				return nil, nil
-			}
-			items, err := statusStore.List(ctx, "")
-			if err != nil {
-				return nil, err
-			}
-			return mapSlice(items, func(item store.AgentStatus) listingsvc.AgentStatus {
-				return listingsvc.AgentStatus{AgentID: item.AgentID, AgentName: item.AgentName}
-			}), nil
-		})
-	}
-	loadAliases := func(ctx context.Context) map[string]string {
-		store := a.store()
-		if store == nil {
-			return map[string]string{}
-		}
-		return listingsvc.LoadThreadAliases(ctx, store.Get)
-	}
-	syncRuntimeThreads := func(threads []listingsvc.ThreadListItem) {
-		runtime := a.uiRuntime()
-		if runtime == nil {
-			return
-		}
-		runtime.ReplaceThreads(mapSlice(threads, func(item listingsvc.ThreadListItem) uistate.ThreadSnapshot {
-			return uistate.ThreadSnapshot{ID: item.ID, Name: item.Name, State: item.State}
-		}))
-	}
 	return listingsvc.BuildThreadList(
 		ctx,
 		"thread/list",
 		true,
 		func() []listingsvc.AgentInfo { return runningAgents },
 		func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
-			return listingsvc.AppendThreadHistoryFromStores(ctx, threads, seen, methodName, appendBinding, appendStatus, func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
-				return listingsvc.AppendHistoryFromArchiveState(ctx, threads, seen, methodName, a.loadThreadArchiveMap)
-			})
+			threads = listingsvc.AppendHistoryFromBindingStore(ctx, threads, seen, methodName, a.listBindingAgentIDs)
+			threads = listingsvc.AppendHistoryFromStatusStore(ctx, threads, seen, methodName, a.listStatusAgentIDs)
+			return listingsvc.AppendHistoryFromArchiveState(ctx, threads, seen, methodName, a.loadThreadArchiveMap)
 		},
-		loadAliases,
-		syncRuntimeThreads,
+		func(ctx context.Context) map[string]string {
+			if store := a.store(); store != nil {
+				return listingsvc.LoadThreadAliases(ctx, store.Get)
+			}
+			return nil
+		},
+		func(threads []listingsvc.ThreadListItem) {
+			if runtime := a.uiRuntime(); runtime != nil {
+				runtime.ReplaceThreads(mapSlice(threads, func(item listingsvc.ThreadListItem) uistate.ThreadSnapshot {
+					return uistate.ThreadSnapshot{ID: item.ID, Name: item.Name, State: item.State}
+				}))
+			}
+		},
 	)
 }
 
@@ -332,10 +292,11 @@ func (a *Adapter) registerBinding(ctx context.Context, agentID string, proc *cod
 }
 
 func (a *Adapter) persistThreadAlias(ctx context.Context, threadID, alias string) error {
-	if store := a.store(); store != nil {
-		return listingsvc.PersistThreadAlias(ctx, threadID, alias, store.Get, store.Set)
+	store := a.store()
+	if store == nil {
+		return nil
 	}
-	return nil
+	return listingsvc.PersistThreadAlias(ctx, threadID, alias, store.Get, store.Set)
 }
 
 func (a *Adapter) loadThreadArchiveMap(ctx context.Context) (map[string]int64, error) {
@@ -360,11 +321,7 @@ func (a *Adapter) FuzzyFileSearch(query string, roots []string, fuzzyMatch func(
 }
 
 func (a *Adapter) readThreadRuntimeState(threadID string) string {
-	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return "idle"
-	}
-	return interruptsvc.ReadThreadRuntimeStateByHooks(id, a.readRuntimeStatus, a.hasActiveTrackedTurn)
+	return interruptsvc.ReadThreadRuntimeStateByHooks(threadID, a.readRuntimeStatus, a.hasActiveTrackedTurn)
 }
 
 func (a *Adapter) readRuntimeStatus(threadID string) string {
@@ -408,20 +365,16 @@ func (a *Adapter) threadExistsForArchive(ctx context.Context, threadID string) b
 	if id == "" {
 		return false
 	}
-	if manager := a.manager(); manager != nil && manager.Get(id) != nil {
-		return true
-	}
-	if threadExistsInRuntime(id, a.uiRuntime()) {
-		return true
-	}
-	return a.ThreadExistsInHistory(ctx, id)
+	manager := a.manager()
+	return (manager != nil && manager.Get(id) != nil) || threadExistsInRuntime(id, a.uiRuntime()) || a.ThreadExistsInHistory(ctx, id)
 }
 
 func (a *Adapter) saveThreadArchiveMap(ctx context.Context, archivedMap map[string]int64) error {
-	if store := a.store(); store != nil {
-		return store.Set(ctx, prefThreadArchivesChat, archivedMap)
+	store := a.store()
+	if store == nil {
+		return nil
 	}
-	return nil
+	return store.Set(ctx, prefThreadArchivesChat, archivedMap)
 }
 
 func (a *Adapter) archiveDeps() archivesvc.ThreadArchiveDeps {

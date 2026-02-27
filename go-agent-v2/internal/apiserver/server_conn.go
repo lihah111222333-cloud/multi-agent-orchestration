@@ -497,45 +497,31 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 
 		// 单次 Unmarshal: 路由 + 延迟解析
 		var env rpcEnvelope
+		var resp *Response
+		reason := ""
+		mustSend := true
 		if err := json.Unmarshal(message, &env); err != nil {
-			_ = sendResponseViaOutbox(s, connID, entry, newError(nil, CodeParseError, "parse error: "+err.Error()), "parse_error_response")
+			resp = newError(nil, CodeParseError, "parse error: "+err.Error())
+			reason = "parse_error_response"
+			mustSend = false
+		} else if !validIncomingJSONRPCVersion(env.JSONRPC) {
+			resp = newError(rawIDtoAny(env.ID), CodeInvalidRequest, "invalid request: jsonrpc must be \"2.0\"")
+			reason = "invalid_jsonrpc_version"
+		} else if handleClientResponse(s, env) {
 			continue
-		}
-		if !validIncomingJSONRPCVersion(env.JSONRPC) {
-			if !sendResponseViaOutbox(
-				s,
-				connID,
-				entry,
-				newError(rawIDtoAny(env.ID), CodeInvalidRequest, "invalid request: jsonrpc must be \"2.0\""),
-				"invalid_jsonrpc_version",
-			) {
-				return
-			}
-			continue
-		}
-
-		// 快速路径: 客户端响应 (有 id + 无 method + 有 result/error)
-		// 直接从 raw bytes 解析 int64 ID → pending map 查找, 零 alloc
-		if handleClientResponse(s, env) {
-			continue
-		}
-		if env.Method != "" && len(env.ID) > 0 && string(env.ID) != "null" && entry.outboxDepth() >= connBacklogCut {
-			overloaded := newErrorData(rawIDtoAny(env.ID), CodeOverloaded, "Server overloaded; retry later.", map[string]any{
+		} else if env.Method != "" && len(env.ID) > 0 && string(env.ID) != "null" && entry.outboxDepth() >= connBacklogCut {
+			resp = newErrorData(rawIDtoAny(env.ID), CodeOverloaded, "Server overloaded; retry later.", map[string]any{
 				"retry_after_ms": 500,
 			})
-			if !sendResponseViaOutbox(s, connID, entry, overloaded, "request_overloaded") {
-				return
+			reason = "request_overloaded"
+		} else {
+			resp = handleParsedMessage(s, ctx, env)
+			if resp == nil {
+				continue
 			}
-			continue
+			reason = "request_response"
 		}
-
-		// 正常请求/通知: 复用已解析的字段
-		resp := handleParsedMessage(s, ctx, env)
-		if resp == nil {
-			continue
-		}
-
-		if !sendResponseViaOutbox(s, connID, entry, resp, "request_response") {
+		if !sendResponseViaOutbox(s, connID, entry, resp, reason) && mustSend {
 			return
 		}
 	}

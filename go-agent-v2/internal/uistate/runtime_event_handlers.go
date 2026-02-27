@@ -189,9 +189,29 @@ func (m *RuntimeManager) applyErrorOverlayLocked(rt *threadRuntime, threadID str
 			rt.streamErrorDetails = ""
 		}
 	} else if eventType != "stream_error" {
-		rt.streamErrorText = ""
-		rt.streamErrorDetails = ""
+		clearStreamErrorOverlay(rt)
 	}
+}
+
+func clearTerminalWaitOverlay(rt *threadRuntime) {
+	rt.terminalWaitOverlay = false
+	rt.terminalWaitLabel = ""
+}
+
+func clearMCPStartupOverlay(rt *threadRuntime) {
+	rt.mcpStartupOverlay = false
+	rt.mcpStartupLabel = ""
+}
+
+func clearBackgroundOverlay(rt *threadRuntime) {
+	rt.backgroundOverlay = false
+	rt.backgroundLabel = ""
+	rt.backgroundDetails = ""
+}
+
+func clearStreamErrorOverlay(rt *threadRuntime) {
+	rt.streamErrorText = ""
+	rt.streamErrorDetails = ""
 }
 
 // applyOverlays updates terminal-wait, MCP-startup, and background overlays.
@@ -201,8 +221,7 @@ func applyOverlays(rt *threadRuntime, eventType, method string, payload map[stri
 			rt.terminalWaitOverlay = true
 			rt.terminalWaitLabel = deriveTerminalWaitLabel(payload)
 		} else {
-			rt.terminalWaitOverlay = false
-			rt.terminalWaitLabel = ""
+			clearTerminalWaitOverlay(rt)
 		}
 	}
 	if isMCPStartupUpdateEvent(eventType, method) {
@@ -210,18 +229,14 @@ func applyOverlays(rt *threadRuntime, eventType, method string, payload map[stri
 		rt.mcpStartupLabel = deriveMCPStartupLabel(payload)
 	}
 	if isMCPStartupCompleteEvent(eventType, method) {
-		rt.mcpStartupOverlay = false
-		rt.mcpStartupLabel = ""
+		clearMCPStartupOverlay(rt)
 	}
 	if isBackgroundEvent(eventType, method) {
 		if shouldClearBackgroundOverlay(payload) {
-			rt.backgroundOverlay = false
-			rt.backgroundLabel = ""
-			rt.backgroundDetails = ""
+			clearBackgroundOverlay(rt)
 			// 重连成功 (done=true) 时清除 stream_error 留下的残留错误文本,
 			// 避免 idle 状态下 "Reconnecting..." 永久卡住 (无后续事件来清除)。
-			rt.streamErrorText = ""
-			rt.streamErrorDetails = ""
+			clearStreamErrorOverlay(rt)
 		} else {
 			rt.backgroundOverlay = true
 			rt.backgroundLabel = deriveBackgroundLabel(payload)
@@ -233,9 +248,7 @@ func applyOverlays(rt *threadRuntime, eventType, method string, payload map[stri
 	// Background overlay is only emitted by reconnection logic; once non-background
 	// events resume flowing, the connection is healthy and the overlay is stale.
 	if rt.backgroundOverlay && !isBackgroundEvent(eventType, method) {
-		rt.backgroundOverlay = false
-		rt.backgroundLabel = ""
-		rt.backgroundDetails = ""
+		clearBackgroundOverlay(rt)
 	}
 }
 
@@ -290,8 +303,7 @@ func handleTurnStartedDepth(m *RuntimeManager, threadID string, rt *threadRuntim
 	rt.turnDepth = 1
 	rt.approvalDepth = 0
 	rt.userInputDepth = 0
-	rt.terminalWaitOverlay = false
-	rt.terminalWaitLabel = ""
+	clearTerminalWaitOverlay(rt)
 	rt.statusHeader = "工作中"
 	rt.approvalContext = "" // 清空上一轮的审批上下文
 }
@@ -300,8 +312,7 @@ func handleTurnCompleteDepth(m *RuntimeManager, threadID string, rt *threadRunti
 	m.clearTurnLifecycleLocked(threadID)
 	// mcp_startup_complete 为主清理信号，但历史/重连链路可能丢失 complete，
 	// turn 收敛时兜底清理，避免 "MCP 启动中" 状态残留。
-	rt.mcpStartupOverlay = false
-	rt.mcpStartupLabel = ""
+	clearMCPStartupOverlay(rt)
 }
 
 func handleReasoningDeltaDepth(m *RuntimeManager, threadID string, rt *threadRuntime, eventType, method, text string, _ map[string]any) {
@@ -317,8 +328,7 @@ func handleReasoningDeltaDepth(m *RuntimeManager, threadID string, rt *threadRun
 func handleCommandStartDepth(m *RuntimeManager, threadID string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
 	rt.commandDepth += 1
 	rt.approvalDepth = 0
-	rt.terminalWaitOverlay = false
-	rt.terminalWaitLabel = ""
+	clearTerminalWaitOverlay(rt)
 	m.incrActivityStatLocked(threadID, "command", "")
 }
 
@@ -326,14 +336,12 @@ func handleCommandOutputDepth(_ *RuntimeManager, _ string, rt *threadRuntime, _,
 	if rt.commandDepth == 0 {
 		rt.commandDepth = 1
 	}
-	rt.terminalWaitOverlay = false
-	rt.terminalWaitLabel = ""
+	clearTerminalWaitOverlay(rt)
 }
 
 func handleCommandDoneDepth(_ *RuntimeManager, _ string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
 	rt.commandDepth = max(0, rt.commandDepth-1)
-	rt.terminalWaitOverlay = false
-	rt.terminalWaitLabel = ""
+	clearTerminalWaitOverlay(rt)
 }
 
 func handleFileEditStartDepth(m *RuntimeManager, threadID string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
@@ -429,13 +437,9 @@ func (m *RuntimeManager) clearTurnLifecycleLocked(threadID string) {
 	rt.fileEditDepth = 0
 	rt.toolCallDepth = 0
 	rt.collabDepth = 0
-	rt.terminalWaitOverlay = false
-	rt.terminalWaitLabel = ""
-	rt.backgroundOverlay = false
-	rt.backgroundLabel = ""
-	rt.backgroundDetails = ""
-	rt.streamErrorText = ""
-	rt.streamErrorDetails = ""
+	clearTerminalWaitOverlay(rt)
+	clearBackgroundOverlay(rt)
+	clearStreamErrorOverlay(rt)
 	rt.statusHeader = ""
 	rt.reasoningHeaderBuf = ""
 	rt.approvalContext = "" // Fix 4: 清空审批上下文
@@ -554,45 +558,73 @@ func (m *RuntimeManager) deriveThreadStateLocked(threadID string) string {
 	}
 }
 
-func (m *RuntimeManager) deriveThreadStatusHeaderLocked(threadID, state string) string {
-	rt := m.runtime[threadID]
+type threadStatusBranch uint8
+
+const (
+	threadStatusBranchDefault threadStatusBranch = iota
+	threadStatusBranchStreamError
+	threadStatusBranchTerminalWait
+	threadStatusBranchMCPStartup
+	threadStatusBranchBackground
+	threadStatusBranchUserInput
+	threadStatusBranchApproval
+	threadStatusBranchReasoningHeader
+)
+
+func deriveThreadStatusBranch(rt *threadRuntime) threadStatusBranch {
 	switch {
 	case strings.TrimSpace(rt.streamErrorText) != "":
-		return rt.streamErrorText
+		return threadStatusBranchStreamError
 	case rt.terminalWaitOverlay:
+		return threadStatusBranchTerminalWait
+	case shouldShowMCPStartupOverlay(rt):
+		return threadStatusBranchMCPStartup
+	case rt.backgroundOverlay:
+		return threadStatusBranchBackground
+	case rt.userInputDepth > 0:
+		return threadStatusBranchUserInput
+	case rt.approvalDepth > 0:
+		return threadStatusBranchApproval
+	case shouldUseReasoningHeader(rt):
+		return threadStatusBranchReasoningHeader
+	default:
+		return threadStatusBranchDefault
+	}
+}
+
+func (m *RuntimeManager) deriveThreadStatusHeaderLocked(threadID, state string) string {
+	rt := m.runtime[threadID]
+	switch deriveThreadStatusBranch(rt) {
+	case threadStatusBranchStreamError:
+		return rt.streamErrorText
+	case threadStatusBranchTerminalWait:
 		if strings.TrimSpace(rt.terminalWaitLabel) != "" {
 			return rt.terminalWaitLabel
 		}
 		return "等待后台终端"
-	case shouldShowMCPStartupOverlay(rt):
+	case threadStatusBranchMCPStartup:
 		if strings.TrimSpace(rt.mcpStartupLabel) != "" {
 			return rt.mcpStartupLabel
 		}
 		return "MCP 启动中"
-	case rt.backgroundOverlay:
+	case threadStatusBranchBackground:
 		if strings.TrimSpace(rt.backgroundLabel) != "" {
 			return rt.backgroundLabel
 		}
 		return "后台处理中"
-	case rt.userInputDepth > 0:
+	case threadStatusBranchUserInput:
 		return "等待输入"
-	case rt.approvalDepth > 0:
+	case threadStatusBranchApproval:
 		// Fix 4: 展示具体的审批上下文，而不是笼统的 "等待确认"。
 		if strings.TrimSpace(rt.approvalContext) != "" {
 			return "等待确认 · " + rt.approvalContext
 		}
 		return "等待确认"
-	case shouldUseReasoningHeader(rt):
+	case threadStatusBranchReasoningHeader:
 		return rt.statusHeader
 	}
 	switch state {
-	case "running":
-		return "工作中"
-	case "editing":
-		return "工作中"
-	case "thinking":
-		return "工作中"
-	case "responding":
+	case "running", "editing", "thinking", "responding":
 		return "工作中"
 	case "starting":
 		return "启动中"
@@ -626,23 +658,23 @@ func defaultStatusHeaderForState(state string) string {
 
 func (m *RuntimeManager) deriveThreadStatusDetailsLocked(threadID, state string) string {
 	rt := m.runtime[threadID]
-	switch {
-	case strings.TrimSpace(rt.streamErrorText) != "":
+	switch deriveThreadStatusBranch(rt) {
+	case threadStatusBranchStreamError:
 		return strings.TrimSpace(rt.streamErrorDetails)
-	case rt.terminalWaitOverlay:
+	case threadStatusBranchTerminalWait:
 		return "命令正在等待终端输入"
-	case shouldShowMCPStartupOverlay(rt):
+	case threadStatusBranchMCPStartup:
 		return "正在初始化 MCP 服务"
-	case rt.backgroundOverlay:
+	case threadStatusBranchBackground:
 		if strings.TrimSpace(rt.backgroundDetails) != "" {
 			return rt.backgroundDetails
 		}
 		return "后台事件处理中"
-	case rt.userInputDepth > 0:
+	case threadStatusBranchUserInput:
 		return "等待用户输入后继续"
-	case rt.approvalDepth > 0:
+	case threadStatusBranchApproval:
 		return "等待用户审批后继续"
-	case shouldUseReasoningHeader(rt):
+	case threadStatusBranchReasoningHeader:
 		return "根据推理标题展示当前阶段"
 	}
 	switch state {

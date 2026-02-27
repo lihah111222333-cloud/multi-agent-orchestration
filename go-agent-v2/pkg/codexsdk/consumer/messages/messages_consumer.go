@@ -2,10 +2,12 @@ package messages
 
 import (
 	"context"
+	"os"
 	"strings"
 
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
-	rolloutconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/rollout"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/codex"
+	rolloutsvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/rollout"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
@@ -15,7 +17,7 @@ const (
 	ThreadMessageHydrationPageSize   = 500
 )
 
-type ThreadHistoryMessage = rolloutconsumer.ThreadHistoryMessage
+type ThreadHistoryMessage = rolloutsvc.ThreadHistoryMessage
 
 func BuildThreadMessagesResponse(messages []ThreadHistoryMessage, total int64) map[string]any {
 	return map[string]any{"messages": messages, "total": total}
@@ -67,17 +69,20 @@ func LoadAllThreadMessagesFromCodexRollout(
 	normalizeCodexThreadID func(string) string,
 	showInjectedPromptInChat bool,
 ) ([]ThreadHistoryMessage, error) {
-	return rolloutconsumer.LoadAllThreadMessagesFromCodexRollout(
+	return rolloutsvc.LoadAllThreadMessagesFromCodexRollout(
 		ctx,
 		threadID,
 		resolveRolloutHistorySource,
 		normalizeCodexThreadID,
+		codex.FindRolloutPath,
+		func(path string) bool { _, err := os.Stat(path); return err == nil },
+		codex.ReadRolloutMessagesWithTrim,
 		showInjectedPromptInChat,
 	)
 }
 
 func PaginateRolloutMessages(all []ThreadHistoryMessage, limit int, before int64) []ThreadHistoryMessage {
-	return rolloutconsumer.PaginateRolloutMessages(all, limit, before)
+	return rolloutsvc.PaginateRolloutMessages(all, limit, before)
 }
 
 func HistoryMessagesToRecords(msgs []ThreadHistoryMessage) []uistate.HistoryRecord {

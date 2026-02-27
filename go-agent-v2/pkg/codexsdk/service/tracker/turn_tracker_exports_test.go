@@ -11,7 +11,7 @@ func TestEnsureTurnTrackerStateLocked_Defaults(t *testing.T) {
 		mu             sync.Mutex
 		activeTurns    map[string]*trackedTurn
 		watchdog       time.Duration
-		summaryCache   map[string]trackedTurnSummaryCacheEntry
+		summaryCache   map[string]TrackedTurnSummaryCacheEntry
 		summaryTTL     time.Duration
 		stallThreshold time.Duration
 		stallHeartbeat time.Duration

@@ -261,21 +261,19 @@ func runHierarchyTool[T any](
 	if err != nil {
 		return toolError(err)
 	}
-	filePath, err := requireToolFilePath(call, params.FilePath)
+	filePath, line, column, err := requireToolFilePosition(call, params.FilePath, params.Line, params.Column)
 	if err != nil {
 		return toolError(err)
 	}
+	doneAttrs := append(lspToolPathPositionAttrs(filePath, line, column), "direction", params.Direction)
 	return runAndMarshalLogged(
 		call,
-		func() (T, error) { return run(filePath, params.Line, params.Column, params.Direction) },
-		h.hierarchyToolErrorFormatter(tool, filePath, params.Line, params.Column),
+		func() (T, error) { return run(filePath, line, column, params.Direction) },
+		h.hierarchyToolErrorFormatter(tool, filePath, line, column),
 		emptyMsg,
 		func(result T) bool { return isHierarchyResultEmpty(result) },
 		func(result T) []any { return []any{"result_count", hierarchyResultCount(result)} },
-		logger.FieldPath, lspToolLogPath(filePath),
-		"line", params.Line,
-		"column", params.Column,
-		"direction", params.Direction,
+		doneAttrs...,
 	)
 }
 
@@ -477,6 +475,46 @@ func requireToolFilePath(call *lspToolCallLogger, raw string) (string, error) {
 	return filePath, nil
 }
 
+func requireToolFilePosition(
+	call *lspToolCallLogger,
+	rawFilePath string,
+	line, column int,
+) (filePath string, outLine, outColumn int, err error) {
+	filePath, err = requireToolFilePath(call, rawFilePath)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	return filePath, line, column, nil
+}
+
+func requireToolFileLineColumn(
+	call *lspToolCallLogger,
+	rawFilePath string,
+	linePtr, columnPtr *int,
+) (filePath string, line, column int, err error) {
+	filePath, err = requireToolFilePath(call, rawFilePath)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	line, column, err = requireLineColumn(call, linePtr, columnPtr)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	return filePath, line, column, nil
+}
+
+func lspToolPathAttrs(filePath string) []any {
+	return []any{logger.FieldPath, lspToolLogPath(filePath)}
+}
+
+func lspToolPathPositionAttrs(filePath string, line, column int) []any {
+	return []any{
+		logger.FieldPath, lspToolLogPath(filePath),
+		"line", line,
+		"column", column,
+	}
+}
+
 func runFilePathManagerTool[T any](
 	h *ToolHandlers,
 	tool string,
@@ -500,7 +538,7 @@ func runFilePathManagerTool[T any](
 	if err != nil {
 		return toolError(err)
 	}
-	doneAttrs := []any{logger.FieldPath, lspToolLogPath(filePath)}
+	doneAttrs := lspToolPathAttrs(filePath)
 	if extraDoneAttrs != nil {
 		doneAttrs = append(doneAttrs, extraDoneAttrs(filePath)...)
 	}
@@ -539,24 +577,20 @@ func runFilePositionManagerTool[T any](
 	if err != nil {
 		return toolError(err)
 	}
-	filePath, err := requireToolFilePath(call, params.FilePath)
+	filePath, line, column, err := requireToolFilePosition(call, params.FilePath, params.Line, params.Column)
 	if err != nil {
 		return toolError(err)
 	}
-	doneAttrs := []any{
-		logger.FieldPath, lspToolLogPath(filePath),
-		"line", params.Line,
-		"column", params.Column,
-	}
+	doneAttrs := lspToolPathPositionAttrs(filePath, line, column)
 	if extraDoneAttrs != nil {
-		doneAttrs = append(doneAttrs, extraDoneAttrs(filePath, params.Line, params.Column)...)
+		doneAttrs = append(doneAttrs, extraDoneAttrs(filePath, line, column)...)
 	}
 	return runAndMarshalLogged(
 		call,
-		func() (T, error) { return run(filePath, params.Line, params.Column) },
+		func() (T, error) { return run(filePath, line, column) },
 		func(err error) string {
 			if formatErr != nil {
-				return formatErr(filePath, params.Line, params.Column, err)
+				return formatErr(filePath, line, column, err)
 			}
 			return toolError(err)
 		},
@@ -584,13 +618,12 @@ func (h *ToolHandlers) Hover(args json.RawMessage) string {
 	if err != nil {
 		return toolError(err)
 	}
-	filePath, err := requireToolFilePath(call, params.FilePath)
+	filePath, line, column, err := requireToolFilePosition(call, params.FilePath, params.Line, params.Column)
 	if err != nil {
 		return toolError(err)
 	}
-	resolvedPath := lspToolLogPath(filePath)
-	attrs := []any{logger.FieldPath, resolvedPath, "line", params.Line, "column", params.Column}
-	result, err := h.manager.Hover(filePath, params.Line, params.Column)
+	attrs := lspToolPathPositionAttrs(filePath, line, column)
+	result, err := h.manager.Hover(filePath, line, column)
 	if err != nil {
 		call.fail(err, append(attrs, "stage", "execute")...)
 		return toolError(err)
@@ -796,7 +829,7 @@ func (h *ToolHandlers) References(args json.RawMessage) string {
 	if err != nil {
 		return toolError(err)
 	}
-	filePath, err := requireToolFilePath(call, params.FilePath)
+	filePath, line, column, err := requireToolFilePosition(call, params.FilePath, params.Line, params.Column)
 	if err != nil {
 		return toolError(err)
 	}
@@ -807,16 +840,13 @@ func (h *ToolHandlers) References(args json.RawMessage) string {
 	return runAndMarshalLogged(
 		call,
 		func() ([]Location, error) {
-			return h.manager.References(filePath, params.Line, params.Column, includeDecl)
+			return h.manager.References(filePath, line, column, includeDecl)
 		},
 		nil,
 		"no references found",
 		func(result []Location) bool { return len(result) == 0 },
 		func(result []Location) []any { return []any{"result_count", len(result)} },
-		logger.FieldPath, lspToolLogPath(filePath),
-		"line", params.Line,
-		"column", params.Column,
-		"include_declaration", includeDecl,
+		append(lspToolPathPositionAttrs(filePath, line, column), "include_declaration", includeDecl)...,
 	)
 }
 
@@ -845,23 +875,18 @@ func (h *ToolHandlers) Rename(args json.RawMessage) string {
 	if err != nil {
 		return toolError(err)
 	}
-	filePath, err := requireToolFilePath(call, params.FilePath)
+	filePath, line, column, err := requireToolFilePosition(call, params.FilePath, params.Line, params.Column)
 	if err != nil {
 		return toolError(err)
 	}
 	if strings.TrimSpace(params.NewName) == "" {
-		call.fail(fmt.Errorf("new_name is required"),
-			logger.FieldPath, lspToolLogPath(filePath),
-			"line", params.Line,
-			"column", params.Column,
-			"stage", "validate",
-		)
+		call.fail(fmt.Errorf("new_name is required"), append(lspToolPathPositionAttrs(filePath, line, column), "stage", "validate")...)
 		return "error: new_name is required"
 	}
 	return runAndMarshalLogged(
 		call,
 		func() (*WorkspaceEdit, error) {
-			return h.manager.Rename(filePath, params.Line, params.Column, params.NewName)
+			return h.manager.Rename(filePath, line, column, params.NewName)
 		},
 		nil,
 		"no edits produced",
@@ -871,10 +896,7 @@ func (h *ToolHandlers) Rename(args json.RawMessage) string {
 		func(result *WorkspaceEdit) []any {
 			return []any{"result_count", workspaceEditCount(result)}
 		},
-		logger.FieldPath, lspToolLogPath(filePath),
-		"line", params.Line,
-		"column", params.Column,
-		"new_name_len", len(params.NewName),
+		append(lspToolPathPositionAttrs(filePath, line, column), "new_name_len", len(params.NewName))...,
 	)
 }
 
@@ -1327,11 +1349,7 @@ func (h *ToolHandlers) CodeAction(args json.RawMessage) string {
 	if err != nil {
 		return toolError(err)
 	}
-	filePath, err := requireToolFilePath(call, params.FilePath)
-	if err != nil {
-		return toolError(err)
-	}
-	line, column, err := requireLineColumn(call, params.Line, params.Column)
+	filePath, line, column, err := requireToolFileLineColumn(call, params.FilePath, params.Line, params.Column)
 	if err != nil {
 		return toolError(err)
 	}
@@ -1345,12 +1363,12 @@ func (h *ToolHandlers) CodeAction(args json.RawMessage) string {
 		"no code action found",
 		func(result []CodeActionResult) bool { return len(result) == 0 },
 		func(result []CodeActionResult) []any { return []any{"result_count", len(result)} },
-		logger.FieldPath, lspToolLogPath(filePath),
-		"line", line,
-		"column", column,
-		"end_line", endLine,
-		"end_column", endColumn,
-		"only_count", len(params.Only),
+		append(
+			lspToolPathPositionAttrs(filePath, line, column),
+			"end_line", endLine,
+			"end_column", endColumn,
+			"only_count", len(params.Only),
+		)...,
 	)
 }
 
@@ -1375,11 +1393,7 @@ func (h *ToolHandlers) SignatureHelp(args json.RawMessage) string {
 	if err != nil {
 		return toolError(err)
 	}
-	filePath, err := requireToolFilePath(call, params.FilePath)
-	if err != nil {
-		return toolError(err)
-	}
-	line, column, err := requireLineColumn(call, params.Line, params.Column)
+	filePath, line, column, err := requireToolFileLineColumn(call, params.FilePath, params.Line, params.Column)
 	if err != nil {
 		return toolError(err)
 	}
@@ -1397,9 +1411,7 @@ func (h *ToolHandlers) SignatureHelp(args json.RawMessage) string {
 			}
 			return []any{"result_count", len(result.Signatures)}
 		},
-		logger.FieldPath, lspToolLogPath(filePath),
-		"line", line,
-		"column", column,
+		lspToolPathPositionAttrs(filePath, line, column)...,
 	)
 }
 
@@ -1428,9 +1440,7 @@ func (h *ToolHandlers) Format(args json.RawMessage) string {
 		"no formatting edits",
 		func(result []TextEdit) bool { return len(result) == 0 },
 		func(result []TextEdit) []any { return []any{"result_count", len(result)} },
-		logger.FieldPath, lspToolLogPath(filePath),
-		"tab_size", tabSize,
-		"insert_spaces", insertSpaces,
+		append(lspToolPathAttrs(filePath), "tab_size", tabSize, "insert_spaces", insertSpaces)...,
 	)
 }
 

@@ -21,15 +21,23 @@ type UserInput struct {
 	Content string `json:"content,omitempty"` // type=skill/fileContent
 }
 
+type turnInputParams struct {
+	Input                []UserInput `json:"input"`
+	SelectedSkills       []string    `json:"selectedSkills,omitempty"`
+	ManualSkillSelection bool        `json:"manualSkillSelection,omitempty"`
+}
+
+type turnThreadIDParams struct {
+	ThreadID string `json:"threadId"`
+}
+
 type turnStartParams struct {
-	ThreadID             string          `json:"threadId"`
-	Input                []UserInput     `json:"input"`
-	SelectedSkills       []string        `json:"selectedSkills,omitempty"`
-	ManualSkillSelection bool            `json:"manualSkillSelection,omitempty"`
-	Cwd                  string          `json:"cwd,omitempty"`
-	ApprovalPolicy       string          `json:"approvalPolicy,omitempty"`
-	Model                string          `json:"model,omitempty"`
-	OutputSchema         json.RawMessage `json:"outputSchema,omitempty"`
+	turnThreadIDParams
+	turnInputParams
+	Cwd            string          `json:"cwd,omitempty"`
+	ApprovalPolicy string          `json:"approvalPolicy,omitempty"`
+	Model          string          `json:"model,omitempty"`
+	OutputSchema   json.RawMessage `json:"outputSchema,omitempty"`
 }
 
 // turnInfo 通用 turn 信息。
@@ -80,11 +88,9 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 }
 
 type turnSteerParams struct {
-	ThreadID             string      `json:"threadId"`
-	ExpectedTurnID       string      `json:"expectedTurnId"`
-	Input                []UserInput `json:"input"`
-	SelectedSkills       []string    `json:"selectedSkills,omitempty"`
-	ManualSkillSelection bool        `json:"manualSkillSelection,omitempty"`
+	turnThreadIDParams
+	ExpectedTurnID string `json:"expectedTurnId"`
+	turnInputParams
 }
 
 func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, error) {
@@ -97,33 +103,27 @@ func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, erro
 	})
 }
 
-type turnInterruptParams struct {
-	ThreadID string `json:"threadId"`
-}
+type turnInterruptParams = turnThreadIDParams
 
-type turnForceCompleteParams struct {
-	ThreadID string `json:"threadId"`
-}
+type turnForceCompleteParams = turnThreadIDParams
 
 type threadRealtimeStartParams struct {
-	ThreadID  string  `json:"threadId"`
+	turnThreadIDParams
 	Prompt    string  `json:"prompt"`
 	SessionID *string `json:"sessionId,omitempty"`
 }
 
 type threadRealtimeAppendAudioParams struct {
-	ThreadID string `json:"threadId"`
-	Audio    any    `json:"audio"`
+	turnThreadIDParams
+	Audio any `json:"audio"`
 }
 
 type threadRealtimeAppendTextParams struct {
-	ThreadID string `json:"threadId"`
-	Text     string `json:"text"`
+	turnThreadIDParams
+	Text string `json:"text"`
 }
 
-type threadRealtimeStopParams struct {
-	ThreadID string `json:"threadId"`
-}
+type threadRealtimeStopParams = turnThreadIDParams
 
 // reviewStartParams review/start 请求参数。
 type reviewTarget struct {
@@ -150,6 +150,14 @@ type reviewStartResponse struct {
 	ReviewThreadID string          `json:"reviewThreadId"`
 }
 
+func requireReviewTargetValue(raw, field, targetType string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", pkgerr.New("Server.reviewStart", "target."+field+" is required when target.type is "+targetType)
+	}
+	return value, nil
+}
+
 func buildReviewStartArgs(p reviewStartParams) (string, error) {
 	targetType := strings.TrimSpace(p.Target.Type)
 	if targetType == "" {
@@ -157,23 +165,11 @@ func buildReviewStartArgs(p reviewStartParams) (string, error) {
 	}
 	switch targetType {
 	case "custom":
-		instructions := strings.TrimSpace(p.Target.Instructions)
-		if instructions == "" {
-			return "", pkgerr.New("Server.reviewStart", "target.instructions is required when target.type is custom")
-		}
-		return instructions, nil
+		return requireReviewTargetValue(p.Target.Instructions, "instructions", "custom")
 	case "baseBranch":
-		branch := strings.TrimSpace(p.Target.Branch)
-		if branch == "" {
-			return "", pkgerr.New("Server.reviewStart", "target.branch is required when target.type is baseBranch")
-		}
-		return branch, nil
+		return requireReviewTargetValue(p.Target.Branch, "branch", "baseBranch")
 	case "commit":
-		sha := strings.TrimSpace(p.Target.Sha)
-		if sha == "" {
-			return "", pkgerr.New("Server.reviewStart", "target.sha is required when target.type is commit")
-		}
-		return sha, nil
+		return requireReviewTargetValue(p.Target.Sha, "sha", "commit")
 	case "uncommittedChanges":
 		return strings.TrimSpace(p.Delivery), nil
 	default:

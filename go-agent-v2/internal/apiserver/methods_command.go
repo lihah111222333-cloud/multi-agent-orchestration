@@ -23,20 +23,12 @@ type commandExecParams struct {
 	Env  map[string]string `json:"env,omitempty"`
 }
 
-func boolSet(words string) map[string]bool {
-	set := make(map[string]bool)
-	for _, word := range strings.Fields(words) {
-		set[word] = true
-	}
-	return set
-}
-
 // commandBlocklist 禁止通过 command/exec 执行的危险命令。
-var commandBlocklist = boolSet("rm rmdir sudo su chmod chown mkfs dd kill killall pkill shutdown reboot passwd useradd userdel mount umount fdisk iptables curl wget")
+var commandBlocklist = map[string]bool{"rm": true, "rmdir": true, "sudo": true, "su": true, "chmod": true, "chown": true, "mkfs": true, "dd": true, "kill": true, "killall": true, "pkill": true, "shutdown": true, "reboot": true, "passwd": true, "useradd": true, "userdel": true, "mount": true, "umount": true, "fdisk": true, "iptables": true, "curl": true, "wget": true}
 
 const maxOutputSize = 1 << 20 // 1MB 输出限制
 
-var readCommands = boolSet("cat head tail less more bat grep rg ag find fd tree wc sed awk")
+var readCommands = map[string]bool{"cat": true, "head": true, "tail": true, "less": true, "more": true, "bat": true, "grep": true, "rg": true, "ag": true, "find": true, "fd": true, "tree": true, "wc": true, "sed": true, "awk": true}
 
 const lspPreferenceHint = "[LSP提示] 你有 7 个合并后的 LSP 工具：`lsp_file` `lsp_inspect` `lsp_xref` `lsp_grep` `lsp_structure` `lsp_edit` `lsp_completion`。请优先使用 LSP 工具而非命令行读取代码。\n---\n"
 
@@ -50,8 +42,7 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 	if len(p.Argv) == 0 || strings.TrimSpace(p.Argv[0]) == "" {
 		return nil, apperrors.New("Server.commandExec", "argv is required")
 	}
-	p.Argv[0] = strings.TrimSpace(p.Argv[0])
-	baseName := filepath.Base(p.Argv[0])
+	baseName := filepath.Base(strings.TrimSpace(p.Argv[0]))
 	if commandBlocklist[baseName] {
 		return nil, apperrors.Newf("Server.commandExec", "command %q is blocked for security", baseName)
 	}
@@ -70,7 +61,7 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(execCtx, p.Argv[0], p.Argv[1:]...)
+	cmd := exec.CommandContext(execCtx, strings.TrimSpace(p.Argv[0]), p.Argv[1:]...)
 	if p.Cwd != "" {
 		cmd.Dir = p.Cwd
 	}

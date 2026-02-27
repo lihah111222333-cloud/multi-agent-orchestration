@@ -48,12 +48,14 @@ const (
 
 // AgentProcess 单个 Codex Agent 实例。
 type AgentProcess struct {
-	ID         string           // 唯一标识
-	Name       string           // 显示名称
-	Client     agentcore.Client // Codex API 客户端 (支持 http-api 或 app-server)
-	State      AgentState       // 当前状态
-	LastReport string           // 最近一次 turn 完成时的 agent 报告 (对应 Rust TurnCompleteEvent.last_agent_message)
-	mu         sync.Mutex       // 保护 State / LastReport 字段读写
+	ID          string           // 唯一标识
+	Name        string           // 显示名称
+	Client      agentcore.Client // Codex API 客户端 (支持 http-api 或 app-server)
+	State       AgentState       // 当前状态
+	LastReport  string           // 最近一次 turn 完成时的 agent 报告 (对应 Rust TurnCompleteEvent.last_agent_message)
+	LastMessage string           // 最后一轮 turn 的完整回复内容 (agent_message_delta 拼接)
+	messageBuf  strings.Builder  // 当前 turn 的消息累积缓冲区 (每轮重置)
+	mu          sync.Mutex       // 保护 State / LastReport / LastMessage / messageBuf 字段读写
 }
 
 // IsAlive 报告进程连接是否存活 (线程安全)。
@@ -402,13 +404,33 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event agentcore.Event) {
 		proc.mu.Unlock()
 	}
 
-	// ⚠️ DO NOT DELETE — 此提取逻辑与 apiserver/turn_tracker.go 的 captureAndInjectTurnSummary 不是重复代码。
-	// turn_tracker 服务于 apiserver→前端通知路径; 此处服务于 runner→orchestrator 路径。
+	// 累积当前 turn 的 agent 回复内容 (agent_message_delta)
+	switch normalized.UIType {
+	case uistate.UITypeTurnStarted:
+		// 新 turn 开始: 重置消息缓冲区
+		proc.mu.Lock()
+		proc.messageBuf.Reset()
+		proc.mu.Unlock()
+	case uistate.UITypeAssistantDelta:
+		// 累积 delta 文本
+		if normalized.Text != "" {
+			proc.mu.Lock()
+			proc.messageBuf.WriteString(normalized.Text)
+			proc.mu.Unlock()
+		}
+	case uistate.UITypeTurnComplete:
+		// turn 完成: 保存完整消息到 LastMessage
+		proc.mu.Lock()
+		if proc.messageBuf.Len() > 0 {
+			proc.LastMessage = proc.messageBuf.String()
+			proc.messageBuf.Reset()
+		}
+		proc.mu.Unlock()
+	}
+
+	// DO NOT DELETE — 此提取逻辑与 apiserver/turn_tracker.go 的 captureAndInjectTurnSummary 不是重复代码。
+	// turn_tracker 服务于 apiserver->前端通知路径; 此处服务于 runner->orchestrator 路径。
 	// 两者消费方不同，不可合并。
-	//
-	// 提取任务报告: 对应 Rust TurnCompleteEvent.last_agent_message。
-	// codex/event/task_complete 和 turn/completed 两种事件都可能携带该字段。
-	// uistate.NormalizeEvent 已将两者统一归类为 UITypeTurnComplete。
 	if normalized.UIType == uistate.UITypeTurnComplete {
 		if report := extractLastAgentMessage(event.Data); report != "" {
 			proc.mu.Lock()
@@ -685,10 +707,10 @@ func (m *AgentManager) get(id string) (*AgentProcess, error) {
 	return proc, nil
 }
 
-// GetReport 获取指定 Agent 最近一次任务报告。
+// GetReport 获取指定 Agent 最后一轮的完整回复内容。
 //
-// 返回 Codex TurnCompleteEvent 中的 last_agent_message (agent 完成任务时的总结)。
-// 空字符串表示 agent 尚未完成任何任务，或最近一次完成未携带报告。
+// 优先返回 LastMessage (最后一轮 agent_message_delta 拼接的完整回复),
+// 回退到 LastReport (TurnCompleteEvent.last_agent_message 总结)。
 func (m *AgentManager) GetReport(id string) string {
 	proc := m.Get(id)
 	if proc == nil {
@@ -696,7 +718,21 @@ func (m *AgentManager) GetReport(id string) string {
 	}
 	proc.mu.Lock()
 	defer proc.mu.Unlock()
+	if proc.LastMessage != "" {
+		return proc.LastMessage
+	}
 	return proc.LastReport
+}
+
+// GetState 获取指定 Agent 当前状态。
+func (m *AgentManager) GetState(id string) AgentState {
+	proc := m.Get(id)
+	if proc == nil {
+		return ""
+	}
+	proc.mu.Lock()
+	defer proc.mu.Unlock()
+	return proc.State
 }
 
 // RecoverAgent 尝试恢复卡死的 Agent 进程 (触发 Codex 进程重启)。

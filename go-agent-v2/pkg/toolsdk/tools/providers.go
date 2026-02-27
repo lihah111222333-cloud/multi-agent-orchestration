@@ -205,4 +205,5 @@ type AgentLauncher interface {
 	Stop(id string) error
 	List() any
 	GetReport(id string) string
+	GetState(id string) string
 }

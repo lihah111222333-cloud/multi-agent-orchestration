@@ -321,6 +321,9 @@ func (a agentLauncherAdapter) List() any {
 func (a agentLauncherAdapter) GetReport(id string) string {
 	return a.manager.GetReport(id)
 }
+func (a agentLauncherAdapter) GetState(id string) string {
+	return string(a.manager.GetState(id))
+}
 
 func saveStoreValue[T any](
 	ctx context.Context,

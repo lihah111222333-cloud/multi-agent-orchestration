@@ -289,7 +289,8 @@ func orchestrationGetAgentReport(provider OrchestrationProvider, args json.RawMe
 		return ToolError(apperrors.New("orchestrationGetAgentReport", "agent manager not initialized"))
 	}
 	report := provider.AgentLauncher().GetReport(p.AgentID)
-	return ToolJSON(map[string]any{"agent_id": p.AgentID, "report": report})
+	state := provider.AgentLauncher().GetState(p.AgentID)
+	return ToolJSON(map[string]any{"agent_id": p.AgentID, "state": state, "report": report})
 }
 
 func orchestrationListLen(v any) int {

@@ -60,6 +60,9 @@ type AgentProcess struct {
 //
 // State == error / stopped 时返回 false, 用于 Lazy Recovery 检测。
 func (p *AgentProcess) IsAlive() bool {
+	if p == nil {
+		return false
+	}
 	p.mu.Lock()
 	state := p.State
 	p.mu.Unlock()

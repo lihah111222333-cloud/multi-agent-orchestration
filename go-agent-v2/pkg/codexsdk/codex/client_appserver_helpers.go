@@ -14,9 +14,7 @@ import (
 
 func parseEnvInt(name string) (raw string, value int, err error) {
 	raw = strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return "", 0, nil
-	}
+	if raw == "" { return "", 0, nil }
 	value, err = strconv.Atoi(raw)
 	return raw, value, err
 }
@@ -42,9 +40,7 @@ func reconnectDetails(trigger, activeTurnID string, details map[string]any) map[
 
 func mentionNameFromPath(path string) string {
 	base := strings.TrimSpace(filepath.Base(strings.TrimSpace(path)))
-	if base == "" || base == "." || base == string(filepath.Separator) {
-		return "file"
-	}
+	if base == "" || base == "." || base == string(filepath.Separator) { return "file" }
 	return base
 }
 
@@ -90,12 +86,8 @@ func ensureListenerViaThreadResume(
 	rpcCall func(method string, params any, timeout time.Duration) (json.RawMessage, error),
 ) (string, error) {
 	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return "", apperrors.New("ensureListenerViaThreadResume", "thread id is required")
-	}
-	if rpcCall == nil {
-		return "", apperrors.New("ensureListenerViaThreadResume", "rpc call func is nil")
-	}
+	if id == "" { return "", apperrors.New("ensureListenerViaThreadResume", "thread id is required") }
+	if rpcCall == nil { return "", apperrors.New("ensureListenerViaThreadResume", "rpc call func is nil") }
 	return callThreadResume(
 		"ensureListenerViaThreadResume",
 		rpcCall,
@@ -105,9 +97,7 @@ func ensureListenerViaThreadResume(
 }
 
 func isNotInitializedRPCError(err error) bool {
-	if err == nil {
-		return false
-	}
+	if err == nil { return false }
 	text := strings.ToLower(err.Error())
 	return strings.Contains(text, "not initialized")
 }
@@ -156,9 +146,7 @@ func callWithNotInitializedRecovery(
 	params any,
 	timeout time.Duration,
 ) (json.RawMessage, bool, error) {
-	if rpcCall == nil {
-		return nil, false, apperrors.New("callWithNotInitializedRecovery", "rpc call func is nil")
-	}
+	if rpcCall == nil { return nil, false, apperrors.New("callWithNotInitializedRecovery", "rpc call func is nil") }
 	return retryAfterNotInitialized(
 		"callWithNotInitializedRecovery",
 		false,
@@ -201,19 +189,13 @@ func parseThreadResumeResult(raw json.RawMessage, fallbackID string) (string, er
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return "", apperrors.Wrap(err, "parseThreadResumeResult", "thread/resume decode")
 	}
-	if id := strings.TrimSpace(resp.Thread.ID); id != "" {
-		return id, nil
-	}
-	if fallback != "" {
-		return fallback, nil
-	}
+	if id := strings.TrimSpace(resp.Thread.ID); id != "" { return id, nil }
+	if fallback != "" { return fallback, nil }
 	return "", apperrors.New("parseThreadResumeResult", "thread/resume returned empty thread ID")
 }
 
 func rpcErrorContains(err error, requireAll bool, parts ...string) bool {
-	if err == nil {
-		return false
-	}
+	if err == nil { return false }
 	text := strings.ToLower(strings.TrimSpace(err.Error()))
 	if requireAll {
 		for _, part := range parts {
@@ -240,9 +222,7 @@ func isInvalidParamsRPCError(err error) bool {
 }
 
 func isRPCTimeoutError(err error) bool {
-	if err == nil {
-		return false
-	}
+	if err == nil { return false }
 	text := strings.ToLower(strings.TrimSpace(err.Error()))
 	return strings.Contains(text, " timeout") || strings.HasSuffix(text, "timeout")
 }

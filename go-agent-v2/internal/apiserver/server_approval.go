@@ -96,11 +96,7 @@ func normalizeCommandAmendmentDecision(decisionObj map[string]any) (any, bool) {
 		if !ok {
 			return nil, false
 		}
-		return map[string]any{
-			"acceptWithExecpolicyAmendment": map[string]any{
-				"execpolicy_amendment": execPolicyAmendment,
-			},
-		}, true
+		return map[string]any{"acceptWithExecpolicyAmendment": map[string]any{"execpolicy_amendment": execPolicyAmendment}}, true
 	}
 	if amendmentRaw, ok := extractMapValue(decisionObj, "applyNetworkPolicyAmendment"); ok {
 		amendmentObj, ok := amendmentRaw.(map[string]any)
@@ -111,11 +107,7 @@ func normalizeCommandAmendmentDecision(decisionObj map[string]any) (any, bool) {
 		if !ok {
 			return nil, false
 		}
-		return map[string]any{
-			"applyNetworkPolicyAmendment": map[string]any{
-				"network_policy_amendment": networkPolicyAmendment,
-			},
-		}, true
+		return map[string]any{"applyNetworkPolicyAmendment": map[string]any{"network_policy_amendment": networkPolicyAmendment}}, true
 	}
 	return nil, false
 }
@@ -170,9 +162,7 @@ func normalizeApprovalResultPayload(method string, result any) (map[string]any, 
 }
 
 func mergeApprovalDecisionPayload(method string, current map[string]any, result any) map[string]any {
-	if normalized, ok := normalizeApprovalResultPayload(method, result); ok {
-		return normalized
-	}
+	if normalized, ok := normalizeApprovalResultPayload(method, result); ok { return normalized }
 	return current
 }
 
@@ -231,19 +221,17 @@ func approvalDecisionAllowsSubmit(method string, payload map[string]any) bool {
 }
 
 func denyApprovalSafely(event agentcore.Event, agentID string) {
-	if event.DenyFunc == nil {
-		return
-	}
-	if denyErr := event.DenyFunc(); denyErr != nil {
+	if event.DenyFunc != nil {
+		if denyErr := event.DenyFunc(); denyErr != nil {
 		logger.Warn("app-server: deny callback failed", logger.FieldAgentID, agentID, logger.FieldError, denyErr)
+		}
 	}
 }
 
 func submitApprovalLegacyDecision(s *Server, agentID, method, decision string, event agentcore.Event, denyOnMissing, logSubmitErr bool) {
 	if s == nil || s.mgr == nil {
 		if denyOnMissing {
-			logger.Error("app-server: approval auto-denied — mgr is nil",
-				logger.FieldAgentID, agentID, logger.FieldMethod, method)
+			logger.Error("app-server: approval auto-denied — mgr is nil", logger.FieldAgentID, agentID, logger.FieldMethod, method)
 			denyApprovalSafely(event, agentID)
 		}
 		return
@@ -251,8 +239,7 @@ func submitApprovalLegacyDecision(s *Server, agentID, method, decision string, e
 	proc := s.mgr.Get(agentID)
 	if proc == nil {
 		if denyOnMissing {
-			logger.Error("app-server: approval auto-denied — agent gone",
-				logger.FieldAgentID, agentID, logger.FieldMethod, method)
+			logger.Error("app-server: approval auto-denied — agent gone", logger.FieldAgentID, agentID, logger.FieldMethod, method)
 			denyApprovalSafely(event, agentID)
 		}
 		return
@@ -282,27 +269,13 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 		isSubAgent = true
 		detectedBy = "uiRuntime_isMain"
 	}
-	logger.Info("app-server: approval request received",
-		logger.FieldAgentID, agentID,
-		logger.FieldMethod, method,
-		"agent_count", agentCount,
-		"first_agent_id", firstID,
-		"is_sub_agent", isSubAgent,
-		"detected_by", detectedBy,
-	)
+	logger.Info("app-server: approval request received", logger.FieldAgentID, agentID, logger.FieldMethod, method, "agent_count", agentCount, "first_agent_id", firstID, "is_sub_agent", isSubAgent, "detected_by", detectedBy)
 
 	if isSubAgent {
-		logger.Info("app-server: sub-agent auto-approved",
-			logger.FieldAgentID, agentID,
-			logger.FieldMethod, method,
-			"agent_count", agentCount,
-			"first_agent_id", firstID,
-			"detected_by", detectedBy,
-		)
+		logger.Info("app-server: sub-agent auto-approved", logger.FieldAgentID, agentID, logger.FieldMethod, method, "agent_count", agentCount, "first_agent_id", firstID, "detected_by", detectedBy)
 		if event.RespondResultFunc != nil {
 			if err := event.RespondResultFunc(approvalDecisionPayload(method, true)); err != nil {
-				logger.Warn("app-server: sub-agent auto-approve respond failed",
-					logger.FieldAgentID, agentID, logger.FieldMethod, method, logger.FieldError, err)
+				logger.Warn("app-server: sub-agent auto-approve respond failed", logger.FieldAgentID, agentID, logger.FieldMethod, method, logger.FieldError, err)
 				denyApprovalSafely(event, agentID)
 			}
 		} else {
@@ -312,8 +285,7 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	}
 	inflightKey := agentID + ":" + method
 	if !tryBeginApprovalState(s, inflightKey) {
-		logger.Debug("app-server: approval dedup — skipping duplicate in-flight request",
-			logger.FieldAgentID, agentID, logger.FieldMethod, method)
+		logger.Debug("app-server: approval dedup — skipping duplicate in-flight request", logger.FieldAgentID, agentID, logger.FieldMethod, method)
 		return
 	}
 	defer endApprovalState(s, inflightKey)
@@ -325,8 +297,7 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	if wsErr == nil && resp != nil && resp.Result != nil {
 		decisionPayload = mergeApprovalDecisionPayload(method, decisionPayload, resp.Result)
 	} else if hasNotifyHookState(s) {
-		logger.Info("app-server: approval via Wails mode (no WS client)",
-			logger.FieldAgentID, agentID, logger.FieldMethod, method)
+		logger.Info("app-server: approval via Wails mode (no WS client)", logger.FieldAgentID, agentID, logger.FieldMethod, method)
 
 		reqID, ch, cleanup := allocPendingRequest(s)
 		defer cleanup()
@@ -338,10 +309,7 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 			threadID := strings.TrimSpace(agentID)
 			normalized := uistate.NormalizeEventFromPayload(method, method, payload)
 			s.uiRuntime.ApplyAgentEvent(threadID, normalized, payload)
-			throttledUIStateChanged(s, map[string]any{
-				"source":   method,
-				"threadId": threadID,
-			})
+			throttledUIStateChanged(s, map[string]any{"source": method, "threadId": threadID})
 		}
 		broadcastNotification(s, method, payload)
 		timer := time.NewTimer(5 * time.Minute)
@@ -352,21 +320,15 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 				decisionPayload = mergeApprovalDecisionPayload(method, decisionPayload, wailsResp.Result)
 			}
 		case <-timer.C:
-			logger.Warn("app-server: approval timed out (Wails mode)",
-				logger.FieldAgentID, agentID, logger.FieldMethod, method)
+			logger.Warn("app-server: approval timed out (Wails mode)", logger.FieldAgentID, agentID, logger.FieldMethod, method)
 		}
 	} else {
-		logger.Warn("app-server: approval auto-denied — no WS client and no notifyHook",
-			logger.FieldAgentID, agentID, logger.FieldMethod, method)
+		logger.Warn("app-server: approval auto-denied — no WS client and no notifyHook", logger.FieldAgentID, agentID, logger.FieldMethod, method)
 	}
 
 	if event.RespondResultFunc != nil {
 		if err := event.RespondResultFunc(decisionPayload); err != nil {
-			logger.Warn("app-server: respond approval result failed",
-				logger.FieldAgentID, agentID,
-				logger.FieldMethod, method,
-				logger.FieldError, err,
-			)
+			logger.Warn("app-server: respond approval result failed", logger.FieldAgentID, agentID, logger.FieldMethod, method, logger.FieldError, err)
 			denyApprovalSafely(event, agentID)
 		}
 		return

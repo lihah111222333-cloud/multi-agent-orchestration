@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
@@ -10,6 +11,10 @@ import (
 )
 
 type ThreadListItem = agentcore.ThreadListItem
+type SlashCommandWithArgsParams struct {
+	ThreadID string `json:"threadId"`
+	Args     string `json:"args,omitempty"`
+}
 
 func RunSendSlashCommand(
 	ctx context.Context,
@@ -97,4 +102,22 @@ func ThreadSkillsListResult(result map[string]any, err error) (any, error) {
 		return map[string]any{}, nil
 	}
 	return result, nil
+}
+
+func ParseSlashCommandArgParams(params json.RawMessage, argKey string, extractString func(map[string]any, ...string) string) (SlashCommandWithArgsParams, error) {
+	parsed := SlashCommandWithArgsParams{}
+	if len(params) == 0 {
+		return parsed, nil
+	}
+	decoded := map[string]any{}
+	if err := json.Unmarshal(params, &decoded); err != nil {
+		return parsed, apperrors.Wrap(err, "Server.parseSlashCommandWithArgsParams", "invalid params")
+	}
+	parsed.ThreadID = extractString(decoded, "threadId", "threadID", "thread_id")
+	if key := strings.TrimSpace(argKey); key == "" || strings.EqualFold(key, "args") {
+		parsed.Args = extractString(decoded, "args")
+	} else {
+		parsed.Args = extractString(decoded, key, "args")
+	}
+	return parsed, nil
 }

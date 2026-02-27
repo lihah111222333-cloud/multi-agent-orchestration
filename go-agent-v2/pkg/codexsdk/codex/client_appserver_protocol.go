@@ -10,8 +10,19 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
+func withThreadIDParam(threadID string, params map[string]any) map[string]any {
+	params["threadId"] = threadID
+	return params
+}
+
+func setProtocolAliases(params map[string]any, value any, keys ...string) {
+	for _, key := range keys {
+		params[key] = value
+	}
+}
+
 func (c *AppServerClient) Initialize() error {
-	result, err := c.call("initialize", map[string]any{
+	_, err := c.call("initialize", map[string]any{
 		"clientInfo": map[string]any{
 			"name":    "go-agent-v2",
 			"version": "1.0",
@@ -24,7 +35,6 @@ func (c *AppServerClient) Initialize() error {
 		logger.Error("codex: Initialize() FAILED", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldError, err)
 		return err
 	}
-	_ = result
 	return nil
 }
 
@@ -37,6 +47,7 @@ type asThreadStartParams struct {
 }
 
 func (c *AppServerClient) ThreadStart(cwd, model, instructions string, dynamicTools []DynamicTool) (string, error) {
+	const errSource = "AppServerClient.ThreadStart"
 	policy := strings.TrimSpace(c.ApprovalPolicy)
 	logger.Info("codex: thread/start with approval policy",
 		logger.FieldAgentID, c.AgentID,
@@ -52,7 +63,7 @@ func (c *AppServerClient) ThreadStart(cwd, model, instructions string, dynamicTo
 	}, 30*time.Second)
 	if err != nil {
 		logger.Error("codex: thread/start FAILED", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldError, err)
-		return "", apperrors.Wrap(err, "AppServerClient.ThreadStart", "thread/start")
+		return "", apperrors.Wrap(err, errSource, "thread/start")
 	}
 
 	var resp struct {
@@ -62,11 +73,11 @@ func (c *AppServerClient) ThreadStart(cwd, model, instructions string, dynamicTo
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
 		logger.Error("codex: thread/start decode FAILED", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldRaw, string(result), logger.FieldError, err)
-		return "", apperrors.Wrapf(err, "AppServerClient.ThreadStart", "thread/start decode (raw: %s)", result)
+		return "", apperrors.Wrapf(err, errSource, "thread/start decode (raw: %s)", result)
 	}
 	if resp.Thread.ID == "" {
 		logger.Error("codex: thread/start returned empty thread ID", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldRaw, string(result))
-		return "", apperrors.Newf("AppServerClient.ThreadStart", "thread/start returned empty thread ID (raw: %s)", result)
+		return "", apperrors.Newf(errSource, "thread/start returned empty thread ID (raw: %s)", result)
 	}
 	c.ThreadID = resp.Thread.ID
 	c.listenerEnsureNeeded.Store(false)
@@ -95,7 +106,6 @@ func (c *AppServerClient) ensureListenerIfNeeded(
 		return
 	}
 	defer c.listenerEnsureInFlight.Store(false)
-
 	callFn := rpcCall
 	if callFn == nil {
 		callFn = c.call
@@ -124,23 +134,16 @@ func (c *AppServerClient) ensureListenerIfNeededAsync(
 
 func (c *AppServerClient) Submit(prompt string, images, files []string, outputSchema json.RawMessage) error {
 	c.ensureListenerIfNeeded(c.call)
-
 	inputs := buildTurnStartInputs(prompt, images, files)
 	threadID := strings.TrimSpace(c.ThreadID)
-
-	params := map[string]any{
-		"threadId": threadID,
-		"input":    inputs,
-	}
+	params := withThreadIDParam(threadID, map[string]any{"input": inputs})
 	if len(outputSchema) > 0 {
 		params["outputSchema"] = json.RawMessage(outputSchema)
 	}
-
-	result, recovered, err := callWithNotInitializedRecovery(c.call, c.Initialize, "turn/start", params, 10*time.Second)
+	result, _, err := callWithNotInitializedRecovery(c.call, c.Initialize, "turn/start", params, 10*time.Second)
 	if err != nil {
 		return err
 	}
-	_ = recovered
 	if turnID := extractTurnIDFromEventData(result); turnID != "" {
 		c.setActiveTurnID(turnID)
 	}
@@ -157,7 +160,7 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 			return nil
 		}
 	}
-	return c.notify("command", map[string]any{"threadId": c.ThreadID, "command": cmd, "args": args})
+	return c.notify("command", withThreadIDParam(c.ThreadID, map[string]any{"command": cmd, "args": args}))
 }
 
 func (c *AppServerClient) tryInterruptCommand() (bool, error) {
@@ -173,7 +176,6 @@ func (c *AppServerClient) tryInterruptCommand() (bool, error) {
 			appServerInterruptTimeout,
 		)
 	}
-
 	if turnID != "" {
 		err := callTurnInterrupt(turnID, "with_turn_id")
 		if err == nil {
@@ -187,7 +189,6 @@ func (c *AppServerClient) tryInterruptCommand() (bool, error) {
 			return true, nil
 		}
 	}
-
 	if c.callWithInitializeRecovery(
 		"interruptConversation",
 		map[string]any{"conversationId": threadID},
@@ -195,7 +196,6 @@ func (c *AppServerClient) tryInterruptCommand() (bool, error) {
 	) == nil {
 		return true, nil
 	}
-
 	return false, nil
 }
 
@@ -218,23 +218,18 @@ func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID
 		}},
 		Success: true,
 	}
-
 	if requestID != nil {
 		return c.respond(*requestID, result)
 	}
-
 	logger.Warn("codex: SendDynamicToolResult without requestID, falling back to notification",
 		logger.FieldAgentID, c.AgentID, logger.FieldCallID, callID)
-	params := map[string]any{
-		"threadId":     c.ThreadID,
-		"callId":       callID,
-		"toolCallId":   callID,
-		"tool_call_id": callID,
+	params := withThreadIDParam(c.ThreadID, map[string]any{
 		"output":       output,
 		"result":       result,
 		"contentItems": result.ContentItems,
 		"success":      true,
-	}
+	})
+	setProtocolAliases(params, callID, "callId", "toolCallId", "tool_call_id")
 	return c.notify("dynamic_tool_result", params)
 }
 

@@ -143,7 +143,7 @@ func notifyHookFuncState(s *Server) func(method string, params any) {
 
 func snapshotSSEClientsState(s *Server) []chan []byte {
 	return serverValue(s, nil, func(s *Server) []chan []byte {
-		return s.sseState.snapshotClients()
+		return s.sseState.clients.snapshot()
 	})
 }
 
@@ -293,14 +293,20 @@ func consumeFileChangesState(s *Server, threadID string) []string {
 }
 
 func addSSEClientState(s *Server, ch chan []byte) {
+	if ch == nil {
+		return
+	}
 	withServer(s, func(s *Server) {
-		s.sseState.addClient(ch)
+		s.sseState.clients.add(ch)
 	})
 }
 
 func removeSSEClientState(s *Server, ch chan []byte) {
+	if ch == nil {
+		return
+	}
 	withServer(s, func(s *Server) {
-		s.sseState.removeClient(ch)
+		s.sseState.clients.remove(ch)
 	})
 }
 

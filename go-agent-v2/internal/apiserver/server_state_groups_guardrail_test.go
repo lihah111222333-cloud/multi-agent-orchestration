@@ -94,7 +94,7 @@ func TestServerStateGroupShapes(t *testing.T) {
 		"toolCallMu", "toolCallCount",
 	})
 	mustHaveFields(t, reflect.TypeOf(sseState{}), []string{
-		"sseMu", "sseClients",
+		"clients",
 	})
 	mustHaveFields(t, reflect.TypeOf(notifyHookState{}), []string{
 		"notifyHookMu", "notifyHook",
@@ -305,22 +305,22 @@ func TestSSEStateClientLifecycle(t *testing.T) {
 	ch1 := make(chan []byte, 1)
 	ch2 := make(chan []byte, 1)
 
-	st.addClient(ch1)
-	st.addClient(ch2)
-	if got := st.clientCount(); got != 2 {
+	st.clients.add(ch1)
+	st.clients.add(ch2)
+	if got := st.clients.count(); got != 2 {
 		t.Fatalf("clientCount mismatch: got %d want 2", got)
 	}
-	snapshot := st.snapshotClients()
+	snapshot := st.clients.snapshot()
 	if got := len(snapshot); got != 2 {
 		t.Fatalf("snapshot size mismatch: got %d want 2", got)
 	}
 
-	st.removeClient(ch1)
-	if got := st.clientCount(); got != 1 {
+	st.clients.remove(ch1)
+	if got := st.clients.count(); got != 1 {
 		t.Fatalf("post-remove clientCount mismatch: got %d want 1", got)
 	}
-	st.removeClient(ch2)
-	if got := st.clientCount(); got != 0 {
+	st.clients.remove(ch2)
+	if got := st.clients.count(); got != 0 {
 		t.Fatalf("final clientCount mismatch: got %d want 0", got)
 	}
 }

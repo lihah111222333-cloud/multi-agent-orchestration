@@ -140,7 +140,9 @@ func New(deps Deps) *Server {
 			toolCallCount: make(map[string]int64),
 		},
 		sseState: sseState{
-			sseClients: make(map[chan []byte]struct{}),
+			clients: safeSet[chan []byte]{
+				items: make(map[chan []byte]struct{}),
+			},
 		},
 		prefManager: uistate.NewPreferenceManager(nil),
 		uiRuntime:   uistate.NewRuntimeManager(),

@@ -119,8 +119,9 @@ func (m *RuntimeManager) applyAgentEventLocked(threadID string, normalized Norma
 	}
 	nextState := m.deriveThreadStateLocked(threadID)
 	m.setThreadStateLocked(threadID, nextState)
-	m.snapshot.StatusHeadersByThread[threadID] = m.deriveThreadStatusHeaderLocked(threadID, nextState)
-	m.snapshot.StatusDetailsByThread[threadID] = m.deriveThreadStatusDetailsLocked(threadID, nextState)
+	header, details := m.deriveThreadStatusTextsLocked(threadID, nextState)
+	m.snapshot.StatusHeadersByThread[threadID] = header
+	m.snapshot.StatusDetailsByThread[threadID] = details
 }
 
 func (m *RuntimeManager) logIgnoredRuntimeEvent(threadID string, normalized NormalizedEvent) {
@@ -561,14 +562,6 @@ func deriveThreadStatusOverlay(rt *threadRuntime) (string, string, bool) {
 	}
 }
 
-func (m *RuntimeManager) deriveThreadStatusHeaderLocked(threadID, state string) string {
-	rt := m.runtime[threadID]
-	if header, _, ok := deriveThreadStatusOverlay(rt); ok {
-		return header
-	}
-	return defaultStatusHeaderForState(state)
-}
-
 func defaultStatusHeaderForState(state string) string {
 	switch normalizeThreadState(state) {
 	case "starting":
@@ -586,24 +579,25 @@ func defaultStatusHeaderForState(state string) string {
 	}
 }
 
-func (m *RuntimeManager) deriveThreadStatusDetailsLocked(threadID, state string) string {
+func (m *RuntimeManager) deriveThreadStatusTextsLocked(threadID, state string) (string, string) {
 	rt := m.runtime[threadID]
-	if _, details, ok := deriveThreadStatusOverlay(rt); ok {
-		return details
+	if header, details, ok := deriveThreadStatusOverlay(rt); ok {
+		return header, details
 	}
+	header := defaultStatusHeaderForState(state)
 	switch state {
 	case "running":
-		return "命令或工具正在执行"
+		return header, "命令或工具正在执行"
 	case "editing":
-		return "文件修改进行中"
+		return header, "文件修改进行中"
 	case "thinking":
-		return "模型推理中"
+		return header, "模型推理中"
 	case "syncing":
-		return "后台同步中"
+		return header, "后台同步中"
 	case "error":
-		return "运行出现异常"
+		return header, "运行出现异常"
 	default:
-		return ""
+		return header, ""
 	}
 }
 

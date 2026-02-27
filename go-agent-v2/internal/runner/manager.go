@@ -95,14 +95,13 @@ type AgentInfo struct {
 	LastReport string     `json:"last_report,omitempty"` // 最近一次任务报告
 }
 
-// AgentEvent 封装 Agent 事件 (用于 UI 展示)。
 type AgentEvent struct {
 	AgentID string          `json:"agent_id"`
 	Event   agentcore.Event `json:"event"`
 }
 
 type AgentMessage struct {
-	Type    string `json:"type"` // "output" | "input" | "status"
+	Type    string `json:"type"`
 	AgentID string `json:"agent_id"`
 	Data    string `json:"data"`
 	Ts      string `json:"ts"`
@@ -380,7 +379,6 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event agentcore.Event) {
 		}
 	}
 
-	// 特殊状态处理
 	switch event.Type {
 	case agentcore.EventShutdownComplete:
 		newState = StateStopped
@@ -402,22 +400,18 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event agentcore.Event) {
 		proc.mu.Unlock()
 	}
 
-	// 累积当前 turn 的 agent 回复内容 (agent_message_delta)
 	switch normalized.UIType {
 	case uistate.UITypeTurnStarted:
-		// 新 turn 开始: 重置消息缓冲区
 		proc.mu.Lock()
 		proc.messageBuf.Reset()
 		proc.mu.Unlock()
 	case uistate.UITypeAssistantDelta:
-		// 累积 delta 文本
 		if normalized.Text != "" {
 			proc.mu.Lock()
 			proc.messageBuf.WriteString(normalized.Text)
 			proc.mu.Unlock()
 		}
 	case uistate.UITypeTurnComplete:
-		// turn 完成: 保存完整消息到 LastMessage
 		proc.mu.Lock()
 		if proc.messageBuf.Len() > 0 {
 			proc.LastMessage = proc.messageBuf.String()
@@ -460,13 +454,10 @@ func (m *AgentManager) Submit(id, prompt string, images, files []string) error {
 }
 
 func (m *AgentManager) emitUserMessageEvent(proc *AgentProcess, prompt string, images, files []string) {
-	if proc == nil {
-		return
-	}
 	m.mu.RLock()
 	handler := m.onEvent
 	m.mu.RUnlock()
-	if handler == nil {
+	if proc == nil || handler == nil {
 		return
 	}
 

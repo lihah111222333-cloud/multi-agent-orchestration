@@ -283,8 +283,7 @@ func EnsureThreadReadyForTurn(a RuntimeAdapter, ctx context.Context, threadID, c
 		return nil, err
 	}
 	if len(resumeCandidates) == 0 {
-		logger.Warn("turn/start: no valid historical codex thread id, continue with fresh session", a.ThreadLogFields(id)...)
-		return proc, nil
+		return EnsureReadyNoResumeCandidates(a, id, proc), nil
 	}
 
 	resumed, lastResumeErr, fatalResumeErr := TryResumeHistoricalCandidates(a, ctx, manager, proc, id, launchCwd, resumeCandidates)
@@ -299,11 +298,7 @@ func EnsureThreadReadyForTurn(a RuntimeAdapter, ctx context.Context, threadID, c
 		return EnsureReadyResumeFallback(a, ctx, manager, id, launchCwd, proc, lastResumeErr, startInstructions, dynamicTools, len(resumeCandidates))
 	}
 
-	logger.Warn("turn/start: no available historical rollout, continue with fresh session",
-		withThreadLogFields(a, id, "candidate_count", len(resumeCandidates), logger.FieldCwd, launchCwd)...,
-	)
-	RegisterBinding(a, ctx, id, proc)
-	return proc, nil
+	return EnsureReadyNoHistoricalRollout(a, ctx, id, launchCwd, proc, len(resumeCandidates)), nil
 }
 
 func EnsureReadyRunningProcess(a RuntimeAdapter, ctx context.Context, manager Manager, agentID string, launchCwd string) (Process, bool) {
@@ -315,8 +310,6 @@ func EnsureReadyRunningProcess(a RuntimeAdapter, ctx context.Context, manager Ma
 	if proc == nil {
 		return nil, false
 	}
-	// Lazy Recovery: 检测到死进程 (连接断开 / StateError 等)，
-	// 清理后返回 false，让调用者走 launch + resume 恢复路径。
 	if !proc.IsAlive() {
 		logger.Warn("turn/start: dead process detected, stopping for auto-recovery",
 			withThreadLogFields(a, agentID, logger.FieldPort, proc.Port())...,
@@ -357,6 +350,12 @@ func EnsureReadyLaunchProcess(a RuntimeAdapter, ctx context.Context, manager Man
 	return proc, nil
 }
 
+func EnsureReadyNoResumeCandidates(a RuntimeAdapter, agentID string, proc Process) Process {
+	a = normalizeRuntimeAdapter(a)
+	logger.Warn("turn/start: no valid historical codex thread id, continue with fresh session", a.ThreadLogFields(agentID)...)
+	return proc
+}
+
 func EnsureReadyResumeFallback(a RuntimeAdapter, ctx context.Context, manager Manager, agentID string, launchCwd string, proc Process, lastResumeErr error, startInstructions string, dynamicTools []agentcore.DynamicTool, candidateCount int) (Process, error) {
 	a = normalizeRuntimeAdapter(a)
 	logger.Warn("turn/start: all resume candidates exhausted, fallback to fresh session",
@@ -375,6 +374,13 @@ func EnsureReadyResumeFallback(a RuntimeAdapter, ctx context.Context, manager Ma
 	}
 	RegisterBinding(a, ctx, agentID, proc)
 	return proc, nil
+}
+
+func EnsureReadyNoHistoricalRollout(a RuntimeAdapter, ctx context.Context, agentID string, launchCwd string, proc Process, candidateCount int) Process {
+	a = normalizeRuntimeAdapter(a)
+	logger.Warn("turn/start: no available historical rollout, continue with fresh session", withThreadLogFields(a, agentID, "candidate_count", candidateCount, logger.FieldCwd, launchCwd)...)
+	RegisterBinding(a, ctx, agentID, proc)
+	return proc
 }
 
 func RegisterBinding(a RuntimeAdapter, ctx context.Context, agentID string, proc Process) {
@@ -430,7 +436,6 @@ func TryResumeHistoricalCandidates(a RuntimeAdapter, ctx context.Context, manage
 			RegisterBinding(a, ctx, id, proc)
 			return true, nil, nil
 		}
-
 		lastResumeErr = err
 		if a.IsCodexProcessCrashError(err) {
 			logger.Error("turn/start: codex crashed during resume, returning error",
@@ -442,14 +447,12 @@ func TryResumeHistoricalCandidates(a RuntimeAdapter, ctx context.Context, manage
 			}
 			return false, lastResumeErr, a.WrapErrorf(err, "Server.ensureThreadReady", "codex crashed while resuming thread %s (rollout=%s)", id, resumeThreadID)
 		}
-
 		if a.IsHistoricalResumeCandidateError(err) {
 			logger.Warn("turn/start: resume candidate unavailable, try next",
 				withThreadLogFields(a, id, "resume_thread_id", resumeThreadID, logger.FieldError, err)...,
 			)
 			continue
 		}
-
 		logger.Error("turn/start: unrecognized resume error",
 			withThreadLogFields(a, id, "resume_thread_id", resumeThreadID, logger.FieldError, err)...,
 		)
@@ -534,7 +537,6 @@ func StartTurnSubmissionAndTrack(a RuntimeAdapter, ctx context.Context, threadID
 	logger.Info("turn/start: submit returned",
 		withThreadLogFields(a, threadID, "submit_ms", time.Since(submitStart).Milliseconds())...,
 	)
-
 	resolvedTurnID := a.ResolveClientActiveTurnID(proc)
 	if resolvedTurnID == "" {
 		logger.Warn("turn/start: active turn id unavailable after submit; tracker will use synthetic id",

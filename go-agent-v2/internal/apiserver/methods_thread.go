@@ -35,11 +35,6 @@ type threadStartResponse struct {
 	ApprovalPolicy string     `json:"approvalPolicy"`
 }
 
-func normalizeResumeThreadID(raw string) string {
-	id, _, _ := strings.Cut(strings.TrimSpace(raw), ",")
-	return strings.TrimSpace(id)
-}
-
 func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any, error) {
 	result, err := s.codexAdapter.ThreadStart(
 		ctx,
@@ -95,7 +90,7 @@ type threadResumeResponse struct {
 }
 
 func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (any, error) {
-	result, err := s.codexAdapter.ThreadResume(ctx, normalizeResumeThreadID(p.ThreadID), p.Path, p.Cwd, p.Model)
+	result, err := s.codexAdapter.ThreadResume(ctx, strings.TrimSpace(strings.SplitN(strings.TrimSpace(p.ThreadID), ",", 2)[0]), p.Path, p.Cwd, p.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -113,11 +108,7 @@ func (s *Server) threadRecoverTyped(ctx context.Context, p threadIDParams) (any,
 	if err != nil {
 		return nil, err
 	}
-	return threadRecoverResponse{
-		Thread:    threadInfo{ID: result.ThreadID, Status: result.Status},
-		Recovered: result.Recovered,
-		Mode:      result.Mode,
-	}, nil
+	return threadRecoverResponse{Thread: threadInfo{ID: result.ThreadID, Status: result.Status}, Recovered: result.Recovered, Mode: result.Mode}, nil
 }
 
 type threadNameSetParams struct {
@@ -168,9 +159,7 @@ func filterThreadsByArchived(threads []contracts.ThreadListItem, params json.Raw
 	var p struct {
 		Archived *bool `json:"archived,omitempty"`
 	}
-	if len(params) > 0 && string(params) != "null" {
-		_ = json.Unmarshal(params, &p)
-	}
+	_ = json.Unmarshal(params, &p)
 	if p.Archived == nil {
 		return threads
 	}

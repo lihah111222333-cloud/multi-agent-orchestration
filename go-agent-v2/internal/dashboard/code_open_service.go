@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 )
 
 const (
@@ -443,6 +443,36 @@ func supportsLSPFileType(path string) bool {
 	return false
 }
 
+func buildCodeOpenResult(
+	resolvedPath, relativePath string,
+	line, column int,
+	startLine, endLine, totalLines, context int,
+	snippet []map[string]any,
+	diagnostics []map[string]any,
+	lspOpened bool,
+	extra map[string]any,
+) map[string]any {
+	result := map[string]any{
+		"ok":          true,
+		"filePath":    resolvedPath,
+		"relative":    relativePath,
+		"line":        line,
+		"column":      column,
+		"startLine":   startLine,
+		"endLine":     endLine,
+		"totalLines":  totalLines,
+		"language":    fileLanguageByPath(resolvedPath),
+		"context":     context,
+		"snippet":     snippet,
+		"diagnostics": diagnostics,
+		"lspOpened":   lspOpened,
+	}
+	for key, value := range extra {
+		result[key] = value
+	}
+	return result
+}
+
 // Open resolves and reads a code/file reference for UI preview.
 func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 	logger.Info("ui/code/open: begin",
@@ -501,6 +531,7 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 		if p.Line > 0 {
 			targetLine = p.Line
 		}
+		targetColumn := clampColumn(p.Column)
 		fileURL := codePathToURI(resolvedPath)
 		previewURL := fileURL
 		thumbnailURL := fileURL
@@ -514,28 +545,28 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 			"media_type", mediaType,
 			"size_bytes", len(content),
 		)
-		return map[string]any{
-			"ok":           true,
-			"filePath":     resolvedPath,
-			"relative":     relativePath,
-			"line":         targetLine,
-			"column":       clampColumn(p.Column),
-			"startLine":    1,
-			"endLine":      1,
-			"totalLines":   1,
-			"language":     fileLanguageByPath(resolvedPath),
-			"context":      0,
-			"snippet":      []map[string]any{{"line": 1, "text": fmt.Sprintf("[image preview: %s, %d bytes]", mediaType, len(content))}},
-			"diagnostics":  []map[string]any{},
-			"lspOpened":    false,
-			"binary":       looksLikeBinaryContent(content),
-			"mediaType":    mediaType,
-			"sizeBytes":    len(content),
-			"image":        true,
-			"plugin":       "image-parser",
-			"previewURL":   previewURL,
-			"thumbnailURL": thumbnailURL,
-		}, nil
+		return buildCodeOpenResult(
+			resolvedPath,
+			relativePath,
+			targetLine,
+			targetColumn,
+			1,
+			1,
+			1,
+			0,
+			[]map[string]any{{"line": 1, "text": fmt.Sprintf("[image preview: %s, %d bytes]", mediaType, len(content))}},
+			[]map[string]any{},
+			false,
+			map[string]any{
+				"binary":       looksLikeBinaryContent(content),
+				"mediaType":    mediaType,
+				"sizeBytes":    len(content),
+				"image":        true,
+				"plugin":       "image-parser",
+				"previewURL":   previewURL,
+				"thumbnailURL": thumbnailURL,
+			},
+		), nil
 	}
 
 	if looksLikeBinaryContent(content) {
@@ -544,33 +575,34 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 		if p.Line > 0 {
 			targetLine = p.Line
 		}
+		targetColumn := clampColumn(p.Column)
 		logger.Info("ui/code/open: binary content detected",
 			"resolved_path", resolvedPath,
 			"relative_path", relativePath,
 			"media_type", mediaType,
 			"size_bytes", len(content),
 		)
-		return map[string]any{
-			"ok":         true,
-			"filePath":   resolvedPath,
-			"relative":   relativePath,
-			"line":       targetLine,
-			"column":     clampColumn(p.Column),
-			"startLine":  1,
-			"endLine":    1,
-			"totalLines": 1,
-			"language":   fileLanguageByPath(resolvedPath),
-			"context":    0,
-			"snippet": []map[string]any{{
+		return buildCodeOpenResult(
+			resolvedPath,
+			relativePath,
+			targetLine,
+			targetColumn,
+			1,
+			1,
+			1,
+			0,
+			[]map[string]any{{
 				"line": 1,
 				"text": fmt.Sprintf("[binary file omitted: %s, %d bytes]", mediaType, len(content)),
 			}},
-			"diagnostics": []map[string]any{},
-			"lspOpened":   false,
-			"binary":      true,
-			"mediaType":   mediaType,
-			"sizeBytes":   len(content),
-		}, nil
+			[]map[string]any{},
+			false,
+			map[string]any{
+				"binary":    true,
+				"mediaType": mediaType,
+				"sizeBytes": len(content),
+			},
+		), nil
 	}
 
 	text := strings.ReplaceAll(string(content), "\r\n", "\n")
@@ -604,21 +636,20 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 	}
 	diagnostics := s.gatherCodeDiagnostics(resolvedPath, startLine, endLine)
 
-	result := map[string]any{
-		"ok":          true,
-		"filePath":    resolvedPath,
-		"relative":    relativePath,
-		"line":        targetLine,
-		"column":      targetColumn,
-		"startLine":   startLine,
-		"endLine":     endLine,
-		"totalLines":  len(lines),
-		"language":    fileLanguageByPath(resolvedPath),
-		"context":     contextLines,
-		"snippet":     buildCodeSnippet(lines, startLine, endLine),
-		"diagnostics": diagnostics,
-		"lspOpened":   lspOpened,
-	}
+	result := buildCodeOpenResult(
+		resolvedPath,
+		relativePath,
+		targetLine,
+		targetColumn,
+		startLine,
+		endLine,
+		len(lines),
+		contextLines,
+		buildCodeSnippet(lines, startLine, endLine),
+		diagnostics,
+		lspOpened,
+		nil,
+	)
 
 	logger.Info("ui/code/open: success",
 		"resolved_path", resolvedPath,

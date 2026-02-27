@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk"
-	historyconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/history"
-	messagesconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/messages"
 	lifecyclesvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/lifecycle"
+	messagessvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/messages"
 	rolloutsvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/rollout"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -27,7 +27,7 @@ func (a *Adapter) ThreadMessages(ctx context.Context, threadID string, limit int
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	allMsgs, err := messagesconsumer.LoadAllThreadMessagesFromCodexRollout(
+	allMsgs, err := messagessvc.LoadAllThreadMessagesFromCodexRollout(
 		ctx,
 		id,
 		a.resolveRolloutHistorySource,
@@ -38,31 +38,35 @@ func (a *Adapter) ThreadMessages(ctx context.Context, threadID string, limit int
 		return nil, apperrors.Wrap(err, "Server.threadMessages", "load codex rollout messages")
 	}
 	total := int64(len(allMsgs))
-	msgs := messagesconsumer.PaginateRolloutMessages(allMsgs, limit, before)
+	msgs := messagessvc.PaginateRolloutMessages(allMsgs, limit, before)
 	logger.Info("thread/messages: page selected", append(threadLogFields(id), "before", before, "limit", limit, "page_count", len(msgs), "total", total)...)
 
 	runtime := a.uiRuntime()
 	if runtime != nil {
-		messagesconsumer.HandleThreadMessagesHydration(
+		messagessvc.HandleThreadMessagesHydration(
 			id,
 			allMsgs,
 			msgs,
 			before,
-			messagesconsumer.CalculateHydrationLoadLimit,
-			runtime.HydrateHistory,
-			func(threadID string, all []messagesconsumer.ThreadHistoryMessage, firstPage []messagesconsumer.ThreadHistoryMessage, loadLimit int) {
-				messagesconsumer.StreamRemainingHistory(
+			messagessvc.CalculateHydrationLoadLimit,
+			func(threadID string, records []messagessvc.ThreadHistoryMessage) bool {
+				return runtime.HydrateHistory(threadID, toHistoryRecords(records))
+			},
+			func(threadID string, all []messagessvc.ThreadHistoryMessage, firstPage []messagessvc.ThreadHistoryMessage, loadLimit int) {
+				messagessvc.StreamRemainingHistory(
 					threadID,
 					all,
 					firstPage,
 					loadLimit,
-					messagesconsumer.ThreadMessageHydrationPageSize,
-					messagesconsumer.PaginateRolloutMessages,
-					runtime.AppendHistory,
+					messagessvc.ThreadMessageHydrationPageSize,
+					messagessvc.PaginateRolloutMessages,
+					func(threadID string, records []messagessvc.ThreadHistoryMessage) {
+						runtime.AppendHistory(threadID, toHistoryRecords(records))
+					},
 					func(id string) int { return len(runtime.ThreadDiff(id)) },
 					func(id string) int { return len(runtime.ThreadTimeline(id)) },
 					func(id string, totalLoaded int, pages int) {
-						a.notify("thread/messages/page", messagesconsumer.BuildThreadMessagesPagePayload(id, totalLoaded, pages))
+						a.notify("thread/messages/page", messagessvc.BuildThreadMessagesPagePayload(id, totalLoaded, pages))
 					},
 				)
 			},
@@ -74,7 +78,7 @@ func (a *Adapter) ThreadMessages(ctx context.Context, threadID string, limit int
 		diffLen, timelineLen = len(runtime.ThreadDiff(id)), len(runtime.ThreadTimeline(id))
 	}
 	logger.Info("thread/messages: response prepared", append(threadLogFields(id), "page_count", len(msgs), "total", total, "timeline_len", timelineLen, "diff_len", diffLen)...)
-	return messagesconsumer.BuildThreadMessagesResponse(msgs, total), nil
+	return messagessvc.BuildThreadMessagesResponse(msgs, total), nil
 }
 
 func (a *Adapter) showInjectedPromptInChat(ctx context.Context) bool {
@@ -87,7 +91,7 @@ func (a *Adapter) showInjectedPromptInChat(ctx context.Context) bool {
 		logger.Warn("ui preferences: load injected prompt visibility failed", logger.FieldError, err)
 		return false
 	}
-	return messagesconsumer.ParsePreferenceBool(value, false)
+	return messagessvc.ParsePreferenceBool(value, false)
 }
 
 func (a *Adapter) resolveRolloutHistorySource(ctx context.Context, threadID string) (string, string) {
@@ -112,7 +116,7 @@ func (a *Adapter) resolveRolloutHistorySource(ctx context.Context, threadID stri
 		return binding.CodexThreadID, binding.RolloutPath, nil
 	}
 	statusSessionIDByAgentID := func(ctx context.Context, agentID string) (string, error) {
-		return historyconsumer.StatusSessionIDByAgentID(ctx, a.statusStore(), agentID)
+		return a.statusSessionID(ctx, agentID)
 	}
 	return rolloutsvc.ResolveRolloutHistorySource(
 		ctx,
@@ -122,4 +126,23 @@ func (a *Adapter) resolveRolloutHistorySource(ctx context.Context, threadID stri
 		statusSessionIDByAgentID,
 		lifecyclesvc.NormalizeCodexThreadID,
 	)
+}
+
+func toHistoryRecords(msgs []messagessvc.ThreadHistoryMessage) []uistate.HistoryRecord {
+	if len(msgs) == 0 {
+		return nil
+	}
+	out := make([]uistate.HistoryRecord, 0, len(msgs))
+	for _, msg := range msgs {
+		out = append(out, uistate.HistoryRecord{
+			ID:        msg.ID,
+			Role:      msg.Role,
+			EventType: msg.EventType,
+			Method:    msg.Method,
+			Content:   msg.Content,
+			Metadata:  msg.Metadata,
+			CreatedAt: msg.CreatedAt,
+		})
+	}
+	return out
 }

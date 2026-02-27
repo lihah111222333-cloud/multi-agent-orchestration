@@ -61,58 +61,65 @@ func ReadRolloutMessagesWithTrim(rolloutPath string, trimInjectedUserContent boo
 	scanner.Buffer(make([]byte, 0, 64*1024), 100*1024*1024) // 100 MB max — rollout 行可能含 base64 图片或大 diff
 
 	for scanner.Scan() {
-		var line rolloutLine
-		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
-			continue
+		msg, ok := parseRolloutLine(scanner.Bytes(), trimInjectedUserContent)
+		if ok {
+			messages = append(messages, msg)
 		}
-		if line.Type != "response_item" {
-			continue
-		}
-
-		var payload rolloutPayload
-		if err := json.Unmarshal(line.Payload, &payload); err != nil {
-			continue
-		}
-		if payload.Type != "message" {
-			continue
-		}
-		if payload.Role != "user" && payload.Role != "assistant" {
-			continue
-		}
-
-		text := extractRolloutText(payload.Content)
-		if text == "" {
-			continue
-		}
-
-		if payload.Role == "user" {
-			text = util.StripLeadingSystemNoise(text)
-			if strings.TrimSpace(text) == "" {
-				continue
-			}
-			if isSystemNoise(text) {
-				continue
-			}
-			if trimInjectedUserContent {
-				text = util.TrimInjectedSkillBlock(text)
-				text = util.TrimInjectedLSPHint(text)
-			}
-			if strings.TrimSpace(text) == "" {
-				continue
-			}
-		}
-
-		messages = append(messages, RolloutMessage{
-			Role:      payload.Role,
-			Content:   text,
-			Timestamp: line.Timestamp,
-		})
 	}
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan rollout file: %w", err)
 	}
 	return messages, nil
+}
+
+func parseRolloutLine(raw []byte, trimInjectedUserContent bool) (RolloutMessage, bool) {
+	var line rolloutLine
+	if err := json.Unmarshal(raw, &line); err != nil || line.Type != "response_item" {
+		return RolloutMessage{}, false
+	}
+
+	var payload rolloutPayload
+	if err := json.Unmarshal(line.Payload, &payload); err != nil {
+		return RolloutMessage{}, false
+	}
+	if payload.Type != "message" || (payload.Role != "user" && payload.Role != "assistant") {
+		return RolloutMessage{}, false
+	}
+
+	text := extractRolloutText(payload.Content)
+	if text == "" {
+		return RolloutMessage{}, false
+	}
+	if payload.Role == "user" {
+		var ok bool
+		text, ok = normalizeRolloutUserText(text, trimInjectedUserContent)
+		if !ok {
+			return RolloutMessage{}, false
+		}
+	}
+
+	return RolloutMessage{
+		Role:      payload.Role,
+		Content:   text,
+		Timestamp: line.Timestamp,
+	}, true
+}
+
+func normalizeRolloutUserText(text string, trimInjectedUserContent bool) (string, bool) {
+	text = util.StripLeadingSystemNoise(text)
+	if !hasMeaningfulText(text) || isSystemNoise(text) {
+		return "", false
+	}
+	if trimInjectedUserContent {
+		text = util.TrimInjectedSkillBlock(text)
+		text = util.TrimInjectedLSPHint(text)
+	}
+	return text, hasMeaningfulText(text)
+}
+
+func hasMeaningfulText(text string) bool {
+	return strings.TrimSpace(text) != ""
 }
 
 // FindRolloutPath 根据 codexThreadID 查找 rollout 文件。
@@ -132,30 +139,39 @@ func FindRolloutPath(codexThreadID string) (string, error) {
 
 	now := time.Now()
 	todayDir := filepath.Join(sessionsDir, now.Format("2006"), now.Format("01"), now.Format("02"))
-	if matches, _ := filepath.Glob(filepath.Join(todayDir, suffix)); len(matches) > 0 {
-		sort.Strings(matches)
-		return matches[len(matches)-1], nil
+	if match, found, err := latestGlobMatch(filepath.Join(todayDir, suffix)); err == nil && found {
+		return match, nil
 	}
 
 	for i := 1; i <= 7; i++ {
 		d := now.AddDate(0, 0, -i)
 		dir := filepath.Join(sessionsDir, d.Format("2006"), d.Format("01"), d.Format("02"))
-		if matches, _ := filepath.Glob(filepath.Join(dir, suffix)); len(matches) > 0 {
-			sort.Strings(matches)
-			return matches[len(matches)-1], nil
+		if match, found, err := latestGlobMatch(filepath.Join(dir, suffix)); err == nil && found {
+			return match, nil
 		}
 	}
 
 	pattern := filepath.Join(sessionsDir, "*", "*", "*", suffix)
-	matches, err := filepath.Glob(pattern)
+	match, found, err := latestGlobMatch(pattern)
 	if err != nil {
 		return "", fmt.Errorf("glob rollout files: %w", err)
 	}
-	if len(matches) == 0 {
+	if !found {
 		return "", fmt.Errorf("no rollout file found for thread %s", codexThreadID)
 	}
+	return match, nil
+}
+
+func latestGlobMatch(pattern string) (string, bool, error) {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", false, err
+	}
+	if len(matches) == 0 {
+		return "", false, nil
+	}
 	sort.Strings(matches)
-	return matches[len(matches)-1], nil
+	return matches[len(matches)-1], true, nil
 }
 
 func extractRolloutText(content []rolloutContentItem) string {

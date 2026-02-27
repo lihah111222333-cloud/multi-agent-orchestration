@@ -102,11 +102,7 @@ func (a *Adapter) resolveRolloutHistorySource(ctx context.Context, threadID stri
 		})
 	}
 	bindingRolloutSourceByAgentID := func(ctx context.Context, agentID string) (string, string, error) {
-		bindingStore := a.bindingStore()
-		if bindingStore == nil {
-			return "", "", nil
-		}
-		binding, err := bindingStore.FindByAgentID(ctx, agentID)
+		binding, err := a.findBindingByAgentID(ctx, agentID)
 		if err != nil {
 			return "", "", err
 		}
@@ -115,26 +111,19 @@ func (a *Adapter) resolveRolloutHistorySource(ctx context.Context, threadID stri
 		}
 		return binding.CodexThreadID, binding.RolloutPath, nil
 	}
-	statusSessionIDByAgentID := func(ctx context.Context, agentID string) (string, error) {
-		return a.statusSessionID(ctx, agentID)
-	}
 	return rolloutsvc.ResolveRolloutHistorySource(
 		ctx,
 		threadID,
 		runningCodexThreadID,
 		bindingRolloutSourceByAgentID,
-		statusSessionIDByAgentID,
+		a.statusSessionID,
 		lifecyclesvc.NormalizeCodexThreadID,
 	)
 }
 
 func toHistoryRecords(msgs []messagessvc.ThreadHistoryMessage) []uistate.HistoryRecord {
-	if len(msgs) == 0 {
-		return nil
-	}
-	out := make([]uistate.HistoryRecord, 0, len(msgs))
-	for _, msg := range msgs {
-		out = append(out, uistate.HistoryRecord{
+	return mapSlice(msgs, func(msg messagessvc.ThreadHistoryMessage) uistate.HistoryRecord {
+		return uistate.HistoryRecord{
 			ID:        msg.ID,
 			Role:      msg.Role,
 			EventType: msg.EventType,
@@ -142,7 +131,6 @@ func toHistoryRecords(msgs []messagessvc.ThreadHistoryMessage) []uistate.History
 			Content:   msg.Content,
 			Metadata:  msg.Metadata,
 			CreatedAt: msg.CreatedAt,
-		})
-	}
-	return out
+		}
+	})
 }

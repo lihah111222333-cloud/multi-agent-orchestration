@@ -2,7 +2,6 @@ package codexadapter
 
 import (
 	"strings"
-	"sync"
 	"time"
 
 	trackersvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/tracker"
@@ -66,15 +65,6 @@ func (a *Adapter) setTrackerDuration(getter func(turnTrackerState) *time.Duratio
 	trackersvc.SetTrackerDurationCore(state, getter, value)
 }
 
-func (a *Adapter) trackerState() (map[string]*trackedTurn, *sync.Mutex, time.Duration, time.Duration) {
-	state, _ := a.trackerStateAndNotify()
-	return trackersvc.TrackerStateCore(state)
-}
-
-func (a *Adapter) stallThreshold() time.Duration {
-	return a.trackerDuration(func(state turnTrackerState) *time.Duration { return state.StallThreshold }, defaultStallThreshold)
-}
-
 func (a *Adapter) SetStallThreshold(threshold time.Duration) {
 	a.setTrackerDuration(func(state turnTrackerState) *time.Duration { return state.StallThreshold }, threshold)
 }
@@ -89,12 +79,13 @@ func (a *Adapter) touchTrackedTurnLastEvent(threadID string) {
 }
 
 func (a *Adapter) StartApprovalStallHeartbeat(threadID string) func() {
-	_, _, _, stallThreshold := a.trackerState()
+	stallThreshold := a.trackerDuration(func(state turnTrackerState) *time.Duration { return state.StallThreshold }, defaultStallThreshold)
 	return trackersvc.StartStallHeartbeat(threadID, stallThreshold, defaultStallThreshold, defaultStallThreshold, a.touchTrackedTurnLastEvent)
 }
 
 func (a *Adapter) StartDynamicToolStallHeartbeat(threadID string) func() {
-	return trackersvc.StartStallHeartbeat(threadID, a.stallThreshold(), defaultStallThreshold, defaultStallThreshold, a.touchTrackedTurnLastEvent)
+	stallThreshold := a.trackerDuration(func(state turnTrackerState) *time.Duration { return state.StallThreshold }, defaultStallThreshold)
+	return trackersvc.StartStallHeartbeat(threadID, stallThreshold, defaultStallThreshold, defaultStallThreshold, a.touchTrackedTurnLastEvent)
 }
 
 func (a *Adapter) checkTurnStall(threadID string, turnID string) {

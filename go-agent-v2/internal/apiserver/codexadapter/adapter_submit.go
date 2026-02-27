@@ -26,23 +26,14 @@ type managerAdapter struct {
 }
 
 func (a managerAdapter) Get(agentID string) agentcore.Process {
-	if a.manager == nil {
-		return nil
-	}
 	return wrapProcess(a.manager.Get(agentID))
 }
 
 func (a managerAdapter) Launch(ctx context.Context, agentID, alias, profile, cwd, startInstructions string, dynamicTools []agentcore.DynamicTool) error {
-	if a.manager == nil {
-		return nil
-	}
 	return a.manager.Launch(ctx, agentID, alias, profile, cwd, startInstructions, dynamicTools)
 }
 
 func (a managerAdapter) Stop(agentID string) error {
-	if a.manager == nil {
-		return nil
-	}
 	return a.manager.Stop(agentID)
 }
 
@@ -51,16 +42,10 @@ type bindingStoreAdapter struct {
 }
 
 func (a bindingStoreAdapter) Bind(ctx context.Context, agentID, codexThreadID, sessionID string) error {
-	if a.store == nil {
-		return nil
-	}
 	return a.store.Bind(ctx, agentID, codexThreadID, sessionID)
 }
 
 func (a bindingStoreAdapter) FindByAgentID(ctx context.Context, agentID string) (*agentcore.Binding, error) {
-	if a.store == nil {
-		return nil, nil
-	}
 	binding, err := a.store.FindByAgentID(ctx, agentID)
 	if err != nil || binding == nil {
 		return nil, err
@@ -73,27 +58,15 @@ type uiRuntimeAdapter struct {
 }
 
 func (a uiRuntimeAdapter) AppendUserMessage(threadID, text string, attachments []agentcore.TimelineAttachment) {
-	if a.runtime == nil {
-		return
-	}
-	mapped := make([]uistate.TimelineAttachment, len(attachments))
-	for i := range attachments {
-		item := attachments[i]
-		mapped[i] = uistate.TimelineAttachment{Kind: item.Kind, Name: item.Name, Path: item.Path, PreviewURL: item.PreviewURL}
-	}
-	a.runtime.AppendUserMessage(threadID, text, mapped)
+	a.runtime.AppendUserMessage(threadID, text, mapSlice(attachments, func(item agentcore.TimelineAttachment) uistate.TimelineAttachment {
+		return uistate.TimelineAttachment{Kind: item.Kind, Name: item.Name, Path: item.Path, PreviewURL: item.PreviewURL}
+	}))
 }
 
 func (a uiRuntimeAdapter) ThreadTimeline(threadID string) []agentcore.TimelineItem {
-	if a.runtime == nil {
-		return nil
-	}
-	items := a.runtime.ThreadTimeline(threadID)
-	out := make([]agentcore.TimelineItem, len(items))
-	for i := range items {
-		out[i] = agentcore.TimelineItem{Kind: items[i].Kind, Text: items[i].Text}
-	}
-	return out
+	return mapSlice(a.runtime.ThreadTimeline(threadID), func(item uistate.TimelineItem) agentcore.TimelineItem {
+		return agentcore.TimelineItem{Kind: item.Kind, Text: item.Text}
+	})
 }
 
 type processAdapter struct {
@@ -101,10 +74,10 @@ type processAdapter struct {
 }
 
 func (p processAdapter) Port() int {
-	if p.proc == nil || p.proc.Client == nil {
-		return 0
+	if p.proc != nil && p.proc.Client != nil {
+		return p.proc.Client.GetPort()
 	}
-	return p.proc.Client.GetPort()
+	return 0
 }
 
 func (p processAdapter) IsAlive() bool {
@@ -147,27 +120,8 @@ func (a *Adapter) withProcessMap(methodName string, threadID string, fn func(any
 }
 
 func (a *Adapter) sendCommandFromAny(proc any, command, args string) error {
-	return a.SendCommand(asAgentProcess(proc), command, args)
-}
-
-func (a *Adapter) submitFromAny(proc any, prompt string, images, files []string, outputSchema json.RawMessage) error {
-	return a.Submit(asAgentProcess(proc), prompt, images, files, outputSchema)
-}
-
-func (a *Adapter) resumeThreadFromAny(proc any, req codexsdk.ResumeThreadRequest) error {
-	return a.ResumeThread(asAgentProcess(proc), req)
-}
-
-func (a *Adapter) forkThreadFromAny(proc any, req codexsdk.ForkThreadRequest) (*codexsdk.ForkThreadResponse, error) {
-	return a.ForkThread(asAgentProcess(proc), req)
-}
-
-func (a *Adapter) listThreadsFromAny(proc any) ([]codexsdk.ThreadInfo, error) {
-	return a.ListThreads(asAgentProcess(proc))
-}
-
-func (a *Adapter) sendInterruptFromAny(proc any) (bool, error) {
-	return a.sendInterruptCommand(asAgentProcess(proc))
+	typed, _ := proc.(*codexsdk.AgentProcess)
+	return a.SendCommand(typed, command, args)
 }
 
 func (a *Adapter) Submit(proc *codexsdk.AgentProcess, prompt string, images, files []string, outputSchema json.RawMessage) error {
@@ -305,11 +259,9 @@ func (a *Adapter) resolveClientActiveTurnIDForRuntime(proc *codexsdk.AgentProces
 }
 
 func (a *Adapter) resolveProcess(caller, threadID string) (*codexsdk.AgentProcess, error) {
-	proc, err := runtimesvc.ResolveProcess(a.runtimeServiceAdapter(), caller, threadID)
-	if err != nil {
-		return nil, err
-	}
-	return unwrapProcess(proc), nil
+	return withProcess(a, caller, threadID, func(proc *codexsdk.AgentProcess) (*codexsdk.AgentProcess, error) {
+		return proc, nil
+	})
 }
 
 func withProcess[T any](a *Adapter, caller string, threadID string, fn func(*codexsdk.AgentProcess) (T, error)) (T, error) {
@@ -320,7 +272,7 @@ func withProcess[T any](a *Adapter, caller string, threadID string, fn func(*cod
 
 func (a *Adapter) TurnSteer(threadID, submitPrompt string, images, files []string) (map[string]any, error) {
 	return withProcess(a, "Server.turnSteer", threadID, func(proc *codexsdk.AgentProcess) (map[string]any, error) {
-		return lifecyclesvc.RunTurnSteer(proc, a.submitFromAny, submitPrompt, images, files)
+		return lifecyclesvc.RunTurnSteer(proc, a.Submit, submitPrompt, images, files)
 	})
 }
 

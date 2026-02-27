@@ -168,42 +168,44 @@ func (a *Adapter) notify(method string, payload any) {
 	a.depsOrDefault().Notify(method, payload)
 }
 
-func (a *Adapter) bindingExists(ctx context.Context, agentID string) (bool, error) {
+func (a *Adapter) findBindingByAgentID(ctx context.Context, agentID string) (*store.AgentCodexBinding, error) {
 	if bindingStore := a.bindingStore(); bindingStore != nil {
-		binding, err := bindingStore.FindByAgentID(ctx, agentID)
-		return binding != nil, err
+		return bindingStore.FindByAgentID(ctx, agentID)
 	}
-	return false, nil
+	return nil, nil
+}
+
+func (a *Adapter) findStatusByAgentID(ctx context.Context, agentID string) (*store.AgentStatus, error) {
+	if statusStore := a.statusStore(); statusStore != nil {
+		return statusStore.Get(ctx, agentID)
+	}
+	return nil, nil
+}
+
+func (a *Adapter) bindingExists(ctx context.Context, agentID string) (bool, error) {
+	binding, err := a.findBindingByAgentID(ctx, agentID)
+	return binding != nil, err
 }
 
 func (a *Adapter) agentStatusExists(ctx context.Context, agentID string) (bool, error) {
-	if statusStore := a.statusStore(); statusStore != nil {
-		status, err := statusStore.Get(ctx, agentID)
-		return status != nil, err
-	}
-	return false, nil
+	status, err := a.findStatusByAgentID(ctx, agentID)
+	return status != nil, err
 }
 
 func (a *Adapter) bindingCodexThreadID(ctx context.Context, agentID string) (string, error) {
-	if bindingStore := a.bindingStore(); bindingStore != nil {
-		binding, err := bindingStore.FindByAgentID(ctx, agentID)
-		if err != nil || binding == nil {
-			return "", err
-		}
-		return binding.CodexThreadID, nil
+	binding, err := a.findBindingByAgentID(ctx, agentID)
+	if err != nil || binding == nil {
+		return "", err
 	}
-	return "", nil
+	return binding.CodexThreadID, nil
 }
 
 func (a *Adapter) statusSessionID(ctx context.Context, agentID string) (string, error) {
-	if statusStore := a.statusStore(); statusStore != nil {
-		status, err := statusStore.Get(ctx, agentID)
-		if err != nil || status == nil {
-			return "", err
-		}
-		return status.SessionID, nil
+	status, err := a.findStatusByAgentID(ctx, agentID)
+	if err != nil || status == nil {
+		return "", err
 	}
-	return "", nil
+	return status.SessionID, nil
 }
 
 func (a *Adapter) storeGetter() func(context.Context, string) (any, error) {
@@ -276,9 +278,6 @@ func (a *Adapter) ThreadList(ctx context.Context) ([]contracts.ThreadListItem, e
 			}), nil
 		})
 	}
-	appendArchive := func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
-		return listingsvc.AppendHistoryFromArchiveState(ctx, threads, seen, methodName, a.loadThreadArchiveMap)
-	}
 	loadAliases := func(ctx context.Context) map[string]string {
 		store := a.store()
 		if store == nil {
@@ -295,21 +294,19 @@ func (a *Adapter) ThreadList(ctx context.Context) ([]contracts.ThreadListItem, e
 			return uistate.ThreadSnapshot{ID: item.ID, Name: item.Name, State: item.State}
 		}))
 	}
-	items, err := listingsvc.BuildThreadList(
+	return listingsvc.BuildThreadList(
 		ctx,
 		"thread/list",
 		true,
 		func() []listingsvc.AgentInfo { return runningAgents },
 		func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
-			return listingsvc.AppendThreadHistoryFromStores(ctx, threads, seen, methodName, appendBinding, appendStatus, appendArchive)
+			return listingsvc.AppendThreadHistoryFromStores(ctx, threads, seen, methodName, appendBinding, appendStatus, func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
+				return listingsvc.AppendHistoryFromArchiveState(ctx, threads, seen, methodName, a.loadThreadArchiveMap)
+			})
 		},
 		loadAliases,
 		syncRuntimeThreads,
 	)
-	if err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 func (a *Adapter) ThreadLoadedList(_ context.Context, cursor *string, limit *uint32) ([]string, *string, error) {
@@ -344,11 +341,11 @@ func (a *Adapter) persistThreadAlias(ctx context.Context, threadID, alias string
 func (a *Adapter) loadThreadArchiveMap(ctx context.Context) (map[string]int64, error) {
 	archivedMap := map[string]int64{}
 	if store := a.store(); store != nil {
-		if value, err := store.Get(ctx, prefThreadArchivesChat); err != nil {
+		value, err := store.Get(ctx, prefThreadArchivesChat)
+		if err != nil {
 			return nil, err
-		} else {
-			archivedMap = archivesvc.NormalizeThreadArchiveMap(value)
 		}
+		archivedMap = archivesvc.NormalizeThreadArchiveMap(value)
 	}
 	fromDisk, err := archivesvc.LoadThreadArchiveMapFromDisk()
 	if err != nil {
@@ -371,19 +368,18 @@ func (a *Adapter) readThreadRuntimeState(threadID string) string {
 }
 
 func (a *Adapter) readRuntimeStatus(threadID string) string {
-	uiRuntime := a.uiRuntime()
-	if uiRuntime == nil {
+	runtime := a.uiRuntime()
+	if runtime == nil {
 		return ""
 	}
-	snapshot := uiRuntime.Snapshot()
-	return snapshot.Statuses[threadID]
+	return runtime.Snapshot().Statuses[threadID]
 }
 
 func (a *Adapter) waitInterruptOutcome(threadID string, timeout time.Duration, activeHint bool) (bool, string, int64, bool) {
 	return interruptsvc.WaitInterruptOutcome(threadID, timeout, activeHint, a.waitTrackedTurnTerminal, a.readThreadRuntimeState)
 }
 
-func (a *Adapter) sendInterruptCommand(proc *codexsdk.AgentProcess) (bool, error) {
+func (a *Adapter) sendInterruptCommand(proc any) (bool, error) {
 	return interruptsvc.SendInterruptCommand(proc, a.sendCommandFromAny)
 }
 
@@ -396,11 +392,11 @@ func (a *Adapter) withProcessAny(methodName string, threadID string, fn func(any
 }
 
 func (a *Adapter) TurnInterrupt(threadID string) (any, error) {
-	return interruptsvc.TurnInterrupt(threadID, a.readThreadRuntimeState, a.hasActiveTrackedTurn, a.cancelCodeRuns, a.sendInterruptFromAny, a.withProcessAny, a.markTrackedTurnInterruptRequested, a.waitInterruptOutcome, a.notifyTurnCompleted)
+	return interruptsvc.TurnInterrupt(threadID, a.readThreadRuntimeState, a.hasActiveTrackedTurn, a.cancelCodeRuns, a.sendInterruptCommand, a.withProcessAny, a.markTrackedTurnInterruptRequested, a.waitInterruptOutcome, a.notifyTurnCompleted)
 }
 
 func (a *Adapter) TurnForceComplete(threadID string) (any, error) {
-	return interruptsvc.TurnForceComplete(threadID, a.cancelCodeRuns, a.sendInterruptFromAny, a.notifyTurnCompleted, a.withProcessAny)
+	return interruptsvc.TurnForceComplete(threadID, a.cancelCodeRuns, a.sendInterruptCommand, a.notifyTurnCompleted, a.withProcessAny)
 }
 
 func (a *Adapter) ThreadArchiveMap(ctx context.Context) (map[string]int64, error) {

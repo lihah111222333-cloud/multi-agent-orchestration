@@ -318,11 +318,8 @@ func shouldRecoverLifecycleOnMismatchedConversation(
 }
 
 func threadStatusChangedTerminalState(raw json.RawMessage) (string, bool) {
-	if len(raw) == 0 {
-		return "", false
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+	payload, ok := decodeJSONObject(raw)
+	if !ok {
 		return "", false
 	}
 
@@ -341,11 +338,8 @@ func threadStatusChangedTerminalState(raw json.RawMessage) (string, bool) {
 }
 
 func extractTurnIDFromEventData(data json.RawMessage) string {
-	if len(data) == 0 {
-		return ""
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil {
+	payload, ok := decodeJSONObject(data)
+	if !ok {
 		return ""
 	}
 	return extractTurnIDFromPayload(payload)
@@ -569,15 +563,8 @@ func (c *AppServerClient) jsonRPCToEvent(msg jsonRPCMessage) Event {
 }
 
 func normalizeErrorNotificationPayload(raw json.RawMessage) json.RawMessage {
-	if len(raw) == 0 {
-		return raw
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return raw
-	}
-	if payload == nil {
+	payload, ok := decodeJSONObject(raw)
+	if !ok {
 		return raw
 	}
 
@@ -618,6 +605,17 @@ func syncKeys(m map[string]any, k1, k2 string) {
 	}
 }
 
+func decodeJSONObject(raw json.RawMessage) (map[string]any, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+		return nil, false
+	}
+	return payload, true
+}
+
 func truncateBytes(b []byte, max int) string {
 	if len(b) <= max {
 		return string(b)
@@ -651,12 +649,8 @@ func shouldDropLegacyMirrorNotification(msg jsonRPCMessage) (bool, string, strin
 	if msg.ID != nil {
 		return false, "", ""
 	}
-
-	var payload map[string]any
-	if len(msg.Params) == 0 || json.Unmarshal(msg.Params, &payload) != nil {
-		return false, "", ""
-	}
-	if payload == nil {
+	payload, ok := decodeJSONObject(msg.Params)
+	if !ok {
 		return false, "", ""
 	}
 
@@ -681,11 +675,8 @@ func shouldDropLegacyMirrorNotification(msg jsonRPCMessage) (bool, string, strin
 }
 
 func extractConversationIDFromEventParams(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+	payload, ok := decodeJSONObject(raw)
+	if !ok {
 		return ""
 	}
 	if value := firstTrimmedString(payload, "conversationId", "conversation_id", "threadId", "thread_id"); value != "" {
@@ -816,11 +807,8 @@ func (c *AppServerClient) emitConnectionDeadEvent() {
 }
 
 func streamErrorWillRetry(raw json.RawMessage) bool {
-	if len(raw) == 0 {
-		return false
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+	payload, ok := decodeJSONObject(raw)
+	if !ok {
 		return false
 	}
 	if value, ok := extractBoolValue(payload, "willRetry", "will_retry", "recoverable"); ok {

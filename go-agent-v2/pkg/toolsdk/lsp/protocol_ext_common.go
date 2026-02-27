@@ -155,18 +155,6 @@ func decodeNullableSlice[T any](raw json.RawMessage, errPrefix string) ([]T, err
 	return items, nil
 }
 
-func decodeRawItems[T any](arr []json.RawMessage, decodeOne func(json.RawMessage) (T, error)) ([]T, error) {
-	out := make([]T, 0, len(arr))
-	for _, item := range arr {
-		decoded, err := decodeOne(item)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, decoded)
-	}
-	return out, nil
-}
-
 func decodeArrayLike[T any](
 	raw json.RawMessage,
 	errPrefix string,
@@ -178,7 +166,15 @@ func decodeArrayLike[T any](
 	}
 	arr, err := decodeRawArray(raw, errPrefix)
 	if err == nil {
-		return decodeRawItems(arr, decodeOne)
+		out := make([]T, 0, len(arr))
+		for _, item := range arr {
+			decoded, err := decodeOne(item)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, decoded)
+		}
+		return out, nil
 	}
 	if !allowSingle {
 		return nil, err
@@ -257,14 +253,12 @@ func decodeWorkspaceSymbolOne(item json.RawMessage) (WorkspaceSymbolResult, erro
 	locationRaw := obj["location"]
 	if len(locationRaw) > 0 {
 		var locObj map[string]json.RawMessage
-		if err := json.Unmarshal(locationRaw, &locObj); err == nil {
-			if _, hasRange := locObj["range"]; hasRange {
-				var legacy SymbolInformation
-				if err := json.Unmarshal(item, &legacy); err != nil {
-					return WorkspaceSymbolResult{}, fmt.Errorf("decode SymbolInformation: %w", err)
-				}
-				return WorkspaceSymbolResult{SymbolInformation: &legacy}, nil
+		if err := json.Unmarshal(locationRaw, &locObj); err == nil && locObj["range"] != nil {
+			var legacy SymbolInformation
+			if err := json.Unmarshal(item, &legacy); err != nil {
+				return WorkspaceSymbolResult{}, fmt.Errorf("decode SymbolInformation: %w", err)
 			}
+			return WorkspaceSymbolResult{SymbolInformation: &legacy}, nil
 		}
 	}
 
@@ -311,10 +305,9 @@ func decodeCodeActionOrCommand(item json.RawMessage, obj map[string]json.RawMess
 }
 
 func isCodeActionLike(obj map[string]json.RawMessage) bool {
-	for _, key := range []string{"kind", "edit", "diagnostics", "isPreferred", "disabled", "data"} {
-		if _, ok := obj[key]; ok {
-			return true
-		}
+	if obj["kind"] != nil || obj["edit"] != nil || obj["diagnostics"] != nil ||
+		obj["isPreferred"] != nil || obj["disabled"] != nil || obj["data"] != nil {
+		return true
 	}
 	if commandRaw, hasCommand := obj["command"]; hasCommand {
 		var commandName string
@@ -345,43 +338,33 @@ func decodeCompletionItems(raw json.RawMessage) ([]CompletionItem, error) {
 // decodeDocumentSymbols 兼容解码:
 // []DocumentSymbol | []SymbolInformation | null
 func decodeDocumentSymbols(raw json.RawMessage) ([]DocumentSymbol, error) {
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-	arr, err := decodeRawArray(raw, "decode document symbols")
+	return decodeArrayLike(raw, "decode document symbols", false, decodeDocumentSymbolOne)
+}
+
+func decodeDocumentSymbolOne(item json.RawMessage) (DocumentSymbol, error) {
+	obj, err := decodeRawObject(item, "decode document symbol item")
 	if err != nil {
-		return nil, err
+		return DocumentSymbol{}, err
 	}
 
-	out := make([]DocumentSymbol, 0, len(arr))
-	for _, item := range arr {
-		var obj map[string]json.RawMessage
-		if err := json.Unmarshal(item, &obj); err != nil {
-			return nil, fmt.Errorf("decode document symbol item: %w", err)
+	if obj["location"] != nil {
+		var legacy SymbolInformation
+		if err := json.Unmarshal(item, &legacy); err != nil {
+			return DocumentSymbol{}, fmt.Errorf("decode legacy document symbol: %w", err)
 		}
-
-		if _, ok := obj["location"]; ok {
-			var legacy SymbolInformation
-			if err := json.Unmarshal(item, &legacy); err != nil {
-				return nil, fmt.Errorf("decode legacy document symbol: %w", err)
-			}
-			out = append(out, DocumentSymbol{
-				Name:           legacy.Name,
-				Kind:           legacy.Kind,
-				Range:          legacy.Location.Range,
-				SelectionRange: legacy.Location.Range,
-			})
-			continue
-		}
-
-		var symbol DocumentSymbol
-		if err := json.Unmarshal(item, &symbol); err != nil {
-			return nil, fmt.Errorf("decode document symbol: %w", err)
-		}
-		out = append(out, symbol)
+		return DocumentSymbol{
+			Name:           legacy.Name,
+			Kind:           legacy.Kind,
+			Range:          legacy.Location.Range,
+			SelectionRange: legacy.Location.Range,
+		}, nil
 	}
 
-	return out, nil
+	var symbol DocumentSymbol
+	if err := json.Unmarshal(item, &symbol); err != nil {
+		return DocumentSymbol{}, fmt.Errorf("decode document symbol: %w", err)
+	}
+	return symbol, nil
 }
 
 // decodePrepareCallHierarchyItems 兼容解码:
@@ -517,9 +500,9 @@ func decodeSignatureHelp(raw json.RawMessage) (*SignatureHelpResult, error) {
 
 	result := &SignatureHelpResult{}
 	if signaturesRaw, ok := root["signatures"]; ok {
-		var signaturesItems []json.RawMessage
-		if err := json.Unmarshal(signaturesRaw, &signaturesItems); err != nil {
-			return nil, fmt.Errorf("decode signatureHelp signatures: %w", err)
+		signaturesItems, err := decodeRawArray(signaturesRaw, "decode signatureHelp signatures")
+		if err != nil {
+			return nil, err
 		}
 		signatures := make([]SignatureInformationResult, 0, len(signaturesItems))
 		for _, item := range signaturesItems {
@@ -563,11 +546,10 @@ func decodeSignatureInformation(raw json.RawMessage) (SignatureInformationResult
 		result.Documentation, result.DocumentationKind = decodeStringOrMarkup(documentationRaw)
 	}
 	if parametersRaw, ok := obj["parameters"]; ok {
-		var parameterItems []json.RawMessage
-		if err := json.Unmarshal(parametersRaw, &parameterItems); err != nil {
-			return SignatureInformationResult{}, fmt.Errorf("decode signature parameters: %w", err)
+		parameterItems, err := decodeRawArray(parametersRaw, "decode signature parameters")
+		if err != nil {
+			return SignatureInformationResult{}, err
 		}
-
 		parameters := make([]ParameterInformationResult, 0, len(parameterItems))
 		for _, item := range parameterItems {
 			parameter, err := decodeParameterInformation(item)

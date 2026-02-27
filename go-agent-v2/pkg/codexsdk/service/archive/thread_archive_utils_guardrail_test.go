@@ -4,10 +4,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/pathutil"
 )
 
 func TestThreadArchiveUtilsExportSurfaceGuardrail(t *testing.T) {
@@ -16,7 +17,7 @@ func TestThreadArchiveUtilsExportSurfaceGuardrail(t *testing.T) {
 		t.Fatal("runtime.Caller failed")
 	}
 
-	utilsPath := filepath.Join(filepath.Dir(thisFile), "thread_archive_utils.go")
+	utilsPath := pathutil.Join(pathutil.Dir(thisFile), "thread_archive_utils.go")
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, utilsPath, nil, parser.SkipObjectResolution)
 	if err != nil {

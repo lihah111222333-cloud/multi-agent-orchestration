@@ -5,11 +5,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
-	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk"
 	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 )
 
 type codexAdapterHooks struct {
@@ -50,7 +50,7 @@ func (h codexAdapterHooks) getAgentSkills(agentID string) []string {
 	return getAgentSkills(h.server, agentID)
 }
 
-func (h codexAdapterHooks) allSchemas() []agentcore.DynamicTool {
+func (h codexAdapterHooks) allSchemas() []codexsdk.DynamicTool {
 	return allSchemas(h.server)
 }
 

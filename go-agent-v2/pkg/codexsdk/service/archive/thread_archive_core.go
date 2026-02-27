@@ -1,11 +1,11 @@
 package archive
 
 import (
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/pathutil"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -230,7 +230,7 @@ func loadThreadArchiveManifestScope(threadID, op string, deps threadArchiveResto
 	if err != nil {
 		return scope, false, apperrors.Wrap(err, op, "sanitize thread id")
 	}
-	threadDir := filepath.Join(rootDir, safeThreadID)
+	threadDir := pathutil.Join(rootDir, safeThreadID)
 	manifestPath, found, err := deps.findLatestManifestPath(threadDir)
 	if err != nil {
 		return scope, false, apperrors.Wrap(err, op, "find latest manifest")
@@ -290,10 +290,10 @@ func resolveArchivedPath(archiveDir string, archivedPath string) string {
 	if baseDir == "" {
 		return resolved
 	}
-	if filepath.IsAbs(resolved) {
+	if pathutil.IsAbs(resolved) {
 		return resolved
 	}
-	return filepath.Join(baseDir, resolved)
+	return pathutil.Join(baseDir, resolved)
 }
 
 // inspectThreadArchiveForRestore verifies archived files before restore.
@@ -456,7 +456,7 @@ func pruneArchivedCodexSourceFiles(
 		}
 		deleted++
 		if removeEmptyCodexParentDir != nil {
-			removeEmptyCodexParentDir(filepath.Dir(srcPath), codexRoot)
+			removeEmptyCodexParentDir(pathutil.Dir(srcPath), codexRoot)
 		}
 	}
 

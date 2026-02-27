@@ -5,8 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
-	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk"
 )
 
 type fakeRecoverClient struct {
@@ -22,7 +21,7 @@ func (c *fakeRecoverClient) RecoverConnection(reason string) error {
 
 func TestRecoverConnection_UnsupportedClient(t *testing.T) {
 	a := &Adapter{}
-	err := a.RecoverConnection(&runner.AgentProcess{Client: &fakeClient{}}, "manual")
+	err := a.RecoverConnection(codexsdk.NewAgentProcess(&fakeClient{}), "manual")
 	if err == nil || !strings.Contains(err.Error(), "does not support connection recovery") {
 		t.Fatalf("RecoverConnection() err = %v, want unsupported", err)
 	}
@@ -31,7 +30,7 @@ func TestRecoverConnection_UnsupportedClient(t *testing.T) {
 func TestRecoverConnection_Success(t *testing.T) {
 	client := &fakeRecoverClient{}
 	a := &Adapter{}
-	err := a.RecoverConnection(&runner.AgentProcess{Client: client}, "  manual_recover  ")
+	err := a.RecoverConnection(codexsdk.NewAgentProcess(client), "  manual_recover  ")
 	if err != nil {
 		t.Fatalf("RecoverConnection() err = %v", err)
 	}
@@ -42,7 +41,7 @@ func TestRecoverConnection_Success(t *testing.T) {
 
 func TestThreadRecover_Success(t *testing.T) {
 	clients := make(map[string]*fakeRecoverClient)
-	factory := func(port int, agentID string) agentcore.Client {
+	factory := func(port int, agentID string) codexsdk.Client {
 		client := &fakeRecoverClient{
 			fakeClient: fakeClient{
 				port:     port,
@@ -53,7 +52,7 @@ func TestThreadRecover_Success(t *testing.T) {
 		clients[agentID] = client
 		return client
 	}
-	manager, err := runner.NewAgentManager(factory, factory)
+	manager, err := codexsdk.NewAgentManager(factory, factory)
 	if err != nil {
 		t.Fatalf("NewAgentManager() err = %v", err)
 	}

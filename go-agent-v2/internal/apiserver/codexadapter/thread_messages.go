@@ -31,6 +31,10 @@ type threadHistoryMessage struct {
 
 // ThreadMessages handles rollout history paging and runtime hydration.
 func (a *Adapter) ThreadMessages(ctx context.Context, threadID string, limit int, before int64) (map[string]any, error) {
+	return threadMessagesLogic(a, ctx, threadID, limit, before)
+}
+
+func threadMessagesLogic(a *Adapter, ctx context.Context, threadID string, limit int, before int64) (map[string]any, error) {
 	id, err := requireThreadID("Server.threadMessages", threadID)
 	if err != nil {
 		return nil, err

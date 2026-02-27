@@ -2,10 +2,10 @@ package archive
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/pathutil"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
@@ -135,23 +135,23 @@ func sanitizeArchiveNameStrict(raw string) (string, error) {
 }
 
 func pathWithinRoot(root string, path string) (bool, error) {
-	rootAbs, err := filepath.Abs(strings.TrimSpace(root))
+	rootAbs, err := pathutil.Abs(strings.TrimSpace(root))
 	if err != nil {
 		return false, err
 	}
-	pathAbs, err := filepath.Abs(strings.TrimSpace(path))
+	pathAbs, err := pathutil.Abs(strings.TrimSpace(path))
 	if err != nil {
 		return false, err
 	}
-	rel, err := filepath.Rel(rootAbs, pathAbs)
+	rel, err := pathutil.Rel(rootAbs, pathAbs)
 	if err != nil {
 		return false, err
 	}
-	rel = filepath.Clean(rel)
+	rel = pathutil.Clean(rel)
 	if rel == "." {
 		return true, nil
 	}
-	return !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..", nil
+	return !strings.HasPrefix(rel, ".."+pathutil.Separator) && rel != "..", nil
 }
 
 // inferThreadArtifactKind infers the artifact kind from filename.

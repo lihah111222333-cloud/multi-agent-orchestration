@@ -3,13 +3,12 @@ package rollout
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/codex"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/pathutil"
 )
 
 func TestParseRolloutTimestamp(t *testing.T) {
@@ -102,10 +101,7 @@ func TestResolveRolloutHistorySource(t *testing.T) {
 func TestLoadAllThreadMessagesFromCodexRollout(t *testing.T) {
 	t.Run("load and convert rollout messages", func(t *testing.T) {
 		dir := t.TempDir()
-		path := filepath.Join(dir, "rollout.jsonl")
-		if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
-			t.Fatalf("write rollout file: %v", err)
-		}
+		path := pathutil.Join(dir, "rollout.jsonl")
 
 		trimInjectedArg := false
 		got, err := LoadAllThreadMessagesFromCodexRollout(

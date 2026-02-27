@@ -4,11 +4,11 @@ import (
 	"context"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
-	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk"
 	consumerruntime "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/runtime"
 )
 
-func (a *Adapter) registerBinding(ctx context.Context, agentID string, proc *runner.AgentProcess) {
+func (a *Adapter) registerBinding(ctx context.Context, agentID string, proc *codexsdk.AgentProcess) {
 	consumerruntime.RegisterBinding(ctx, a.runtimeConsumerDeps(), agentID, proc)
 }
 
@@ -34,7 +34,7 @@ func (a *Adapter) TurnSteerFromInputAligned(req turnSteerRequest) (map[string]an
 	return consumerruntime.TurnSteerFromInputAligned(a.runtimeConsumerDeps(), req)
 }
 
-func (a *Adapter) resolveProcess(caller, threadID string) (*runner.AgentProcess, error) {
+func (a *Adapter) resolveProcess(caller, threadID string) (*codexsdk.AgentProcess, error) {
 	return consumerruntime.ResolveProcess(a.runtimeConsumerDeps(), caller, threadID)
 }
 
@@ -42,7 +42,7 @@ func withProcess[T any](
 	a *Adapter,
 	caller string,
 	threadID string,
-	fn func(*runner.AgentProcess) (T, error),
+	fn func(*codexsdk.AgentProcess) (T, error),
 ) (T, error) {
 	return consumerruntime.WithProcess(a.runtimeConsumerDeps(), caller, threadID, fn)
 }

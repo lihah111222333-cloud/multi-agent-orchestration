@@ -7,8 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
-	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk"
 )
 
 type fakeClient struct {
@@ -21,8 +20,8 @@ func (c *fakeClient) GetPort() int { return c.port }
 func (c *fakeClient) GetThreadID() string {
 	return c.threadID
 }
-func (c *fakeClient) SetEventHandler(agentcore.EventHandler) {}
-func (c *fakeClient) SpawnAndConnect(context.Context, string, string, string, string, []agentcore.DynamicTool) error {
+func (c *fakeClient) SetEventHandler(codexsdk.EventHandler) {}
+func (c *fakeClient) SpawnAndConnect(context.Context, string, string, string, string, []codexsdk.DynamicTool) error {
 	c.running = true
 	return nil
 }
@@ -30,10 +29,10 @@ func (c *fakeClient) Submit(string, []string, []string, json.RawMessage) error {
 func (c *fakeClient) SendCommand(string, string) error                         { return nil }
 func (c *fakeClient) SendDynamicToolResult(string, string, *int64) error       { return nil }
 func (c *fakeClient) RespondError(int64, int, string) error                    { return nil }
-func (c *fakeClient) ListThreads() ([]agentcore.ThreadInfo, error)             { return nil, nil }
-func (c *fakeClient) ResumeThread(agentcore.ResumeThreadRequest) error         { return nil }
-func (c *fakeClient) ForkThread(agentcore.ForkThreadRequest) (*agentcore.ForkThreadResponse, error) {
-	return &agentcore.ForkThreadResponse{ThreadID: c.threadID}, nil
+func (c *fakeClient) ListThreads() ([]codexsdk.ThreadInfo, error)              { return nil, nil }
+func (c *fakeClient) ResumeThread(codexsdk.ResumeThreadRequest) error          { return nil }
+func (c *fakeClient) ForkThread(codexsdk.ForkThreadRequest) (*codexsdk.ForkThreadResponse, error) {
+	return &codexsdk.ForkThreadResponse{ThreadID: c.threadID}, nil
 }
 func (c *fakeClient) Shutdown() error {
 	c.running = false
@@ -45,18 +44,18 @@ func (c *fakeClient) Kill() error {
 }
 func (c *fakeClient) Running() bool { return c.running }
 
-func testDeps(mgr *runner.AgentManager) *Deps {
+func testDeps(mgr *codexsdk.AgentManager) *Deps {
 	return normalizeDeps(Deps{
 		Manager: mgr,
 	})
 }
 
-func newTestManager(t *testing.T) *runner.AgentManager {
+func newTestManager(t *testing.T) *codexsdk.AgentManager {
 	t.Helper()
-	factory := func(port int, agentID string) agentcore.Client {
+	factory := func(port int, agentID string) codexsdk.Client {
 		return &fakeClient{port: port, threadID: agentID, running: true}
 	}
-	mgr, err := runner.NewAgentManager(factory, factory)
+	mgr, err := codexsdk.NewAgentManager(factory, factory)
 	if err != nil {
 		t.Fatalf("NewAgentManager() error = %v", err)
 	}
@@ -96,7 +95,7 @@ func TestWithProcess_Success(t *testing.T) {
 	t.Cleanup(func() { _ = mgr.Stop("thread-1") })
 
 	a := &Adapter{ctx: testDeps(mgr)}
-	got, err := withProcess(a, "Test.withProcess", "thread-1", func(proc *runner.AgentProcess) (string, error) {
+	got, err := withProcess(a, "Test.withProcess", "thread-1", func(proc *codexsdk.AgentProcess) (string, error) {
 		if proc == nil {
 			t.Fatal("proc is nil")
 		}
@@ -118,7 +117,7 @@ func TestWithProcess_TrimmedThreadID(t *testing.T) {
 	t.Cleanup(func() { _ = mgr.Stop("thread-1") })
 
 	a := &Adapter{ctx: testDeps(mgr)}
-	_, err := withProcess(a, "Test.withProcess", "  thread-1  ", func(proc *runner.AgentProcess) (int, error) {
+	_, err := withProcess(a, "Test.withProcess", "  thread-1  ", func(proc *codexsdk.AgentProcess) (int, error) {
 		if proc == nil {
 			t.Fatal("proc is nil")
 		}
@@ -137,7 +136,7 @@ func TestWithProcess_PropagatesFnError(t *testing.T) {
 	t.Cleanup(func() { _ = mgr.Stop("thread-1") })
 
 	a := &Adapter{ctx: testDeps(mgr)}
-	_, err := withProcess(a, "Test.withProcess", "thread-1", func(*runner.AgentProcess) (int, error) {
+	_, err := withProcess(a, "Test.withProcess", "thread-1", func(*codexsdk.AgentProcess) (int, error) {
 		return 0, errors.New("inner error")
 	})
 	if err == nil || !strings.Contains(err.Error(), "inner error") {

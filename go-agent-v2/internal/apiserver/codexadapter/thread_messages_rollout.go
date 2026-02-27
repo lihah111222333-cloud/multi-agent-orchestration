@@ -3,9 +3,8 @@ package codexadapter
 import (
 	"context"
 
-	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk"
 	rolloutconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/rollout"
-	rolloutsvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/rollout"
 )
 
 // ResolveRolloutHistorySource resolves codex thread id and rollout path via adapter context stores.
@@ -14,7 +13,7 @@ func (a *Adapter) ResolveRolloutHistorySource(
 	threadID string,
 	normalizeCodexThreadID func(string) string,
 ) (string, string) {
-	return rolloutsvc.ResolveRolloutHistorySource(
+	return rolloutconsumer.ResolveRolloutHistorySource(
 		ctx,
 		threadID,
 		a.runningCodexThreadID,
@@ -25,11 +24,11 @@ func (a *Adapter) ResolveRolloutHistorySource(
 }
 
 func (a *Adapter) runningCodexThreadID(threadID string) string {
-	return rolloutsvc.RunningCodexThreadIDFromManager(threadID, a.managerProcess, a.getThreadIDFromAny)
+	return rolloutconsumer.RunningCodexThreadIDFromManager(threadID, a.managerProcess, a.getThreadIDFromAny)
 }
 
 func (a *Adapter) getThreadIDFromAny(proc any) string {
-	typed, _ := proc.(*runner.AgentProcess)
+	typed, _ := proc.(*codexsdk.AgentProcess)
 	return a.GetThreadID(typed)
 }
 
@@ -86,9 +85,9 @@ func loadAllThreadMessagesFromCodexRollout(
 }
 
 func paginateRolloutMessages(all []threadHistoryMessage, limit int, before int64) []threadHistoryMessage {
-	serviceItems := make([]rolloutsvc.ThreadHistoryMessage, 0, len(all))
+	serviceItems := make([]rolloutconsumer.ThreadHistoryMessage, 0, len(all))
 	for _, item := range all {
-		serviceItems = append(serviceItems, rolloutsvc.ThreadHistoryMessage{
+		serviceItems = append(serviceItems, rolloutconsumer.ThreadHistoryMessage{
 			ID:        item.ID,
 			AgentID:   item.AgentID,
 			Role:      item.Role,
@@ -99,7 +98,7 @@ func paginateRolloutMessages(all []threadHistoryMessage, limit int, before int64
 			CreatedAt: item.CreatedAt,
 		})
 	}
-	page := rolloutsvc.PaginateRolloutMessages(serviceItems, limit, before)
+	page := rolloutconsumer.PaginateRolloutMessages(serviceItems, limit, before)
 	out := make([]threadHistoryMessage, 0, len(page))
 	for _, item := range page {
 		out = append(out, threadHistoryMessage{

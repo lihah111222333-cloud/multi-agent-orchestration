@@ -10,10 +10,9 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
-	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk"
 	consumerruntime "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/runtime"
 	appErrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -26,12 +25,12 @@ const (
 
 // Deps defines codex adapter runtime dependencies.
 type Deps struct {
-	Manager                  *runner.AgentManager
+	Manager                  *codexsdk.AgentManager
 	Store                    *uistate.PreferenceManager
 	BindingStore             *store.AgentCodexBindingStore
 	AgentStatusStore         *store.AgentStatusStore
 	UIRuntime                *uistate.RuntimeManager
-	AllSchemas               func() []agentcore.DynamicTool
+	AllSchemas               func() []codexsdk.DynamicTool
 	NowUnixMilli             func() int64
 	SetAgentWorkDir          func(agentID, cwd string)
 	CancelCodeRuns           func(agentID string) int
@@ -42,7 +41,7 @@ type Deps struct {
 	Notify                   func(method string, params any)
 }
 
-func defaultAllSchemaProvider() []agentcore.DynamicTool { return nil }
+func defaultAllSchemaProvider() []codexsdk.DynamicTool { return nil }
 
 func defaultNowUnixMilliProvider() int64 { return time.Now().UnixMilli() }
 
@@ -160,7 +159,7 @@ func (a *Adapter) store() *uistate.PreferenceManager {
 	return a.ctx.Store
 }
 
-func (a *Adapter) manager() *runner.AgentManager {
+func (a *Adapter) manager() *codexsdk.AgentManager {
 	if a == nil || a.ctx == nil {
 		return nil
 	}
@@ -207,7 +206,7 @@ func threadLogFields(threadID string) []any {
 // errNoProcess is returned when the agent process or its client is nil.
 var errNoProcess = errors.New("codexadapter: agent process not found")
 
-func withClientE[T any](proc *runner.AgentProcess, fn func(agentcore.Client) (T, error)) (T, error) {
+func withClientE[T any](proc *codexsdk.AgentProcess, fn func(codexsdk.Client) (T, error)) (T, error) {
 	var zero T
 	if proc == nil || proc.Client == nil {
 		return zero, errNoProcess
@@ -215,29 +214,29 @@ func withClientE[T any](proc *runner.AgentProcess, fn func(agentcore.Client) (T,
 	return fn(proc.Client)
 }
 
-func withClient(proc *runner.AgentProcess, fn func(agentcore.Client) error) error {
-	_, err := withClientE(proc, func(c agentcore.Client) (struct{}, error) {
+func withClient(proc *codexsdk.AgentProcess, fn func(codexsdk.Client) error) error {
+	_, err := withClientE(proc, func(c codexsdk.Client) (struct{}, error) {
 		return struct{}{}, fn(c)
 	})
 	return err
 }
 
 // Submit sends user input to codex.
-func (a *Adapter) Submit(proc *runner.AgentProcess, prompt string, images, files []string, outputSchema json.RawMessage) error {
-	return withClient(proc, func(c agentcore.Client) error {
+func (a *Adapter) Submit(proc *codexsdk.AgentProcess, prompt string, images, files []string, outputSchema json.RawMessage) error {
+	return withClient(proc, func(c codexsdk.Client) error {
 		return c.Submit(prompt, images, files, outputSchema)
 	})
 }
 
 // SendCommand sends slash command to codex.
-func (a *Adapter) SendCommand(proc *runner.AgentProcess, command string, args string) error {
-	return withClient(proc, func(c agentcore.Client) error {
+func (a *Adapter) SendCommand(proc *codexsdk.AgentProcess, command string, args string) error {
+	return withClient(proc, func(c codexsdk.Client) error {
 		return c.SendCommand(command, args)
 	})
 }
 
 // GetThreadID returns the current codex thread id.
-func (a *Adapter) GetThreadID(proc *runner.AgentProcess) string {
+func (a *Adapter) GetThreadID(proc *codexsdk.AgentProcess) string {
 	if proc == nil || proc.Client == nil {
 		return ""
 	}
@@ -245,48 +244,48 @@ func (a *Adapter) GetThreadID(proc *runner.AgentProcess) string {
 }
 
 // ResumeThread resumes historical codex thread.
-func (a *Adapter) ResumeThread(proc *runner.AgentProcess, req agentcore.ResumeThreadRequest) error {
-	return withClient(proc, func(c agentcore.Client) error {
+func (a *Adapter) ResumeThread(proc *codexsdk.AgentProcess, req codexsdk.ResumeThreadRequest) error {
+	return withClient(proc, func(c codexsdk.Client) error {
 		return c.ResumeThread(req)
 	})
 }
 
 // ListThreads returns codex threads.
-func (a *Adapter) ListThreads(proc *runner.AgentProcess) ([]agentcore.ThreadInfo, error) {
-	return withClientE(proc, func(c agentcore.Client) ([]agentcore.ThreadInfo, error) {
+func (a *Adapter) ListThreads(proc *codexsdk.AgentProcess) ([]codexsdk.ThreadInfo, error) {
+	return withClientE(proc, func(c codexsdk.Client) ([]codexsdk.ThreadInfo, error) {
 		return c.ListThreads()
 	})
 }
 
 // ForkThread creates a forked thread from source thread.
-func (a *Adapter) ForkThread(proc *runner.AgentProcess, req agentcore.ForkThreadRequest) (*agentcore.ForkThreadResponse, error) {
-	return withClientE(proc, func(c agentcore.Client) (*agentcore.ForkThreadResponse, error) {
+func (a *Adapter) ForkThread(proc *codexsdk.AgentProcess, req codexsdk.ForkThreadRequest) (*codexsdk.ForkThreadResponse, error) {
+	return withClientE(proc, func(c codexsdk.Client) (*codexsdk.ForkThreadResponse, error) {
 		return c.ForkThread(req)
 	})
 }
 
 // RespondError returns dynamic tool call error to codex.
-func (a *Adapter) RespondError(proc *runner.AgentProcess, id int64, code int, message string) error {
-	return withClient(proc, func(c agentcore.Client) error {
+func (a *Adapter) RespondError(proc *codexsdk.AgentProcess, id int64, code int, message string) error {
+	return withClient(proc, func(c codexsdk.Client) error {
 		return c.RespondError(id, code, message)
 	})
 }
 
 // SendDynamicToolResult returns dynamic tool call result to codex.
-func (a *Adapter) SendDynamicToolResult(proc *runner.AgentProcess, callID, output string, requestID *int64) error {
-	return withClient(proc, func(c agentcore.Client) error {
+func (a *Adapter) SendDynamicToolResult(proc *codexsdk.AgentProcess, callID, output string, requestID *int64) error {
+	return withClient(proc, func(c codexsdk.Client) error {
 		return c.SendDynamicToolResult(callID, output, requestID)
 	})
 }
 
-func (a *Adapter) allDynamicToolSchemas() []agentcore.DynamicTool {
+func (a *Adapter) allDynamicToolSchemas() []codexsdk.DynamicTool {
 	if a == nil || a.ctx == nil {
 		return nil
 	}
 	return a.ctx.AllSchemas()
 }
 
-func (a *Adapter) resolveStartInstructionsForLaunch(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
+func (a *Adapter) resolveStartInstructionsForLaunch(ctx context.Context, dynamicTools []codexsdk.DynamicTool) string {
 	hint := a.ResolveLSPUsagePromptHint(ctx, defaultLSPUsagePromptHint, maxLSPUsagePromptHintLen)
 	startInstructions, warnings := a.PrependLSPAvailabilityWarning(hint, dynamicTools, commonadapter.MergePromptText)
 	if len(warnings) > 0 {
@@ -419,7 +418,7 @@ func (a *Adapter) collectAutoMatchedSkillMatches(prompt string, inputs []contrac
 	return a.CollectAutoMatchedSkillMatches(prompt, inputs, configuredSkillNames, candidates, options)
 }
 
-func (a *Adapter) resolveStartInstructionsForRuntime(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
+func (a *Adapter) resolveStartInstructionsForRuntime(ctx context.Context, dynamicTools []codexsdk.DynamicTool) string {
 	return a.resolveStartInstructionsForLaunch(ctx, dynamicTools)
 }
 
@@ -427,11 +426,11 @@ func (a *Adapter) resolveRuntimeCodexThreadCandidates(ctx context.Context, agent
 	return a.ResolveCodexThreadCandidates(ctx, agentID, appendUniqueThreadIDFallback, PreviewResumeCandidates)
 }
 
-func (a *Adapter) resumeRuntimeThread(proc *runner.AgentProcess, req agentcore.ResumeThreadRequest) error {
+func (a *Adapter) resumeRuntimeThread(proc *codexsdk.AgentProcess, req codexsdk.ResumeThreadRequest) error {
 	return a.ResumeThread(proc, req)
 }
 
-func (a *Adapter) resolveClientActiveTurnIDForRuntime(proc *runner.AgentProcess) string {
+func (a *Adapter) resolveClientActiveTurnIDForRuntime(proc *codexsdk.AgentProcess) string {
 	if proc == nil {
 		return ""
 	}

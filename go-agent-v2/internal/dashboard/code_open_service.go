@@ -72,33 +72,29 @@ func normalizeProjectPath(path string) string {
 		return ""
 	}
 	if abs, err := filepath.Abs(path); err == nil {
-		return filepath.Clean(abs)
+		path = abs
 	}
 	return filepath.Clean(path)
-}
-
-func appendNormalizedProjectRoot(roots *[]string, seen map[string]struct{}, raw string) {
-	if roots == nil {
-		return
-	}
-	normalized := normalizeProjectPath(raw)
-	if normalized == "" || normalized == "." {
-		return
-	}
-	key := strings.ToLower(filepath.Clean(normalized))
-	if _, exists := seen[key]; exists {
-		return
-	}
-	seen[key] = struct{}{}
-	*roots = append(*roots, normalized)
 }
 
 func normalizeProjectRoots(project string, projects []string) []string {
 	seen := map[string]struct{}{}
 	roots := make([]string, 0, len(projects)+2)
-	appendNormalizedProjectRoot(&roots, seen, project)
+	add := func(raw string) {
+		normalized := normalizeProjectPath(raw)
+		if normalized == "" || normalized == "." {
+			return
+		}
+		key := strings.ToLower(filepath.Clean(normalized))
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		roots = append(roots, normalized)
+	}
+	add(project)
 	for _, item := range projects {
-		appendNormalizedProjectRoot(&roots, seen, item)
+		add(item)
 	}
 	return roots
 }

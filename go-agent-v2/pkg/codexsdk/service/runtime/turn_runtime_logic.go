@@ -17,37 +17,23 @@ type SkillMatchCandidate = agentcore.SkillMatchCandidate
 type AutoMatchedSkillMatch = agentcore.AutoMatchedSkillMatch
 type AutoSkillMatchOptions = agentcore.AutoSkillMatchOptions
 type TurnInput = agentcore.TurnInput
-type TurnStartRequest = agentcore.TurnStartRequest
 type TurnSteerRequest = agentcore.TurnSteerRequest
-type TurnStartEntryResult = agentcore.TurnStartEntryResult
-type TurnAppendUserTimelineOptions = agentcore.TurnAppendUserTimelineOptions
-type TurnSteerEntryPrepareResult = agentcore.TurnSteerEntryPrepareResult
 type TimelineAttachment = agentcore.TimelineAttachment
-type TimelineItem = agentcore.TimelineItem
 type TimelineRuntime = agentcore.TimelineRuntime
-type Binding = agentcore.Binding
-type BindingStore = agentcore.BindingStore
 type Process = agentcore.Process
-type Manager = agentcore.Manager
 
 type (
-	ResumeThreadRequest struct {
-		ThreadID string
-		Cwd      string
-	}
+	ResumeThreadRequest         struct{ ThreadID, Cwd string }
 	TurnStartPreparedSubmission struct {
-		Prompt                string
-		SubmitPrompt          string
-		Images                []string
-		Files                 []string
+		Prompt, SubmitPrompt  string
+		Images, Files         []string
 		TimelineAttachments   []TimelineAttachment
 		SelectedSkillCount    int
 		AutoMatchedSkillCount int
 	}
 	ParsedTurnInputs struct {
 		Prompt              string
-		Images              []string
-		Files               []string
+		Images, Files       []string
 		TimelineAttachments []TimelineAttachment
 	}
 	PreparedSubmissionCommon struct {
@@ -93,7 +79,7 @@ type PrepareAdapter struct {
 type RuntimeAdapter struct {
 	PrepareAdapter
 
-	Manager                           func() Manager
+	Manager                           func() agentcore.Manager
 	ThreadExistsInHistory             func(ctx context.Context, threadID string) bool
 	AllDynamicToolSchemas             func() []agentcore.DynamicTool
 	ResolveStartInstructionsForLaunch func(ctx context.Context, dynamicTools []agentcore.DynamicTool) string
@@ -101,7 +87,7 @@ type RuntimeAdapter struct {
 	ThreadLogFields                   func(threadID string) []any
 	GetThreadID                       func(proc Process) string
 	CancelCodeRuns                    func(agentID string) int
-	BindingStore                      func() BindingStore
+	BindingStore                      func() agentcore.BindingStore
 	ResolveCodexThreadCandidates      func(ctx context.Context, agentID string) []string
 	ResumeThread                      func(proc Process, req ResumeThreadRequest) error
 	IsCodexProcessCrashError          func(err error) bool
@@ -133,8 +119,7 @@ func fillNilFuncs(dst any, defaults any) {
 	if dstValue.Kind() != reflect.Ptr || dstValue.Elem().Kind() != reflect.Struct {
 		return
 	}
-	target := dstValue.Elem()
-	def := reflect.ValueOf(defaults)
+	target, def := dstValue.Elem(), reflect.ValueOf(defaults)
 	if def.Kind() == reflect.Ptr {
 		def = def.Elem()
 	}
@@ -142,17 +127,12 @@ func fillNilFuncs(dst any, defaults any) {
 		return
 	}
 	for i := 0; i < target.NumField() && i < def.NumField(); i++ {
-		field := target.Field(i)
-		if field.Kind() != reflect.Func || !field.IsNil() {
-			continue
-		}
-		defField := def.Field(i)
-		if defField.Kind() == reflect.Func && !defField.IsNil() {
+		field, defField := target.Field(i), def.Field(i)
+		if field.Kind() == reflect.Func && field.IsNil() && defField.Kind() == reflect.Func && !defField.IsNil() {
 			field.Set(defField)
 		}
 	}
 }
-
 func withThreadLogFields(a RuntimeAdapter, threadID string, kv ...any) []any {
 	return append(a.ThreadLogFields(threadID), kv...)
 }
@@ -207,7 +187,7 @@ var defaultPrepareAdapter = PrepareAdapter{
 }
 
 var defaultRuntimeAdapter = RuntimeAdapter{
-	Manager:                           func() Manager { return nil },
+	Manager:                           func() agentcore.Manager { return nil },
 	ThreadExistsInHistory:             func(context.Context, string) bool { return false },
 	AllDynamicToolSchemas:             func() []agentcore.DynamicTool { return nil },
 	ResolveStartInstructionsForLaunch: func(context.Context, []agentcore.DynamicTool) string { return "" },
@@ -218,7 +198,7 @@ var defaultRuntimeAdapter = RuntimeAdapter{
 	},
 	GetThreadID:                  func(Process) string { return "" },
 	CancelCodeRuns:               func(string) int { return 0 },
-	BindingStore:                 func() BindingStore { return nil },
+	BindingStore:                 func() agentcore.BindingStore { return nil },
 	ResolveCodexThreadCandidates: func(context.Context, string) []string { return nil },
 	ResumeThread: func(Process, ResumeThreadRequest) error {
 		return appErrors.New("Server.ensureThreadReady", "thread process is not available")
@@ -244,7 +224,6 @@ func EnsureThreadReadyForTurn(a RuntimeAdapter, ctx context.Context, threadID, c
 	a = normalizeRuntimeAdapter(a)
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-
 	manager := a.Manager()
 	if manager == nil {
 		return nil, a.NewError("Server.ensureThreadReady", "thread manager is not initialized")
@@ -257,130 +236,88 @@ func EnsureThreadReadyForTurn(a RuntimeAdapter, ctx context.Context, threadID, c
 	if launchCwd == "" {
 		launchCwd = "."
 	}
-
-	if proc, ok := EnsureReadyRunningProcess(a, ctx, manager, id, launchCwd); ok {
-		return proc, nil
-	}
-
-	hasHistory := a.ThreadExistsInHistory(ctx, id)
-	if !hasHistory {
-		return nil, a.NewErrorf("Server.ensureThreadReady", "thread %s not found", id)
-	}
-	resumeCandidates := CollectResumeCandidates(a, ctx, id)
-
-	logger.Info("turn/start: restoring historical thread",
-		withThreadLogFields(a, id,
-			"has_history", hasHistory, logger.FieldCwd, launchCwd,
-			"candidate_count", len(resumeCandidates), "candidates", a.PreviewResumeCandidates(resumeCandidates, 4),
-		)...,
-	)
-
-	dynamicTools := a.AllDynamicToolSchemas()
-	startInstructions := a.ResolveStartInstructionsForLaunch(ctx, dynamicTools)
-
-	proc, err := EnsureReadyLaunchProcess(a, ctx, manager, id, launchCwd, startInstructions, dynamicTools)
-	if err != nil {
-		return nil, err
-	}
-	if len(resumeCandidates) == 0 {
-		return EnsureReadyNoResumeCandidates(a, id, proc), nil
-	}
-
-	resumed, lastResumeErr, fatalResumeErr := TryResumeHistoricalCandidates(a, ctx, manager, proc, id, launchCwd, resumeCandidates)
-	if fatalResumeErr != nil {
-		return nil, fatalResumeErr
-	}
-	if resumed {
-		return proc, nil
-	}
-
-	if lastResumeErr != nil {
-		return EnsureReadyResumeFallback(a, ctx, manager, id, launchCwd, proc, lastResumeErr, startInstructions, dynamicTools, len(resumeCandidates))
-	}
-
-	return EnsureReadyNoHistoricalRollout(a, ctx, id, launchCwd, proc, len(resumeCandidates)), nil
-}
-
-func EnsureReadyRunningProcess(a RuntimeAdapter, ctx context.Context, manager Manager, agentID string, launchCwd string) (Process, bool) {
-	a = normalizeRuntimeAdapter(a)
-	if manager == nil {
-		return nil, false
-	}
-	proc := manager.Get(agentID)
-	if proc == nil {
-		return nil, false
-	}
-	if !proc.IsAlive() {
-		logger.Warn("turn/start: dead process detected, stopping for auto-recovery",
-			withThreadLogFields(a, agentID, logger.FieldPort, proc.Port())...,
-		)
-		a.CancelCodeRuns(agentID)
-		_ = manager.Stop(agentID)
-		return nil, false
-	}
-	logger.Info("turn/start: using running process",
-		withThreadLogFields(a, agentID, logger.FieldPort, proc.Port(), "codex_thread_id", a.GetThreadID(proc))...,
-	)
-	a.SetAgentWorkDir(agentID, launchCwd)
-	RegisterBinding(a, ctx, agentID, proc)
-	return proc, true
-}
-
-func EnsureReadyLaunchProcess(a RuntimeAdapter, ctx context.Context, manager Manager, agentID string, launchCwd string, startInstructions string, dynamicTools []agentcore.DynamicTool) (Process, error) {
-	a = normalizeRuntimeAdapter(a)
-	if manager == nil {
-		return nil, a.NewError("Server.ensureThreadReady", "thread manager is not initialized")
-	}
-	if err := manager.Launch(ctx, agentID, agentID, "", launchCwd, startInstructions, dynamicTools); err != nil {
-		if proc := manager.Get(agentID); proc != nil {
-			a.SetAgentWorkDir(agentID, launchCwd)
+	if proc := manager.Get(id); proc != nil {
+		if !proc.IsAlive() {
+			logger.Warn("turn/start: dead process detected, stopping for auto-recovery", withThreadLogFields(a, id, logger.FieldPort, proc.Port())...)
+			a.CancelCodeRuns(id)
+			_ = manager.Stop(id)
+		} else {
+			logger.Info("turn/start: using running process", withThreadLogFields(a, id, logger.FieldPort, proc.Port(), "codex_thread_id", a.GetThreadID(proc))...)
+			a.SetAgentWorkDir(id, launchCwd)
+			RegisterBinding(a, ctx, id, proc)
 			return proc, nil
 		}
-		return nil, a.WrapErrorf(err, "Server.ensureThreadReady", "auto-load thread %s", agentID)
 	}
-
-	proc := manager.Get(agentID)
+	if !a.ThreadExistsInHistory(ctx, id) {
+		return nil, a.NewErrorf("Server.ensureThreadReady", "thread %s not found", id)
+	}
+	resumeCandidates := make([]string, 0, 4)
+	if bindingStore := a.BindingStore(); bindingStore != nil {
+		if binding, bindErr := bindingStore.FindByAgentID(ctx, id); bindErr == nil && binding != nil {
+			resumeCandidates = append(resumeCandidates, binding.CodexThreadID)
+			logger.Info("turn/start: found DB binding", withThreadLogFields(a, id, "bound_codex_thread_id", binding.CodexThreadID)...)
+		}
+	}
+	if len(resumeCandidates) == 0 {
+		resumeCandidates = append(resumeCandidates, a.ResolveCodexThreadCandidates(ctx, id)...)
+	}
+	logger.Info("turn/start: restoring historical thread", withThreadLogFields(a, id, "has_history", true, logger.FieldCwd, launchCwd, "candidate_count", len(resumeCandidates), "candidates", a.PreviewResumeCandidates(resumeCandidates, 4))...)
+	dynamicTools := a.AllDynamicToolSchemas()
+	startInstructions := a.ResolveStartInstructionsForLaunch(ctx, dynamicTools)
+	if err = manager.Launch(ctx, id, id, "", launchCwd, startInstructions, dynamicTools); err != nil {
+		if proc := manager.Get(id); proc != nil {
+			a.SetAgentWorkDir(id, launchCwd)
+			return proc, nil
+		}
+		return nil, a.WrapErrorf(err, "Server.ensureThreadReady", "auto-load thread %s", id)
+	}
+	proc := manager.Get(id)
 	if proc == nil {
-		return nil, a.NewErrorf("Server.ensureThreadReady", "thread %s loaded but not found", agentID)
+		return nil, a.NewErrorf("Server.ensureThreadReady", "thread %s loaded but not found", id)
 	}
-	a.SetAgentWorkDir(agentID, launchCwd)
-	logger.Info("turn/start: process launched for restore",
-		withThreadLogFields(a, agentID, logger.FieldPort, proc.Port(), "codex_thread_id_before_resume", a.GetThreadID(proc))...,
-	)
-	return proc, nil
+	a.SetAgentWorkDir(id, launchCwd)
+	logger.Info("turn/start: process launched for restore", withThreadLogFields(a, id, logger.FieldPort, proc.Port(), "codex_thread_id_before_resume", a.GetThreadID(proc))...)
+	if len(resumeCandidates) == 0 {
+		logger.Warn("turn/start: no valid historical codex thread id, continue with fresh session", a.ThreadLogFields(id)...)
+		return proc, nil
+	}
+	var lastResumeErr error
+	for _, resumeThreadID := range resumeCandidates {
+		resumeErr := a.ResumeThread(proc, ResumeThreadRequest{ThreadID: resumeThreadID, Cwd: launchCwd})
+		if resumeErr == nil {
+			logger.Info("turn/start: historical thread auto-loaded", withThreadLogFields(a, id, "resume_thread_id", resumeThreadID, "codex_thread_id_after_resume", a.GetThreadID(proc), logger.FieldCwd, launchCwd)...)
+			RegisterBinding(a, ctx, id, proc)
+			return proc, nil
+		}
+		lastResumeErr = resumeErr
+		keepTrying, wrappedErr := handleResumeCandidateError(a, manager, id, resumeThreadID, resumeErr)
+		if keepTrying {
+			continue
+		}
+		return nil, wrappedErr
+	}
+	return ensureReadyFinalizeAfterResume(a, ctx, manager, id, launchCwd, proc, lastResumeErr, startInstructions, dynamicTools, len(resumeCandidates))
 }
 
-func EnsureReadyNoResumeCandidates(a RuntimeAdapter, agentID string, proc Process) Process {
-	a = normalizeRuntimeAdapter(a)
-	logger.Warn("turn/start: no valid historical codex thread id, continue with fresh session", a.ThreadLogFields(agentID)...)
-	return proc
-}
-
-func EnsureReadyResumeFallback(a RuntimeAdapter, ctx context.Context, manager Manager, agentID string, launchCwd string, proc Process, lastResumeErr error, startInstructions string, dynamicTools []agentcore.DynamicTool, candidateCount int) (Process, error) {
-	a = normalizeRuntimeAdapter(a)
-	logger.Warn("turn/start: all resume candidates exhausted, fallback to fresh session",
-		withThreadLogFields(a, agentID, "candidate_count", candidateCount, "last_error", lastResumeErr, logger.FieldCwd, launchCwd)...,
-	)
-	if manager != nil && manager.Get(agentID) == nil {
-		a.CancelCodeRuns(agentID)
-		_ = manager.Stop(agentID)
-		if launchErr := manager.Launch(ctx, agentID, agentID, "", launchCwd, startInstructions, dynamicTools); launchErr != nil {
-			return nil, a.WrapErrorf(launchErr, "Server.ensureThreadReady", "final re-spawn thread %s", agentID)
+func ensureReadyFinalizeAfterResume(a RuntimeAdapter, ctx context.Context, manager agentcore.Manager, agentID string, launchCwd string, proc Process, lastResumeErr error, startInstructions string, dynamicTools []agentcore.DynamicTool, candidateCount int) (Process, error) {
+	if lastResumeErr != nil {
+		logger.Warn("turn/start: all resume candidates exhausted, fallback to fresh session", withThreadLogFields(a, agentID, "candidate_count", candidateCount, "last_error", lastResumeErr, logger.FieldCwd, launchCwd)...)
+		if manager != nil && manager.Get(agentID) == nil {
+			a.CancelCodeRuns(agentID)
+			_ = manager.Stop(agentID)
+			if launchErr := manager.Launch(ctx, agentID, agentID, "", launchCwd, startInstructions, dynamicTools); launchErr != nil {
+				return nil, a.WrapErrorf(launchErr, "Server.ensureThreadReady", "final re-spawn thread %s", agentID)
+			}
+			proc = manager.Get(agentID)
+			if proc == nil {
+				return nil, a.NewErrorf("Server.ensureThreadReady", "thread %s final re-spawn failed", agentID)
+			}
 		}
-		proc = manager.Get(agentID)
-		if proc == nil {
-			return nil, a.NewErrorf("Server.ensureThreadReady", "thread %s final re-spawn failed", agentID)
-		}
+	} else {
+		logger.Warn("turn/start: no available historical rollout, continue with fresh session", withThreadLogFields(a, agentID, "candidate_count", candidateCount, logger.FieldCwd, launchCwd)...)
 	}
 	RegisterBinding(a, ctx, agentID, proc)
 	return proc, nil
-}
-
-func EnsureReadyNoHistoricalRollout(a RuntimeAdapter, ctx context.Context, agentID string, launchCwd string, proc Process, candidateCount int) Process {
-	a = normalizeRuntimeAdapter(a)
-	logger.Warn("turn/start: no available historical rollout, continue with fresh session", withThreadLogFields(a, agentID, "candidate_count", candidateCount, logger.FieldCwd, launchCwd)...)
-	RegisterBinding(a, ctx, agentID, proc)
-	return proc
 }
 
 func RegisterBinding(a RuntimeAdapter, ctx context.Context, agentID string, proc Process) {
@@ -400,83 +337,37 @@ func RegisterBinding(a RuntimeAdapter, ctx context.Context, agentID string, proc
 	}
 }
 
-func CollectResumeCandidates(a RuntimeAdapter, ctx context.Context, agentID string) []string {
-	a = normalizeRuntimeAdapter(a)
-	id := strings.TrimSpace(agentID)
-	if id == "" {
-		return nil
-	}
-	resumeCandidates := make([]string, 0, 4)
-	if bindingStore := a.BindingStore(); bindingStore != nil {
-		if binding, err := bindingStore.FindByAgentID(ctx, id); err == nil && binding != nil {
-			resumeCandidates = append(resumeCandidates, binding.CodexThreadID)
-			logger.Info("turn/start: found DB binding",
-				withThreadLogFields(a, id, "bound_codex_thread_id", binding.CodexThreadID)...,
-			)
+func handleResumeCandidateError(a RuntimeAdapter, manager agentcore.Manager, threadID, resumeThreadID string, err error) (keepTrying bool, wrapped error) {
+	if a.IsCodexProcessCrashError(err) {
+		logger.Error("turn/start: codex crashed during resume, returning error", withThreadLogFields(a, threadID, "resume_thread_id", resumeThreadID, logger.FieldError, err)...)
+		a.CancelCodeRuns(threadID)
+		if manager != nil {
+			_ = manager.Stop(threadID)
 		}
+		return false, a.WrapErrorf(err, "Server.ensureThreadReady", "codex crashed while resuming thread %s (rollout=%s)", threadID, resumeThreadID)
 	}
-	if len(resumeCandidates) == 0 {
-		resumeCandidates = append(resumeCandidates, a.ResolveCodexThreadCandidates(ctx, id)...)
+	if a.IsHistoricalResumeCandidateError(err) {
+		logger.Warn("turn/start: resume candidate unavailable, try next", withThreadLogFields(a, threadID, "resume_thread_id", resumeThreadID, logger.FieldError, err)...)
+		return true, nil
 	}
-	return resumeCandidates
+	logger.Error("turn/start: unrecognized resume error", withThreadLogFields(a, threadID, "resume_thread_id", resumeThreadID, logger.FieldError, err)...)
+	return false, a.WrapErrorf(err, "Server.ensureThreadReady", "resume failed for thread %s (rollout=%s)", threadID, resumeThreadID)
 }
 
-func TryResumeHistoricalCandidates(a RuntimeAdapter, ctx context.Context, manager Manager, proc Process, agentID string, launchCwd string, resumeCandidates []string) (resumed bool, lastResumeErr error, fatalErr error) {
-	a = normalizeRuntimeAdapter(a)
-	id := strings.TrimSpace(agentID)
-	if id == "" || proc == nil {
-		return false, nil, nil
-	}
-	for _, resumeThreadID := range resumeCandidates {
-		err := a.ResumeThread(proc, ResumeThreadRequest{ThreadID: resumeThreadID, Cwd: launchCwd})
-		if err == nil {
-			logger.Info("turn/start: historical thread auto-loaded",
-				withThreadLogFields(a, id, "resume_thread_id", resumeThreadID, "codex_thread_id_after_resume", a.GetThreadID(proc), logger.FieldCwd, launchCwd)...,
-			)
-			RegisterBinding(a, ctx, id, proc)
-			return true, nil, nil
-		}
-		lastResumeErr = err
-		if a.IsCodexProcessCrashError(err) {
-			logger.Error("turn/start: codex crashed during resume, returning error",
-				withThreadLogFields(a, id, "resume_thread_id", resumeThreadID, logger.FieldError, err)...,
-			)
-			a.CancelCodeRuns(id)
-			if manager != nil {
-				_ = manager.Stop(id)
-			}
-			return false, lastResumeErr, a.WrapErrorf(err, "Server.ensureThreadReady", "codex crashed while resuming thread %s (rollout=%s)", id, resumeThreadID)
-		}
-		if a.IsHistoricalResumeCandidateError(err) {
-			logger.Warn("turn/start: resume candidate unavailable, try next",
-				withThreadLogFields(a, id, "resume_thread_id", resumeThreadID, logger.FieldError, err)...,
-			)
-			continue
-		}
-		logger.Error("turn/start: unrecognized resume error",
-			withThreadLogFields(a, id, "resume_thread_id", resumeThreadID, logger.FieldError, err)...,
-		)
-		return false, lastResumeErr, a.WrapErrorf(err, "Server.ensureThreadReady", "resume failed for thread %s (rollout=%s)", id, resumeThreadID)
-	}
-	return false, lastResumeErr, nil
-}
-
-func TurnStart(a RuntimeAdapter, ctx context.Context, req TurnStartRequest) (TurnStartEntryResult, error) {
+func TurnStart(a RuntimeAdapter, ctx context.Context, req agentcore.TurnStartRequest) (agentcore.TurnStartEntryResult, error) {
 	a = normalizeRuntimeAdapter(a)
 	threadID, err := a.RequireThreadID("Server.turnStart", req.ThreadID)
 	if err != nil {
-		return TurnStartEntryResult{}, err
+		return agentcore.TurnStartEntryResult{}, err
 	}
-	logger.Info("turn/start: request received",
-		withThreadLogFields(a, threadID, logger.FieldCwd, strings.TrimSpace(req.Cwd), "input_count", len(req.Input), "selected_skills_count", len(req.SelectedSkills))...,
-	)
+	logger.Info("turn/start: request received", withThreadLogFields(a, threadID, logger.FieldCwd, strings.TrimSpace(req.Cwd), "input_count", len(req.Input), "selected_skills_count", len(req.SelectedSkills))...)
 	selectedSkills, err := a.NormalizeSkillNames(req.SelectedSkills)
 	if err != nil {
-		return TurnStartEntryResult{}, a.WrapError(err, "Server.turnStart", "normalize selected skills")
+		return agentcore.TurnStartEntryResult{}, a.WrapError(err, "Server.turnStart", "normalize selected skills")
 	}
 	prepared, err := PrepareTurnStartSubmission(a.PrepareAdapter, threadID, req.Input, selectedSkills, req.ManualSkillSelection)
 	if err != nil {
-		return TurnStartEntryResult{}, err
+		return agentcore.TurnStartEntryResult{}, err
 	}
 	logger.Info("turn/start: input prepared",
 		withThreadLogFields(a, threadID,
@@ -488,19 +379,19 @@ func TurnStart(a RuntimeAdapter, ctx context.Context, req TurnStartRequest) (Tur
 
 	turnID, err := StartTurnSubmissionAndTrack(a, ctx, threadID, req.Cwd, prepared.SubmitPrompt, prepared.Images, prepared.Files, req.OutputSchema)
 	if err != nil {
-		return TurnStartEntryResult{}, err
+		return agentcore.TurnStartEntryResult{}, err
 	}
-	AppendTurnStartUserTimeline(a.PrepareAdapter, ctx, prepared.TimelineAttachments, TurnAppendUserTimelineOptions{
+	AppendTurnStartUserTimeline(a.PrepareAdapter, ctx, prepared.TimelineAttachments, agentcore.TurnAppendUserTimelineOptions{
 		ThreadID:     threadID,
 		Prompt:       prepared.Prompt,
 		SubmitPrompt: prepared.SubmitPrompt,
 		Images:       prepared.Images,
 		Files:        prepared.Files,
 	})
-	return TurnStartEntryResult{TurnID: turnID}, nil
+	return agentcore.TurnStartEntryResult{TurnID: turnID}, nil
 }
 
-func TurnSteerFromInput(a RuntimeAdapter, req TurnSteerRequest) (map[string]any, error) {
+func TurnSteerFromInput(a RuntimeAdapter, req agentcore.TurnSteerRequest) (map[string]any, error) {
 	a = normalizeRuntimeAdapter(a)
 	threadID, err := a.RequireThreadID("Server.turnSteer", req.ThreadID)
 	if err != nil {
@@ -518,7 +409,6 @@ func TurnSteerFromInput(a RuntimeAdapter, req TurnSteerRequest) (map[string]any,
 }
 
 func StartTurnSubmissionAndTrack(a RuntimeAdapter, ctx context.Context, threadID string, cwd string, submitPrompt string, images []string, files []string, outputSchema json.RawMessage) (string, error) {
-	a = normalizeRuntimeAdapter(a)
 	threadID, err := a.RequireThreadID("Server.turnStart", threadID)
 	if err != nil {
 		return "", err
@@ -527,26 +417,18 @@ func StartTurnSubmissionAndTrack(a RuntimeAdapter, ctx context.Context, threadID
 	if err != nil {
 		return "", err
 	}
-	logger.Info("turn/start: thread dispatch resolved",
-		withThreadLogFields(a, threadID, logger.FieldPort, proc.Port(), "codex_thread_id", a.GetThreadID(proc))...,
-	)
+	logger.Info("turn/start: thread dispatch resolved", withThreadLogFields(a, threadID, logger.FieldPort, proc.Port(), "codex_thread_id", a.GetThreadID(proc))...)
 	submitStart := time.Now()
 	if err := a.Submit(proc, submitPrompt, images, files, outputSchema); err != nil {
 		return "", a.WrapError(err, "Server.turnStart", "submit prompt")
 	}
-	logger.Info("turn/start: submit returned",
-		withThreadLogFields(a, threadID, "submit_ms", time.Since(submitStart).Milliseconds())...,
-	)
+	logger.Info("turn/start: submit returned", withThreadLogFields(a, threadID, "submit_ms", time.Since(submitStart).Milliseconds())...)
 	resolvedTurnID := a.ResolveClientActiveTurnID(proc)
 	if resolvedTurnID == "" {
-		logger.Warn("turn/start: active turn id unavailable after submit; tracker will use synthetic id",
-			a.ThreadLogFields(threadID)...,
-		)
+		logger.Warn("turn/start: active turn id unavailable after submit; tracker will use synthetic id", a.ThreadLogFields(threadID)...)
 	}
 	turnID := a.BeginTrackedTurn(threadID, resolvedTurnID)
-	logger.Info("turn/start: tracker registered",
-		withThreadLogFields(a, threadID, "turn_id", turnID, "tracker_setup_ms", time.Since(submitStart).Milliseconds())...,
-	)
+	logger.Info("turn/start: tracker registered", withThreadLogFields(a, threadID, "turn_id", turnID, "tracker_setup_ms", time.Since(submitStart).Milliseconds())...)
 	return turnID, nil
 }
 

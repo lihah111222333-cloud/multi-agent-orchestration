@@ -23,7 +23,6 @@ type commandExecParams struct {
 	Env  map[string]string `json:"env,omitempty"`
 }
 
-// commandBlocklist 禁止通过 command/exec 执行的危险命令。
 var commandBlocklist = map[string]bool{"rm": true, "rmdir": true, "sudo": true, "su": true, "chmod": true, "chown": true, "mkfs": true, "dd": true, "kill": true, "killall": true, "pkill": true, "shutdown": true, "reboot": true, "passwd": true, "useradd": true, "userdel": true, "mount": true, "umount": true, "fdisk": true, "iptables": true, "curl": true, "wget": true}
 
 const maxOutputSize = 1 << 20 // 1MB 输出限制
@@ -51,12 +50,7 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 			return nil, apperrors.New("Server.commandExec", "shell metacharacters not allowed in arguments")
 		}
 	}
-
-	logger.Info("command/exec: starting",
-		logger.FieldCommand, baseName,
-		logger.FieldCwd, p.Cwd,
-		"argc", len(p.Argv),
-	)
+	logger.Info("command/exec: starting", logger.FieldCommand, baseName, logger.FieldCwd, p.Cwd, "argc", len(p.Argv))
 
 	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -85,38 +79,21 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
 		if !ok {
-			logger.Error("command/exec: run failed",
-				logger.FieldCommand, baseName,
-				logger.FieldError, err,
-				logger.FieldDurationMS, elapsed.Milliseconds(),
-			)
+			logger.Error("command/exec: run failed", logger.FieldCommand, baseName, logger.FieldError, err, logger.FieldDurationMS, elapsed.Milliseconds())
 			return nil, apperrors.Wrap(err, "Server.commandExec", "run command")
 		}
 		exitCode = exitErr.ExitCode()
 	}
-
-	logger.Info("command/exec: completed",
-		logger.FieldCommand, baseName,
-		logger.FieldExitCode, exitCode,
-		logger.FieldDurationMS, elapsed.Milliseconds(),
-	)
+	logger.Info("command/exec: completed", logger.FieldCommand, baseName, logger.FieldExitCode, exitCode, logger.FieldDurationMS, elapsed.Milliseconds())
 
 	outStr := stdout.String()
-
 	if readCommands[baseName] {
-		logger.Info("command/exec: read command detected, injecting LSP hint",
-			logger.FieldCommand, baseName,
-		)
+		logger.Info("command/exec: read command detected, injecting LSP hint", logger.FieldCommand, baseName)
 		if !strings.HasPrefix(outStr, lspPreferenceHint) {
 			outStr = lspPreferenceHint + outStr
 		}
 	}
-
-	return commandExecResponse{
-		ExitCode: exitCode,
-		Stdout:   outStr,
-		Stderr:   stderr.String(),
-	}, nil
+	return commandExecResponse{ExitCode: exitCode, Stdout: outStr, Stderr: stderr.String()}, nil
 }
 
 type skillsLocalReadParams = skillsruntime.SkillsLocalReadParams
@@ -225,12 +202,9 @@ func skillsRemoteWriteTyped(s *Server, ctx context.Context, p skillsRemoteWriteP
 	return skillsManagerDelegate(s).SkillsRemoteWrite(ctx, skillsruntime.SkillsRemoteWriteParams(p))
 }
 
-// getAgentSkills 返回指定 agent 配置的技能列表。
 func getAgentSkills(s *Server, agentID string) []string {
 	return skillsManagerDelegate(s).GetAgentSkills(agentID)
 }
-
-// listSkillMatchCandidates returns normalized candidates for adapter auto-match.
 func listSkillMatchCandidates(s *Server) ([]contracts.SkillMatchCandidate, error) {
 	if s == nil || s.skillSvc == nil {
 		return nil, nil

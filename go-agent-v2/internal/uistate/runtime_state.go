@@ -12,17 +12,15 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-// RuntimeManager stores UI business runtime state in Go.
 type RuntimeManager struct {
 	mu sync.RWMutex
 
-	snapshot RuntimeSnapshot
-	runtime  map[string]*threadRuntime
-	seq      uint64
+	snapshot                    RuntimeSnapshot
+	runtime                     map[string]*threadRuntime
+	seq                         uint64
 	sanitizeInjectedUserMessage bool
 }
 
-// NewRuntimeManager creates an empty runtime manager.
 func NewRuntimeManager() *RuntimeManager {
 	return &RuntimeManager{
 		snapshot: RuntimeSnapshot{
@@ -50,23 +48,18 @@ func (m *RuntimeManager) SetSanitizeInjectedUserMessage(enabled bool) {
 	m.sanitizeInjectedUserMessage = enabled
 }
 
-// Snapshot returns a deep-copied runtime snapshot for JSON-RPC responses.
 func (m *RuntimeManager) Snapshot() RuntimeSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return cloneSnapshot(m.snapshot)
 }
 
-// SnapshotLight returns a snapshot without timelines and diffs (the heaviest fields).
-// Use ThreadTimeline / ThreadDiff to fetch specific thread data separately.
 func (m *RuntimeManager) SnapshotLight() RuntimeSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return cloneSnapshotLight(m.snapshot)
 }
 
-// ThreadTimeline returns a single thread's timeline items (read-only reference).
-// Callers must NOT mutate the returned slice.
 func (m *RuntimeManager) ThreadTimeline(threadID string) []TimelineItem {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -81,7 +74,6 @@ func (m *RuntimeManager) ThreadTimeline(threadID string) []TimelineItem {
 	return src
 }
 
-// ThreadDiff returns a single thread's diff text.
 func (m *RuntimeManager) ThreadDiff(threadID string) string {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -92,8 +84,6 @@ func (m *RuntimeManager) ThreadDiff(threadID string) string {
 	return m.snapshot.DiffTextByThread[id]
 }
 
-// AllTimelinesAndDiffs returns all hydrated timelines and diff texts.
-// Used by ui/state/get to avoid race conditions when switching threads.
 func (m *RuntimeManager) AllTimelinesAndDiffs() (map[string][]TimelineItem, map[string]string) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -108,7 +98,6 @@ func (m *RuntimeManager) AllTimelinesAndDiffs() (map[string][]TimelineItem, map[
 	return timelines, diffs
 }
 
-// ReplaceThreads upserts thread list and status snapshot.
 func (m *RuntimeManager) ReplaceThreads(threads []ThreadSnapshot) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -147,7 +136,6 @@ func (m *RuntimeManager) ReplaceThreads(threads []ThreadSnapshot) {
 	m.snapshot.Threads = next
 }
 
-// SetThreadName updates thread visible name and alias meta.
 func (m *RuntimeManager) SetThreadName(threadID, name string) {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -175,7 +163,6 @@ func (m *RuntimeManager) SetThreadName(threadID, name string) {
 	m.snapshot.AgentMetaByID[id] = meta
 }
 
-// SetMainAgent marks the selected main agent.
 func (m *RuntimeManager) SetMainAgent(threadID string) {
 	id := strings.TrimSpace(threadID)
 
@@ -194,8 +181,6 @@ func (m *RuntimeManager) SetMainAgent(threadID string) {
 	}
 }
 
-// IsMainAgent reports whether the given agent is the designated main agent.
-// Returns true if no main agent is set (fallback: treat all as main for safety).
 func (m *RuntimeManager) IsMainAgent(threadID string) bool {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -204,7 +189,6 @@ func (m *RuntimeManager) IsMainAgent(threadID string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// 如果没有任何 agent 被标记为 main，则全部视为 main（安全兜底）。
 	hasAnyMain := false
 	for _, meta := range m.snapshot.AgentMetaByID {
 		if meta.IsMain {
@@ -222,7 +206,6 @@ func (m *RuntimeManager) IsMainAgent(threadID string) bool {
 	return meta.IsMain
 }
 
-// AppendUserMessage appends a user message into timeline.
 func (m *RuntimeManager) AppendUserMessage(threadID, text string, attachments []TimelineAttachment) {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -234,7 +217,6 @@ func (m *RuntimeManager) AppendUserMessage(threadID, text string, attachments []
 	m.appendUserLocked(id, text, attachments, time.Now())
 }
 
-// ClearThreadTimeline clears a single thread timeline and diff.
 func (m *RuntimeManager) ClearThreadTimeline(threadID string) {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -248,7 +230,6 @@ func (m *RuntimeManager) ClearThreadTimeline(threadID string) {
 	m.runtime[id] = newThreadRuntime()
 }
 
-// ApplyAgentEvent mutates runtime state by normalized backend events.
 func (m *RuntimeManager) ApplyAgentEvent(threadID string, normalized NormalizedEvent, payload map[string]any) {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -265,7 +246,6 @@ func (m *RuntimeManager) ApplyAgentEvent(threadID string, normalized NormalizedE
 	m.applyAgentEventLocked(id, normalized, payload, time.Now())
 }
 
-// TimelineStats returns per-thread timeline item counts for diagnostics.
 func (m *RuntimeManager) TimelineStats() map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -290,8 +270,6 @@ func (m *RuntimeManager) TimelineStats() map[string]any {
 	}
 }
 
-// hasAccumulatedText returns true if the timeline item at the given index
-// exists and has non-empty Text (i.e. streaming deltas have been accumulated).
 func hasAccumulatedText(timeline []TimelineItem, index int) bool {
 	if index < 0 || index >= len(timeline) {
 		return false
@@ -299,8 +277,6 @@ func hasAccumulatedText(timeline []TimelineItem, index int) bool {
 	return timeline[index].Text != ""
 }
 
-// HydrateHistory rebuilds thread timeline from stored messages.
-// Returns false if skipped (e.g. thread is actively streaming).
 func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord) bool {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -310,10 +286,6 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 若 thread 正在积累流式文本 (assistant/thinking delta 未完成),
-	// 跳过 hydration 以免清空已累积的 delta。
-	// 仅在 index 处的 item 已有非空 Text 时才视为"正在流式"。
-	// turn_started 会设置 thinkingIndex 但 item.Text 仍为空 — 此时 hydration 仍应执行。
 	if rt, ok := m.runtime[id]; ok {
 		timeline := m.snapshot.TimelinesByThread[id]
 		if hasAccumulatedText(timeline, rt.assistantIndex) ||
@@ -368,8 +340,6 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 		m.applyAgentEventLocked(id, normalized, payload, ts)
 	}
 
-	// 清理瞬态 overlay 状态: MCP/terminal/background overlay 依赖实时事件,
-	// 不会被持久化, 因此 hydration 重放可能错误地重新启用 overlay。
 	if rt := m.runtime[id]; rt != nil {
 		rt.mcpStartupOverlay = false
 		rt.mcpStartupLabel = ""
@@ -382,8 +352,6 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 	return true
 }
 
-// AppendHistory appends additional history records without resetting the timeline.
-// Used by streaming pages after the initial HydrateHistory call.
 func (m *RuntimeManager) AppendHistory(threadID string, records []HistoryRecord) {
 	id := strings.TrimSpace(threadID)
 	if id == "" || len(records) == 0 {
@@ -571,7 +539,6 @@ func attachmentName(path string) string {
 	return base
 }
 
-// ReplaceWorkspaceRuns replaces workspace run cache.
 func (m *RuntimeManager) ReplaceWorkspaceRuns(runs []map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -589,7 +556,6 @@ func (m *RuntimeManager) ReplaceWorkspaceRuns(runs []map[string]any) {
 	m.snapshot.WorkspaceLastError = ""
 }
 
-// UpsertWorkspaceRun upserts a workspace run item.
 func (m *RuntimeManager) UpsertWorkspaceRun(raw map[string]any) {
 	runKey := extractRunKey(raw)
 	if runKey == "" {
@@ -610,7 +576,6 @@ func (m *RuntimeManager) UpsertWorkspaceRun(raw map[string]any) {
 	m.snapshot.WorkspaceLastError = ""
 }
 
-// ApplyWorkspaceMergeResult merges merge-result metrics into a run.
 func (m *RuntimeManager) ApplyWorkspaceMergeResult(runKey string, result map[string]any) {
 	key := strings.TrimSpace(runKey)
 	if key == "" {
@@ -643,7 +608,6 @@ func (m *RuntimeManager) ApplyWorkspaceMergeResult(runKey string, result map[str
 	m.snapshot.WorkspaceLastError = ""
 }
 
-// SetWorkspaceUnavailable marks workspace feature unavailable.
 func (m *RuntimeManager) SetWorkspaceUnavailable(message string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

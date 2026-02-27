@@ -12,27 +12,23 @@ type classifyResult struct {
 }
 
 var classifyMap = map[string]classifyResult{
-	// Assistant Messages
 	"agent_message_delta":         {UITypeAssistantDelta},
 	"agent_message_content_delta": {UITypeAssistantDelta},
 	"agent_message_completed":     {UITypeAssistantDone},
 	"agent_message":               {UITypeAssistantDone},
 
-	// Reasoning
 	"agent_reasoning":               {UITypeReasoningDelta},
 	"agent_reasoning_delta":         {UITypeReasoningDelta},
 	"agent_reasoning_raw":           {UITypeReasoningDelta},
 	"agent_reasoning_raw_delta":     {UITypeReasoningDelta},
 	"agent_reasoning_section_break": {UITypeReasoningDelta},
 
-	// Command Execution
 	"exec_command_begin":        {UITypeCommandStart},
 	"exec_output_delta":         {UITypeCommandOutput},
 	"exec_command_output_delta": {UITypeCommandOutput},
 	"exec_command_end":          {UITypeCommandDone},
 	"exec_terminal_interaction": {UITypeSystem},
 
-	// File Editing
 	"patch_apply_begin": {UITypeFileEditStart},
 	"file_read":         {UITypeFileEditStart},
 	"patch_apply":       {UITypeCommandOutput},
@@ -40,17 +36,14 @@ var classifyMap = map[string]classifyResult{
 	"patch_apply_end":   {UITypeFileEditDone},
 	"file_updated":      {UITypeFileEditDone},
 
-	// Tool Calls
 	"mcp_tool_call_begin": {UITypeToolCall},
 	"mcp_tool_call":       {UITypeToolCall},
 	"dynamic_tool_call":   {UITypeSystem},
 	"mcp_tool_call_end":   {UITypeToolCall},
 
-	// Approval
 	"exec_approval_request":        {UITypeApprovalRequest},
 	"file_change_approval_request": {UITypeApprovalRequest},
 
-	// Turn Lifecycle
 	"turn_started":              {UITypeTurnStarted},
 	"task_started":              {UITypeTurnStarted},
 	"codex/event/task_started":  {UITypeTurnStarted},
@@ -63,7 +56,6 @@ var classifyMap = map[string]classifyResult{
 	"turn_aborted":              {UITypeTurnComplete},
 	"idle":                      {UITypeTurnComplete},
 
-	// Plan / Diff
 	"plan_delta":             {UITypePlanDelta},
 	"plan_update":            {UITypePlanDelta},
 	"turn_plan":              {UITypePlanDelta},
@@ -71,18 +63,14 @@ var classifyMap = map[string]classifyResult{
 	"codex/event/plan_delta": {UITypePlanDelta},
 	"turn_diff":              {UITypeDiffUpdate},
 
-	// User Message
 	"user_message": {UITypeUserMessage},
 
-	// Errors
 	"error":           {UITypeError},
 	"stream_error":    {UITypeError},
 	"connection_dead": {UITypeError},
 
-	// Warnings
 	"warning": {UITypeSystem},
 
-	// System / Lifecycle
 	"shutdown_complete":       {UITypeSystem},
 	"session_configured":      {UITypeSystem},
 	"mcp_startup_update":      {UITypeSystem},
@@ -99,7 +87,6 @@ var classifyMap = map[string]classifyResult{
 	"exited_review_mode":      {UITypeSystem},
 	"background_event":        {UITypeSystem},
 
-	// Collab Agents
 	"collab_agent_spawn_begin":       {UITypeSystem},
 	"collab_agent_interaction_begin": {UITypeSystem},
 	"collab_waiting_begin":           {UITypeSystem},
@@ -294,7 +281,6 @@ func extractNormalizedCommand(payload map[string]any) string {
 	return ""
 }
 
-// extractNormalizedFiles 从 payload 提取文件路径。
 func extractNormalizedFiles(codexType string, payload map[string]any) (file string, files []string) {
 	switch {
 	case codexType == "patch_apply_begin" || codexType == "item/fileChange/started":
@@ -321,7 +307,6 @@ func extractNormalizedFiles(codexType string, payload map[string]any) (file stri
 	}
 }
 
-// extractExitCodeFromPayload 仅在 exec_command_end 事件中提取退出码。
 func extractExitCodeFromPayload(codexType string, payload map[string]any) *int {
 	if codexType != "exec_command_end" &&
 		codexType != "item/completed" &&
@@ -335,9 +320,6 @@ func extractExitCodeFromPayload(codexType string, payload map[string]any) *int {
 	return nil
 }
 
-// NormalizeEvent 将 codex 事件归一化为前端可渲染的结构化事件。
-//
-// 纯函数, 无状态, 无锁, 热路径安全。
 func NormalizeEvent(codexType, method string, data json.RawMessage) NormalizedEvent {
 	var payload map[string]any
 	if len(data) > 0 {
@@ -350,7 +332,6 @@ func NormalizeEvent(codexType, method string, data json.RawMessage) NormalizedEv
 	return NormalizeEventFromPayload(codexType, method, payload)
 }
 
-// NormalizeEventFromPayload 将已解码 payload 的事件归一化为前端可渲染结构。
 func NormalizeEventFromPayload(codexType, method string, payload map[string]any) NormalizedEvent {
 	if payload == nil {
 		payload = map[string]any{}

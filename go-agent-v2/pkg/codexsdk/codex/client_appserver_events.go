@@ -1,27 +1,41 @@
 package codex
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"maps"
 	"net"
-	"os"
-	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/gorilla/websocket"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
+
+const threadStatusChangedMethod = "thread/status/changed"
+
+var lifecycleCompletionEventTypes = map[string]struct{}{
+	EventTurnComplete:     {},
+	"turn_aborted":        {},
+	EventIdle:             {},
+	EventError:            {},
+	EventShutdownComplete: {},
+}
+
+var threadStatusChangedTerminalTypes = map[string]struct{}{
+	"idle":         {},
+	"systemerror":  {},
+	"system_error": {},
+	"error":        {},
+	"notloaded":    {},
+	"not_loaded":   {},
+}
 
 func (c *AppServerClient) readLoop() {
 	if !c.readLoopRunning.CompareAndSwap(false, true) {
 		return
 	}
-	connectionDead := false // 标记非正常退出, defer 时发射 connection_dead 事件
+	connectionDead := false
 	defer func() {
 		c.readLoopRunning.Store(false)
 		c.wsMu.Lock()
@@ -43,117 +57,108 @@ func (c *AppServerClient) readLoop() {
 	}()
 
 	for !c.stopped.Load() {
-		conn := c.currentWSConn()
-		if conn == nil {
-			if c.stopped.Load() {
-				return
-			}
-			if !c.reconnectWS("ws_missing", apperrors.New("AppServerClient.readLoop", "ws not connected")) {
-				connectionDead = true
-				return
-			}
-			continue
-		}
-		_, message, err := conn.ReadMessage()
-		if err == nil {
-			_ = conn.SetReadDeadline(time.Now().Add(currentAppServerReadIdleTimeout()))
-		}
-		if err != nil {
-			readErr := apperrors.Wrap(err, "AppServerClient.readLoop", "read message")
-			health, shouldRespawn, openedCircuit := c.noteReadFailure(time.Now())
-			c.failPendingCalls(readErr)
-			if !c.stopped.Load() {
-				willRetry := appServerStreamMaxRetries > 0
-				reconnectingMessage := "Reconnecting..."
-				if !willRetry {
-					reconnectingMessage = "Stream disconnected"
-				}
-				details := map[string]any{
-					"message":     reconnectingMessage,
-					"attempt":     0,
-					"max_retries": appServerStreamMaxRetries,
-					"trigger":     "read_error",
-				}
-				maps.Copy(details, health.asDetailsMap())
-				c.emitStreamError(readErr, "read", isIdleTimeoutError(err), willRetry, details)
-			}
-			if c.stopped.Load() && isShutdownReadError(err) {
-				logger.Debug("codex: readLoop read failed (shutdown)", logger.FieldAgentID, c.AgentID, logger.FieldError, readErr)
-			} else {
-				logger.Warn("codex: readLoop read failed",
-					logger.FieldAgentID, c.AgentID,
-					"idle_timeout", isIdleTimeoutError(err),
-					"should_respawn", shouldRespawn,
-					"opened_circuit", openedCircuit,
-					"failure_streak", health.ReadFailureStreak,
-					logger.FieldError, readErr,
-				)
-			}
-			if c.stopped.Load() {
-				return
-			}
-			trigger := "read_error"
-			if shouldRespawn {
-				trigger = "read_error_burst"
-			}
-			if c.reconnectWS(trigger, readErr) {
-				continue
-			}
+		message, shouldStop, deadConnection := c.readLoopReadMessage()
+		if deadConnection {
 			connectionDead = true
+		}
+		if shouldStop {
 			return
 		}
-
-		var msg jsonRPCMessage
-		if err := json.Unmarshal(message, &msg); err != nil {
-			logger.Warn("codex: readLoop unparseable JSON-RPC message", logger.FieldAgentID, c.AgentID, logger.FieldError, err, "raw_prefix", truncateBytes(message, 200))
+		if message == nil {
 			continue
 		}
-		if dropped, preview, convID := shouldDropLegacyMirrorNotification(msg); dropped {
-			seq := c.legacyMirrorDropCount.Add(1)
-			if shouldLogLegacyMirrorDrop(seq) {
-				logger.Info("codex: dropped legacy mirror stream notification", logger.FieldAgentID, c.AgentID, logger.FieldMethod, msg.Method, "conversation_id", convID, "preview", preview, "drop_count", seq)
-			} else {
-				logger.Debug("codex: dropped legacy mirror stream notification", logger.FieldAgentID, c.AgentID, logger.FieldMethod, msg.Method, "conversation_id", convID, "preview", preview)
-			}
-			continue
-		}
-
-		if c.handleRPCResponse(msg) {
-			continue
-		}
-
-		if c.handleRPCEvent(msg) {
+		if c.readLoopDispatchMessage(message) {
 			return
 		}
 	}
 }
 
-func (c *AppServerClient) pingLoop(conn *websocket.Conn) {
-	ticker := time.NewTicker(appServerPingInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-c.ctx.Done():
-			return
-		case <-c.wsDone:
-			return
-		case <-ticker.C:
-			c.wsMu.Lock()
-			if c.ws != conn {
-				c.wsMu.Unlock()
-				return
-			}
-			err := c.ws.WriteControl(websocket.PingMessage, []byte("ping"), time.Now().Add(appServerWriteTimeout))
-			if err != nil {
-				_ = c.ws.Close()
-				c.ws = nil
-				c.wsMu.Unlock()
-				return
-			}
-			c.wsMu.Unlock()
+func (c *AppServerClient) readLoopReadMessage() ([]byte, bool, bool) {
+	conn := c.currentWSConn()
+	if conn == nil {
+		if c.stopped.Load() {
+			return nil, true, false
 		}
+		if !c.reconnectWS("ws_missing", apperrors.New("AppServerClient.readLoop", "ws not connected")) {
+			return nil, true, true
+		}
+		return nil, false, false
 	}
+
+	_, message, err := conn.ReadMessage()
+	if err == nil {
+		_ = conn.SetReadDeadline(time.Now().Add(currentAppServerReadIdleTimeout()))
+		return message, false, false
+	}
+	return c.handleReadLoopReadError(err)
+}
+
+func (c *AppServerClient) handleReadLoopReadError(err error) ([]byte, bool, bool) {
+	readErr := apperrors.Wrap(err, "AppServerClient.readLoop", "read message")
+	health, shouldRespawn, openedCircuit := c.noteReadFailure(time.Now())
+	c.failPendingCalls(readErr)
+
+	if !c.stopped.Load() {
+		willRetry := appServerStreamMaxRetries > 0
+		reconnectingMessage := "Reconnecting..."
+		if !willRetry {
+			reconnectingMessage = "Stream disconnected"
+		}
+		details := map[string]any{
+			"message":     reconnectingMessage,
+			"attempt":     0,
+			"max_retries": appServerStreamMaxRetries,
+			"trigger":     "read_error",
+		}
+		maps.Copy(details, health.asDetailsMap())
+		c.emitStreamError(readErr, "read", isIdleTimeoutError(err), willRetry, details)
+	}
+
+	if c.stopped.Load() && isShutdownReadError(err) {
+		logger.Debug("codex: readLoop read failed (shutdown)", logger.FieldAgentID, c.AgentID, logger.FieldError, readErr)
+	} else {
+		logger.Warn("codex: readLoop read failed",
+			logger.FieldAgentID, c.AgentID,
+			"idle_timeout", isIdleTimeoutError(err),
+			"should_respawn", shouldRespawn,
+			"opened_circuit", openedCircuit,
+			"failure_streak", health.ReadFailureStreak,
+			logger.FieldError, readErr,
+		)
+	}
+
+	if c.stopped.Load() {
+		return nil, true, false
+	}
+	trigger := "read_error"
+	if shouldRespawn {
+		trigger = "read_error_burst"
+	}
+	if c.reconnectWS(trigger, readErr) {
+		return nil, false, false
+	}
+	return nil, true, true
+}
+
+func (c *AppServerClient) readLoopDispatchMessage(message []byte) bool {
+	var msg jsonRPCMessage
+	if err := json.Unmarshal(message, &msg); err != nil {
+		logger.Warn("codex: readLoop unparseable JSON-RPC message", logger.FieldAgentID, c.AgentID, logger.FieldError, err, "raw_prefix", truncateBytes(message, 200))
+		return false
+	}
+	if dropped, preview, convID := shouldDropLegacyMirrorNotification(msg); dropped {
+		seq := c.legacyMirrorDropCount.Add(1)
+		if shouldLogLegacyMirrorDrop(seq) {
+			logger.Info("codex: dropped legacy mirror stream notification", logger.FieldAgentID, c.AgentID, logger.FieldMethod, msg.Method, "conversation_id", convID, "preview", preview, "drop_count", seq)
+		} else {
+			logger.Debug("codex: dropped legacy mirror stream notification", logger.FieldAgentID, c.AgentID, logger.FieldMethod, msg.Method, "conversation_id", convID, "preview", preview)
+		}
+		return false
+	}
+	if c.handleRPCResponse(msg) {
+		return false
+	}
+	return c.handleRPCEvent(msg)
 }
 
 func (c *AppServerClient) handleRPCResponse(msg jsonRPCMessage) bool {
@@ -250,23 +255,34 @@ func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 		if turnID != "" {
 			c.setActiveTurnID(turnID)
 		}
-	case EventTurnComplete, "turn_aborted", EventIdle, EventError, EventShutdownComplete:
-		if activeTurnID != "" {
-			c.clearActiveTurnID()
-		}
 	case EventStreamError:
 		if streamErrorWillRetry(event.Data) || activeTurnID == "" {
 			return
 		}
 		c.clearActiveTurnID()
-	case "thread/status/changed":
-		if activeTurnID == "" {
+	default:
+		if isLifecycleCompletionEvent(event.Type) {
+			if activeTurnID != "" {
+				c.clearActiveTurnID()
+			}
+			return
+		}
+		if !isThreadStatusChangedMethod(method) || activeTurnID == "" {
 			return
 		}
 		if _, terminal := threadStatusChangedTerminalState(event.Data); terminal {
 			c.clearActiveTurnID()
 		}
 	}
+}
+
+func isLifecycleCompletionEvent(eventType string) bool {
+	_, ok := lifecycleCompletionEventTypes[eventType]
+	return ok
+}
+
+func isThreadStatusChangedMethod(method string) bool {
+	return strings.EqualFold(strings.TrimSpace(method), threadStatusChangedMethod)
 }
 
 func shouldRecoverLifecycleOnMismatchedConversation(
@@ -281,24 +297,23 @@ func shouldRecoverLifecycleOnMismatchedConversation(
 	}
 	turnID := strings.TrimSpace(extractTurnIDFromEventData(event.Data))
 	targetsActiveTurn := turnID != "" && strings.EqualFold(turnID, activeTurnID)
-	switch event.Type {
-	case EventTurnComplete, "turn_aborted", EventIdle, EventError, EventShutdownComplete:
+	if isLifecycleCompletionEvent(event.Type) {
 		return targetsActiveTurn
-	case EventStreamError:
+	}
+	if event.Type == EventStreamError {
 		return targetsActiveTurn && !streamErrorWillRetry(event.Data)
 	}
-	if strings.EqualFold(strings.TrimSpace(method), "thread/status/changed") {
-		_, terminal := threadStatusChangedTerminalState(event.Data)
-		if !terminal {
-			return false
-		}
-		turnID := strings.TrimSpace(extractTurnIDFromEventData(event.Data))
-		if turnID != "" {
-			return strings.EqualFold(turnID, strings.TrimSpace(activeTurnID))
-		}
-		return allowThreadTerminalWithoutTurnID
+	if !isThreadStatusChangedMethod(method) {
+		return false
 	}
-	return false
+	_, terminal := threadStatusChangedTerminalState(event.Data)
+	if !terminal {
+		return false
+	}
+	if turnID != "" {
+		return strings.EqualFold(turnID, activeTurnID)
+	}
+	return allowThreadTerminalWithoutTurnID
 }
 
 func threadStatusChangedTerminalState(raw json.RawMessage) (string, bool) {
@@ -317,17 +332,11 @@ func threadStatusChangedTerminalState(raw json.RawMessage) (string, bool) {
 	case map[string]any:
 		statusType = strings.ToLower(strings.TrimSpace(trimmedStringValue(status["type"])))
 	}
-
 	if statusType == "" {
 		return "", false
 	}
-
-	switch statusType {
-	case "idle", "systemerror", "system_error", "error", "notloaded", "not_loaded":
-		return statusType, true
-	default:
-		return statusType, false
-	}
+	_, terminal := threadStatusChangedTerminalTypes[statusType]
+	return statusType, terminal
 }
 
 func extractTurnIDFromEventData(data json.RawMessage) string {
@@ -341,34 +350,48 @@ func extractTurnIDFromEventData(data json.RawMessage) string {
 	return extractTurnIDFromPayload(payload)
 }
 
+var recursiveTurnPayloadKeys = [...]string{"msg", "data", "payload"}
+
 func extractTurnIDFromPayload(payload map[string]any) string {
 	if payload == nil {
 		return ""
 	}
-	if id := trimmedStringValue(payload["turnId"]); id != "" {
+	if id := firstTrimmedString(payload, "turnId", "turn_id"); id != "" {
 		return id
 	}
-	if id := trimmedStringValue(payload["turn_id"]); id != "" {
-		return id
-	}
-	if turn, ok := payload["turn"].(map[string]any); ok {
-		if id := trimmedStringValue(turn["id"]); id != "" {
-			return id
-		}
-		if id := trimmedStringValue(turn["turnId"]); id != "" {
+	if turn := nestedPayload(payload, "turn"); turn != nil {
+		if id := firstTrimmedString(turn, "id", "turnId"); id != "" {
 			return id
 		}
 	}
-	for _, key := range []string{"msg", "data", "payload"} {
-		nested, ok := payload[key].(map[string]any)
-		if !ok {
-			continue
-		}
-		if id := extractTurnIDFromPayload(nested); id != "" {
-			return id
+	for _, key := range recursiveTurnPayloadKeys {
+		if nested := nestedPayload(payload, key); nested != nil {
+			if id := extractTurnIDFromPayload(nested); id != "" {
+				return id
+			}
 		}
 	}
 	return ""
+}
+
+func firstTrimmedString(payload map[string]any, keys ...string) string {
+	if payload == nil {
+		return ""
+	}
+	for _, key := range keys {
+		if value := trimmedStringValue(payload[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func nestedPayload(payload map[string]any, key string) map[string]any {
+	if payload == nil {
+		return nil
+	}
+	nested, _ := payload[key].(map[string]any)
+	return nested
 }
 
 func trimmedStringValue(value any) string {
@@ -396,113 +419,100 @@ func (c *AppServerClient) clearActiveTurnID() {
 	c.activeTurnID.Store("")
 }
 
-type methodEventAlias struct {
-	method    string
-	eventType string
+var baseMethodToEventMap = map[string]string{
+	"error":                                 EventError,
+	"thread/started":                        EventSessionConfigured,
+	"thread/name/updated":                   EventThreadNameUpdated,
+	"thread/tokenUsage/updated":             EventTokenCount,
+	"turn/started":                          EventTurnStarted,
+	"turn/completed":                        EventTurnComplete,
+	"turn/aborted":                          "turn_aborted",
+	"turn/diff/updated":                     EventTurnDiff,
+	"turn/plan/updated":                     EventPlanUpdate,
+	"item/agentMessage/delta":               EventAgentMessageDelta,
+	"item/plan/delta":                       EventPlanDelta,
+	"item/commandExecution/outputDelta":     EventExecCommandOutputDelta,
+	"item/reasoning/summaryTextDelta":       EventAgentReasoningDelta,
+	"item/reasoning/summaryPartAdded":       EventAgentReasoningSectionBreak,
+	"item/reasoning/textDelta":              EventAgentReasoningRawDelta,
+	"thread/compacted":                      EventContextCompacted,
+	"deprecationNotice":                     "deprecationNotice",
+	"configWarning":                         EventWarning,
+	"windows/worldWritableWarning":          EventWarning,
+	"authStatusChange":                      "authStatusChange",
+	"loginChatGptComplete":                  "loginChatGptComplete",
+	"sessionConfigured":                     EventSessionConfigured,
+	"item/commandExecution/requestApproval": EventExecApprovalRequest,
+	"item/tool/call":                        EventDynamicToolCall,
+	"applyPatchApproval":                    "applyPatchApproval",
+	"execCommandApproval":                   EventExecApprovalRequest,
 }
 
-type prefixedEventAlias struct {
-	suffix    string
-	eventType string
+var sharedLegacySuffixToEventMap = map[string]string{
+	"agent_message_content_delta":    EventAgentMessageDelta,
+	"agent_message_delta":            EventAgentMessageDelta,
+	"agent_message":                  EventAgentMessage,
+	"agent_reasoning":                EventAgentReasoning,
+	"agent_reasoning_raw":            EventAgentReasoningRaw,
+	"agent_reasoning_raw_delta":      EventAgentReasoningRawDelta,
+	"agent_reasoning_section_break":  EventAgentReasoningSectionBreak,
+	"agent_reasoning_delta":          EventAgentReasoningDelta,
+	"agent_message_completed":        EventAgentMessageCompleted,
+	"turn_started":                   EventTurnStarted,
+	"turn_completed":                 EventTurnComplete,
+	"turn_aborted":                   "turn_aborted",
+	"session_configured":             EventSessionConfigured,
+	"mcp_startup_complete":           EventMCPStartupComplete,
+	"shutdown_complete":              EventShutdownComplete,
+	"error":                          EventError,
+	"stream_error":                   EventStreamError,
+	"warning":                        EventWarning,
+	"exec_approval_request":          EventExecApprovalRequest,
+	"exec_command_begin":             EventExecCommandBegin,
+	"exec_command_end":               EventExecCommandEnd,
+	"exec_command_output_delta":      EventExecCommandOutputDelta,
+	"patch_apply_begin":              EventPatchApplyBegin,
+	"patch_apply_end":                EventPatchApplyEnd,
+	"mcp_tool_call_begin":            EventMCPToolCallBegin,
+	"mcp_tool_call_end":              EventMCPToolCallEnd,
+	"mcp_list_tools_response":        EventMCPListToolsResponse,
+	"list_skills_response":           EventListSkillsResponse,
+	"dynamic_tool_call":              EventDynamicToolCall,
+	"collab_agent_spawn_begin":       EventCollabAgentSpawnBegin,
+	"collab_agent_spawn_end":         EventCollabAgentSpawnEnd,
+	"collab_agent_interaction_begin": EventCollabAgentInteractionBegin,
+	"collab_agent_interaction_end":   EventCollabAgentInteractionEnd,
 }
 
-var baseMethodAliases = [...]methodEventAlias{
-	{"error", EventError},
-	{"thread/started", EventSessionConfigured},
-	{"thread/name/updated", EventThreadNameUpdated},
-	{"thread/tokenUsage/updated", EventTokenCount},
-	{"turn/started", EventTurnStarted},
-	{"turn/completed", EventTurnComplete},
-	{"turn/aborted", "turn_aborted"},
-	{"turn/diff/updated", EventTurnDiff},
-	{"turn/plan/updated", EventPlanUpdate},
-	{"item/agentMessage/delta", EventAgentMessageDelta},
-	{"item/plan/delta", EventPlanDelta},
-	{"item/commandExecution/outputDelta", EventExecCommandOutputDelta},
-	{"item/reasoning/summaryTextDelta", EventAgentReasoningDelta},
-	{"item/reasoning/summaryPartAdded", EventAgentReasoningSectionBreak},
-	{"item/reasoning/textDelta", EventAgentReasoningRawDelta},
-	{"thread/compacted", EventContextCompacted},
-	{"deprecationNotice", "deprecationNotice"},
-	{"configWarning", EventWarning},
-	{"windows/worldWritableWarning", EventWarning},
-	{"authStatusChange", "authStatusChange"},
-	{"loginChatGptComplete", "loginChatGptComplete"},
-	{"sessionConfigured", EventSessionConfigured},
-	{"item/commandExecution/requestApproval", EventExecApprovalRequest},
-	{"item/tool/call", EventDynamicToolCall},
-	{"applyPatchApproval", "applyPatchApproval"},
-	{"execCommandApproval", EventExecApprovalRequest},
+var codexOnlyLegacySuffixToEventMap = map[string]string{
+	"task_started":            EventTurnStarted,
+	"reasoning_content_delta": EventAgentReasoningDelta,
+	"token_count":             EventTokenCount,
+	"context_compacted":       EventContextCompacted,
+	"thread_name_updated":     EventThreadNameUpdated,
+	"thread_rolled_back":      EventThreadRolledBack,
+	"plan_delta":              EventPlanDelta,
+	"plan_update":             EventPlanUpdate,
+	"item_started":            "item/started",
+	"item_completed":          "item/completed",
+	"raw_response_item":       "rawResponseItem/completed",
 }
 
-var sharedLegacyAliases = [...]prefixedEventAlias{
-	{"agent_message_content_delta", EventAgentMessageDelta},
-	{"agent_message_delta", EventAgentMessageDelta},
-	{"agent_message", EventAgentMessage},
-	{"agent_reasoning", EventAgentReasoning},
-	{"agent_reasoning_raw", EventAgentReasoningRaw},
-	{"agent_reasoning_raw_delta", EventAgentReasoningRawDelta},
-	{"agent_reasoning_section_break", EventAgentReasoningSectionBreak},
-	{"agent_reasoning_delta", EventAgentReasoningDelta},
-	{"agent_message_completed", EventAgentMessageCompleted},
-	{"turn_started", EventTurnStarted},
-	{"turn_completed", EventTurnComplete},
-	{"turn_aborted", "turn_aborted"},
-	{"session_configured", EventSessionConfigured},
-	{"mcp_startup_complete", EventMCPStartupComplete},
-	{"shutdown_complete", EventShutdownComplete},
-	{"error", EventError},
-	{"stream_error", EventStreamError},
-	{"warning", EventWarning},
-	{"exec_approval_request", EventExecApprovalRequest},
-	{"exec_command_begin", EventExecCommandBegin},
-	{"exec_command_end", EventExecCommandEnd},
-	{"exec_command_output_delta", EventExecCommandOutputDelta},
-	{"patch_apply_begin", EventPatchApplyBegin},
-	{"patch_apply_end", EventPatchApplyEnd},
-	{"mcp_tool_call_begin", EventMCPToolCallBegin},
-	{"mcp_tool_call_end", EventMCPToolCallEnd},
-	{"mcp_list_tools_response", EventMCPListToolsResponse},
-	{"list_skills_response", EventListSkillsResponse},
-	{"dynamic_tool_call", EventDynamicToolCall},
-	{"collab_agent_spawn_begin", EventCollabAgentSpawnBegin},
-	{"collab_agent_spawn_end", EventCollabAgentSpawnEnd},
-	{"collab_agent_interaction_begin", EventCollabAgentInteractionBegin},
-	{"collab_agent_interaction_end", EventCollabAgentInteractionEnd},
-}
+var sharedLegacyPrefixes = [...]string{"agent/event/", "codex/event/"}
 
-var codexOnlyLegacyAliases = [...]prefixedEventAlias{
-	{"task_started", EventTurnStarted},
-	{"reasoning_content_delta", EventAgentReasoningDelta},
-	{"token_count", EventTokenCount},
-	{"context_compacted", EventContextCompacted},
-	{"thread_name_updated", EventThreadNameUpdated},
-	{"thread_rolled_back", EventThreadRolledBack},
-	{"plan_delta", EventPlanDelta},
-	{"plan_update", EventPlanUpdate},
-	{"item_started", "item/started"},
-	{"item_completed", "item/completed"},
-	{"raw_response_item", "rawResponseItem/completed"},
-}
-
-func putMethodEventAliases(target map[string]string, aliases []methodEventAlias) {
-	for _, alias := range aliases {
-		target[alias.method] = alias.eventType
-	}
-}
-
-func putPrefixedEventAliases(target map[string]string, prefix string, aliases []prefixedEventAlias) {
-	for _, alias := range aliases {
-		target[prefix+alias.suffix] = alias.eventType
+func addPrefixedEventAliases(target map[string]string, prefixes []string, aliases map[string]string) {
+	for _, prefix := range prefixes {
+		for suffix, eventType := range aliases {
+			target[prefix+suffix] = eventType
+		}
 	}
 }
 
 func buildMethodToEventMap() map[string]string {
 	methodMap := make(map[string]string, 96)
-	putMethodEventAliases(methodMap, baseMethodAliases[:])
-	putPrefixedEventAliases(methodMap, "agent/event/", sharedLegacyAliases[:])
-	putPrefixedEventAliases(methodMap, "codex/event/", sharedLegacyAliases[:])
-	putPrefixedEventAliases(methodMap, "codex/event/", codexOnlyLegacyAliases[:])
+	maps.Copy(methodMap, baseMethodToEventMap)
+	addPrefixedEventAliases(methodMap, sharedLegacyPrefixes[:], sharedLegacySuffixToEventMap)
+	addPrefixedEventAliases(methodMap, []string{"codex/event/"}, codexOnlyLegacySuffixToEventMap)
 	return methodMap
 }
 
@@ -683,30 +693,10 @@ func extractConversationIDFromEventParams(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
 		return ""
 	}
-	if value := trimmedStringValue(payload["conversationId"]); value != "" {
+	if value := firstTrimmedString(payload, "conversationId", "conversation_id", "threadId", "thread_id"); value != "" {
 		return value
 	}
-	if value := trimmedStringValue(payload["conversation_id"]); value != "" {
-		return value
-	}
-	if value := trimmedStringValue(payload["threadId"]); value != "" {
-		return value
-	}
-	if value := trimmedStringValue(payload["thread_id"]); value != "" {
-		return value
-	}
-	if thread, ok := payload["thread"].(map[string]any); ok {
-		if value := trimmedStringValue(thread["id"]); value != "" {
-			return value
-		}
-		if value := trimmedStringValue(thread["threadId"]); value != "" {
-			return value
-		}
-		if value := trimmedStringValue(thread["thread_id"]); value != "" {
-			return value
-		}
-	}
-	return ""
+	return firstTrimmedString(nestedPayload(payload, "thread"), "id", "threadId", "thread_id")
 }
 
 func isLegacyMirrorEnvelope(method string, payload map[string]any) bool {
@@ -748,48 +738,16 @@ func truncateString(s string, max int) string {
 	return string(runes[:max]) + "...(truncated)"
 }
 
+var mcpStartupMethods = map[string]struct{}{
+	"agent/event/mcp_startup_update":   {},
+	"agent/event/mcp_startup_complete": {},
+	"codex/event/mcp_startup_update":   {},
+	"codex/event/mcp_startup_complete": {},
+}
+
 func isMCPStartupMethod(method string) bool {
-	m := strings.ToLower(strings.TrimSpace(method))
-	switch m {
-	case "agent/event/mcp_startup_update",
-		"agent/event/mcp_startup_complete",
-		"codex/event/mcp_startup_update",
-		"codex/event/mcp_startup_complete":
-		return true
-	default:
-		return false
-	}
-}
-
-func (c *AppServerClient) asWriteJSON(v any) error {
-	c.wsMu.Lock()
-	defer c.wsMu.Unlock()
-	if c.ws == nil {
-		err := apperrors.New("AppServerClient.asWriteJSON", "ws not connected")
-		c.failPendingCalls(err)
-		return err
-	}
-	_ = c.ws.SetWriteDeadline(time.Now().Add(appServerWriteTimeout))
-	if err := c.ws.WriteJSON(v); err != nil {
-		writeErr := apperrors.Wrap(err, "AppServerClient.asWriteJSON", "ws write")
-		_ = c.ws.Close()
-		c.ws = nil
-		c.failPendingCalls(writeErr)
-		return writeErr
-	}
-	return nil
-}
-
-func (c *AppServerClient) failPendingCalls(err error) {
-	if err == nil {
-		err = apperrors.New("AppServerClient.failPendingCalls", "connection unavailable")
-	}
-	c.pending.Range(func(_, value any) bool {
-		if call, ok := value.(*pendingCall); ok {
-			call.resolve(nil, err)
-		}
-		return true
-	})
+	_, ok := mcpStartupMethods[strings.ToLower(strings.TrimSpace(method))]
+	return ok
 }
 
 func (c *AppServerClient) emitStreamError(err error, phase string, idleTimeout bool, willRetry bool, details map[string]any) {
@@ -902,109 +860,4 @@ func isIdleTimeoutError(err error) bool {
 	}
 	text := strings.ToLower(err.Error())
 	return strings.Contains(text, "i/o timeout") || strings.Contains(text, "read timeout")
-}
-
-func (c *AppServerClient) SpawnAndConnect(ctx context.Context, prompt, cwd, model, instructions string, dynamicTools []DynamicTool) error {
-	if err := c.Spawn(ctx); err != nil {
-		return err
-	}
-
-	if err := c.connectWS(); err != nil {
-		_ = c.Kill()
-		return err
-	}
-
-	if err := c.Initialize(); err != nil {
-		_ = c.Kill()
-		return apperrors.Wrap(err, "AppServerClient.SpawnAndConnect", "initialize")
-	}
-
-	threadID, err := c.ThreadStart(cwd, model, instructions, dynamicTools)
-	if err != nil {
-		_ = c.Kill()
-		return err
-	}
-
-	logger.Info("codex: app-server thread started",
-		logger.FieldAgentID, c.AgentID,
-		logger.FieldPort, c.Port,
-		logger.FieldThreadID, threadID,
-		"dynamic_tools", len(dynamicTools),
-	)
-	return nil
-}
-
-func (c *AppServerClient) Shutdown() error {
-	if c.stopped.Swap(true) {
-		return nil
-	}
-	c.cancel()
-
-	if err := c.notify("shutdown", nil); err != nil {
-		logger.Debug("codex: shutdown notify failed (best-effort)",
-			logger.FieldAgentID, c.AgentID, logger.FieldError, err)
-	}
-
-	c.wsMu.Lock()
-	if c.ws != nil {
-		closeMsg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutdown")
-		_ = c.ws.WriteControl(websocket.CloseMessage, closeMsg, time.Now().Add(time.Second))
-		_ = c.ws.Close()
-	}
-	c.wsMu.Unlock()
-
-	select {
-	case <-c.wsDone:
-	case <-time.After(3 * time.Second):
-	}
-
-	if err := c.Kill(); err != nil {
-		return err
-	}
-
-	if c.stderrCollector != nil {
-		_ = c.stderrCollector.Close()
-	}
-	return nil
-}
-
-func (c *AppServerClient) Kill() error {
-	if c.Cmd == nil || c.Cmd.Process == nil {
-		return nil
-	}
-	pid := c.Cmd.Process.Pid
-	killErr := syscall.Kill(-pid, syscall.SIGKILL)
-	if killErr != nil {
-		killErr = c.Cmd.Process.Kill()
-	}
-	if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
-		return killErr
-	}
-	waitDone := make(chan error, 1)
-	go func() { waitDone <- c.Cmd.Wait() }()
-	select {
-	case waitErr := <-waitDone:
-		if waitErr == nil {
-			return nil
-		}
-		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) {
-			return nil
-		}
-		waitMsg := waitErr.Error()
-		if strings.Contains(waitMsg, "Wait was already called") || strings.Contains(waitMsg, "no child processes") {
-			return nil
-		}
-		return waitErr
-	case <-time.After(5 * time.Second):
-		logger.Warn("codex: Kill() Cmd.Wait timed out after 5s, abandoning",
-			logger.FieldAgentID, c.AgentID,
-			"pid", c.Cmd.Process.Pid,
-		)
-		return nil
-	}
-}
-
-func (c *AppServerClient) Running() bool {
-	return !c.stopped.Load() && c.Cmd != nil && c.Cmd.ProcessState == nil
 }

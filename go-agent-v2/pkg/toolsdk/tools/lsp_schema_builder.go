@@ -8,11 +8,6 @@ const (
 	defaultColumnDescription   = "0-indexed column number"
 )
 
-type lspToolBinding struct {
-	schema  agentcore.DynamicTool
-	handler func(LSPProvider) LSPDynamicToolHandler
-}
-
 func lspDynamicTool(name string, description string, inputSchema map[string]any) agentcore.DynamicTool {
 	return agentcore.DynamicTool{Name: name, Description: description, InputSchema: inputSchema}
 }
@@ -49,20 +44,6 @@ func lspSchema(properties map[string]any, required []string, extras map[string]a
 		schema[key] = value
 	}
 	return schema
-}
-
-func lspFilePathSchema(filePathDescription string, required bool, extraProperties map[string]any, schemaExtras map[string]any) map[string]any {
-	properties := map[string]any{
-		"file_path": lspStringProperty(defaultIfEmpty(filePathDescription, defaultFilePathDescription)),
-	}
-	for key, value := range extraProperties {
-		properties[key] = value
-	}
-	requiredFields := []string{}
-	if required {
-		requiredFields = append(requiredFields, "file_path")
-	}
-	return lspSchema(properties, requiredFields, schemaExtras)
 }
 
 func lspFileLineColumnSchema(filePathDescription string, lineDescription string, columnDescription string, extraProperties map[string]any, required []string, schemaExtras map[string]any) map[string]any {

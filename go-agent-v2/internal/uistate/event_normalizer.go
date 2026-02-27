@@ -7,8 +7,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-// ── classifyEvent: map 查表替代 switch ──
-
 type classifyResult struct {
 	uiType UIType
 }
@@ -213,7 +211,6 @@ func classifyItemLifecycleEvent(codexType, method string, payload map[string]any
 	return "", false
 }
 
-// classifyEventWithMethodAndPayload 按 codex 原始事件类型 + method + payload 分类。
 func classifyEventWithMethodAndPayload(codexType, method string, payload map[string]any) UIType {
 	if r, ok := classifyMap[codexType]; ok {
 		return r.uiType
@@ -229,19 +226,14 @@ func classifyEventWithMethodAndPayload(codexType, method string, payload map[str
 	return UITypeSystem
 }
 
-// classifyEventWithMethod 按 codex 原始事件类型 + method 分类 (map 查表, O(1))。
 func classifyEventWithMethod(codexType, method string) UIType {
 	return classifyEventWithMethodAndPayload(codexType, method, nil)
 }
 
-// classifyEvent 按 codex 原始事件类型分类 (map 查表, O(1))。
 func classifyEvent(codexType string) UIType {
 	return classifyEventWithMethodAndPayload(codexType, "", nil)
 }
 
-// ── NormalizeEvent 辅助函数 ──
-
-// extractText 按优先级从 payload 提取文本: delta > text > content > output > message。
 func extractText(payload map[string]any) string {
 	for _, key := range []string{"delta", "text", "content", "output", "message"} {
 		if v, ok := payload[key].(string); ok {

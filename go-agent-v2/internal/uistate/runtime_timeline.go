@@ -64,9 +64,7 @@ func (m *RuntimeManager) patchTimelineItemLocked(threadID string, index int, pat
 	m.snapshot.TimelinesByThread[threadID] = list
 }
 
-func (m *RuntimeManager) timelineLocked(threadID string) []TimelineItem {
-	return m.snapshot.TimelinesByThread[threadID]
-}
+func (m *RuntimeManager) timelineLocked(threadID string) []TimelineItem { return m.snapshot.TimelinesByThread[threadID] }
 
 func (m *RuntimeManager) appendUserLocked(threadID, text string, attachments []TimelineAttachment, ts time.Time) {
 	if strings.TrimSpace(text) == "" && len(attachments) == 0 {
@@ -184,9 +182,7 @@ func (m *RuntimeManager) appendAssistantLocked(threadID, delta string, ts time.T
 	})
 }
 
-func (m *RuntimeManager) finishAssistantLocked(threadID string) {
-	m.runtime[threadID].assistantIndex = -1
-}
+func (m *RuntimeManager) finishAssistantLocked(threadID string) { m.runtime[threadID].assistantIndex = -1 }
 
 func (m *RuntimeManager) startCommandLocked(threadID, command string, ts time.Time) {
 	m.finishThinkingLocked(threadID)
@@ -505,10 +501,7 @@ func parsePlanEntriesAny(raw any) []planEntry {
 	return out
 }
 
-func extractPlanExplanation(raw any) string {
-	text, _ := raw.(string)
-	return strings.TrimSpace(text)
-}
+func extractPlanExplanation(raw any) string { text, _ := raw.(string); return strings.TrimSpace(text) }
 
 func formatPlanSnapshot(entries []planEntry, explanation string) (string, bool) {
 	total := len(entries)
@@ -549,7 +542,6 @@ func planStatusSymbol(status string) string {
 func (m *RuntimeManager) completeTurnLocked(threadID string, ts time.Time) {
 	m.finishThinkingLocked(threadID)
 	m.finishAssistantLocked(threadID)
-
 	rt := m.runtime[threadID]
 	if rt.commandIndex >= 0 {
 		zero := 0
@@ -681,10 +673,7 @@ func extractRunKey(raw map[string]any) string {
 	if raw == nil {
 		return ""
 	}
-	if value := strings.TrimSpace(util.ExtractFirstString(raw, "run_key")); value != "" {
-		return value
-	}
-	if value := strings.TrimSpace(util.ExtractFirstString(raw, "runKey")); value != "" {
+	if value := strings.TrimSpace(util.ExtractFirstString(raw, "run_key", "runKey")); value != "" {
 		return value
 	}
 	return ""

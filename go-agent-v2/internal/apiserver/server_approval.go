@@ -72,37 +72,27 @@ func extractMapValue(payload map[string]any, keys ...string) (any, bool) {
 	return nil, false
 }
 
-// ── 审批决策别名表 (表驱动) ──
-
-// approvalStringAliases 将各种用户输入别名归一化为标准决策字符串。
 var approvalStringAliases = map[string]string{
-	// accept 家族
 	"accept": "accept", "approved": "accept", "approve": "accept",
 	"yes": "accept", "y": "accept", "true": "accept", "1": "accept",
-	// acceptForSession 家族
 	"acceptforsession": "acceptForSession", "accept_for_session": "acceptForSession", "accept-for-session": "acceptForSession",
-	// decline 家族
 	"decline": "decline", "denied": "decline", "reject": "decline", "rejected": "decline",
 	"no": "decline", "n": "decline", "false": "decline", "0": "decline",
-	// cancel 家族
 	"cancel": "cancel", "abort": "cancel", "aborted": "cancel",
 }
 
-// approvalMethodAcceptWord 每种审批方法的 "approve" 决策词。
 var approvalMethodAcceptWord = map[string]string{
 	approvalMethodCommandExecution: "accept",
 	approvalMethodFileChange:       "accept",
 	approvalMethodSkillRequest:     "approve",
 }
 
-// approvalMethodValidDecisions 每种审批方法允许的字符串决策集合。
 var approvalMethodValidDecisions = map[string]map[string]bool{
 	approvalMethodCommandExecution: {"accept": true, "acceptForSession": true, "decline": true, "cancel": true},
 	approvalMethodFileChange:       {"accept": true, "acceptForSession": true, "decline": true, "cancel": true},
 	approvalMethodSkillRequest:     {"approve": true, "decline": true},
 }
 
-// approvalMethodAllowsSubmit 每种审批方法视为 "通过" 的字符串决策集合。
 var approvalMethodAllowsSubmit = map[string]map[string]bool{
 	approvalMethodCommandExecution: {"accept": true, "acceptForSession": true},
 	approvalMethodFileChange:       {"accept": true, "acceptForSession": true},
@@ -114,22 +104,17 @@ func normalizeApprovalDecisionString(raw string) (string, bool) {
 	return normalized, ok
 }
 
-// normalizeStringDecisionForMethod 对字符串决策做方法级归一化:
-// skill 方法将 "accept" 重映射为 "approve"，其他方法保持不变。
 func normalizeStringDecisionForMethod(method, decision string) (string, bool) {
-	// skill 方法: accept → approve
 	if method == approvalMethodSkillRequest && decision == "accept" {
 		decision = "approve"
 	}
 	valid := approvalMethodValidDecisions[method]
 	if valid == nil {
-		// 未知方法: 宽松接受所有标准决策
 		return decision, decision != ""
 	}
 	return decision, valid[decision]
 }
 
-// normalizeCommandAmendmentDecision 处理 command 审批特有的嵌套 amendment 对象。
 func normalizeCommandAmendmentDecision(decisionObj map[string]any) (any, bool) {
 	if amendmentRaw, ok := extractMapValue(decisionObj, "acceptWithExecpolicyAmendment"); ok {
 		amendmentObj, ok := amendmentRaw.(map[string]any)
@@ -166,23 +151,17 @@ func normalizeCommandAmendmentDecision(decisionObj map[string]any) (any, bool) {
 
 func normalizeApprovalDecision(method string, raw any) (any, bool) {
 	method = strings.TrimSpace(method)
-
-	// 字符串路径: 查表归一化
 	if decision, ok := normalizeApprovalDecisionString(approvalStringValue(raw)); ok {
 		decision, ok = normalizeStringDecisionForMethod(method, decision)
 		if ok {
 			return decision, true
 		}
 	}
-
-	// 嵌套对象路径: 仅 command 审批支持 amendment 对象
 	if decisionObj, ok := raw.(map[string]any); ok && decisionObj != nil {
 		if method == approvalMethodCommandExecution || method == "" {
 			return normalizeCommandAmendmentDecision(decisionObj)
 		}
 	}
-
-	// 未知方法 fallback: 依次尝试 command → fileChange → skill
 	if method != approvalMethodCommandExecution && method != approvalMethodFileChange && method != approvalMethodSkillRequest {
 		for _, fallbackMethod := range []string{approvalMethodCommandExecution, approvalMethodFileChange, approvalMethodSkillRequest} {
 			if decision, ok := normalizeApprovalDecision(fallbackMethod, raw); ok {
@@ -190,7 +169,6 @@ func normalizeApprovalDecision(method string, raw any) (any, bool) {
 			}
 		}
 	}
-
 	return nil, false
 }
 
@@ -217,6 +195,13 @@ func normalizeApprovalResultPayload(method string, result any) (map[string]any, 
 	return nil, false
 }
 
+func mergeApprovalDecisionPayload(method string, current map[string]any, result any) map[string]any {
+	if normalized, ok := normalizeApprovalResultPayload(method, result); ok {
+		return normalized
+	}
+	return current
+}
+
 func approvalDecisionPayload(method string, approved bool) map[string]any {
 	decision := "decline"
 	if approved {
@@ -238,8 +223,6 @@ func approvalDecisionAllowsSubmit(method string, payload map[string]any) bool {
 		return false
 	}
 	method = strings.TrimSpace(method)
-
-	// 嵌套对象路径: command 审批的 amendment 判断
 	if method == approvalMethodCommandExecution || method == "" {
 		if decisionObj, ok := decisionRaw.(map[string]any); ok && decisionObj != nil {
 			if _, ok := extractMapValue(decisionObj, "acceptWithExecpolicyAmendment"); ok {
@@ -264,8 +247,6 @@ func approvalDecisionAllowsSubmit(method string, payload map[string]any) bool {
 			return false
 		}
 	}
-
-	// 字符串路径: 查 allowsSubmit 表
 	decision, ok := normalizeApprovalDecision(method, decisionRaw)
 	if !ok {
 		return false
@@ -273,7 +254,6 @@ func approvalDecisionAllowsSubmit(method string, payload map[string]any) bool {
 	decisionStr, _ := decision.(string)
 	allowSet := approvalMethodAllowsSubmit[method]
 	if allowSet == nil {
-		// 未知方法: 默认用 command 规则
 		allowSet = approvalMethodAllowsSubmit[approvalMethodCommandExecution]
 	}
 	return allowSet[decisionStr]
@@ -288,22 +268,33 @@ func denyApprovalSafely(event agentcore.Event, agentID string) {
 	}
 }
 
-// handleApprovalRequest 处理审批事件: 双通道模式。
-//
-// 优先尝试 WebSocket (SendRequestToAll) — 适用于 IDE 客户端。
-// 若无 WebSocket 连接, 降级为 Wails 模式:
-//  1. AllocPendingRequest 分配 pending ID
-//  2. broadcastNotification 推送审批请求 (→ notifyHook → Wails Event → 前端)
-//  3. 等待前端 CallAPI("approval/respond") → ResolvePendingRequest 写入 channel
+func submitApprovalLegacyDecision(s *Server, agentID, method, decision string, event agentcore.Event, denyOnMissing, logSubmitErr bool) {
+	if s == nil || s.mgr == nil {
+		if denyOnMissing {
+			logger.Error("app-server: approval auto-denied — mgr is nil",
+				logger.FieldAgentID, agentID, logger.FieldMethod, method)
+			denyApprovalSafely(event, agentID)
+		}
+		return
+	}
+	proc := s.mgr.Get(agentID)
+	if proc == nil {
+		if denyOnMissing {
+			logger.Error("app-server: approval auto-denied — agent gone",
+				logger.FieldAgentID, agentID, logger.FieldMethod, method)
+			denyApprovalSafely(event, agentID)
+		}
+		return
+	}
+	if err := s.codexAdapter.Submit(proc, decision, nil, nil, nil); err != nil && logSubmitErr {
+		logger.Warn("app-server: relay approval to codex failed", logger.FieldAgentID, agentID, logger.FieldError, err)
+	}
+}
+
 func handleApprovalRequest(s *Server, agentID, method string, payload map[string]any, event agentcore.Event) {
 	if s == nil {
 		return
 	}
-
-	// Fix 1: 子 agent 自动审批 — 多 agent 编排场景中，子 agent 不应阻塞等待人类审批。
-	// 双重检查:
-	//   (1) AgentManager 计数 — 多 agent 且非首个 → 视为子 agent (立即可用，无时序问题)
-	//   (2) uiRuntime.IsMainAgent — 已有明确标记时使用
 	isSubAgent := false
 	detectedBy := ""
 	agentCount := 0
@@ -320,8 +311,6 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 		isSubAgent = true
 		detectedBy = "uiRuntime_isMain"
 	}
-
-	// L1 诊断日志: 无论是否为子 agent，都记录审批事件到达时的上下文
 	logger.Info("app-server: approval request received",
 		logger.FieldAgentID, agentID,
 		logger.FieldMethod, method,
@@ -346,15 +335,11 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 					logger.FieldAgentID, agentID, logger.FieldMethod, method, logger.FieldError, err)
 				denyApprovalSafely(event, agentID)
 			}
-		} else if s.mgr != nil {
-			if proc := s.mgr.Get(agentID); proc != nil {
-				_ = s.codexAdapter.Submit(proc, "yes", nil, nil, nil)
-			}
+		} else {
+			submitApprovalLegacyDecision(s, agentID, method, "yes", event, false, false)
 		}
 		return
 	}
-
-	// 去重: 同一 agentID+method 正在处理中 → 跳过重复调用
 	inflightKey := agentID + ":" + method
 	if !tryBeginApprovalState(s, inflightKey) {
 		logger.Debug("app-server: approval dedup — skipping duplicate in-flight request",
@@ -362,38 +347,25 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 		return
 	}
 	defer endApprovalState(s, inflightKey)
-
-	// 心跳委派到 turn tracker: 防止 stall 检测在等待审批期间误杀。
 	stopHeartbeat := s.codexAdapter.StartApprovalStallHeartbeat(agentID)
 	defer stopHeartbeat()
 
 	decisionPayload := approvalDecisionPayload(method, false)
-
-	// 尝试 WebSocket 通道 (IDE 客户端)
 	resp, wsErr := sendRequestToAll(s, method, payload)
 	if wsErr == nil && resp != nil && resp.Result != nil {
-		if normalized, ok := normalizeApprovalResultPayload(method, resp.Result); ok {
-			decisionPayload = normalized
-		}
+		decisionPayload = mergeApprovalDecisionPayload(method, decisionPayload, resp.Result)
 	} else {
-		// 降级: Wails 模式 — 通过 broadcastNotification + pending channel
-		// 仅在有 notifyHook (Wails 前端) 时才等待, 否则直接跳过 (默认 decline)
 		hasHook := hasNotifyHookState(s)
-
 		if hasHook {
 			logger.Info("app-server: approval via Wails mode (no WS client)",
 				logger.FieldAgentID, agentID, logger.FieldMethod, method)
 
 			reqID, ch, cleanup := allocPendingRequest(s)
 			defer cleanup()
-
-			// 注入 requestId, 前端据此回复
 			if payload == nil {
 				payload = make(map[string]any)
 			}
 			payload["requestId"] = reqID
-
-			// 同步回灌到 uiRuntime，确保 timeline 审批卡拿到 requestId 可交互。
 			if s.uiRuntime != nil {
 				threadID := strings.TrimSpace(agentID)
 				normalized := uistate.NormalizeEventFromPayload(method, method, payload)
@@ -403,26 +375,19 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 					"threadId": threadID,
 				})
 			}
-
-			// 推送审批请求到前端 (→ notifyHook → Wails Event)
 			broadcastNotification(s, method, payload)
-
-			// 等待前端回复 (5 分钟超时)
 			timer := time.NewTimer(5 * time.Minute)
 			defer timer.Stop()
 			select {
 			case wailsResp := <-ch:
 				if wailsResp != nil {
-					if normalized, ok := normalizeApprovalResultPayload(method, wailsResp.Result); ok {
-						decisionPayload = normalized
-					}
+					decisionPayload = mergeApprovalDecisionPayload(method, decisionPayload, wailsResp.Result)
 				}
 			case <-timer.C:
 				logger.Warn("app-server: approval timed out (Wails mode)",
 					logger.FieldAgentID, agentID, logger.FieldMethod, method)
 			}
 		} else {
-			// 无前端连接: 无法交互, 自动拒绝
 			logger.Warn("app-server: approval auto-denied — no WS client and no notifyHook",
 				logger.FieldAgentID, agentID, logger.FieldMethod, method)
 		}
@@ -439,33 +404,12 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 		}
 		return
 	}
-
-	// 回退兼容路径: 老协议下无 Request-Response 回调时, 仍用 yes/no submit。
-	if s.mgr == nil {
-		logger.Error("app-server: approval auto-denied — mgr is nil",
-			logger.FieldAgentID, agentID, logger.FieldMethod, method)
-		denyApprovalSafely(event, agentID)
-		return
-	}
-	proc := s.mgr.Get(agentID)
-	if proc == nil {
-		logger.Error("app-server: approval auto-denied — agent gone",
-			logger.FieldAgentID, agentID, logger.FieldMethod, method)
-		denyApprovalSafely(event, agentID)
-		return
-	}
 	legacyDecision := "no"
 	if approvalDecisionAllowsSubmit(method, decisionPayload) {
 		legacyDecision = "yes"
 	}
-	if err := s.codexAdapter.Submit(proc, legacyDecision, nil, nil, nil); err != nil {
-		logger.Warn("app-server: relay approval to codex failed", logger.FieldAgentID, agentID, logger.FieldError, err)
-	}
+	submitApprovalLegacyDecision(s, agentID, method, legacyDecision, event, true, true)
 }
-
-// ========================================
-// 审批回复 JSON-RPC 方法 (merged from methods_approval.go)
-// ========================================
 
 type approvalRespondParams struct {
 	RequestID int64 `json:"requestId"`

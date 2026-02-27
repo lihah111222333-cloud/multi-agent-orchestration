@@ -33,3 +33,26 @@ data/
 
 # Local forked repositories
 ast-grep/
+
+# ── Go 编译产物（二进制） ──
+go-agent-v2/agent-terminal
+go-agent-v2/desktop
+go-agent-v2/desktop-slint
+go-agent-v2/app-server
+go-agent-v2/rpc-test.test
+go-agent-v2/bin/
+
+# ── 前端依赖 ──
+node_modules/
+
+# ── 临时 / 调试文件 ──
+go-agent-v2/.tmp/
+
+# ── 构建产物（Vite hash 文件等） ──
+index-*.js
+
+# ── Go 通用 ──
+*.test
+*.out
+*.cover
+*.exe

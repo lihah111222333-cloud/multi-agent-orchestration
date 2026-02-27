@@ -155,27 +155,6 @@ func decodeNullableSlice[T any](raw json.RawMessage, errPrefix string) ([]T, err
 	return items, nil
 }
 
-func decodeMappedRawArray[T any](
-	raw json.RawMessage,
-	errPrefix string,
-	decodeOne func(json.RawMessage) (T, error),
-) ([]T, error) {
-	arr, err := decodeRawArray(raw, errPrefix)
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]T, 0, len(arr))
-	for _, item := range arr {
-		decoded, err := decodeOne(item)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, decoded)
-	}
-	return out, nil
-}
-
 func decodeArrayLike[T any](
 	raw json.RawMessage,
 	errPrefix string,
@@ -185,9 +164,17 @@ func decodeArrayLike[T any](
 	if isNullRaw(raw) {
 		return nil, nil
 	}
-	items, err := decodeMappedRawArray(raw, errPrefix, decodeOne)
+	arr, err := decodeRawArray(raw, errPrefix)
 	if err == nil {
-		return items, nil
+		out := make([]T, 0, len(arr))
+		for _, item := range arr {
+			decoded, err := decodeOne(item)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, decoded)
+		}
+		return out, nil
 	}
 	if !allowSingle {
 		return nil, err
@@ -263,8 +250,7 @@ func decodeWorkspaceSymbolOne(item json.RawMessage) (WorkspaceSymbolResult, erro
 		return WorkspaceSymbolResult{}, err
 	}
 
-	locationRaw := obj["location"]
-	if len(locationRaw) > 0 {
+	if locationRaw := obj["location"]; len(locationRaw) > 0 {
 		var locObj map[string]json.RawMessage
 		if err := json.Unmarshal(locationRaw, &locObj); err == nil && locObj["range"] != nil {
 			var legacy SymbolInformation
@@ -297,8 +283,8 @@ func decodeCodeActionOne(item json.RawMessage) (CodeActionResult, error) {
 }
 
 func decodeCodeActionOrCommand(item json.RawMessage, obj map[string]json.RawMessage) (CodeActionResult, error) {
+	var cmd Command
 	if !isCodeActionLike(obj) {
-		var cmd Command
 		if err := json.Unmarshal(item, &cmd); err == nil && strings.TrimSpace(cmd.Command) != "" {
 			return CodeActionResult{Command: &cmd}, nil
 		}
@@ -309,7 +295,6 @@ func decodeCodeActionOrCommand(item json.RawMessage, obj map[string]json.RawMess
 		return CodeActionResult{CodeAction: &action}, nil
 	}
 
-	var cmd Command
 	if err := json.Unmarshal(item, &cmd); err == nil {
 		return CodeActionResult{Command: &cmd}, nil
 	}
@@ -513,7 +498,7 @@ func decodeSignatureHelp(raw json.RawMessage) (*SignatureHelpResult, error) {
 
 	result := &SignatureHelpResult{}
 	if signaturesRaw, ok := root["signatures"]; ok {
-		signatures, err := decodeMappedRawArray(signaturesRaw, "decode signatureHelp signatures", decodeSignatureInformation)
+		signatures, err := decodeArrayLike(signaturesRaw, "decode signatureHelp signatures", false, decodeSignatureInformation)
 		if err != nil {
 			return nil, err
 		}
@@ -551,7 +536,7 @@ func decodeSignatureInformation(raw json.RawMessage) (SignatureInformationResult
 		result.Documentation, result.DocumentationKind = decodeStringOrMarkup(documentationRaw)
 	}
 	if parametersRaw, ok := obj["parameters"]; ok {
-		parameters, err := decodeMappedRawArray(parametersRaw, "decode signature parameters", decodeParameterInformation)
+		parameters, err := decodeArrayLike(parametersRaw, "decode signature parameters", false, decodeParameterInformation)
 		if err != nil {
 			return SignatureInformationResult{}, err
 		}

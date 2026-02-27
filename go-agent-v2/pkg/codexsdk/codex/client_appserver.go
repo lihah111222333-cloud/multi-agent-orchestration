@@ -4,10 +4,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"os/exec"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,9 +45,10 @@ type jsonRPCError struct {
 
 // jsonRPCResponse JSON-RPC 2.0 响应 (用于回复 server request)。
 type jsonRPCResponse struct {
-	JSONRPC string    `json:"jsonrpc"`
-	ID      jsonRPCID `json:"id"`
-	Result  any       `json:"result,omitempty"`
+	JSONRPC string        `json:"jsonrpc"`
+	ID      jsonRPCID     `json:"id"`
+	Result  any           `json:"result,omitempty"`
+	Error   *jsonRPCError `json:"error,omitempty"`
 }
 
 // pendingCall 等待响应的 JSON-RPC 调用。
@@ -152,11 +150,10 @@ func init() {
 }
 
 func appServerReadIdleTimeoutFromEnv() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("GO_AGENT_APP_SERVER_STREAM_IDLE_TIMEOUT_MS"))
+	raw, ms, err := parseEnvInt("GO_AGENT_APP_SERVER_STREAM_IDLE_TIMEOUT_MS")
 	if raw == "" {
 		return defaultAppServerReadIdleTimeout
 	}
-	ms, err := strconv.Atoi(raw)
 	if err != nil || ms <= 0 {
 		logger.Warn("codex: invalid GO_AGENT_APP_SERVER_STREAM_IDLE_TIMEOUT_MS, using default",
 			"value", raw,
@@ -199,11 +196,10 @@ func GetAppServerReadIdleTimeout() time.Duration {
 }
 
 func appServerStreamMaxRetriesFromEnv() int {
-	raw := strings.TrimSpace(os.Getenv("GO_AGENT_APP_SERVER_STREAM_MAX_RETRIES"))
+	raw, value, err := parseEnvInt("GO_AGENT_APP_SERVER_STREAM_MAX_RETRIES")
 	if raw == "" {
 		return defaultAppServerStreamMaxRetries
 	}
-	value, err := strconv.Atoi(raw)
 	if err != nil || value < 0 {
 		logger.Warn("codex: invalid GO_AGENT_APP_SERVER_STREAM_MAX_RETRIES, using default",
 			"value", raw,

@@ -50,16 +50,20 @@ func (c *Client) DeleteThread(threadID string) error {
 	return apperrors.New("Client.DeleteThread", "delete thread not supported in app-server transport")
 }
 
+func restClientUnsupported(method string) error {
+	return apperrors.New(method, "not supported in REST client, use AppServerClient")
+}
+
 func (c *Client) SendCommand(cmd, args string) error {
-	return apperrors.New("Client.SendCommand", "slash commands not supported in REST client, use AppServerClient")
+	return restClientUnsupported("Client.SendCommand")
 }
 
 func (c *Client) SendDynamicToolResult(callID, output string, requestID *int64) error {
-	return apperrors.New("Client.SendDynamicToolResult", "dynamic tool result not supported in REST client, use AppServerClient")
+	return restClientUnsupported("Client.SendDynamicToolResult")
 }
 
 func (c *Client) RespondError(id int64, code int, message string) error {
-	return apperrors.New("Client.RespondError", "server request response not supported in REST client, use AppServerClient")
+	return restClientUnsupported("Client.RespondError")
 }
 
 func checkPortFree(port int) error {

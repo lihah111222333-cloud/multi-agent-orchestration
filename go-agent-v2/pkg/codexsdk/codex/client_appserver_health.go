@@ -44,6 +44,15 @@ type appServerHealthSnapshot struct {
 	TotalNotInitialized   int64
 }
 
+func (h *appServerConnectionHealth) resetAfterRecovery(now time.Time) {
+	h.consecutiveReconnectFailures = 0
+	h.consecutiveReadFailures = 0
+	h.consecutiveNotInitializedRPC = 0
+	h.readFailureTimes = nil
+	h.notInitializedTimes = nil
+	h.lastReconnectAt = now
+}
+
 func (s appServerHealthSnapshot) asDetailsMap() map[string]any {
 	return map[string]any{
 		"read_failure_streak":       s.ReadFailureStreak,
@@ -144,23 +153,17 @@ func (c *AppServerClient) noteReadFailure(now time.Time) (appServerHealthSnapsho
 	return snapshot, recentForRespawn >= appServerRespawnEscalationThreshold, openedCircuit
 }
 
-func (c *AppServerClient) noteReconnectAttempt(now time.Time) appServerHealthSnapshot {
+func (c *AppServerClient) noteReconnectAttempt() {
 	c.healthMu.Lock()
 	defer c.healthMu.Unlock()
 	c.health.totalReconnectAttempt++
-	return c.healthSnapshotLocked(now)
 }
 
 func (c *AppServerClient) noteReconnectSuccess(now time.Time) appServerHealthSnapshot {
 	c.healthMu.Lock()
 	defer c.healthMu.Unlock()
 	c.health.totalReconnectSuccess++
-	c.health.consecutiveReconnectFailures = 0
-	c.health.consecutiveReadFailures = 0
-	c.health.consecutiveNotInitializedRPC = 0
-	c.health.readFailureTimes = nil
-	c.health.notInitializedTimes = nil
-	c.health.lastReconnectAt = now
+	c.health.resetAfterRecovery(now)
 	return c.healthSnapshotLocked(now)
 }
 
@@ -177,12 +180,7 @@ func (c *AppServerClient) noteRespawnResult(now time.Time, success bool) appServ
 	defer c.healthMu.Unlock()
 	if success {
 		c.health.totalRespawnSuccess++
-		c.health.consecutiveReconnectFailures = 0
-		c.health.consecutiveReadFailures = 0
-		c.health.consecutiveNotInitializedRPC = 0
-		c.health.readFailureTimes = nil
-		c.health.notInitializedTimes = nil
-		c.health.lastReconnectAt = now
+		c.health.resetAfterRecovery(now)
 	} else {
 		c.health.totalRespawnFailure++
 	}

@@ -60,23 +60,21 @@ func (id jsonRPCID) int64Ptr() *int64 {
 	return &v
 }
 
+func (id jsonRPCID) unmarshal(dst any) bool {
+	return len(id.raw) > 0 && json.Unmarshal(id.raw, dst) == nil
+}
+
 func (id jsonRPCID) asInt64() (int64, bool) {
-	if len(id.raw) == 0 {
-		return 0, false
-	}
 	var value int64
-	if err := json.Unmarshal(id.raw, &value); err != nil {
+	if !id.unmarshal(&value) {
 		return 0, false
 	}
 	return value, true
 }
 
 func (id jsonRPCID) asString() (string, bool) {
-	if len(id.raw) == 0 {
-		return "", false
-	}
 	var value string
-	if err := json.Unmarshal(id.raw, &value); err != nil {
+	if !id.unmarshal(&value) {
 		return "", false
 	}
 	return value, true
@@ -98,15 +96,16 @@ func (id *jsonRPCID) UnmarshalJSON(data []byte) error {
 		id.raw = nil
 		return nil
 	}
+	raw := []byte(trimmed)
 
 	var intID int64
-	if err := json.Unmarshal([]byte(trimmed), &intID); err == nil {
+	if err := json.Unmarshal(raw, &intID); err == nil {
 		id.raw = json.RawMessage(strconv.FormatInt(intID, 10))
 		return nil
 	}
 
 	var stringID string
-	if err := json.Unmarshal([]byte(trimmed), &stringID); err == nil {
+	if err := json.Unmarshal(raw, &stringID); err == nil {
 		raw, marshalErr := json.Marshal(stringID)
 		if marshalErr != nil {
 			return marshalErr

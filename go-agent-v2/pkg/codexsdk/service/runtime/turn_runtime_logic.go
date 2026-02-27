@@ -11,80 +11,29 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-// AutoMatchInput carries user input metadata used for skill auto-match.
-type AutoMatchInput struct {
-	Type string
-	Name string
-}
+// Shared DTO types — canonical definitions live in agentcore.
+type AutoMatchInput = agentcore.AutoMatchInput
+type SkillMatchCandidate = agentcore.SkillMatchCandidate
+type AutoMatchedSkillMatch = agentcore.AutoMatchedSkillMatch
+type AutoSkillMatchOptions = agentcore.AutoSkillMatchOptions
+type TurnInput = agentcore.TurnInput
+type TurnStartRequest = agentcore.TurnStartRequest
+type TurnSteerRequest = agentcore.TurnSteerRequest
+type TurnStartEntryResult = agentcore.TurnStartEntryResult
+type TurnAppendUserTimelineOptions = agentcore.TurnAppendUserTimelineOptions
+type TurnSteerEntryPrepareResult = agentcore.TurnSteerEntryPrepareResult
+type TimelineAttachment = agentcore.TimelineAttachment
+type TimelineItem = agentcore.TimelineItem
+type TimelineRuntime = agentcore.TimelineRuntime
+type Binding = agentcore.Binding
+type BindingStore = agentcore.BindingStore
+type Process = agentcore.Process
+type Manager = agentcore.Manager
 
-// SkillMatchCandidate describes one skill candidate for auto-match classification.
-type SkillMatchCandidate struct {
-	Name         string
-	ForceWords   []string
-	TriggerWords []string
-}
-
-// AutoMatchedSkillMatch stores one matched skill classification result.
-type AutoMatchedSkillMatch struct {
-	Name         string
-	MatchedBy    string
-	MatchedTerms []string
-}
-
-// AutoSkillMatchOptions controls how configured skills participate in auto-match.
-type AutoSkillMatchOptions struct {
-	IncludeConfiguredExplicit bool
-	IncludeConfiguredForce    bool
-}
-
-// TurnInput is a protocol-level user input item for turn/start and turn/steer.
-type TurnInput struct {
-	Type    string
-	Text    string
-	URL     string
-	Path    string
-	Name    string
-	Content string
-}
-
-// TurnStartRequest carries protocol params for turn/start.
-type TurnStartRequest struct {
-	ThreadID             string
-	Cwd                  string
-	Input                []TurnInput
-	SelectedSkills       []string
-	ManualSkillSelection bool
-	OutputSchema         json.RawMessage
-}
-
-// TurnSteerRequest carries protocol params for turn/steer.
-type TurnSteerRequest struct {
-	ThreadID             string
-	ExpectedTurnID       string
-	Input                []TurnInput
-	SelectedSkills       []string
-	ManualSkillSelection bool
-}
-
-// TurnStartEntryResult carries response payload for turn/start.
-type TurnStartEntryResult struct {
-	TurnID string
-}
-
-// TurnAppendUserTimelineOptions configures turn/start user timeline rendering.
-type TurnAppendUserTimelineOptions struct {
-	ThreadID     string
-	Prompt       string
-	SubmitPrompt string
-	Images       []string
-	Files        []string
-}
-
-// TurnSteerEntryPrepareResult contains prepared submit payload for turn/steer.
-type TurnSteerEntryPrepareResult struct {
-	SubmitPrompt string
-	Images       []string
-	Files        []string
+// ResumeThreadRequest carries resume params for process-level resume.
+type ResumeThreadRequest struct {
+	ThreadID string
+	Cwd      string
 }
 
 // TurnStartPreparedSubmission contains prepared submit payload for turn/start.
@@ -112,56 +61,6 @@ type PreparedSubmissionCommon struct {
 	SubmitPrompt          string
 	SelectedSkillCount    int
 	AutoMatchedSkillCount int
-}
-
-// TimelineAttachment is a lightweight timeline attachment reference.
-type TimelineAttachment struct {
-	Kind       string
-	Name       string
-	Path       string
-	PreviewURL string
-}
-
-// TimelineItem is the minimal thread timeline item view needed by runtime logic.
-type TimelineItem struct {
-	Kind string
-	Text string
-}
-
-// TimelineRuntime abstracts UI runtime timeline operations.
-type TimelineRuntime interface {
-	AppendUserMessage(threadID, text string, attachments []TimelineAttachment)
-	ThreadTimeline(threadID string) []TimelineItem
-}
-
-// Binding is a lightweight agent/thread binding payload.
-type Binding struct {
-	CodexThreadID string
-}
-
-// BindingStore abstracts binding persistence operations.
-type BindingStore interface {
-	Bind(ctx context.Context, agentID, codexThreadID, sessionID string) error
-	FindByAgentID(ctx context.Context, agentID string) (*Binding, error)
-}
-
-// Process is a runtime process abstraction used by service logic.
-type Process interface {
-	Port() int
-	MarkSessionLost()
-}
-
-// Manager is the process manager abstraction used by service logic.
-type Manager interface {
-	Get(agentID string) Process
-	Launch(ctx context.Context, agentID, alias, profile, cwd, startInstructions string, dynamicTools []agentcore.DynamicTool) error
-	Stop(agentID string) error
-}
-
-// ResumeThreadRequest carries resume params for process-level resume.
-type ResumeThreadRequest struct {
-	ThreadID string
-	Cwd      string
 }
 
 const (
@@ -492,6 +391,18 @@ func EnsureReadyRunningProcess(
 	if proc == nil {
 		return nil, false
 	}
+	// Lazy Recovery: 检测到死进程 (连接断开 / StateError 等)，
+	// 清理后返回 false，让调用者走 launch + resume 恢复路径。
+	if !proc.IsAlive() {
+		logger.Warn("turn/start: dead process detected, stopping for auto-recovery",
+			append(a.ThreadLogFields(agentID),
+				logger.FieldPort, proc.Port(),
+			)...,
+		)
+		a.CancelCodeRuns(agentID)
+		_ = manager.Stop(agentID)
+		return nil, false
+	}
 	logger.Info("turn/start: using running process",
 		append(a.ThreadLogFields(agentID),
 			logger.FieldPort, proc.Port(),
@@ -543,9 +454,6 @@ func EnsureReadyNoResumeCandidates(a RuntimeAdapter, agentID string, proc Proces
 	logger.Warn("turn/start: no valid historical codex thread id, continue with fresh session",
 		a.ThreadLogFields(agentID)...,
 	)
-	if proc != nil {
-		proc.MarkSessionLost()
-	}
 	return proc
 }
 
@@ -580,10 +488,6 @@ func EnsureReadyResumeFallback(
 			return nil, a.NewErrorf("Server.ensureThreadReady", "thread %s final re-spawn failed", agentID)
 		}
 	}
-	if proc != nil {
-		proc.MarkSessionLost()
-	}
-	NotifySessionLost(a, agentID, lastResumeErr)
 	RegisterBinding(a, ctx, agentID, proc)
 	return proc, nil
 }
@@ -603,9 +507,6 @@ func EnsureReadyNoHistoricalRollout(
 			logger.FieldCwd, launchCwd,
 		)...,
 	)
-	if proc != nil {
-		proc.MarkSessionLost()
-	}
 	RegisterBinding(a, ctx, agentID, proc)
 	return proc
 }
@@ -628,25 +529,6 @@ func RegisterBinding(a RuntimeAdapter, ctx context.Context, agentID string, proc
 			)...,
 		)
 	}
-}
-
-func BuildSessionLostNotification(agentID string, lastErr error) (string, map[string]any) {
-	detail := ""
-	if lastErr != nil {
-		detail = lastErr.Error()
-	}
-	return "ui/state/changed", map[string]any{
-		"source":   "session_lost_warning",
-		"agent_id": agentID,
-		"warning":  "会话历史已丢失 (codex session 文件不存在)，已自动回退到全新会话",
-		"detail":   detail,
-	}
-}
-
-func NotifySessionLost(a RuntimeAdapter, agentID string, lastErr error) {
-	a = normalizeRuntimeAdapter(a)
-	method, payload := BuildSessionLostNotification(agentID, lastErr)
-	a.Notify(method, payload)
 }
 
 func CollectResumeCandidates(a RuntimeAdapter, ctx context.Context, agentID string) []string {
@@ -712,7 +594,6 @@ func TryResumeHistoricalCandidates(
 			if manager != nil {
 				_ = manager.Stop(id)
 			}
-			NotifySessionLost(a, id, err)
 			return false, lastResumeErr, a.WrapErrorf(err, "Server.ensureThreadReady",
 				"codex crashed while resuming thread %s (rollout=%s)", id, resumeThreadID)
 		}

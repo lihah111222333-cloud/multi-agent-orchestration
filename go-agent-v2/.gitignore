@@ -25,3 +25,7 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Keep embed sentinel file tracked for cmd/agent-terminal clean-checkout builds.
+!cmd/agent-terminal/frontend/dist/
+!cmd/agent-terminal/frontend/dist/.gitkeep

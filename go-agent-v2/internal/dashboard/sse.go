@@ -33,10 +33,13 @@ func (b *EventBus) Publish(event Event) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	for _, ch := range b.subscribers {
-		select {
-		case ch <- event:
-		default:
-		}
+		func() {
+			defer func() { recover() }() // Unsubscribe 关闭 channel 后的竞态保护
+			select {
+			case ch <- event:
+			default:
+			}
+		}()
 	}
 }
 
@@ -54,13 +57,18 @@ func (b *EventBus) Subscribe(id string) chan Event {
 	return ch
 }
 
-// Unsubscribe 取消订阅。
+// Unsubscribe 取消订阅并关闭 channel。
 //
-// 不关闭 ch — sseHandler 通过 ctx.Done() 退出, GC 回收未引用的 channel。
+// 关闭 ch 确保 sseHandler goroutine 能通过 ok==false 检查退出,
+// 避免 goroutine 泄漏。
 func (b *EventBus) Unsubscribe(id string) {
 	b.mu.Lock()
+	ch, ok := b.subscribers[id]
 	delete(b.subscribers, id)
 	b.mu.Unlock()
+	if ok && ch != nil {
+		close(ch)
+	}
 }
 
 // sseHandler Gin SSE handler。

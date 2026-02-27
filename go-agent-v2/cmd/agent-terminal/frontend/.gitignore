@@ -1,5 +1,6 @@
 node_modules/
 test-results/
 tmp-playwright/
-dist/
+dist/*
+!dist/.gitkeep
 playwright-report/

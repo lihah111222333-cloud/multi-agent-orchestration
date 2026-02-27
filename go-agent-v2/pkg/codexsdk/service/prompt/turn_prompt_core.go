@@ -134,27 +134,10 @@ func collectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]st
 	return toolNames
 }
 
-type AutoMatchInput struct {
-	Type string
-	Name string
-}
-
-type SkillMatchCandidate struct {
-	Name         string
-	ForceWords   []string
-	TriggerWords []string
-}
-
-type AutoMatchedSkillMatch struct {
-	Name         string
-	MatchedBy    string
-	MatchedTerms []string
-}
-
-type AutoSkillMatchOptions struct {
-	IncludeConfiguredExplicit bool
-	IncludeConfiguredForce    bool
-}
+type AutoMatchInput = agentcore.AutoMatchInput
+type SkillMatchCandidate = agentcore.SkillMatchCandidate
+type AutoMatchedSkillMatch = agentcore.AutoMatchedSkillMatch
+type AutoSkillMatchOptions = agentcore.AutoSkillMatchOptions
 
 func collectAutoMatchedSkillMatches(
 	prompt string,

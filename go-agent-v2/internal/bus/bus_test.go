@@ -51,16 +51,15 @@ func TestUnsubscribeStopsDelivery(t *testing.T) {
 	b := NewMessageBus()
 	sub := b.Subscribe("unsub-test", TopicAll)
 
-	// Unsubscribe before publish
+	// Unsubscribe closes the channel
 	b.Unsubscribe(sub.ID)
 
 	b.Publish(Message{Topic: "test.msg", Type: "test"})
 
-	select {
-	case <-sub.Ch:
-		t.Fatal("unsubscribed subscriber should not receive messages")
-	case <-time.After(50 * time.Millisecond):
-		// Expected: no message received
+	// Channel is closed — reads return zero value immediately, no new messages delivered.
+	_, ok := <-sub.Ch
+	if ok {
+		t.Fatal("unsubscribed subscriber channel should be closed")
 	}
 }
 
@@ -90,17 +89,16 @@ func TestPublishDropsOnFullChannel(t *testing.T) {
 
 	// Drain remaining to find the new message
 	found := false
+outer:
 	for range 65 {
 		select {
 		case msg := <-sub.Ch:
 			if msg.Topic == "after-drain" {
 				found = true
+				break outer
 			}
 		case <-time.After(100 * time.Millisecond):
-			break
-		}
-		if found {
-			break
+			break outer
 		}
 	}
 	if !found {

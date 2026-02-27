@@ -74,5 +74,9 @@ func (s *Server) cleanupRuntimeResources() {
 			s.codeRunner.Cleanup()
 		}
 		clearAllAgentWorkDirsState(s)
+
+		// 防止 uiThrottle 定时器泄漏 + 清理积累的状态 map。
+		stopAllUIThrottleTimersState(s)
+		clearAllToolCallState(s)
 	})
 }

@@ -1,6 +1,155 @@
 package agentcore
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
+
+// ────────────────────────────────────────────────────
+// Shared DTO types (canonical definitions)
+// Used by contracts, service/*, and consumer/*
+// ────────────────────────────────────────────────────
+
+// AutoMatchInput carries user input metadata used for skill auto-match.
+type AutoMatchInput struct {
+	Type string
+	Name string
+}
+
+// SkillMatchCandidate describes one skill candidate for auto-match classification.
+type SkillMatchCandidate struct {
+	Name         string
+	ForceWords   []string
+	TriggerWords []string
+}
+
+// AutoMatchedSkillMatch stores one matched skill classification result.
+type AutoMatchedSkillMatch struct {
+	Name         string
+	MatchedBy    string
+	MatchedTerms []string
+}
+
+// AutoSkillMatchOptions controls how configured skills participate in auto-match.
+type AutoSkillMatchOptions struct {
+	IncludeConfiguredExplicit bool
+	IncludeConfiguredForce    bool
+}
+
+// TurnInput is a protocol-level user input item for turn/start and turn/steer.
+type TurnInput struct {
+	Type    string
+	Text    string
+	URL     string
+	Path    string
+	Name    string
+	Content string
+}
+
+// TurnStartRequest carries protocol params for turn/start.
+type TurnStartRequest struct {
+	ThreadID             string
+	Cwd                  string
+	Input                []TurnInput
+	SelectedSkills       []string
+	ManualSkillSelection bool
+	OutputSchema         json.RawMessage
+}
+
+// TurnSteerRequest carries protocol params for turn/steer.
+type TurnSteerRequest struct {
+	ThreadID             string
+	ExpectedTurnID       string
+	Input                []TurnInput
+	SelectedSkills       []string
+	ManualSkillSelection bool
+}
+
+// TurnAppendUserTimelineOptions configures turn/start user timeline rendering.
+type TurnAppendUserTimelineOptions struct {
+	ThreadID     string
+	Prompt       string
+	SubmitPrompt string
+	Images       []string
+	Files        []string
+}
+
+// TurnStartEntryPrepareResult contains prepared submit payload for turn/start.
+type TurnStartEntryPrepareResult struct {
+	Prompt                string
+	SubmitPrompt          string
+	Images                []string
+	Files                 []string
+	SelectedSkillCount    int
+	AutoMatchedSkillCount int
+}
+
+// TurnSteerEntryPrepareResult contains prepared submit payload for turn/steer.
+type TurnSteerEntryPrepareResult struct {
+	SubmitPrompt string
+	Images       []string
+	Files        []string
+}
+
+// TurnStartEntryResult carries response payload for turn/start.
+type TurnStartEntryResult struct {
+	TurnID string
+}
+
+// TimelineAttachment is a lightweight timeline attachment reference.
+type TimelineAttachment struct {
+	Kind       string
+	Name       string
+	Path       string
+	PreviewURL string
+}
+
+// TimelineItem is the minimal thread timeline item view needed by runtime logic.
+type TimelineItem struct {
+	Kind string
+	Text string
+}
+
+// Binding is a lightweight agent/thread binding payload.
+type Binding struct {
+	CodexThreadID string
+}
+
+// ThreadListItem models one thread list payload entry.
+type ThreadListItem struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+// ────────────────────────────────────────────────────
+// Shared interfaces
+// ────────────────────────────────────────────────────
+
+// TimelineRuntime abstracts UI runtime timeline operations.
+type TimelineRuntime interface {
+	AppendUserMessage(threadID, text string, attachments []TimelineAttachment)
+	ThreadTimeline(threadID string) []TimelineItem
+}
+
+// Process is a runtime process abstraction used by service logic.
+type Process interface {
+	Port() int
+	IsAlive() bool
+}
+
+// Manager is the process manager abstraction used by service logic.
+type Manager interface {
+	Get(agentID string) Process
+	Launch(ctx context.Context, agentID, alias, profile, cwd, startInstructions string, dynamicTools []DynamicTool) error
+	Stop(agentID string) error
+}
+
+// BindingStore abstracts binding persistence operations.
+type BindingStore interface {
+	Bind(ctx context.Context, agentID, codexThreadID, sessionID string) error
+	FindByAgentID(ctx context.Context, agentID string) (*Binding, error)
+}
 
 // Event is the CLI-agnostic event envelope.
 type Event struct {

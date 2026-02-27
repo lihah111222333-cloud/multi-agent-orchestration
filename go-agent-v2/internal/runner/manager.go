@@ -21,8 +21,8 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -48,34 +48,22 @@ const (
 
 // AgentProcess 单个 Codex Agent 实例。
 type AgentProcess struct {
-	ID          string           // 唯一标识
-	Name        string           // 显示名称
-	Client      agentcore.Client // Codex API 客户端 (支持 http-api 或 app-server)
-	State       AgentState       // 当前状态
-	LastReport  string           // 最近一次 turn 完成时的 agent 报告 (对应 Rust TurnCompleteEvent.last_agent_message)
-	SessionLost bool             // 重启后 codex session 丢失, 下次 turn 需注入 DB 历史上下文
-	mu          sync.Mutex       // 保护 State / LastReport / SessionLost 字段读写
+	ID         string           // 唯一标识
+	Name       string           // 显示名称
+	Client     agentcore.Client // Codex API 客户端 (支持 http-api 或 app-server)
+	State      AgentState       // 当前状态
+	LastReport string           // 最近一次 turn 完成时的 agent 报告 (对应 Rust TurnCompleteEvent.last_agent_message)
+	mu         sync.Mutex       // 保护 State / LastReport 字段读写
 }
 
-// MarkSessionLost 标记 session 丢失 (线程安全)。
+// IsAlive 报告进程连接是否存活 (线程安全)。
 //
-// 重启后 codex session 恢复失败时调用。
-// 下次 turn/start 会检查此标记, 向 prompt 注入 DB 历史上下文。
-func (p *AgentProcess) MarkSessionLost() {
+// State == error / stopped 时返回 false, 用于 Lazy Recovery 检测。
+func (p *AgentProcess) IsAlive() bool {
 	p.mu.Lock()
-	p.SessionLost = true
+	state := p.State
 	p.mu.Unlock()
-}
-
-// ConsumeSessionLost 读取并清除 SessionLost 标记 (线程安全, 仅消费一次)。
-func (p *AgentProcess) ConsumeSessionLost() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if !p.SessionLost {
-		return false
-	}
-	p.SessionLost = false
-	return true
+	return state != StateError && state != StateStopped
 }
 
 // AgentInfo Agent 信息快照 (线程安全复制)。

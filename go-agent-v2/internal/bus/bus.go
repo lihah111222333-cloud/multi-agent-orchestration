@@ -268,17 +268,25 @@ func (b *MessageBus) Publish(msg Message) {
 
 	// fan-out 在锁外执行, 不阻塞 Subscribe/Unsubscribe
 	for _, sub := range matched {
-		select {
-		case sub.Ch <- msg:
-		default:
-			// 通道满, 丢弃 (避免阻塞发布者)
-			b.dropped.Add(1)
-			logger.Warn("bus: subscriber channel full, message dropped",
-				logger.FieldSubscriber, sub.ID,
-				logger.FieldTopic, msg.Topic,
-				logger.FieldSeq, msg.Seq,
-			)
-		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// Unsubscribe 关闭了 channel, 忽略 send-on-closed-channel panic
+					b.dropped.Add(1)
+				}
+			}()
+			select {
+			case sub.Ch <- msg:
+			default:
+				// 通道满, 丢弃 (避免阻塞发布者)
+				b.dropped.Add(1)
+				logger.Warn("bus: subscriber channel full, message dropped",
+					logger.FieldSubscriber, sub.ID,
+					logger.FieldTopic, msg.Topic,
+					logger.FieldSeq, msg.Seq,
+				)
+			}
+		}()
 	}
 
 	// 全局回调在锁外执行 (回调可能耗时)
@@ -300,14 +308,19 @@ func (b *MessageBus) Subscribe(id, filter string) *Subscriber {
 	return sub
 }
 
-// Unsubscribe 取消订阅。
+// Unsubscribe 取消订阅并关闭 channel。
 //
-// 注意: 不关闭 Ch — 因为 Publish 可能在锁外 fan-out 时仍持有该 Subscriber 的快照引用。
-// 订阅者应自行停止从 Ch 读取; GC 会回收未引用的 channel。
+// 关闭 Ch 确保阻塞在 range Ch 上的消费者 goroutine 能够退出，
+// 避免 goroutine 泄漏。Publish 的 fan-out 在锁外执行时使用
+// recover 保护，安全处理向已关闭 channel 发送的 panic。
 func (b *MessageBus) Unsubscribe(id string) {
 	b.mu.Lock()
+	sub, ok := b.subscribers[id]
 	delete(b.subscribers, id)
 	b.mu.Unlock()
+	if ok && sub != nil {
+		close(sub.Ch)
+	}
 }
 
 // SubscriberCount 返回当前订阅者数量。

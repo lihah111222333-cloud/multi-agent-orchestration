@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/discovery"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
@@ -43,6 +43,9 @@ func NewAgentRouter(bus *MessageBus, discover AgentDiscoverer, factories ...Agen
 
 // DelegateTask routes one task from fromID to toThreadID.
 func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prompt string, images, files []string) error {
+	// 自动清理已停止的缓存客户端, 避免 clients map 无限增长。
+	r.CleanupStale()
+
 	endpoints, err := r.discover.ListRunning(ctx)
 	if err != nil {
 		return apperrors.Wrap(err, "AgentRouter.DelegateTask", "discover agents")

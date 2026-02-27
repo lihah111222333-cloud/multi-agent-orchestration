@@ -345,6 +345,11 @@ go test ./pkg/codexsdk/agentcore/... ./pkg/codexsdk/codex/...
 go test ./...
 ```
 
+说明：
+
+- `cmd/agent-terminal/frontend/dist/.gitkeep` 作为 `go:embed` 的编译保底文件，保证干净 checkout 下 `go build ./...` 与 `go test ./...` 可复现通过。
+- 如需验证桌面端 UI 运行效果，仍需额外执行前端构建产出真实 `frontend/dist` 资源。
+
 P7-A 约束检查：
 
 ```bash
@@ -695,11 +700,12 @@ for d in pkg/codexsdk/service pkg/codexsdk/consumer; do
   find "$d" -name '*.go' ! -name 'doc.go' -type f | grep -q . || { echo "FAIL: $d has no implementation files"; exit 1; }
 done
 
-# 6) service 纯度检查：禁止外部 I/O 与 internal 依赖
-rg -n '^\s*"github.com/multi-agent/go-agent-v2/internal/' pkg/codexsdk/service --glob '*.go' && \
-  { echo "FAIL: service imports internal packages"; exit 1; } || true
-rg -n '^\s*"(os|os/exec|io|io/fs|path/filepath|net|net/http|database/sql)"' pkg/codexsdk/service --glob '*.go' && \
-  { echo "FAIL: service contains IO imports"; exit 1; } || true
+# 6) service 纯度检查：禁止 external I/O 与 internal 依赖（B2 口径排除 archive 与 *_test.go）
+# 说明：archive 为历史存量，收口到 P7-C 统一治理；B2 先确保新增迁移域不引入新泄漏
+rg -n '^\s*"github.com/multi-agent/go-agent-v2/internal/' pkg/codexsdk/service --glob '*.go' --glob '!**/*_test.go' --glob '!archive/**' && \
+  { echo "FAIL: service imports internal packages (non-archive, non-test)"; exit 1; } || true
+rg -n '^\s*"(os|os/exec|io|io/fs|path/filepath|net|net/http|database/sql)"' pkg/codexsdk/service --glob '*.go' --glob '!**/*_test.go' --glob '!archive/**' && \
+  { echo "FAIL: service contains IO imports (non-archive, non-test)"; exit 1; } || true
 ```
 
 ---

@@ -165,6 +165,19 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 		Agents:  snapshots,
 	}
 
+	// 清理已下线 Agent 的指纹缓存, 防止 memory map 无限增长。
+	activeIDs := make(map[string]struct{}, len(agents))
+	for _, a := range agents {
+		activeIDs[a.AgentID] = struct{}{}
+	}
+	p.mu.Lock()
+	for id := range p.memory {
+		if _, alive := activeIDs[id]; !alive {
+			delete(p.memory, id)
+		}
+	}
+	p.mu.Unlock()
+
 	logger.Debug("patrol: cycle complete",
 		logger.FieldCount, len(snapshots),
 		"unhealthy", result.Summary["unhealthy"],

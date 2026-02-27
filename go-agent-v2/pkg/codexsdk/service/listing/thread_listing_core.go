@@ -8,17 +8,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/history"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 const PrefThreadAliases = "threads.aliases"
 
-type ThreadListItem struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	State string `json:"state"`
-}
+type ThreadListItem = agentcore.ThreadListItem
 
 type AgentInfo struct {
 	ID    string

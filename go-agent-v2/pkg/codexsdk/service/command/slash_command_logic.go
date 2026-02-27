@@ -4,15 +4,12 @@ import (
 	"context"
 	"strings"
 
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-type ThreadListItem struct {
-	ID    string
-	Name  string
-	State string
-}
+type ThreadListItem = agentcore.ThreadListItem
 
 func runSendSlashCommand(
 	ctx context.Context,

@@ -88,80 +88,91 @@ func newCodexAdapter(s *Server) *codexadapter.Adapter {
 	})
 }
 
-func registerCodeRunCancelState(s *Server, agentID, callID string, cancel context.CancelFunc) string {
-	if s == nil {
-		return ""
+func withServer(s *Server, fn func(*Server)) {
+	if s == nil || fn == nil {
+		return
 	}
-	return s.codeRunState.registerCodeRunCancel(agentID, callID, cancel)
+	fn(s)
+}
+
+func serverValue[T any](s *Server, fallback T, fn func(*Server) T) T {
+	if s == nil || fn == nil {
+		return fallback
+	}
+	return fn(s)
+}
+
+func serverValue2[T1, T2 any](s *Server, fallback1 T1, fallback2 T2, fn func(*Server) (T1, T2)) (T1, T2) {
+	if s == nil || fn == nil {
+		return fallback1, fallback2
+	}
+	return fn(s)
+}
+
+func registerCodeRunCancelState(s *Server, agentID, callID string, cancel context.CancelFunc) string {
+	return serverValue(s, "", func(s *Server) string {
+		return s.codeRunState.registerCodeRunCancel(agentID, callID, cancel)
+	})
 }
 
 func unregisterCodeRunCancelState(s *Server, agentID, runKey string) {
-	if s == nil {
-		return
-	}
-	s.codeRunState.unregisterCodeRunCancel(agentID, runKey)
+	withServer(s, func(s *Server) {
+		s.codeRunState.unregisterCodeRunCancel(agentID, runKey)
+	})
 }
 
 func cancelCodeRunsState(s *Server, agentID string) int {
-	if s == nil {
-		return 0
-	}
-	return s.codeRunState.cancelCodeRuns(agentID)
+	return serverValue(s, 0, func(s *Server) int {
+		return s.codeRunState.cancelCodeRuns(agentID)
+	})
 }
 
 func setAgentWorkDirState(s *Server, agentID, cwd string) {
-	if s == nil {
-		return
-	}
-	s.codeRunState.setAgentWorkDir(agentID, cwd)
+	withServer(s, func(s *Server) {
+		s.codeRunState.setAgentWorkDir(agentID, cwd)
+	})
 }
 
 func clearAgentWorkDirState(s *Server, agentID string) {
-	if s == nil {
-		return
-	}
-	s.codeRunState.clearAgentWorkDir(agentID)
+	withServer(s, func(s *Server) {
+		s.codeRunState.clearAgentWorkDir(agentID)
+	})
 }
 
 func getAgentWorkDirState(s *Server, agentID string) string {
-	if s == nil {
-		return ""
-	}
-	return s.codeRunState.getAgentWorkDir(agentID)
+	return serverValue(s, "", func(s *Server) string {
+		return s.codeRunState.getAgentWorkDir(agentID)
+	})
 }
 
 func cancelAllCodeRuns(s *Server) int {
-	if s == nil {
-		return 0
-	}
-	return s.codeRunState.cancelAllCodeRuns()
+	return serverValue(s, 0, func(s *Server) int {
+		return s.codeRunState.cancelAllCodeRuns()
+	})
 }
+
 func notifyHookFuncState(s *Server) func(method string, params any) {
-	if s == nil {
-		return nil
-	}
-	return s.notifyHookState.hook()
+	return serverValue(s, nil, func(s *Server) func(method string, params any) {
+		return s.notifyHookState.hook()
+	})
 }
 
 func snapshotSSEClientsState(s *Server) []chan []byte {
-	if s == nil {
-		return nil
-	}
-	return s.sseState.snapshotClients()
+	return serverValue(s, nil, func(s *Server) []chan []byte {
+		return s.sseState.snapshotClients()
+	})
 }
 
 func connsSnapshotState(s *Server) map[string]*connEntry {
-	if s == nil {
-		return nil
-	}
-	return s.connManagerState.connsSnapshot()
+	return serverValue(s, nil, func(s *Server) map[string]*connEntry {
+		return s.connManagerState.connsSnapshot()
+	})
 }
 
 func removeConnState(s *Server, connID string) (*connEntry, bool) {
-	if s == nil {
-		return nil, false
-	}
-	return s.connManagerState.removeConn(connID)
+	return serverValue2(s, (*connEntry)(nil), false, func(s *Server) (*connEntry, bool) {
+		return s.connManagerState.removeConn(connID)
+	})
 }
 
 func allocPendingRequestState(s *Server) (reqID int64, ch <-chan *Response, cleanup func()) {
@@ -172,127 +183,111 @@ func allocPendingRequestState(s *Server) (reqID int64, ch <-chan *Response, clea
 }
 
 func getConnState(s *Server, connID string) (*connEntry, bool) {
-	if s == nil {
-		return nil, false
-	}
-	return s.connManagerState.getConn(connID)
+	return serverValue2(s, (*connEntry)(nil), false, func(s *Server) (*connEntry, bool) {
+		return s.connManagerState.getConn(connID)
+	})
 }
 
 func firstConnIDState(s *Server) string {
-	if s == nil {
-		return ""
-	}
-	return s.connManagerState.firstConnID()
+	return serverValue(s, "", func(s *Server) string {
+		return s.connManagerState.firstConnID()
+	})
 }
 
 func deliverPendingResponseState(s *Server, reqID int64, resp *Response) (bool, bool) {
-	if s == nil {
-		return false, false
-	}
-	return s.connManagerState.deliverPendingResponse(reqID, resp)
+	return serverValue2(s, false, false, func(s *Server) (bool, bool) {
+		return s.connManagerState.deliverPendingResponse(reqID, resp)
+	})
 }
 
 func connectionCountState(s *Server) int {
-	if s == nil {
-		return 0
-	}
-	return s.connManagerState.connectionCount()
+	return serverValue(s, 0, func(s *Server) int {
+		return s.connManagerState.connectionCount()
+	})
 }
 
 func allocConnIDState(s *Server) string {
-	if s == nil {
-		return ""
-	}
-	return s.connManagerState.allocConnID()
+	return serverValue(s, "", func(s *Server) string {
+		return s.connManagerState.allocConnID()
+	})
 }
 
 func addConnState(s *Server, connID string, entry *connEntry) {
-	if s == nil {
-		return
-	}
-	s.connManagerState.addConn(connID, entry)
+	withServer(s, func(s *Server) {
+		s.connManagerState.addConn(connID, entry)
+	})
 }
+
 func setDiagnosticsCacheState(s *Server, uri string, diagnostics []lsp.Diagnostic) {
-	if s == nil {
-		return
-	}
-	s.diagnosticsCacheState.setDiagnostics(uri, diagnostics)
+	withServer(s, func(s *Server) {
+		s.diagnosticsCacheState.setDiagnostics(uri, diagnostics)
+	})
 }
 
 func getDiagnosticsCacheState(s *Server, uri string) []lsp.Diagnostic {
-	if s == nil {
-		return nil
-	}
-	return s.diagnosticsCacheState.getDiagnostics(uri)
+	return serverValue(s, nil, func(s *Server) []lsp.Diagnostic {
+		return s.diagnosticsCacheState.getDiagnostics(uri)
+	})
 }
 
 func allDiagnosticsCacheState(s *Server) map[string][]lsp.Diagnostic {
-	if s == nil {
-		return map[string][]lsp.Diagnostic{}
-	}
-	return s.diagnosticsCacheState.allDiagnostics()
+	return serverValue(s, map[string][]lsp.Diagnostic{}, func(s *Server) map[string][]lsp.Diagnostic {
+		return s.diagnosticsCacheState.allDiagnostics()
+	})
 }
+
 func rememberReportRequesterState(s *Server, workerID, requesterID string, now time.Time) int {
-	if s == nil {
-		return 0
-	}
-	return s.turnTrackingState.rememberReportRequester(workerID, requesterID, now)
+	return serverValue(s, 0, func(s *Server) int {
+		return s.turnTrackingState.rememberReportRequester(workerID, requesterID, now)
+	})
 }
 
 func takeReportRequestersState(s *Server, workerID string, now time.Time) []string {
-	if s == nil {
-		return nil
-	}
-	return s.turnTrackingState.takeReportRequesters(workerID, now)
+	return serverValue(s, nil, func(s *Server) []string {
+		return s.turnTrackingState.takeReportRequesters(workerID, now)
+	})
 }
 
 func setNotifyHookState(s *Server, h func(method string, params any)) {
-	if s == nil {
-		return
-	}
-	s.notifyHookState.setHook(h)
+	withServer(s, func(s *Server) {
+		s.notifyHookState.setHook(h)
+	})
 }
 
 func stageUIStateChangedState(s *Server, key string, payload map[string]any, now time.Time, interval time.Duration, onFlush func()) (map[string]any, bool) {
-	if s == nil {
-		return nil, false
-	}
-	return s.uiThrottleState.stageUIStateChanged(key, payload, now, interval, onFlush)
+	return serverValue2(s, map[string]any(nil), false, func(s *Server) (map[string]any, bool) {
+		return s.uiThrottleState.stageUIStateChanged(key, payload, now, interval, onFlush)
+	})
 }
 
 func flushUIStateChangedState(s *Server, key string, now time.Time) (map[string]any, bool) {
-	if s == nil {
-		return nil, false
-	}
-	return s.uiThrottleState.flushUIStateChanged(key, now)
+	return serverValue2(s, map[string]any(nil), false, func(s *Server) (map[string]any, bool) {
+		return s.uiThrottleState.flushUIStateChanged(key, now)
+	})
 }
 
 func rememberFileChangesState(s *Server, threadID string, files []string) {
-	if s == nil {
-		return
-	}
-	s.turnTrackingState.rememberFileChanges(threadID, files)
+	withServer(s, func(s *Server) {
+		s.turnTrackingState.rememberFileChanges(threadID, files)
+	})
 }
 
 func consumeFileChangesState(s *Server, threadID string) []string {
-	if s == nil {
-		return nil
-	}
-	return s.turnTrackingState.consumeFileChanges(threadID)
+	return serverValue(s, nil, func(s *Server) []string {
+		return s.turnTrackingState.consumeFileChanges(threadID)
+	})
 }
 
 func addSSEClientState(s *Server, ch chan []byte) {
-	if s == nil {
-		return
-	}
-	s.sseState.addClient(ch)
+	withServer(s, func(s *Server) {
+		s.sseState.addClient(ch)
+	})
 }
 
 func removeSSEClientState(s *Server, ch chan []byte) {
-	if s == nil {
-		return
-	}
-	s.sseState.removeClient(ch)
+	withServer(s, func(s *Server) {
+		s.sseState.removeClient(ch)
+	})
 }
 
 func withThreadAliasLock(s *Server, fn func()) {
@@ -306,38 +301,45 @@ func withThreadAliasLock(s *Server, fn func()) {
 }
 
 func tryBeginApprovalState(s *Server, key string) bool {
-	if s == nil {
-		return false
-	}
-	return s.runtimeGuardState.tryBeginApproval(key)
+	return serverValue(s, false, func(s *Server) bool {
+		return s.runtimeGuardState.tryBeginApproval(key)
+	})
 }
 
 func endApprovalState(s *Server, key string) {
-	if s == nil {
-		return
-	}
-	s.runtimeGuardState.endApproval(key)
+	withServer(s, func(s *Server) {
+		s.runtimeGuardState.endApproval(key)
+	})
 }
 
 func hasNotifyHookState(s *Server) bool {
-	if s == nil {
-		return false
-	}
-	return s.notifyHookState.hasHook()
+	return serverValue(s, false, func(s *Server) bool {
+		return s.notifyHookState.hasHook()
+	})
+}
+
+func stopAllUIThrottleTimersState(s *Server) {
+	withServer(s, func(s *Server) {
+		s.uiThrottleState.stopAllTimers()
+	})
+}
+
+func clearAllToolCallState(s *Server) {
+	withServer(s, func(s *Server) {
+		s.toolCallState.clearAll()
+	})
 }
 
 func incrementToolCallState(s *Server, name string) int64 {
-	if s == nil {
-		return 0
-	}
-	return s.toolCallState.increment(name)
+	return serverValue(s, int64(0), func(s *Server) int64 {
+		return s.toolCallState.increment(name)
+	})
 }
 
 func nextThreadSeqState(s *Server) int64 {
-	if s == nil {
-		return 0
-	}
-	return s.turnTrackingState.nextThreadSeq()
+	return serverValue(s, int64(0), func(s *Server) int64 {
+		return s.turnTrackingState.nextThreadSeq()
+	})
 }
 
 func doRuntimeCleanupState(s *Server, fn func()) {
@@ -351,8 +353,7 @@ func doRuntimeCleanupState(s *Server, fn func()) {
 }
 
 func clearAllAgentWorkDirsState(s *Server) {
-	if s == nil {
-		return
-	}
-	s.codeRunState.clearAllAgentWorkDirs()
+	withServer(s, func(s *Server) {
+		s.codeRunState.clearAllAgentWorkDirs()
+	})
 }

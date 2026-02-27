@@ -218,6 +218,10 @@ func applyOverlays(rt *threadRuntime, eventType, method string, payload map[stri
 			rt.backgroundOverlay = false
 			rt.backgroundLabel = ""
 			rt.backgroundDetails = ""
+			// 重连成功 (done=true) 时清除 stream_error 留下的残留错误文本,
+			// 避免 idle 状态下 "Reconnecting..." 永久卡住 (无后续事件来清除)。
+			rt.streamErrorText = ""
+			rt.streamErrorDetails = ""
 		} else {
 			rt.backgroundOverlay = true
 			rt.backgroundLabel = deriveBackgroundLabel(payload)

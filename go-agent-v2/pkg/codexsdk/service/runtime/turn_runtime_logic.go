@@ -167,6 +167,8 @@ type ResumeThreadRequest struct {
 type PrepareAdapter interface {
 	MergePromptText(left, right string) string
 	FileContentInputText(name, content string) string
+	BuildAttachmentName(path string) string
+	BuildAttachmentPreviewURL(path string) string
 
 	BuildSelectedSkillPrompt(selectedSkills []string) (string, int)
 	ListSkillMatchCandidates() ([]SkillMatchCandidate, error)

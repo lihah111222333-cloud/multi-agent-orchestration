@@ -2,20 +2,14 @@ package codexadapter
 
 import (
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
-	serviceruntime "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/runtime"
+	consumerruntime "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/runtime"
 )
 
 func (a *Adapter) CollectAutoMatchedSkillMatchesForThread(
-	threadID, prompt string,
+	threadID string,
+	prompt string,
 	input []contracts.TurnInput,
 	options contracts.AutoSkillMatchOptions,
 ) []autoMatchedSkillMatch {
-	matches := serviceruntime.CollectAutoMatchedSkillMatchesForThread(
-		newServiceRuntimeBridge(a.runtimeConsumerDeps()),
-		threadID,
-		prompt,
-		toRuntimeTurnInputs(input),
-		toRuntimeAutoSkillMatchOptions(options),
-	)
-	return fromRuntimeAutoMatchedSkillMatches(matches)
+	return consumerruntime.CollectAutoMatchedSkillMatchesForThread(a.runtimeConsumerDeps(), threadID, prompt, input, options)
 }

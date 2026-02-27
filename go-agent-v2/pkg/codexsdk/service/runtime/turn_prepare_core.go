@@ -2,8 +2,6 @@ package runtime
 
 import (
 	"context"
-	"net/url"
-	"path/filepath"
 	"strings"
 
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -20,43 +18,6 @@ func EnsureTurnSteerResultTurnID(result map[string]any, activeTurnID string) map
 	return result
 }
 
-func BuildAttachmentName(path string) string {
-	value := strings.TrimSpace(path)
-	if value == "" {
-		return ""
-	}
-	lower := strings.ToLower(value)
-	if ext, ok := strings.CutPrefix(lower, "data:image/"); ok {
-		ext = strings.TrimSpace(ext)
-		if idx := strings.Index(ext, ";"); idx >= 0 {
-			ext = ext[:idx]
-		}
-		ext = strings.TrimSpace(ext)
-		if ext == "" {
-			return "image"
-		}
-		return "image." + ext
-	}
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
-		if parsed, err := url.Parse(value); err == nil {
-			base := strings.TrimSpace(filepath.Base(parsed.Path))
-			if base != "" && base != "." && base != string(filepath.Separator) {
-				return base
-			}
-		}
-		return value
-	}
-	base := strings.TrimSpace(filepath.Base(value))
-	if base == "" || base == "." || base == string(filepath.Separator) {
-		return value
-	}
-	return base
-}
-
-func BuildAttachmentPreviewURL(path string) string {
-	return util.BuildAttachmentPreviewURL(path)
-}
-
 func PrepareTurnSubmissionCommon(
 	a PrepareAdapter,
 	threadID string,
@@ -64,7 +25,7 @@ func PrepareTurnSubmissionCommon(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) PreparedSubmissionCommon {
-	parsed := ParseTurnInputs(input, a.FileContentInputText)
+	parsed := ParseTurnInputs(input, a.FileContentInputText, a.BuildAttachmentName, a.BuildAttachmentPreviewURL)
 	skillPrompt, selectedSkillCount, autoMatchedSkillCount := BuildTurnSkillPrompt(
 		a,
 		threadID,
@@ -172,7 +133,7 @@ func AppendTurnStartUserTimeline(
 		return
 	}
 	if len(attachments) == 0 {
-		attachments = BuildUserTimelineAttachments(opt.Images, opt.Files)
+		attachments = BuildUserTimelineAttachments(opt.Images, opt.Files, a.BuildAttachmentName, a.BuildAttachmentPreviewURL)
 	}
 	showInjected := a.ShowInjectedPromptInChat(ctx)
 	appendInjectedHint := showInjected && !ThreadTimelineAlreadyShowsInjectedPrompt(a, opt.ThreadID)
@@ -288,9 +249,20 @@ func RenderAutoMatchedSkillPrompt(
 	return a.RenderAutoMatchedSkillPrompt(agentID, matches)
 }
 
-func ParseTurnInputs(inputs []TurnInput, fileContentInputText func(string, string) string) ParsedTurnInputs {
+func ParseTurnInputs(
+	inputs []TurnInput,
+	fileContentInputText func(string, string) string,
+	buildAttachmentName func(string) string,
+	buildAttachmentPreviewURL func(string) string,
+) ParsedTurnInputs {
 	if len(inputs) == 0 {
 		return ParsedTurnInputs{}
+	}
+	if buildAttachmentName == nil {
+		buildAttachmentName = func(path string) string { return strings.TrimSpace(path) }
+	}
+	if buildAttachmentPreviewURL == nil {
+		buildAttachmentPreviewURL = func(path string) string { return strings.TrimSpace(path) }
 	}
 	texts := make([]string, 0, len(inputs))
 	images := make([]string, 0, len(inputs))
@@ -313,7 +285,7 @@ func ParseTurnInputs(inputs []TurnInput, fileContentInputText func(string, strin
 				continue
 			}
 			images = append(images, image)
-			attachments = appendImageTimelineAttachment(attachments, BuildAttachmentName(image), image, image)
+			attachments = appendImageTimelineAttachment(attachments, buildAttachmentName, buildAttachmentPreviewURL, image, image, image)
 		case "localimage":
 			imagePath := strings.TrimSpace(inp.Path)
 			preview := strings.TrimSpace(inp.URL)
@@ -332,12 +304,12 @@ func ParseTurnInputs(inputs []TurnInput, fileContentInputText func(string, strin
 			if nameSource == "" {
 				nameSource = preview
 			}
-			attachments = appendImageTimelineAttachment(attachments, BuildAttachmentName(nameSource), imagePath, preview)
+			attachments = appendImageTimelineAttachment(attachments, buildAttachmentName, buildAttachmentPreviewURL, nameSource, imagePath, preview)
 		case "filecontent":
 			path := strings.TrimSpace(inp.Path)
 			if path != "" {
 				files = append(files, path)
-				attachments = appendFileTimelineAttachment(attachments, BuildAttachmentName(path), path)
+				attachments = appendFileTimelineAttachment(attachments, buildAttachmentName(path), path)
 				continue
 			}
 			if fileContentInputText != nil {
@@ -359,7 +331,7 @@ func ParseTurnInputs(inputs []TurnInput, fileContentInputText func(string, strin
 				continue
 			}
 			files = append(files, path)
-			attachments = appendFileTimelineAttachment(attachments, BuildAttachmentName(path), path)
+			attachments = appendFileTimelineAttachment(attachments, buildAttachmentName(path), path)
 		case "skill":
 			// Skill injection is handled by selectedSkills.
 		}
@@ -375,14 +347,16 @@ func ParseTurnInputs(inputs []TurnInput, fileContentInputText func(string, strin
 
 func appendImageTimelineAttachment(
 	attachments []TimelineAttachment,
-	name string,
+	buildAttachmentName func(string) string,
+	buildAttachmentPreviewURL func(string) string,
+	nameSource string,
 	path string,
 	preview string,
 ) []TimelineAttachment {
-	previewURL := BuildAttachmentPreviewURL(preview)
+	previewURL := buildAttachmentPreviewURL(preview)
 	return append(attachments, TimelineAttachment{
 		Kind:       "image",
-		Name:       name,
+		Name:       buildAttachmentName(nameSource),
 		Path:       path,
 		PreviewURL: previewURL,
 	})
@@ -400,32 +374,50 @@ func appendFileTimelineAttachment(
 	})
 }
 
-func ExtractTurnInputs(inputs []TurnInput, fileContentInputText func(string, string) string) (prompt string, images, files []string) {
-	parsed := ParseTurnInputs(inputs, fileContentInputText)
+func ExtractTurnInputs(
+	inputs []TurnInput,
+	fileContentInputText func(string, string) string,
+) (prompt string, images, files []string) {
+	parsed := ParseTurnInputs(inputs, fileContentInputText, nil, nil)
 	return parsed.Prompt, parsed.Images, parsed.Files
 }
 
-func BuildUserTimelineAttachments(images, files []string) []TimelineAttachment {
+func BuildUserTimelineAttachments(
+	images, files []string,
+	buildAttachmentName func(string) string,
+	buildAttachmentPreviewURL func(string) string,
+) []TimelineAttachment {
+	if buildAttachmentName == nil {
+		buildAttachmentName = func(path string) string { return strings.TrimSpace(path) }
+	}
+	if buildAttachmentPreviewURL == nil {
+		buildAttachmentPreviewURL = func(path string) string { return strings.TrimSpace(path) }
+	}
 	attachments := make([]TimelineAttachment, 0, len(images)+len(files))
 	for _, raw := range images {
 		path := strings.TrimSpace(raw)
 		if path == "" {
 			continue
 		}
-		attachments = appendImageTimelineAttachment(attachments, BuildAttachmentName(path), path, path)
+		attachments = appendImageTimelineAttachment(attachments, buildAttachmentName, buildAttachmentPreviewURL, path, path, path)
 	}
 	for _, raw := range files {
 		path := strings.TrimSpace(raw)
 		if path == "" {
 			continue
 		}
-		attachments = appendFileTimelineAttachment(attachments, BuildAttachmentName(path), path)
+		attachments = appendFileTimelineAttachment(attachments, buildAttachmentName(path), path)
 	}
 	return attachments
 }
 
-func BuildUserTimelineAttachmentsFromInputs(inputs []TurnInput, fileContentInputText func(string, string) string) []TimelineAttachment {
-	parsed := ParseTurnInputs(inputs, fileContentInputText)
+func BuildUserTimelineAttachmentsFromInputs(
+	inputs []TurnInput,
+	fileContentInputText func(string, string) string,
+	buildAttachmentName func(string) string,
+	buildAttachmentPreviewURL func(string) string,
+) []TimelineAttachment {
+	parsed := ParseTurnInputs(inputs, fileContentInputText, buildAttachmentName, buildAttachmentPreviewURL)
 	if len(parsed.TimelineAttachments) == 0 {
 		return nil
 	}

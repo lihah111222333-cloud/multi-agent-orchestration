@@ -428,10 +428,6 @@ func (c *Client) waitProcessExit(timeout time.Duration) {
 func (c *Client) clearPending() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.clearPendingLocked()
-}
-
-func (c *Client) clearPendingLocked() {
 	for id, ch := range c.pending {
 		close(ch)
 		delete(c.pending, id)
@@ -489,16 +485,16 @@ func (c *Client) notify(method string, params any) error {
 }
 
 func (c *Client) writeRequest(id int, method string, params any) error {
-	return c.writeMessage(buildRPCRequest(method, params, &id))
+	return c.writeMessage(buildRPCRequest(method, params, id))
 }
 
-func buildRPCRequest(method string, params any, id *int) map[string]any {
+func buildRPCRequest(method string, params any, id any) map[string]any {
 	msg := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  method,
 	}
 	if id != nil {
-		msg["id"] = *id
+		msg["id"] = id
 	}
 	if params != nil {
 		msg["params"] = params

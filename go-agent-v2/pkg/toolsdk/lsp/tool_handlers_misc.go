@@ -221,7 +221,38 @@ type lspHierarchyParam struct {
 
 // CallHierarchy gets call hierarchy entries.
 func (h *ToolHandlers) CallHierarchy(args json.RawMessage) string {
-	call, ok := h.startManagedToolCall("lsp_call_hierarchy", args)
+	return runHierarchyTool(
+		h,
+		"lsp_call_hierarchy",
+		args,
+		"no call hierarchy found",
+		func(filePath string, line, column int, direction string) ([]CallHierarchyResult, error) {
+			return h.manager.CallHierarchy(filePath, line, column, direction)
+		},
+	)
+}
+
+// TypeHierarchy gets type hierarchy entries.
+func (h *ToolHandlers) TypeHierarchy(args json.RawMessage) string {
+	return runHierarchyTool(
+		h,
+		"lsp_type_hierarchy",
+		args,
+		"no type hierarchy found",
+		func(filePath string, line, column int, direction string) ([]TypeHierarchyResult, error) {
+			return h.manager.TypeHierarchy(filePath, line, column, direction)
+		},
+	)
+}
+
+func runHierarchyTool[T any](
+	h *ToolHandlers,
+	tool string,
+	args json.RawMessage,
+	emptyMsg string,
+	run func(filePath string, line, column int, direction string) (T, error),
+) string {
+	call, ok := h.startManagedToolCall(tool, args)
 	if !ok {
 		return "error: lsp manager unavailable"
 	}
@@ -233,54 +264,49 @@ func (h *ToolHandlers) CallHierarchy(args json.RawMessage) string {
 	if err != nil {
 		return toolError(err)
 	}
-	resolvedPath := lspToolLogPath(filePath)
 	return runAndMarshalLogged(
 		call,
-		func() ([]CallHierarchyResult, error) {
-			return h.manager.CallHierarchy(filePath, params.Line, params.Column, params.Direction)
-		},
-		nil,
-		"no call hierarchy found",
-		func(result []CallHierarchyResult) bool { return len(result) == 0 },
-		func(result []CallHierarchyResult) []any { return []any{"result_count", len(result)} },
-		logger.FieldPath, resolvedPath,
+		func() (T, error) { return run(filePath, params.Line, params.Column, params.Direction) },
+		h.hierarchyToolErrorFormatter(tool, filePath, params.Line, params.Column),
+		emptyMsg,
+		func(result T) bool { return isHierarchyResultEmpty(result) },
+		func(result T) []any { return []any{"result_count", hierarchyResultCount(result)} },
+		logger.FieldPath, lspToolLogPath(filePath),
 		"line", params.Line,
 		"column", params.Column,
 		"direction", params.Direction,
 	)
 }
 
-// TypeHierarchy gets type hierarchy entries.
-func (h *ToolHandlers) TypeHierarchy(args json.RawMessage) string {
-	call, ok := h.startManagedToolCall("lsp_type_hierarchy", args)
-	if !ok {
-		return "error: lsp manager unavailable"
+func (h *ToolHandlers) hierarchyToolErrorFormatter(tool, filePath string, line, column int) func(error) string {
+	if tool != "lsp_type_hierarchy" {
+		return nil
 	}
-	params, err := decodeToolParams[lspHierarchyParam](call, args)
-	if err != nil {
-		return toolError(err)
+	return func(err error) string {
+		return h.contextualToolError("lsp_type_hierarchy", filePath, line, column, err)
 	}
-	filePath, err := requireToolFilePath(call, params.FilePath)
-	if err != nil {
-		return toolError(err)
+}
+
+func isHierarchyResultEmpty[T any](result T) bool {
+	switch v := any(result).(type) {
+	case []CallHierarchyResult:
+		return len(v) == 0
+	case []TypeHierarchyResult:
+		return len(v) == 0
+	default:
+		return false
 	}
-	resolvedPath := lspToolLogPath(filePath)
-	return runAndMarshalLogged(
-		call,
-		func() ([]TypeHierarchyResult, error) {
-			return h.manager.TypeHierarchy(filePath, params.Line, params.Column, params.Direction)
-		},
-		func(err error) string {
-			return h.contextualToolError("lsp_type_hierarchy", filePath, params.Line, params.Column, err)
-		},
-		"no type hierarchy found",
-		func(result []TypeHierarchyResult) bool { return len(result) == 0 },
-		func(result []TypeHierarchyResult) []any { return []any{"result_count", len(result)} },
-		logger.FieldPath, resolvedPath,
-		"line", params.Line,
-		"column", params.Column,
-		"direction", params.Direction,
-	)
+}
+
+func hierarchyResultCount[T any](result T) int {
+	switch v := any(result).(type) {
+	case []CallHierarchyResult:
+		return len(v)
+	case []TypeHierarchyResult:
+		return len(v)
+	default:
+		return 0
+	}
 }
 
 // SemanticTokens gets document semantic tokens.
@@ -393,6 +419,33 @@ func requireNonNegativePosition(line, column int) error {
 		return fmt.Errorf("line and column must be >= 0")
 	}
 	return nil
+}
+
+func requireLineColumn(call *lspToolCallLogger, linePtr, columnPtr *int) (line, column int, err error) {
+	line, err = requireIntParam("line", linePtr)
+	if err != nil {
+		call.fail(err, "stage", "validate")
+		return 0, 0, err
+	}
+	column, err = requireIntParam("column", columnPtr)
+	if err != nil {
+		call.fail(err, "stage", "validate")
+		return 0, 0, err
+	}
+	if err = requireNonNegativePosition(line, column); err != nil {
+		call.fail(err, "stage", "validate")
+		return 0, 0, err
+	}
+	return line, column, nil
+}
+
+func readToolFileContent(call *lspToolCallLogger, filePath, resolvedPath string) ([]byte, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		call.fail(err, logger.FieldPath, resolvedPath, "stage", "read_file")
+		return nil, err
+	}
+	return content, nil
 }
 
 func (h *ToolHandlers) startManagedToolCall(tool string, args json.RawMessage) (*lspToolCallLogger, bool) {
@@ -535,102 +588,87 @@ func (h *ToolHandlers) Hover(args json.RawMessage) string {
 		return toolError(err)
 	}
 	resolvedPath := lspToolLogPath(filePath)
+	attrs := []any{logger.FieldPath, resolvedPath, "line", params.Line, "column", params.Column}
 	result, err := h.manager.Hover(filePath, params.Line, params.Column)
 	if err != nil {
-		call.fail(err,
-			logger.FieldPath, resolvedPath,
-			"line", params.Line,
-			"column", params.Column,
-			"stage", "execute",
-		)
+		call.fail(err, append(attrs, "stage", "execute")...)
 		return toolError(err)
 	}
 	if result == nil {
-		call.done(
-			logger.FieldPath, resolvedPath,
-			"line", params.Line,
-			"column", params.Column,
-			"result_empty", true,
-		)
+		call.done(append(attrs, "result_empty", true)...)
 		return "no hover info available"
 	}
-	call.done(
-		logger.FieldPath, resolvedPath,
-		"line", params.Line,
-		"column", params.Column,
-		"result_empty", false,
-		"content_len", len(result.Contents.Value),
-	)
+	call.done(append(attrs, "result_empty", false, "content_len", len(result.Contents.Value))...)
 	return result.Contents.Value
 }
 
 // OpenFile opens file and triggers LSP analysis.
 func (h *ToolHandlers) OpenFile(args json.RawMessage) string {
-	call, ok := h.startManagedToolCall("lsp_open_file", args)
-	if !ok {
-		return "error: lsp manager unavailable"
+	call, filePath, resolvedPath, errText := h.decodeManagedFilePath("lsp_open_file", args)
+	if errText != "" {
+		return errText
 	}
-	params, err := decodeToolParams[lspFilePathParam](call, args)
+	content, err := readToolFileContent(call, filePath, resolvedPath)
 	if err != nil {
-		return toolError(err)
-	}
-	filePath, err := requireToolFilePath(call, params.FilePath)
-	if err != nil {
-		return toolError(err)
-	}
-	resolvedPath := lspToolLogPath(filePath)
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		call.fail(err,
-			logger.FieldPath, resolvedPath,
-			"stage", "read_file",
-		)
 		return "error: reading file: " + err.Error()
 	}
 	if err := h.manager.OpenFile(filePath, string(content)); err != nil {
-		call.fail(err,
-			logger.FieldPath, resolvedPath,
-			logger.FieldBytes, len(content),
-			"stage", "execute",
-		)
+		call.fail(err, logger.FieldPath, resolvedPath, logger.FieldBytes, len(content), "stage", "execute")
 		return toolError(err)
 	}
-	call.done(
-		logger.FieldPath, resolvedPath,
-		logger.FieldBytes, len(content),
-		"result_empty", false,
-	)
+	call.done(logger.FieldPath, resolvedPath, logger.FieldBytes, len(content), "result_empty", false)
 	return fmt.Sprintf("opened %s (%d bytes)", filePath, len(content))
 }
 
 // ReadFile returns full file content.
 func (h *ToolHandlers) ReadFile(args json.RawMessage) string {
-	call := startLSPToolCallFromArgs("lsp_read_file", args)
+	call, filePath, resolvedPath, errText := h.decodeFilePathToolCall("lsp_read_file", args)
+	if errText != "" {
+		return errText
+	}
+	content, err := readToolFileContent(call, filePath, resolvedPath)
+	if err != nil {
+		return "error: reading file: " + err.Error()
+	}
+	call.done(logger.FieldPath, resolvedPath, logger.FieldBytes, len(content), "result_empty", len(content) == 0)
+	return string(content)
+}
+
+func (h *ToolHandlers) decodeManagedFilePath(
+	tool string,
+	args json.RawMessage,
+) (call *lspToolCallLogger, filePath, resolvedPath string, errText string) {
+	call, ok := h.startManagedToolCall(tool, args)
+	if !ok {
+		return nil, "", "", "error: lsp manager unavailable"
+	}
+	params, err := decodeToolParams[lspFilePathParam](call, args)
+	if err != nil {
+		return nil, "", "", toolError(err)
+	}
+	filePath, err = requireToolFilePath(call, params.FilePath)
+	if err != nil {
+		return nil, "", "", toolError(err)
+	}
+	return call, filePath, lspToolLogPath(filePath), ""
+}
+
+func (h *ToolHandlers) decodeFilePathToolCall(
+	tool string,
+	args json.RawMessage,
+) (call *lspToolCallLogger, filePath, resolvedPath string, errText string) {
+	call = startLSPToolCallFromArgs(tool, args)
 	params, err := decodeArgs[lspFilePathParam](args)
 	if err != nil {
 		call.fail(err, "stage", "decode")
-		return toolError(err)
+		return nil, "", "", toolError(err)
 	}
-	filePath, err := requireFilePath(params.FilePath)
+	filePath, err = requireFilePath(params.FilePath)
 	if err != nil {
 		call.fail(err, "stage", "validate")
-		return toolError(err)
+		return nil, "", "", toolError(err)
 	}
-	resolvedPath := lspToolLogPath(filePath)
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		call.fail(err,
-			logger.FieldPath, resolvedPath,
-			"stage", "read_file",
-		)
-		return "error: reading file: " + err.Error()
-	}
-	call.done(
-		logger.FieldPath, resolvedPath,
-		logger.FieldBytes, len(content),
-		"result_empty", len(content) == 0,
-	)
-	return string(content)
+	return call, filePath, lspToolLogPath(filePath), ""
 }
 
 // Diagnostics returns current diagnostics from cache.
@@ -765,7 +803,6 @@ func (h *ToolHandlers) References(args json.RawMessage) string {
 	if params.IncludeDecl != nil {
 		includeDecl = *params.IncludeDecl
 	}
-	resolvedPath := lspToolLogPath(filePath)
 	return runAndMarshalLogged(
 		call,
 		func() ([]Location, error) {
@@ -775,7 +812,7 @@ func (h *ToolHandlers) References(args json.RawMessage) string {
 		"no references found",
 		func(result []Location) bool { return len(result) == 0 },
 		func(result []Location) []any { return []any{"result_count", len(result)} },
-		logger.FieldPath, resolvedPath,
+		logger.FieldPath, lspToolLogPath(filePath),
 		"line", params.Line,
 		"column", params.Column,
 		"include_declaration", includeDecl,
@@ -820,7 +857,6 @@ func (h *ToolHandlers) Rename(args json.RawMessage) string {
 		)
 		return "error: new_name is required"
 	}
-	resolvedPath := lspToolLogPath(filePath)
 	return runAndMarshalLogged(
 		call,
 		func() (*WorkspaceEdit, error) {
@@ -834,7 +870,7 @@ func (h *ToolHandlers) Rename(args json.RawMessage) string {
 		func(result *WorkspaceEdit) []any {
 			return []any{"result_count", workspaceEditCount(result)}
 		},
-		logger.FieldPath, resolvedPath,
+		logger.FieldPath, lspToolLogPath(filePath),
 		"line", params.Line,
 		"column", params.Column,
 		"new_name_len", len(params.NewName),
@@ -1286,31 +1322,11 @@ func (h *ToolHandlers) CodeAction(args json.RawMessage) string {
 	if err != nil {
 		return toolError(err)
 	}
-	line, err := requireIntParam("line", params.Line)
+	line, column, err := requireLineColumn(call, params.Line, params.Column)
 	if err != nil {
-		call.fail(err, "stage", "validate")
 		return toolError(err)
 	}
-	column, err := requireIntParam("column", params.Column)
-	if err != nil {
-		call.fail(err, "stage", "validate")
-		return toolError(err)
-	}
-	if err := requireNonNegativePosition(line, column); err != nil {
-		call.fail(err, "stage", "validate")
-		return toolError(err)
-	}
-
-	endLine := -1
-	if params.EndLine != nil {
-		endLine = *params.EndLine
-	}
-	endColumn := -1
-	if params.EndColumn != nil {
-		endColumn = *params.EndColumn
-	}
-
-	resolvedPath := lspToolLogPath(filePath)
+	endLine, endColumn := optionalRangeEnd(params.EndLine, params.EndColumn)
 	return runAndMarshalLogged(
 		call,
 		func() ([]CodeActionResult, error) {
@@ -1320,13 +1336,24 @@ func (h *ToolHandlers) CodeAction(args json.RawMessage) string {
 		"no code action found",
 		func(result []CodeActionResult) bool { return len(result) == 0 },
 		func(result []CodeActionResult) []any { return []any{"result_count", len(result)} },
-		logger.FieldPath, resolvedPath,
+		logger.FieldPath, lspToolLogPath(filePath),
 		"line", line,
 		"column", column,
 		"end_line", endLine,
 		"end_column", endColumn,
 		"only_count", len(params.Only),
 	)
+}
+
+func optionalRangeEnd(endLine, endColumn *int) (int, int) {
+	line, column := -1, -1
+	if endLine != nil {
+		line = *endLine
+	}
+	if endColumn != nil {
+		column = *endColumn
+	}
+	return line, column
 }
 
 // SignatureHelp gets signature help at a position.
@@ -1343,22 +1370,10 @@ func (h *ToolHandlers) SignatureHelp(args json.RawMessage) string {
 	if err != nil {
 		return toolError(err)
 	}
-	line, err := requireIntParam("line", params.Line)
+	line, column, err := requireLineColumn(call, params.Line, params.Column)
 	if err != nil {
-		call.fail(err, "stage", "validate")
 		return toolError(err)
 	}
-	column, err := requireIntParam("column", params.Column)
-	if err != nil {
-		call.fail(err, "stage", "validate")
-		return toolError(err)
-	}
-	if err := requireNonNegativePosition(line, column); err != nil {
-		call.fail(err, "stage", "validate")
-		return toolError(err)
-	}
-
-	resolvedPath := lspToolLogPath(filePath)
 	return runAndMarshalLogged(
 		call,
 		func() (*SignatureHelpResult, error) {
@@ -1373,7 +1388,7 @@ func (h *ToolHandlers) SignatureHelp(args json.RawMessage) string {
 			}
 			return []any{"result_count", len(result.Signatures)}
 		},
-		logger.FieldPath, resolvedPath,
+		logger.FieldPath, lspToolLogPath(filePath),
 		"line", line,
 		"column", column,
 	)
@@ -1381,15 +1396,11 @@ func (h *ToolHandlers) SignatureHelp(args json.RawMessage) string {
 
 // Format returns formatting edits.
 func (h *ToolHandlers) Format(args json.RawMessage) string {
-	call, ok := h.startManagedToolCall("lsp_format", args)
-	if !ok {
-		return "error: lsp manager unavailable"
+	call, filePath, _, errText := h.decodeManagedFilePath("lsp_format", args)
+	if errText != "" {
+		return errText
 	}
 	params, err := decodeToolParams[lspFormatParam](call, args)
-	if err != nil {
-		return toolError(err)
-	}
-	filePath, err := requireToolFilePath(call, params.FilePath)
 	if err != nil {
 		return toolError(err)
 	}
@@ -1401,7 +1412,6 @@ func (h *ToolHandlers) Format(args json.RawMessage) string {
 	if params.InsertSpaces != nil {
 		insertSpaces = *params.InsertSpaces
 	}
-	resolvedPath := lspToolLogPath(filePath)
 	return runAndMarshalLogged(
 		call,
 		func() ([]TextEdit, error) { return h.manager.Format(filePath, tabSize, insertSpaces) },
@@ -1409,7 +1419,7 @@ func (h *ToolHandlers) Format(args json.RawMessage) string {
 		"no formatting edits",
 		func(result []TextEdit) bool { return len(result) == 0 },
 		func(result []TextEdit) []any { return []any{"result_count", len(result)} },
-		logger.FieldPath, resolvedPath,
+		logger.FieldPath, lspToolLogPath(filePath),
 		"tab_size", tabSize,
 		"insert_spaces", insertSpaces,
 	)
@@ -2280,118 +2290,71 @@ func decodeMergedAction(args json.RawMessage) (string, error) {
 	return p.Action, nil
 }
 
-// LSPFile routes file operations.
-func (h *ToolHandlers) LSPFile(args json.RawMessage) string {
+func routeMergedAction(args json.RawMessage, group string, routes map[string]func(json.RawMessage) string) string {
 	action, err := decodeMergedAction(args)
 	if err != nil {
 		return toolError(err)
 	}
-	switch action {
-	case "open_file":
-		return h.OpenFile(args)
-	case "read_file":
-		return h.ReadFile(args)
-	case "did_change":
-		return h.DidChange(args)
-	case "diagnostics":
-		return h.Diagnostics(args)
-	default:
-		return toolError(fmt.Errorf("unsupported lsp_file action: %s", action))
+	if handler, ok := routes[action]; ok {
+		return handler(args)
 	}
+	return toolError(fmt.Errorf("unsupported %s action: %s", group, action))
+}
+
+// LSPFile routes file operations.
+func (h *ToolHandlers) LSPFile(args json.RawMessage) string {
+	return routeMergedAction(args, "lsp_file", map[string]func(json.RawMessage) string{
+		"open_file":   h.OpenFile,
+		"read_file":   h.ReadFile,
+		"did_change":  h.DidChange,
+		"diagnostics": h.Diagnostics,
+	})
 }
 
 // LSPInspect routes inspect operations.
 func (h *ToolHandlers) LSPInspect(args json.RawMessage) string {
-	action, err := decodeMergedAction(args)
-	if err != nil {
-		return toolError(err)
-	}
-	switch action {
-	case "hover":
-		return h.Hover(args)
-	case "definition":
-		return h.Definition(args)
-	case "implementation":
-		return h.Implementation(args)
-	case "type_definition":
-		return h.TypeDefinition(args)
-	case "signature_help":
-		return h.SignatureHelp(args)
-	default:
-		return toolError(fmt.Errorf("unsupported lsp_inspect action: %s", action))
-	}
+	return routeMergedAction(args, "lsp_inspect", map[string]func(json.RawMessage) string{
+		"hover":           h.Hover,
+		"definition":      h.Definition,
+		"implementation":  h.Implementation,
+		"type_definition": h.TypeDefinition,
+		"signature_help":  h.SignatureHelp,
+	})
 }
 
 // LSPXRef routes cross-reference operations.
 func (h *ToolHandlers) LSPXRef(args json.RawMessage) string {
-	action, err := decodeMergedAction(args)
-	if err != nil {
-		return toolError(err)
-	}
-	switch action {
-	case "call_hierarchy":
-		return h.CallHierarchy(args)
-	case "type_hierarchy":
-		return h.TypeHierarchy(args)
-	case "references":
-		return h.References(args)
-	default:
-		return toolError(fmt.Errorf("unsupported lsp_xref action: %s", action))
-	}
+	return routeMergedAction(args, "lsp_xref", map[string]func(json.RawMessage) string{
+		"call_hierarchy": h.CallHierarchy,
+		"type_hierarchy": h.TypeHierarchy,
+		"references":     h.References,
+	})
 }
 
 // LSPGrep routes text/ast search operations.
 func (h *ToolHandlers) LSPGrep(args json.RawMessage) string {
-	action, err := decodeMergedAction(args)
-	if err != nil {
-		return toolError(err)
-	}
-	switch action {
-	case "text_search":
-		return h.TextSearch(args)
-	case "ast_search":
-		return h.AstSearch(args)
-	default:
-		return toolError(fmt.Errorf("unsupported lsp_grep action: %s", action))
-	}
+	return routeMergedAction(args, "lsp_grep", map[string]func(json.RawMessage) string{
+		"text_search": h.TextSearch,
+		"ast_search":  h.AstSearch,
+	})
 }
 
 // LSPStructure routes structure/hierarchy operations.
 func (h *ToolHandlers) LSPStructure(args json.RawMessage) string {
-	action, err := decodeMergedAction(args)
-	if err != nil {
-		return toolError(err)
-	}
-	switch action {
-	case "document_symbol":
-		return h.DocumentSymbol(args)
-	case "workspace_symbol":
-		return h.WorkspaceSymbol(args)
-	case "semantic_tokens":
-		return h.SemanticTokens(args)
-	case "folding_range":
-		return h.FoldingRange(args)
-	default:
-		return toolError(fmt.Errorf("unsupported lsp_structure action: %s", action))
-	}
+	return routeMergedAction(args, "lsp_structure", map[string]func(json.RawMessage) string{
+		"document_symbol":  h.DocumentSymbol,
+		"workspace_symbol": h.WorkspaceSymbol,
+		"semantic_tokens":  h.SemanticTokens,
+		"folding_range":    h.FoldingRange,
+	})
 }
 
 // LSPEdit routes edit operations.
 func (h *ToolHandlers) LSPEdit(args json.RawMessage) string {
-	action, err := decodeMergedAction(args)
-	if err != nil {
-		return toolError(err)
-	}
-	switch action {
-	case "rename":
-		return h.Rename(args)
-	case "code_action":
-		return h.CodeAction(args)
-	case "format":
-		return h.Format(args)
-	case "replace_range":
-		return h.ReplaceRange(args)
-	default:
-		return toolError(fmt.Errorf("unsupported lsp_edit action: %s", action))
-	}
+	return routeMergedAction(args, "lsp_edit", map[string]func(json.RawMessage) string{
+		"rename":        h.Rename,
+		"code_action":   h.CodeAction,
+		"format":        h.Format,
+		"replace_range": h.ReplaceRange,
+	})
 }

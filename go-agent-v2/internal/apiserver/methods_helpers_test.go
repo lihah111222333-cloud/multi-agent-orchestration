@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	lifecycleconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/lifecycle"
+	lifecyclesvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/lifecycle"
 )
 
 // ========================================
@@ -70,23 +70,23 @@ func TestNormalizeCodexThreadID(t *testing.T) {
 func TestBuildResumeCandidates(t *testing.T) {
 	uuid := "550e8400-e29b-41d4-a716-446655440000"
 	// when threadID is a UUID, return it directly
-	got := lifecycleconsumer.BuildResumeCandidates(uuid, nil, normalizeCodexThreadID)
+	got := lifecyclesvc.BuildResumeCandidates(uuid, nil, normalizeCodexThreadID)
 	if len(got) != 1 || got[0] != uuid {
 		t.Errorf("UUID input: got %v, want [%s]", got, uuid)
 	}
 	// when threadID is NOT a UUID, use resolved
 	resolved := []string{"id-1", "id-2", "id-2"} // 2nd is dup
-	got = lifecycleconsumer.BuildResumeCandidates("my-agent", resolved, normalizeCodexThreadID)
+	got = lifecyclesvc.BuildResumeCandidates("my-agent", resolved, normalizeCodexThreadID)
 	if len(got) != 2 {
 		t.Errorf("dedup: got %d, want 2", len(got))
 	}
 	// when no resolved, fallback to threadID
-	got = lifecycleconsumer.BuildResumeCandidates("my-agent", nil, normalizeCodexThreadID)
+	got = lifecyclesvc.BuildResumeCandidates("my-agent", nil, normalizeCodexThreadID)
 	if len(got) != 1 || got[0] != "my-agent" {
 		t.Errorf("fallback: got %v, want [my-agent]", got)
 	}
 	// empty
-	got = lifecycleconsumer.BuildResumeCandidates("", nil, normalizeCodexThreadID)
+	got = lifecyclesvc.BuildResumeCandidates("", nil, normalizeCodexThreadID)
 	if got != nil {
 		t.Errorf("empty: got %v, want nil", got)
 	}
@@ -98,36 +98,36 @@ func TestBuildResumeCandidates(t *testing.T) {
 
 func TestTryResumeCandidates(t *testing.T) {
 	// no candidates
-	_, err := lifecycleconsumer.TryResumeCandidates(nil, "fallback", nil, lifecycleconsumer.IsHistoricalResumeCandidateError)
+	_, err := lifecyclesvc.TryResumeCandidates(nil, "fallback", nil, lifecyclesvc.IsHistoricalResumeCandidateError)
 	if err == nil {
 		t.Error("no candidates: expected error, got nil")
 	}
 
 	// first succeeds
-	id, err := lifecycleconsumer.TryResumeCandidates([]string{"a", "b"}, "fallback", func(s string) error {
+	id, err := lifecyclesvc.TryResumeCandidates([]string{"a", "b"}, "fallback", func(s string) error {
 		return nil
-	}, lifecycleconsumer.IsHistoricalResumeCandidateError)
+	}, lifecyclesvc.IsHistoricalResumeCandidateError)
 	if err != nil || id != "a" {
 		t.Errorf("first succeeds: got %q, %v; want 'a', nil", id, err)
 	}
 
 	// first fails with candidate error, second succeeds
 	calls := 0
-	id, err = lifecycleconsumer.TryResumeCandidates([]string{"a", "b"}, "fallback", func(s string) error {
+	id, err = lifecyclesvc.TryResumeCandidates([]string{"a", "b"}, "fallback", func(s string) error {
 		calls++
 		if calls == 1 {
 			return errors.New("no rollout found for thread id")
 		}
 		return nil
-	}, lifecycleconsumer.IsHistoricalResumeCandidateError)
+	}, lifecyclesvc.IsHistoricalResumeCandidateError)
 	if err != nil || id != "b" {
 		t.Errorf("skip+succeed: got %q, %v; want 'b', nil", id, err)
 	}
 
 	// non-candidate error → immediate return
-	id, err = lifecycleconsumer.TryResumeCandidates([]string{"a", "b"}, "fallback", func(s string) error {
+	id, err = lifecyclesvc.TryResumeCandidates([]string{"a", "b"}, "fallback", func(s string) error {
 		return errors.New("network timeout")
-	}, lifecycleconsumer.IsHistoricalResumeCandidateError)
+	}, lifecyclesvc.IsHistoricalResumeCandidateError)
 	if err == nil {
 		t.Error("non-candidate error: expected error, got nil")
 	}
@@ -136,9 +136,9 @@ func TestTryResumeCandidates(t *testing.T) {
 	}
 
 	// all candidate errors → error
-	_, err = lifecycleconsumer.TryResumeCandidates([]string{"a", "b"}, "fallback", func(s string) error {
+	_, err = lifecyclesvc.TryResumeCandidates([]string{"a", "b"}, "fallback", func(s string) error {
 		return fmt.Errorf("no rollout found for thread id %s", s)
-	}, lifecycleconsumer.IsHistoricalResumeCandidateError)
+	}, lifecyclesvc.IsHistoricalResumeCandidateError)
 	if err == nil {
 		t.Error("all exhausted: expected error, got nil")
 	}
@@ -149,13 +149,13 @@ func TestTryResumeCandidates(t *testing.T) {
 // ========================================
 
 func TestPreviewResumeCandidates(t *testing.T) {
-	if got := lifecycleconsumer.PreviewResumeCandidates(nil, 3); got != nil {
+	if got := lifecyclesvc.PreviewResumeCandidates(nil, 3); got != nil {
 		t.Errorf("nil: got %v, want nil", got)
 	}
-	if got := lifecycleconsumer.PreviewResumeCandidates([]string{"a", "b"}, 5); len(got) != 2 {
+	if got := lifecyclesvc.PreviewResumeCandidates([]string{"a", "b"}, 5); len(got) != 2 {
 		t.Errorf("under: got %d, want 2", len(got))
 	}
-	got := lifecycleconsumer.PreviewResumeCandidates([]string{"a", "b", "c", "d"}, 2)
+	got := lifecyclesvc.PreviewResumeCandidates([]string{"a", "b", "c", "d"}, 2)
 	if len(got) != 3 || got[2] != "...+2 more" {
 		t.Errorf("over: got %v, want [a b ...+2 more]", got)
 	}
@@ -182,7 +182,7 @@ func TestIsHistoricalResumeCandidateError(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := lifecycleconsumer.IsHistoricalResumeCandidateError(tt.err)
+			got := lifecyclesvc.IsHistoricalResumeCandidateError(tt.err)
 			if got != tt.want {
 				t.Errorf("isHistoricalResumeCandidateError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
@@ -195,16 +195,16 @@ func TestIsHistoricalResumeCandidateError(t *testing.T) {
 // ========================================
 
 func TestIsCodexProcessCrashError(t *testing.T) {
-	if lifecycleconsumer.IsCodexProcessCrashError(nil) {
+	if lifecyclesvc.IsCodexProcessCrashError(nil) {
 		t.Error("nil should be false")
 	}
-	if !lifecycleconsumer.IsCodexProcessCrashError(errors.New("websocket: close 1006")) {
+	if !lifecyclesvc.IsCodexProcessCrashError(errors.New("websocket: close 1006")) {
 		t.Error("ws close 1006 should be true")
 	}
-	if !lifecycleconsumer.IsCodexProcessCrashError(errors.New("abnormal closure")) {
+	if !lifecyclesvc.IsCodexProcessCrashError(errors.New("abnormal closure")) {
 		t.Error("abnormal closure should be true")
 	}
-	if lifecycleconsumer.IsCodexProcessCrashError(errors.New("random error")) {
+	if lifecyclesvc.IsCodexProcessCrashError(errors.New("random error")) {
 		t.Error("random should be false")
 	}
 }

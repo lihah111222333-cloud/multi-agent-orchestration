@@ -6,9 +6,9 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk"
 	historyconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/history"
-	lifecycleconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/lifecycle"
 	messagesconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/messages"
-	rolloutconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/rollout"
+	lifecyclesvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/lifecycle"
+	rolloutsvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/rollout"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
@@ -31,7 +31,7 @@ func (a *Adapter) ThreadMessages(ctx context.Context, threadID string, limit int
 		ctx,
 		id,
 		a.resolveRolloutHistorySource,
-		lifecycleconsumer.NormalizeCodexThreadID,
+		lifecyclesvc.NormalizeCodexThreadID,
 		a.showInjectedPromptInChat(ctx),
 	)
 	if err != nil {
@@ -92,7 +92,7 @@ func (a *Adapter) showInjectedPromptInChat(ctx context.Context) bool {
 
 func (a *Adapter) resolveRolloutHistorySource(ctx context.Context, threadID string) (string, string) {
 	runningCodexThreadID := func(threadID string) string {
-		return rolloutconsumer.RunningCodexThreadIDFromManager(threadID, a.managerProcess, func(proc any) string {
+		return rolloutsvc.RunningCodexThreadIDFromManager(threadID, a.managerProcess, func(proc any) string {
 			typed, _ := proc.(*codexsdk.AgentProcess)
 			return a.GetThreadID(typed)
 		})
@@ -114,12 +114,12 @@ func (a *Adapter) resolveRolloutHistorySource(ctx context.Context, threadID stri
 	statusSessionIDByAgentID := func(ctx context.Context, agentID string) (string, error) {
 		return historyconsumer.StatusSessionIDByAgentID(ctx, a.statusStore(), agentID)
 	}
-	return rolloutconsumer.ResolveRolloutHistorySource(
+	return rolloutsvc.ResolveRolloutHistorySource(
 		ctx,
 		threadID,
 		runningCodexThreadID,
 		bindingRolloutSourceByAgentID,
 		statusSessionIDByAgentID,
-		lifecycleconsumer.NormalizeCodexThreadID,
+		lifecyclesvc.NormalizeCodexThreadID,
 	)
 }

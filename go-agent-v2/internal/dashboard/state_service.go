@@ -258,10 +258,7 @@ func resolvePreferredCmdThreadID(threads []StateThread, mainAgentID, preferred s
 	candidates := make([]StateThread, 0, len(threads))
 	for _, thread := range threads {
 		id := strings.TrimSpace(thread.ID)
-		if id == "" {
-			continue
-		}
-		if mainID != "" && id == mainID {
+		if id == "" || (mainID != "" && id == mainID) {
 			continue
 		}
 		candidates = append(candidates, thread)

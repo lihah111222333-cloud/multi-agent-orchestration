@@ -388,7 +388,12 @@ func (m *WorkspaceManager) walkMergeEntry(
 		return nil
 	}
 	seen[rel] = true
-	return m.mergeOneFile(ctx, run, path, rel, tracked, result, req)
+	candidate, ok := m.buildMergeCandidate(ctx, run, path, rel, tracked, result)
+	if !ok {
+		return nil
+	}
+	m.applyMergeCandidate(ctx, run, candidate, result, req)
+	return nil
 }
 
 func recordMergeResult(result *WorkspaceMergeResult, counter *int, path, action, reason string) {
@@ -404,20 +409,6 @@ func recordMergeResult(result *WorkspaceMergeResult, counter *int, path, action,
 
 func recordMergeError(result *WorkspaceMergeResult, path, reason string) {
 	recordMergeResult(result, &result.Errors, path, "error", reason)
-}
-
-func (m *WorkspaceManager) mergeOneFile(
-	ctx context.Context, run *store.WorkspaceRun,
-	wsPath, rel string,
-	tracked map[string]store.WorkspaceRunFile,
-	result *WorkspaceMergeResult, req WorkspaceMergeRequest,
-) error {
-	candidate, ok := m.buildMergeCandidate(ctx, run, wsPath, rel, tracked, result)
-	if !ok {
-		return nil
-	}
-	m.applyMergeCandidate(ctx, run, candidate, result, req)
-	return nil
 }
 
 type mergeCandidate struct {
@@ -522,8 +513,10 @@ func (m *WorkspaceManager) applyMergeCandidate(
 		return
 	}
 	if req.DryRun {
-		m.saveFileOrLog(ctx, candidate.toRunFile(run.RunKey, WorkspaceFileStateChanged, "", ""))
-		recordMergeResult(result, &result.Merged, candidate.rel, "would_merge", "")
+		m.saveFileAndRecord(ctx, result,
+			candidate.toRunFile(run.RunKey, WorkspaceFileStateChanged, "", ""),
+			&result.Merged, "would_merge", "",
+		)
 		return
 	}
 	if err := copyFileAtomic(candidate.wsPath, candidate.sourcePath, candidate.wsInfo.Mode().Perm()); err != nil {

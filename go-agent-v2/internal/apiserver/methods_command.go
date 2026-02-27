@@ -36,12 +36,10 @@ var commandBlocklist = boolSet("rm rmdir sudo su chmod chown mkfs dd kill killal
 
 const maxOutputSize = 1 << 20 // 1MB 输出限制
 
-// readCommands 阅读类命令集合 — 检测到时注入 LSP 工具优先提示。
 var readCommands = boolSet("cat head tail less more bat grep rg ag find fd tree wc sed awk")
 
 const lspPreferenceHint = "[LSP提示] 你有 7 个合并后的 LSP 工具：`lsp_file` `lsp_inspect` `lsp_xref` `lsp_grep` `lsp_structure` `lsp_edit` `lsp_completion`。请优先使用 LSP 工具而非命令行读取代码。\n---\n"
 
-// commandExecResponse command/exec 响应。
 type commandExecResponse struct {
 	ExitCode int    `json:"exitCode"`
 	Stdout   string `json:"stdout"`
@@ -49,13 +47,10 @@ type commandExecResponse struct {
 }
 
 func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any, error) {
-	if len(p.Argv) == 0 {
+	if len(p.Argv) == 0 || strings.TrimSpace(p.Argv[0]) == "" {
 		return nil, apperrors.New("Server.commandExec", "argv is required")
 	}
 	p.Argv[0] = strings.TrimSpace(p.Argv[0])
-	if p.Argv[0] == "" {
-		return nil, apperrors.New("Server.commandExec", "argv is required")
-	}
 	baseName := filepath.Base(p.Argv[0])
 	if commandBlocklist[baseName] {
 		return nil, apperrors.Newf("Server.commandExec", "command %q is blocked for security", baseName)
@@ -82,17 +77,13 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 	if len(p.Env) > 0 {
 		cmd.Env = os.Environ()
 		for k, v := range p.Env {
-			if !isAllowedEnvKey(k) {
-				continue
+			if isAllowedEnvKey(k) {
+				cmd.Env = append(cmd.Env, k+"="+v)
 			}
-			cmd.Env = append(cmd.Env, k+"="+v)
 		}
 	}
 
-	// 限制输出大小, 防止内存耗尽
 	var stdout, stderr strings.Builder
-	stdout.Grow(4096)
-	stderr.Grow(4096)
 	cmd.Stdout = util.NewLimitedWriter(&stdout, maxOutputSize)
 	cmd.Stderr = util.NewLimitedWriter(&stderr, maxOutputSize)
 
@@ -101,9 +92,8 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 	elapsed := time.Since(start)
 	exitCode := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
 			logger.Error("command/exec: run failed",
 				logger.FieldCommand, baseName,
 				logger.FieldError, err,
@@ -111,6 +101,7 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 			)
 			return nil, apperrors.Wrap(err, "Server.commandExec", "run command")
 		}
+		exitCode = exitErr.ExitCode()
 	}
 
 	logger.Info("command/exec: completed",

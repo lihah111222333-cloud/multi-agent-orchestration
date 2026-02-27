@@ -632,85 +632,53 @@ func TrackerStateCore(state TurnTrackerState) (map[string]*trackedTurn, *sync.Mu
 	stallThreshold := TrackerDurationOrDefault(state.StallThreshold, DefaultStallThreshold)
 	return activeTurns, turnMu, watchdogTimeout, stallThreshold
 }
-func ApplyTrackedTurnTransitionCore(state TurnTrackerState, threadID string, req TrackedTurnTransitionRequest) TrackedTurnTransitionResult {
-	result := TrackedTurnTransitionResult{}
-	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return result
+
+func stopTrackedTurnTimers(turn *trackedTurn) {
+	if turn == nil {
+		return
 	}
-	activeTurns, turnMu, _, _ := TrackerStateCore(state)
-	if turnMu == nil || activeTurns == nil {
-		return result
+	if turn.Timer != nil {
+		turn.Timer.Stop()
 	}
-	turnMu.Lock()
-	defer turnMu.Unlock()
-	EnsureTurnTrackerStateLocked(state)
-	turn, ok := activeTurns[id]
-	if !ok || turn == nil {
-		return result
+	if turn.StallTimer != nil {
+		turn.StallTimer.Stop()
 	}
-	result.Found = true
-	result.ThreadID = id
-	result.TurnID = strings.TrimSpace(turn.ID)
-	result.StartedAt = turn.StartedAt
-	result.LastEventAt = turn.LastEventAt
-	result.InterruptRequested = turn.InterruptRequested
-	result.StallHintLogged = turn.StallHintLogged
-	if req.TouchHeartbeat {
-		turn.LastEventAt = time.Now()
-		result.LastEventAt = turn.LastEventAt
+	if turn.EarlySilenceTimer != nil {
+		turn.EarlySilenceTimer.Stop()
 	}
-	if req.MarkInterruptRequested {
-		turn.InterruptRequested = true
-		turn.InterruptRequestedAt = time.Now()
-		result.InterruptRequested = true
-	}
-	if req.MarkStallHint {
-		wantTurnID := strings.TrimSpace(req.MarkStallHintForTurnID)
-		if wantTurnID != "" && !strings.EqualFold(result.TurnID, wantTurnID) {
-			return result
-		}
-		if !turn.StallHintLogged {
-			turn.StallHintLogged = true
-			result.StallHintLogged = true
-			result.StallHintApplied = true
-		}
-	}
-	if req.Finalize != nil {
-		wantTurnID := strings.TrimSpace(req.Finalize.TurnID)
-		result.ExpectedTurnID = wantTurnID
-		if wantTurnID != "" && !strings.EqualFold(result.TurnID, wantTurnID) {
-			result.TurnIDMismatch = true
-		}
-		delete(activeTurns, id)
-		if turn.Timer != nil {
-			turn.Timer.Stop()
-		}
-		if turn.StallTimer != nil {
-			turn.StallTimer.Stop()
-		}
-		if turn.EarlySilenceTimer != nil {
-			turn.EarlySilenceTimer.Stop()
-		}
-		finalStatus := NormalizeTrackedTurnStatus(req.Finalize.Status)
-		if turn.InterruptRequested && finalStatus == "completed" {
-			finalStatus = "interrupted"
-		}
-		if turn.Done != nil {
-			select {
-			case turn.Done <- finalStatus:
-			default:
-			}
-		}
-		reasonText := strings.TrimSpace(req.Finalize.Reason)
-		result.Finalized = true
-		result.FinalStatus = finalStatus
-		result.FinalReason = reasonText
-		result.Completion = buildTrackedTurnCompletionPayload(id, result.TurnID, finalStatus, reasonText)
-	}
-	return result
 }
-func WithActiveTurnCore(state TurnTrackerState, threadID string, fn func(threadID string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool) bool {
+
+func sendTrackedTurnDone(turn *trackedTurn, status string) bool {
+	if turn == nil || turn.Done == nil {
+		return false
+	}
+	select {
+	case turn.Done <- status:
+		return true
+	default:
+		return false
+	}
+}
+
+func removeActiveTrackedTurn(activeTurns map[string]*trackedTurn, threadID string) (*trackedTurn, bool) {
+	if activeTurns == nil {
+		return nil, false
+	}
+	turn, ok := activeTurns[threadID]
+	if !ok || turn == nil {
+		return nil, false
+	}
+	delete(activeTurns, threadID)
+	stopTrackedTurnTimers(turn)
+	return turn, true
+}
+
+func withActiveTrackedTurnCore(
+	state TurnTrackerState,
+	threadID string,
+	ensureState bool,
+	fn func(threadID string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool,
+) bool {
 	activeTurns, turnMu, _, _ := TrackerStateCore(state)
 	id := strings.TrimSpace(threadID)
 	if id == "" || turnMu == nil || fn == nil {
@@ -718,6 +686,9 @@ func WithActiveTurnCore(state TurnTrackerState, threadID string, fn func(threadI
 	}
 	turnMu.Lock()
 	defer turnMu.Unlock()
+	if ensureState {
+		EnsureTurnTrackerStateLocked(state)
+	}
 	if activeTurns == nil {
 		return false
 	}
@@ -726,6 +697,64 @@ func WithActiveTurnCore(state TurnTrackerState, threadID string, fn func(threadI
 		return false
 	}
 	return fn(id, turn, activeTurns)
+}
+
+func ApplyTrackedTurnTransitionCore(state TurnTrackerState, threadID string, req TrackedTurnTransitionRequest) TrackedTurnTransitionResult {
+	result := TrackedTurnTransitionResult{}
+	if !withActiveTrackedTurnCore(state, threadID, true, func(id string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool {
+		result.Found = true
+		result.ThreadID = id
+		result.TurnID = strings.TrimSpace(turn.ID)
+		result.StartedAt = turn.StartedAt
+		result.LastEventAt = turn.LastEventAt
+		result.InterruptRequested = turn.InterruptRequested
+		result.StallHintLogged = turn.StallHintLogged
+		if req.TouchHeartbeat {
+			turn.LastEventAt = time.Now()
+			result.LastEventAt = turn.LastEventAt
+		}
+		if req.MarkInterruptRequested {
+			turn.InterruptRequested = true
+			turn.InterruptRequestedAt = time.Now()
+			result.InterruptRequested = true
+		}
+		if req.MarkStallHint {
+			wantTurnID := strings.TrimSpace(req.MarkStallHintForTurnID)
+			if wantTurnID != "" && !strings.EqualFold(result.TurnID, wantTurnID) {
+				return true
+			}
+			if !turn.StallHintLogged {
+				turn.StallHintLogged = true
+				result.StallHintLogged = true
+				result.StallHintApplied = true
+			}
+		}
+		if req.Finalize != nil {
+			wantTurnID := strings.TrimSpace(req.Finalize.TurnID)
+			result.ExpectedTurnID = wantTurnID
+			if wantTurnID != "" && !strings.EqualFold(result.TurnID, wantTurnID) {
+				result.TurnIDMismatch = true
+			}
+			removeActiveTrackedTurn(activeTurns, id)
+			finalStatus := NormalizeTrackedTurnStatus(req.Finalize.Status)
+			if turn.InterruptRequested && finalStatus == "completed" {
+				finalStatus = "interrupted"
+			}
+			sendTrackedTurnDone(turn, finalStatus)
+			reasonText := strings.TrimSpace(req.Finalize.Reason)
+			result.Finalized = true
+			result.FinalStatus = finalStatus
+			result.FinalReason = reasonText
+			result.Completion = buildTrackedTurnCompletionPayload(id, result.TurnID, finalStatus, reasonText)
+		}
+		return true
+	}) {
+		return result
+	}
+	return result
+}
+func WithActiveTurnCore(state TurnTrackerState, threadID string, fn func(threadID string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool) bool {
+	return withActiveTrackedTurnCore(state, threadID, false, fn)
 }
 func WithActiveTurnByIDCore(state TurnTrackerState, threadID, turnID string, fn func(threadID string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool) bool {
 	expectedTurnID := strings.TrimSpace(turnID)
@@ -740,31 +769,11 @@ func WithActiveTurnByIDCore(state TurnTrackerState, threadID, turnID string, fn 
 	})
 }
 func SupersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurnID string) (map[string]any, string, bool) {
-	if activeTurns == nil {
-		return nil, "", false
-	}
-	prev, ok := activeTurns[threadID]
+	prev, ok := removeActiveTrackedTurn(activeTurns, threadID)
 	if !ok || prev == nil {
 		return nil, "", false
 	}
-	delete(activeTurns, threadID)
-	if prev.Timer != nil {
-		prev.Timer.Stop()
-	}
-	if prev.StallTimer != nil {
-		prev.StallTimer.Stop()
-	}
-	if prev.EarlySilenceTimer != nil {
-		prev.EarlySilenceTimer.Stop()
-	}
-	doneSent := false
-	if prev.Done != nil {
-		select {
-		case prev.Done <- "failed":
-			doneSent = true
-		default:
-		}
-	}
+	doneSent := sendTrackedTurnDone(prev, "failed")
 	prevAge := time.Since(prev.StartedAt)
 	prevLastEventAge := time.Since(prev.LastEventAt)
 	logFn := logger.Warn

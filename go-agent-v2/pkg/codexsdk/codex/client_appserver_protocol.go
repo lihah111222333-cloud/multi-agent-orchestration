@@ -7,7 +7,6 @@ import (
 
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
-	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 func (c *AppServerClient) Initialize() error {
@@ -110,14 +109,6 @@ func (c *AppServerClient) ensureListenerIfNeeded(
 	c.listenerEnsureNeeded.Store(false)
 }
 
-func (c *AppServerClient) ensureListenerIfNeededAsync(
-	rpcCall func(method string, params any, timeout time.Duration) (json.RawMessage, error),
-) {
-	util.SafeGo(func() {
-		c.ensureListenerIfNeeded(rpcCall)
-	})
-}
-
 func (c *AppServerClient) Submit(prompt string, images, files []string, outputSchema json.RawMessage) error {
 	c.ensureListenerIfNeeded(c.call)
 	params := map[string]any{"threadId": strings.TrimSpace(c.ThreadID), "input": buildTurnStartInputs(prompt, images, files)}
@@ -177,7 +168,7 @@ func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID
 		Success: true,
 	}
 	if requestID != nil {
-		return c.respond(*requestID, result)
+		return c.respondWithID(newJSONRPCIntID(*requestID), result)
 	}
 	logger.Warn("codex: SendDynamicToolResult without requestID, falling back to notification",
 		logger.FieldAgentID, c.AgentID, logger.FieldCallID, callID)

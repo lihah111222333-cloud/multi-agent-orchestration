@@ -87,12 +87,6 @@ var approvalMethodValidDecisions = map[string]map[string]bool{
 	approvalMethodSkillRequest:     {"approve": true, "decline": true},
 }
 
-var approvalMethodAllowsSubmit = map[string]map[string]bool{
-	approvalMethodCommandExecution: {"accept": true, "acceptForSession": true},
-	approvalMethodFileChange:       {"accept": true, "acceptForSession": true},
-	approvalMethodSkillRequest:     {"approve": true},
-}
-
 func normalizeCommandAmendmentDecision(decisionObj map[string]any) (any, bool) {
 	if amendmentRaw, ok := extractMapValue(decisionObj, "acceptWithExecpolicyAmendment"); ok {
 		amendmentObj, ok := amendmentRaw.(map[string]any)
@@ -232,11 +226,10 @@ func approvalDecisionAllowsSubmit(method string, payload map[string]any) bool {
 		return false
 	}
 	decisionStr, _ := decision.(string)
-	allowSet := approvalMethodAllowsSubmit[method]
-	if allowSet == nil {
-		allowSet = approvalMethodAllowsSubmit[approvalMethodCommandExecution]
+	if method == approvalMethodSkillRequest {
+		return decisionStr == "approve"
 	}
-	return allowSet[decisionStr]
+	return decisionStr == "accept" || decisionStr == "acceptForSession"
 }
 
 func denyApprovalSafely(event agentcore.Event, agentID string) {
@@ -308,9 +301,8 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 			"first_agent_id", firstID,
 			"detected_by", detectedBy,
 		)
-		autoApprovePayload := approvalDecisionPayload(method, true)
 		if event.RespondResultFunc != nil {
-			if err := event.RespondResultFunc(autoApprovePayload); err != nil {
+			if err := event.RespondResultFunc(approvalDecisionPayload(method, true)); err != nil {
 				logger.Warn("app-server: sub-agent auto-approve respond failed",
 					logger.FieldAgentID, agentID, logger.FieldMethod, method, logger.FieldError, err)
 				denyApprovalSafely(event, agentID)
@@ -334,42 +326,40 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	resp, wsErr := sendRequestToAll(s, method, payload)
 	if wsErr == nil && resp != nil && resp.Result != nil {
 		decisionPayload = mergeApprovalDecisionPayload(method, decisionPayload, resp.Result)
-	} else {
-		if hasNotifyHookState(s) {
-			logger.Info("app-server: approval via Wails mode (no WS client)",
-				logger.FieldAgentID, agentID, logger.FieldMethod, method)
+	} else if hasNotifyHookState(s) {
+		logger.Info("app-server: approval via Wails mode (no WS client)",
+			logger.FieldAgentID, agentID, logger.FieldMethod, method)
 
-			reqID, ch, cleanup := allocPendingRequest(s)
-			defer cleanup()
-			if payload == nil {
-				payload = make(map[string]any)
+		reqID, ch, cleanup := allocPendingRequest(s)
+		defer cleanup()
+		if payload == nil {
+			payload = make(map[string]any)
+		}
+		payload["requestId"] = reqID
+		if s.uiRuntime != nil {
+			threadID := strings.TrimSpace(agentID)
+			normalized := uistate.NormalizeEventFromPayload(method, method, payload)
+			s.uiRuntime.ApplyAgentEvent(threadID, normalized, payload)
+			throttledUIStateChanged(s, map[string]any{
+				"source":   method,
+				"threadId": threadID,
+			})
+		}
+		broadcastNotification(s, method, payload)
+		timer := time.NewTimer(5 * time.Minute)
+		defer timer.Stop()
+		select {
+		case wailsResp := <-ch:
+			if wailsResp != nil {
+				decisionPayload = mergeApprovalDecisionPayload(method, decisionPayload, wailsResp.Result)
 			}
-			payload["requestId"] = reqID
-			if s.uiRuntime != nil {
-				threadID := strings.TrimSpace(agentID)
-				normalized := uistate.NormalizeEventFromPayload(method, method, payload)
-				s.uiRuntime.ApplyAgentEvent(threadID, normalized, payload)
-				throttledUIStateChanged(s, map[string]any{
-					"source":   method,
-					"threadId": threadID,
-				})
-			}
-			broadcastNotification(s, method, payload)
-			timer := time.NewTimer(5 * time.Minute)
-			defer timer.Stop()
-			select {
-			case wailsResp := <-ch:
-				if wailsResp != nil {
-					decisionPayload = mergeApprovalDecisionPayload(method, decisionPayload, wailsResp.Result)
-				}
-			case <-timer.C:
-				logger.Warn("app-server: approval timed out (Wails mode)",
-					logger.FieldAgentID, agentID, logger.FieldMethod, method)
-			}
-		} else {
-			logger.Warn("app-server: approval auto-denied — no WS client and no notifyHook",
+		case <-timer.C:
+			logger.Warn("app-server: approval timed out (Wails mode)",
 				logger.FieldAgentID, agentID, logger.FieldMethod, method)
 		}
+	} else {
+		logger.Warn("app-server: approval auto-denied — no WS client and no notifyHook",
+			logger.FieldAgentID, agentID, logger.FieldMethod, method)
 	}
 
 	if event.RespondResultFunc != nil {

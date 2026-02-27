@@ -26,25 +26,19 @@ type connManagerState struct {
 }
 
 func (s *connManagerState) connectionCount() int {
-	if s == nil {
-		return 0
-	}
+	if s == nil { return 0 }
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.conns)
 }
 
 func (s *connManagerState) allocConnID() string {
-	if s == nil {
-		return ""
-	}
+	if s == nil { return "" }
 	return fmt.Sprintf("conn-%d", s.nextID.Add(1))
 }
 
 func (s *connManagerState) firstConnID() string {
-	if s == nil {
-		return ""
-	}
+	if s == nil { return "" }
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for id := range s.conns {
@@ -54,9 +48,7 @@ func (s *connManagerState) firstConnID() string {
 }
 
 func (s *connManagerState) connsSnapshot() map[string]*connEntry {
-	if s == nil {
-		return nil
-	}
+	if s == nil { return nil }
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	snapshot := make(map[string]*connEntry, len(s.conns))
@@ -65,9 +57,7 @@ func (s *connManagerState) connsSnapshot() map[string]*connEntry {
 }
 
 func (s *connManagerState) getConn(connID string) (*connEntry, bool) {
-	if s == nil {
-		return nil, false
-	}
+	if s == nil { return nil, false }
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	entry, ok := s.conns[connID]
@@ -75,9 +65,7 @@ func (s *connManagerState) getConn(connID string) (*connEntry, bool) {
 }
 
 func (s *connManagerState) addConn(connID string, entry *connEntry) {
-	if s == nil || connID == "" || entry == nil {
-		return
-	}
+	if s == nil || connID == "" || entry == nil { return }
 	s.mu.Lock()
 	if s.conns == nil {
 		s.conns = make(map[string]*connEntry)
@@ -87,9 +75,7 @@ func (s *connManagerState) addConn(connID string, entry *connEntry) {
 }
 
 func (s *connManagerState) removeConn(connID string) (*connEntry, bool) {
-	if s == nil || connID == "" {
-		return nil, false
-	}
+	if s == nil || connID == "" { return nil, false }
 	s.mu.Lock()
 	entry, ok := s.conns[connID]
 	if ok {
@@ -100,9 +86,7 @@ func (s *connManagerState) removeConn(connID string) (*connEntry, bool) {
 }
 
 func (s *connManagerState) allocPendingRequest() (reqID int64, ch <-chan *Response, cleanup func()) {
-	if s == nil {
-		return 0, nil, func() {}
-	}
+	if s == nil { return 0, nil, func() {} }
 	id := s.nextReqID.Add(1)
 	respCh := make(chan *Response, 1)
 	s.pendingMu.Lock()
@@ -120,9 +104,7 @@ func (s *connManagerState) allocPendingRequest() (reqID int64, ch <-chan *Respon
 }
 
 func (s *connManagerState) pendingResponseChannel(reqID int64) (chan *Response, bool) {
-	if s == nil {
-		return nil, false
-	}
+	if s == nil { return nil, false }
 	s.pendingMu.Lock()
 	ch, ok := s.pending[reqID]
 	s.pendingMu.Unlock()
@@ -157,21 +139,15 @@ type codeRunState struct {
 }
 
 func (s *codeRunState) normalizeAgentID(agentID string) string {
-	if s == nil {
-		return ""
-	}
+	if s == nil { return "" }
 	return strings.TrimSpace(agentID)
 }
 
 func (s *codeRunState) setAgentWorkDir(agentID, cwd string) {
 	id := s.normalizeAgentID(agentID)
-	if id == "" {
-		return
-	}
+	if id == "" { return }
 	normalized := tools.NormalizeAgentWorkDir(cwd)
-	if normalized == "" {
-		return
-	}
+	if normalized == "" { return }
 	s.agentWorkDirMu.Lock()
 	if s.agentWorkDirs == nil {
 		s.agentWorkDirs = make(map[string]string)
@@ -182,9 +158,7 @@ func (s *codeRunState) setAgentWorkDir(agentID, cwd string) {
 
 func (s *codeRunState) getAgentWorkDir(agentID string) string {
 	id := s.normalizeAgentID(agentID)
-	if id == "" {
-		return ""
-	}
+	if id == "" { return "" }
 	s.agentWorkDirMu.RLock()
 	cwd := s.agentWorkDirs[id]
 	s.agentWorkDirMu.RUnlock()
@@ -193,18 +167,14 @@ func (s *codeRunState) getAgentWorkDir(agentID string) string {
 
 func (s *codeRunState) clearAgentWorkDir(agentID string) {
 	id := s.normalizeAgentID(agentID)
-	if id == "" {
-		return
-	}
+	if id == "" { return }
 	s.agentWorkDirMu.Lock()
 	delete(s.agentWorkDirs, id)
 	s.agentWorkDirMu.Unlock()
 }
 
 func (s *codeRunState) clearAllAgentWorkDirs() {
-	if s == nil {
-		return
-	}
+	if s == nil { return }
 	s.agentWorkDirMu.Lock()
 	clear(s.agentWorkDirs)
 	s.agentWorkDirMu.Unlock()
@@ -214,16 +184,12 @@ func (s *codeRunState) withCodeRunsByAgentID(id string, create bool, fn func(run
 	s.codeRunMu.Lock()
 	defer s.codeRunMu.Unlock()
 	if s.activeCodeRuns == nil {
-		if !create {
-			return
-		}
+		if !create { return }
 		s.activeCodeRuns = make(map[string]map[string]context.CancelFunc)
 	}
 	runs := s.activeCodeRuns[id]
 	if runs == nil {
-		if !create {
-			return
-		}
+		if !create { return }
 		runs = make(map[string]context.CancelFunc)
 		s.activeCodeRuns[id] = runs
 	}
@@ -242,13 +208,9 @@ func (s *codeRunState) takeCodeRunsByAgentID(id string) map[string]context.Cance
 }
 
 func (s *codeRunState) registerCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string {
-	if cancel == nil {
-		return ""
-	}
+	if cancel == nil { return "" }
 	id := s.normalizeAgentID(agentID)
-	if id == "" {
-		return ""
-	}
+	if id == "" { return "" }
 	key := fmt.Sprintf("%s#%d", strings.TrimSpace(callID), s.codeRunSeq.Add(1))
 	s.withCodeRunsByAgentID(id, true, func(runs map[string]context.CancelFunc) {
 		runs[key] = cancel
@@ -258,9 +220,7 @@ func (s *codeRunState) registerCodeRunCancel(agentID, callID string, cancel cont
 
 func (s *codeRunState) unregisterCodeRunCancel(agentID, runKey string) {
 	id, key := s.normalizeAgentID(agentID), strings.TrimSpace(runKey)
-	if id == "" || key == "" {
-		return
-	}
+	if id == "" || key == "" { return }
 	s.withCodeRunsByAgentID(id, false, func(runs map[string]context.CancelFunc) {
 		delete(runs, key)
 	})
@@ -268,13 +228,9 @@ func (s *codeRunState) unregisterCodeRunCancel(agentID, runKey string) {
 
 func (s *codeRunState) cancelCodeRuns(agentID string) int {
 	id := s.normalizeAgentID(agentID)
-	if id == "" {
-		return 0
-	}
+	if id == "" { return 0 }
 	runs := s.takeCodeRunsByAgentID(id)
-	if len(runs) == 0 {
-		return 0
-	}
+	if len(runs) == 0 { return 0 }
 	for _, cancel := range runs {
 		cancel()
 	}
@@ -282,9 +238,7 @@ func (s *codeRunState) cancelCodeRuns(agentID string) int {
 }
 
 func (s *codeRunState) cancelAllCodeRuns() int {
-	if s == nil {
-		return 0
-	}
+	if s == nil { return 0 }
 	s.codeRunMu.Lock()
 	all := s.activeCodeRuns
 	s.activeCodeRuns = make(map[string]map[string]context.CancelFunc)
@@ -311,24 +265,18 @@ type turnTrackingState struct {
 }
 
 func (s *turnTrackingState) normalizeThreadID(threadID string) string {
-	if s == nil {
-		return ""
-	}
+	if s == nil { return "" }
 	return strings.TrimSpace(threadID)
 }
 
 func (s *turnTrackingState) nextThreadSeq() int64 {
-	if s == nil {
-		return 0
-	}
+	if s == nil { return 0 }
 	return s.threadSeq.Add(1)
 }
 
 func (s *turnTrackingState) rememberFileChanges(threadID string, files []string) {
 	id := s.normalizeThreadID(threadID)
-	if id == "" || len(files) == 0 {
-		return
-	}
+	if id == "" || len(files) == 0 { return }
 	copied := append([]string(nil), files...)
 	s.fileChangeMu.Lock()
 	if s.fileChangeByThread == nil {
@@ -340,9 +288,7 @@ func (s *turnTrackingState) rememberFileChanges(threadID string, files []string)
 
 func (s *turnTrackingState) consumeFileChanges(threadID string) []string {
 	id := s.normalizeThreadID(threadID)
-	if id == "" {
-		return nil
-	}
+	if id == "" { return nil }
 	s.fileChangeMu.Lock()
 	files := s.fileChangeByThread[id]
 	delete(s.fileChangeByThread, id)
@@ -351,9 +297,7 @@ func (s *turnTrackingState) consumeFileChanges(threadID string) []string {
 }
 
 func (s *turnTrackingState) ensureOrchestrationReportStateLocked() {
-	if s == nil {
-		return
-	}
+	if s == nil { return }
 	if s.orchestrationPendingReports == nil {
 		s.orchestrationPendingReports = make(map[string]map[string]time.Time)
 	}
@@ -363,9 +307,7 @@ func (s *turnTrackingState) ensureOrchestrationReportStateLocked() {
 }
 
 func (s *turnTrackingState) pruneOrchestrationReportRequestsLocked(now time.Time) {
-	if s == nil {
-		return
-	}
+	if s == nil { return }
 	ttl := dashboard.NormalizeDurationOrDefault(s.orchestrationReportTTL, defaultOrchestrationReportTTL)
 	if ttl != s.orchestrationReportTTL {
 		s.orchestrationReportTTL = ttl
@@ -374,9 +316,7 @@ func (s *turnTrackingState) pruneOrchestrationReportRequestsLocked(now time.Time
 }
 
 func (s *turnTrackingState) withOrchestrationReportState(now time.Time, fn func()) {
-	if s == nil || fn == nil {
-		return
-	}
+	if s == nil || fn == nil { return }
 	s.orchestrationReportMu.Lock()
 	defer s.orchestrationReportMu.Unlock()
 	s.ensureOrchestrationReportStateLocked()
@@ -387,9 +327,7 @@ func (s *turnTrackingState) withOrchestrationReportState(now time.Time, fn func(
 func (s *turnTrackingState) rememberReportRequester(workerID, requesterID string, now time.Time) int {
 	target := strings.TrimSpace(workerID)
 	requester := strings.TrimSpace(requesterID)
-	if target == "" || requester == "" {
-		return 0
-	}
+	if target == "" || requester == "" { return 0 }
 	result := 0
 	s.withOrchestrationReportState(now, func() {
 		result = dashboard.RememberOrchestrationRequester(s.orchestrationPendingReports, target, requester, now)
@@ -399,9 +337,7 @@ func (s *turnTrackingState) rememberReportRequester(workerID, requesterID string
 
 func (s *turnTrackingState) takeReportRequesters(workerID string, now time.Time) []string {
 	target := strings.TrimSpace(workerID)
-	if target == "" {
-		return nil
-	}
+	if target == "" { return nil }
 	var requesters []string
 	s.withOrchestrationReportState(now, func() {
 		requesters = dashboard.TakeOrchestrationRequesters(s.orchestrationPendingReports, target)
@@ -415,13 +351,9 @@ type uiThrottleState struct {
 }
 
 func (s *uiThrottleState) stageUIStateChanged(key string, payload map[string]any, now time.Time, interval time.Duration, onFlush func()) (map[string]any, bool) {
-	if s == nil {
-		return nil, false
-	}
+	if s == nil { return nil, false }
 	k := strings.TrimSpace(key)
-	if k == "" {
-		return nil, false
-	}
+	if k == "" { return nil, false }
 	s.uiThrottleMu.Lock()
 	if s.uiThrottleEntries == nil {
 		s.uiThrottleEntries = make(map[string]*uiStateThrottleEntry)
@@ -451,13 +383,9 @@ func (s *uiThrottleState) stageUIStateChanged(key string, payload map[string]any
 }
 
 func (s *uiThrottleState) flushUIStateChanged(key string, now time.Time) (map[string]any, bool) {
-	if s == nil {
-		return nil, false
-	}
+	if s == nil { return nil, false }
 	k := strings.TrimSpace(key)
-	if k == "" {
-		return nil, false
-	}
+	if k == "" { return nil, false }
 	s.uiThrottleMu.Lock()
 	entry := s.uiThrottleEntries[k]
 	if entry == nil || entry.pending == nil {
@@ -476,15 +404,11 @@ func (s *uiThrottleState) flushUIStateChanged(key string, now time.Time) (map[st
 }
 
 func (s *uiThrottleState) stopAllTimers() {
-	if s == nil {
-		return
-	}
+	if s == nil { return }
 	s.uiThrottleMu.Lock()
 	defer s.uiThrottleMu.Unlock()
 	for _, entry := range s.uiThrottleEntries {
-		if entry != nil && entry.timer != nil {
-			entry.timer.Stop()
-		}
+		if entry != nil && entry.timer != nil { entry.timer.Stop() }
 	}
 	clear(s.uiThrottleEntries)
 }
@@ -545,39 +469,27 @@ type runtimeGuardState struct {
 }
 
 func (s *runtimeGuardState) tryBeginApproval(key string) bool {
-	if s == nil {
-		return false
-	}
+	if s == nil { return false }
 	k := strings.TrimSpace(key)
-	if k == "" {
-		return false
-	}
+	if k == "" { return false }
 	_, loaded := s.approvalInFlight.LoadOrStore(k, struct{}{})
 	return !loaded
 }
 
 func (s *runtimeGuardState) endApproval(key string) {
-	if s == nil {
-		return
-	}
+	if s == nil { return }
 	k := strings.TrimSpace(key)
-	if k == "" {
-		return
-	}
+	if k == "" { return }
 	s.approvalInFlight.Delete(k)
 }
 
 func (s *runtimeGuardState) doCleanup(fn func()) {
 	if s == nil {
-		if fn != nil {
-			fn()
-		}
+		if fn != nil { fn() }
 		return
 	}
 	s.cleanupOnce.Do(func() {
-		if fn != nil {
-			fn()
-		}
+		if fn != nil { fn() }
 	})
 }
 
@@ -587,16 +499,12 @@ type threadAliasState struct {
 
 func (s *threadAliasState) withLock(fn func()) {
 	if s == nil {
-		if fn != nil {
-			fn()
-		}
+		if fn != nil { fn() }
 		return
 	}
 	s.threadAliasMu.Lock()
 	defer s.threadAliasMu.Unlock()
-	if fn != nil {
-		fn()
-	}
+	if fn != nil { fn() }
 }
 
 type storeBundle struct {

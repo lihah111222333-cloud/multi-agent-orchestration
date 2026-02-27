@@ -167,24 +167,21 @@ func decodeRawItems[T any](arr []json.RawMessage, decodeOne func(json.RawMessage
 	return out, nil
 }
 
-func decodeArrayLike[T any](raw json.RawMessage, errPrefix string, decodeOne func(json.RawMessage) (T, error)) ([]T, error) {
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-	arr, err := decodeRawArray(raw, errPrefix)
-	if err != nil {
-		return nil, err
-	}
-	return decodeRawItems(arr, decodeOne)
-}
-
-func decodeOneOrArrayLike[T any](raw json.RawMessage, errPrefix string, decodeOne func(json.RawMessage) (T, error)) ([]T, error) {
+func decodeArrayLike[T any](
+	raw json.RawMessage,
+	errPrefix string,
+	allowSingle bool,
+	decodeOne func(json.RawMessage) (T, error),
+) ([]T, error) {
 	if isNullRaw(raw) {
 		return nil, nil
 	}
 	arr, err := decodeRawArray(raw, errPrefix)
 	if err == nil {
 		return decodeRawItems(arr, decodeOne)
+	}
+	if !allowSingle {
+		return nil, err
 	}
 	one, err := decodeOne(raw)
 	if err != nil {
@@ -204,7 +201,7 @@ func decodeRawObject(item json.RawMessage, errPrefix string) (map[string]json.Ra
 // decodeLocationsLike 兼容解码:
 // Location | []Location | []LocationLink | null
 func decodeLocationsLike(raw json.RawMessage) ([]LocationResult, error) {
-	return decodeOneOrArrayLike(raw, "decode location-like", decodeLocationLikeOne)
+	return decodeArrayLike(raw, "decode location-like", true, decodeLocationLikeOne)
 }
 
 func decodeLocationLikeOne(raw json.RawMessage) (LocationResult, error) {
@@ -248,7 +245,7 @@ func decodeLocationLikeOne(raw json.RawMessage) (LocationResult, error) {
 // decodeWorkspaceSymbols 兼容解码:
 // []SymbolInformation | []WorkspaceSymbol | null
 func decodeWorkspaceSymbols(raw json.RawMessage) ([]WorkspaceSymbolResult, error) {
-	return decodeArrayLike(raw, "decode workspace symbols", decodeWorkspaceSymbolOne)
+	return decodeArrayLike(raw, "decode workspace symbols", false, decodeWorkspaceSymbolOne)
 }
 
 func decodeWorkspaceSymbolOne(item json.RawMessage) (WorkspaceSymbolResult, error) {
@@ -281,7 +278,7 @@ func decodeWorkspaceSymbolOne(item json.RawMessage) (WorkspaceSymbolResult, erro
 // decodeCodeActions 兼容解码:
 // (CodeAction | Command)[] | null
 func decodeCodeActions(raw json.RawMessage) ([]CodeActionResult, error) {
-	return decodeArrayLike(raw, "decode code actions", decodeCodeActionOne)
+	return decodeArrayLike(raw, "decode code actions", false, decodeCodeActionOne)
 }
 
 func decodeCodeActionOne(item json.RawMessage) (CodeActionResult, error) {
@@ -314,31 +311,16 @@ func decodeCodeActionOrCommand(item json.RawMessage, obj map[string]json.RawMess
 }
 
 func isCodeActionLike(obj map[string]json.RawMessage) bool {
-	if _, ok := obj["kind"]; ok {
-		return true
+	for _, key := range []string{"kind", "edit", "diagnostics", "isPreferred", "disabled", "data"} {
+		if _, ok := obj[key]; ok {
+			return true
+		}
 	}
-	if _, ok := obj["edit"]; ok {
-		return true
-	}
-	if _, ok := obj["diagnostics"]; ok {
-		return true
-	}
-	if _, ok := obj["isPreferred"]; ok {
-		return true
-	}
-	if _, ok := obj["disabled"]; ok {
-		return true
-	}
-	if _, ok := obj["data"]; ok {
-		return true
-	}
-	commandRaw, hasCommand := obj["command"]
-	if hasCommand {
+	if commandRaw, hasCommand := obj["command"]; hasCommand {
 		var commandName string
 		if err := json.Unmarshal(commandRaw, &commandName); err == nil {
 			return false
 		}
-		// command 为对象时属于 CodeAction.command，而非顶层 Command.command。
 		return true
 	}
 	return false
@@ -347,12 +329,9 @@ func isCodeActionLike(obj map[string]json.RawMessage) bool {
 // decodeCompletionItems 兼容解码:
 // []CompletionItem | CompletionList | null
 func decodeCompletionItems(raw json.RawMessage) ([]CompletionItem, error) {
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-
-	if items, ok := decodeCompletionListItems(raw); ok {
-		return items, nil
+	var list CompletionList
+	if err := json.Unmarshal(raw, &list); err == nil && list.Items != nil {
+		return list.Items, nil
 	}
 
 	items, err := decodeNullableSlice[CompletionItem](raw, "decode completion")
@@ -361,14 +340,6 @@ func decodeCompletionItems(raw json.RawMessage) ([]CompletionItem, error) {
 	}
 
 	return nil, fmt.Errorf("decode completion: unsupported payload")
-}
-
-func decodeCompletionListItems(raw json.RawMessage) ([]CompletionItem, bool) {
-	var list CompletionList
-	if err := json.Unmarshal(raw, &list); err == nil && list.Items != nil {
-		return list.Items, true
-	}
-	return nil, false
 }
 
 // decodeDocumentSymbols 兼容解码:
@@ -661,15 +632,7 @@ func decodeParameterLabel(raw json.RawMessage) (string, []int) {
 // decodeTextEdits 兼容解码 formatting 返回:
 // []TextEdit | null
 func decodeTextEdits(raw json.RawMessage) ([]TextEdit, error) {
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-
-	var edits []TextEdit
-	if err := json.Unmarshal(raw, &edits); err != nil {
-		return nil, fmt.Errorf("decode text edits: %w", err)
-	}
-	return edits, nil
+	return decodeNullableSlice[TextEdit](raw, "decode text edits")
 }
 
 // SemanticTokenResultLimit 是 semantic_tokens decoded 输出上限。

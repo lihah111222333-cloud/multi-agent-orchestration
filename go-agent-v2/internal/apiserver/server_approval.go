@@ -81,12 +81,6 @@ var approvalStringAliases = map[string]string{
 	"cancel": "cancel", "abort": "cancel", "aborted": "cancel",
 }
 
-var approvalMethodAcceptWord = map[string]string{
-	approvalMethodCommandExecution: "accept",
-	approvalMethodFileChange:       "accept",
-	approvalMethodSkillRequest:     "approve",
-}
-
 var approvalMethodValidDecisions = map[string]map[string]bool{
 	approvalMethodCommandExecution: {"accept": true, "acceptForSession": true, "decline": true, "cancel": true},
 	approvalMethodFileChange:       {"accept": true, "acceptForSession": true, "decline": true, "cancel": true},
@@ -97,17 +91,6 @@ var approvalMethodAllowsSubmit = map[string]map[string]bool{
 	approvalMethodCommandExecution: {"accept": true, "acceptForSession": true},
 	approvalMethodFileChange:       {"accept": true, "acceptForSession": true},
 	approvalMethodSkillRequest:     {"approve": true},
-}
-
-func normalizeStringDecisionForMethod(method, decision string) (string, bool) {
-	if method == approvalMethodSkillRequest && decision == "accept" {
-		decision = "approve"
-	}
-	valid := approvalMethodValidDecisions[method]
-	if valid == nil {
-		return decision, decision != ""
-	}
-	return decision, valid[decision]
 }
 
 func normalizeCommandAmendmentDecision(decisionObj map[string]any) (any, bool) {
@@ -147,8 +130,11 @@ func normalizeCommandAmendmentDecision(decisionObj map[string]any) (any, bool) {
 func normalizeApprovalDecision(method string, raw any) (any, bool) {
 	method = strings.TrimSpace(method)
 	if decision, ok := approvalStringAliases[strings.ToLower(strings.TrimSpace(approvalStringValue(raw)))]; ok {
-		decision, ok = normalizeStringDecisionForMethod(method, decision)
-		if ok {
+		if method == approvalMethodSkillRequest && decision == "accept" {
+			decision = "approve"
+		}
+		valid := approvalMethodValidDecisions[method]
+		if valid == nil || valid[decision] {
 			return decision, true
 		}
 	}
@@ -201,9 +187,9 @@ func approvalDecisionPayload(method string, approved bool) map[string]any {
 	if !approved {
 		return map[string]any{"decision": "decline"}
 	}
-	decision := approvalMethodAcceptWord[strings.TrimSpace(method)]
-	if decision == "" {
-		decision = "accept"
+	decision := "accept"
+	if strings.TrimSpace(method) == approvalMethodSkillRequest {
+		decision = "approve"
 	}
 	return map[string]any{"decision": decision}
 }
@@ -415,17 +401,14 @@ func approvalRespondStatus(ok bool, status string) map[string]any {
 }
 
 func approvalRespondResultPayload(p approvalRespondParams) (map[string]any, bool) {
-	result := make(map[string]any, 2)
-	hasResult := false
+	result := map[string]any{}
 	if p.Decision != nil {
 		result["decision"] = p.Decision
-		hasResult = true
 	}
 	if p.Approved != nil {
 		result["approved"] = *p.Approved
-		hasResult = true
 	}
-	return result, hasResult
+	return result, len(result) > 0
 }
 
 func approvalRespondTyped(s *Server, _ context.Context, p approvalRespondParams) (any, error) {

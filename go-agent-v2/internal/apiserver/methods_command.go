@@ -152,10 +152,10 @@ func newSkillsManager(s *Server) *skillsruntime.Manager {
 }
 
 func skillsManagerDelegate(s *Server) *skillsruntime.Manager {
-	if s != nil && s.skillsMgr != nil {
-		return s.skillsMgr
+	if s == nil || s.skillsMgr == nil {
+		return newSkillsManager(s)
 	}
-	return newSkillsManager(s)
+	return s.skillsMgr
 }
 
 func skillsList(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {

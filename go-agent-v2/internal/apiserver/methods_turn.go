@@ -11,14 +11,13 @@ import (
 	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
-// UserInput 用户输入 (支持多种类型)。
 type UserInput struct {
-	Type    string `json:"type"`              // text, image, localImage, skill, mention, fileContent
-	Text    string `json:"text,omitempty"`    // type=text
-	URL     string `json:"url,omitempty"`     // type=image
-	Path    string `json:"path,omitempty"`    // type=localImage/mention/fileContent
-	Name    string `json:"name,omitempty"`    // type=skill/mention
-	Content string `json:"content,omitempty"` // type=skill/fileContent
+	Type    string `json:"type"`
+	Text    string `json:"text,omitempty"`
+	URL     string `json:"url,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Content string `json:"content,omitempty"`
 }
 
 type turnInputParams struct {
@@ -49,11 +48,7 @@ func toCodexTurnInputs(input []UserInput) []contracts.TurnInput {
 	if len(input) == 0 {
 		return nil
 	}
-	out := make([]contracts.TurnInput, len(input))
-	for i := range input {
-		out[i] = contracts.TurnInput(input[i])
-	}
-	return out
+	return mapSlice(input, func(item UserInput) contracts.TurnInput { return contracts.TurnInput(item) })
 }
 
 func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, error) {

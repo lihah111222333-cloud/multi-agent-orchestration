@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	archiveconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/archive"
+	archivesvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/archive"
 )
 
 // ========================================
@@ -35,7 +35,7 @@ func TestSanitizeArchiveName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := archiveconsumer.SanitizeArchiveName(tt.raw)
+			got := archivesvc.SanitizeArchiveName(tt.raw)
 			if got != tt.want {
 				t.Errorf("sanitizeArchiveName(%q) = %q, want %q", tt.raw, got, tt.want)
 			}
@@ -45,15 +45,15 @@ func TestSanitizeArchiveName(t *testing.T) {
 
 func TestSanitizeArchiveNameStrict(t *testing.T) {
 	// valid
-	if name, err := archiveconsumer.SanitizeArchiveNameStrict("valid-name"); err != nil || name != "valid-name" {
+	if name, err := archivesvc.SanitizeArchiveNameStrict("valid-name"); err != nil || name != "valid-name" {
 		t.Errorf("valid: got %q, %v", name, err)
 	}
 	// empty → error
-	if _, err := archiveconsumer.SanitizeArchiveNameStrict(""); err == nil {
+	if _, err := archivesvc.SanitizeArchiveNameStrict(""); err == nil {
 		t.Error("empty: expected error, got nil")
 	}
 	// only special → error
-	if _, err := archiveconsumer.SanitizeArchiveNameStrict("!@#"); err == nil {
+	if _, err := archivesvc.SanitizeArchiveNameStrict("!@#"); err == nil {
 		t.Error("special: expected error, got nil")
 	}
 }
@@ -77,7 +77,7 @@ func TestInferThreadArtifactKind(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := archiveconsumer.InferThreadArtifactKind(tt.filename)
+			got := archivesvc.InferThreadArtifactKind(tt.filename)
 			if got != tt.want {
 				t.Errorf("inferThreadArtifactKind(%q) = %q, want %q", tt.filename, got, tt.want)
 			}
@@ -95,19 +95,19 @@ func TestPathWithinRoot(t *testing.T) {
 	child := filepath.Join(tmpDir, "sub", "file.txt")
 	_ = os.MkdirAll(filepath.Dir(child), 0o755)
 
-	within, err := archiveconsumer.PathWithinRoot(tmpDir, child)
+	within, err := archivesvc.PathWithinRoot(tmpDir, child)
 	if err != nil || !within {
 		t.Errorf("child: got %v, %v; want true, nil", within, err)
 	}
 
 	// root itself
-	within, err = archiveconsumer.PathWithinRoot(tmpDir, tmpDir)
+	within, err = archivesvc.PathWithinRoot(tmpDir, tmpDir)
 	if err != nil || !within {
 		t.Errorf("self: got %v, %v; want true, nil", within, err)
 	}
 
 	// outside
-	within, err = archiveconsumer.PathWithinRoot(tmpDir, "/tmp")
+	within, err = archivesvc.PathWithinRoot(tmpDir, "/tmp")
 	if err != nil {
 		t.Fatalf("outside: error=%v", err)
 	}
@@ -122,38 +122,38 @@ func TestPathWithinRoot(t *testing.T) {
 
 func TestNormalizeThreadArchiveMap(t *testing.T) {
 	// nil → empty map
-	got := archiveconsumer.NormalizeThreadArchiveMap(nil)
+	got := archivesvc.NormalizeThreadArchiveMap(nil)
 	if len(got) != 0 {
 		t.Errorf("nil: got %v", got)
 	}
 
 	// map[string]int64
-	got = archiveconsumer.NormalizeThreadArchiveMap(map[string]int64{"a": 123, "": 456})
+	got = archivesvc.NormalizeThreadArchiveMap(map[string]int64{"a": 123, "": 456})
 	if len(got) != 1 || got["a"] != 123 {
 		t.Errorf("int64 map: got %v", got)
 	}
 
 	// map[string]any with float64
-	got = archiveconsumer.NormalizeThreadArchiveMap(map[string]any{"b": float64(789)})
+	got = archivesvc.NormalizeThreadArchiveMap(map[string]any{"b": float64(789)})
 	if got["b"] != 789 {
 		t.Errorf("any map: got %v", got)
 	}
 
 	// JSON string
-	got = archiveconsumer.NormalizeThreadArchiveMap(`{"c": 1000}`)
+	got = archivesvc.NormalizeThreadArchiveMap(`{"c": 1000}`)
 	if got["c"] != 1000 {
 		t.Errorf("json string: got %v", got)
 	}
 
 	// json.RawMessage
 	raw := json.RawMessage(`{"d": 2000}`)
-	got = archiveconsumer.NormalizeThreadArchiveMap(raw)
+	got = archivesvc.NormalizeThreadArchiveMap(raw)
 	if got["d"] != 2000 {
 		t.Errorf("raw message: got %v", got)
 	}
 
 	// zero value filtered
-	got = archiveconsumer.NormalizeThreadArchiveMap(map[string]any{"e": float64(0)})
+	got = archivesvc.NormalizeThreadArchiveMap(map[string]any{"e": float64(0)})
 	if len(got) != 0 {
 		t.Errorf("zero: got %v", got)
 	}

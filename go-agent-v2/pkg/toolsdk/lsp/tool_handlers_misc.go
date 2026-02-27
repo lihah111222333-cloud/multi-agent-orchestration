@@ -220,7 +220,6 @@ type lspHierarchyParam struct {
 	Direction string `json:"direction"`
 }
 
-// CallHierarchy gets call hierarchy entries.
 func (h *ToolHandlers) CallHierarchy(args json.RawMessage) string {
 	return runHierarchyTool(
 		h,
@@ -233,7 +232,6 @@ func (h *ToolHandlers) CallHierarchy(args json.RawMessage) string {
 	)
 }
 
-// TypeHierarchy gets type hierarchy entries.
 func (h *ToolHandlers) TypeHierarchy(args json.RawMessage) string {
 	return runHierarchyTool(
 		h,
@@ -308,7 +306,6 @@ func hierarchyResultCount[T any](result T) int {
 	}
 }
 
-// SemanticTokens gets document semantic tokens.
 func (h *ToolHandlers) SemanticTokens(args json.RawMessage) string {
 	return runFilePathManagerTool(
 		h,
@@ -333,7 +330,6 @@ func (h *ToolHandlers) SemanticTokens(args json.RawMessage) string {
 	)
 }
 
-// FoldingRange gets document folding ranges.
 func (h *ToolHandlers) FoldingRange(args json.RawMessage) string {
 	return runFilePathManagerTool(
 		h,
@@ -608,7 +604,6 @@ func toolError(err error) string {
 	return "error: " + err.Error()
 }
 
-// Hover calls LSP hover.
 func (h *ToolHandlers) Hover(args json.RawMessage) string {
 	call, ok := h.startManagedToolCall("lsp_hover", args)
 	if !ok {
@@ -636,7 +631,6 @@ func (h *ToolHandlers) Hover(args json.RawMessage) string {
 	return result.Contents.Value
 }
 
-// OpenFile opens file and triggers LSP analysis.
 func (h *ToolHandlers) OpenFile(args json.RawMessage) string {
 	call, filePath, resolvedPath, errText := h.decodeManagedFilePath("lsp_open_file", args)
 	if errText != "" {
@@ -654,7 +648,6 @@ func (h *ToolHandlers) OpenFile(args json.RawMessage) string {
 	return fmt.Sprintf("opened %s (%d bytes)", filePath, len(content))
 }
 
-// ReadFile returns full file content.
 func (h *ToolHandlers) ReadFile(args json.RawMessage) string {
 	call, filePath, resolvedPath, errText := h.decodeFilePathToolCall("lsp_read_file", args)
 	if errText != "" {
@@ -705,7 +698,6 @@ func (h *ToolHandlers) decodeFilePathToolCall(
 	return call, filePath, lspToolLogPath(filePath), ""
 }
 
-// Diagnostics returns current diagnostics from cache.
 func (h *ToolHandlers) Diagnostics(args json.RawMessage) string {
 	call := startLSPToolCallFromArgs("lsp_diagnostics", args)
 	filePath, err := decodeDiagnosticsPath(args)
@@ -804,7 +796,6 @@ func appendDiagnostics(sb *strings.Builder, label string, diags []Diagnostic) in
 	return len(diags)
 }
 
-// Definition performs go-to-definition.
 func (h *ToolHandlers) Definition(args json.RawMessage) string {
 	return runFilePositionManagerTool(
 		h,
@@ -819,7 +810,6 @@ func (h *ToolHandlers) Definition(args json.RawMessage) string {
 	)
 }
 
-// References finds symbol references.
 func (h *ToolHandlers) References(args json.RawMessage) string {
 	call, ok := h.startManagedToolCall("lsp_references", args)
 	if !ok {
@@ -850,7 +840,6 @@ func (h *ToolHandlers) References(args json.RawMessage) string {
 	)
 }
 
-// DocumentSymbol returns file symbols.
 func (h *ToolHandlers) DocumentSymbol(args json.RawMessage) string {
 	return runFilePathManagerTool(
 		h,
@@ -865,7 +854,6 @@ func (h *ToolHandlers) DocumentSymbol(args json.RawMessage) string {
 	)
 }
 
-// Rename renames symbol.
 func (h *ToolHandlers) Rename(args json.RawMessage) string {
 	call, ok := h.startManagedToolCall("lsp_rename", args)
 	if !ok {
@@ -900,7 +888,6 @@ func (h *ToolHandlers) Rename(args json.RawMessage) string {
 	)
 }
 
-// Completion returns code completion items.
 func (h *ToolHandlers) Completion(args json.RawMessage) string {
 	return runFilePositionManagerTool(
 		h,
@@ -924,7 +911,6 @@ func (h *ToolHandlers) Completion(args json.RawMessage) string {
 	)
 }
 
-// DidChange notifies full content changes.
 func (h *ToolHandlers) DidChange(args json.RawMessage) string {
 	call, ok := h.startManagedToolCall("lsp_did_change", args)
 	if !ok {
@@ -1013,7 +999,6 @@ func didChangeSuccessText(persist bool) string {
 	return "ok: file content updated (lsp-only, disk not written)"
 }
 
-// ReplaceRange replaces text within [line:column, end_line:end_column) and applies the edit via did_change.
 func (h *ToolHandlers) ReplaceRange(args json.RawMessage) string {
 	call, ok := h.startManagedToolCall("lsp_replace_range", args)
 	if !ok {
@@ -1339,7 +1324,6 @@ type lspFormatParam struct {
 	InsertSpaces *bool  `json:"insert_spaces"`
 }
 
-// CodeAction gets code actions at a range.
 func (h *ToolHandlers) CodeAction(args json.RawMessage) string {
 	call, ok := h.startManagedToolCall("lsp_code_action", args)
 	if !ok {
@@ -1383,7 +1367,6 @@ func optionalRangeEnd(endLine, endColumn *int) (int, int) {
 	return line, column
 }
 
-// SignatureHelp gets signature help at a position.
 func (h *ToolHandlers) SignatureHelp(args json.RawMessage) string {
 	call, ok := h.startManagedToolCall("lsp_signature_help", args)
 	if !ok {
@@ -1415,7 +1398,6 @@ func (h *ToolHandlers) SignatureHelp(args json.RawMessage) string {
 	)
 }
 
-// Format returns formatting edits.
 func (h *ToolHandlers) Format(args json.RawMessage) string {
 	call, filePath, _, errText := h.decodeManagedFilePath("lsp_format", args)
 	if errText != "" {
@@ -1656,7 +1638,6 @@ type lspSearchMatch struct {
 	Text   string `json:"text"`
 }
 
-// TextSearch performs text search via ripgrep.
 func (h *ToolHandlers) TextSearch(args json.RawMessage) string {
 	call := startLSPToolCallFromArgs("lsp_text_search", args)
 	params, err := decodeArgs[lspTextSearchParam](args)
@@ -1693,7 +1674,6 @@ func (h *ToolHandlers) TextSearch(args json.RawMessage) string {
 	)
 }
 
-// AstSearch performs AST pattern search via ast-grep.
 func (h *ToolHandlers) AstSearch(args json.RawMessage) string {
 	call := startLSPToolCallFromArgs("lsp_ast_search", args)
 	params, err := decodeArgs[lspASTSearchParam](args)

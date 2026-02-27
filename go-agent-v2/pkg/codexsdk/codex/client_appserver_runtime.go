@@ -17,7 +17,6 @@ import (
 func (c *AppServerClient) pingLoop(conn *websocket.Conn) {
 	ticker := time.NewTicker(appServerPingInterval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -27,8 +26,7 @@ func (c *AppServerClient) pingLoop(conn *websocket.Conn) {
 		case <-ticker.C:
 			c.wsMu.Lock()
 			if c.ws != conn {
-				c.wsMu.Unlock()
-				return
+				c.wsMu.Unlock(); return
 			}
 			err := c.ws.WriteControl(websocket.PingMessage, []byte("ping"), time.Now().Add(appServerWriteTimeout))
 			if err != nil {
@@ -66,28 +64,15 @@ func (c *AppServerClient) failPendingCalls(err error) {
 		err = apperrors.New("AppServerClient.failPendingCalls", "connection unavailable")
 	}
 	c.pending.Range(func(_, value any) bool {
-		if call, ok := value.(*pendingCall); ok {
-			call.resolve(nil, err)
-		}
+		if call, ok := value.(*pendingCall); ok { call.resolve(nil, err) }
 		return true
 	})
 }
 
 func (c *AppServerClient) SpawnAndConnect(ctx context.Context, prompt, cwd, model, instructions string, dynamicTools []DynamicTool) error {
-	if err := c.Spawn(ctx); err != nil {
-		return err
-	}
-
-	if err := c.connectWS(); err != nil {
-		_ = c.Kill()
-		return err
-	}
-
-	if err := c.Initialize(); err != nil {
-		_ = c.Kill()
-		return apperrors.Wrap(err, "AppServerClient.SpawnAndConnect", "initialize")
-	}
-
+	if err := c.Spawn(ctx); err != nil { return err }
+	if err := c.connectWS(); err != nil { _ = c.Kill(); return err }
+	if err := c.Initialize(); err != nil { _ = c.Kill(); return apperrors.Wrap(err, "AppServerClient.SpawnAndConnect", "initialize") }
 	threadID, err := c.ThreadStart(cwd, model, instructions, dynamicTools)
 	if err != nil {
 		_ = c.Kill()
@@ -138,9 +123,7 @@ func (c *AppServerClient) Shutdown() error {
 }
 
 func (c *AppServerClient) Kill() error {
-	if c.Cmd == nil || c.Cmd.Process == nil {
-		return nil
-	}
+	if c.Cmd == nil || c.Cmd.Process == nil { return nil }
 	pid := c.Cmd.Process.Pid
 	killErr := syscall.Kill(-pid, syscall.SIGKILL)
 	if killErr != nil {

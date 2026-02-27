@@ -42,14 +42,14 @@ func (a *Adapter) ThreadResume(ctx context.Context, threadID, path, cwd, model s
 		return lifecyclesvc.ThreadResumeResult{}, err
 	}
 	return withProcess(a, "Server.threadResume", id, func(proc *codexsdk.AgentProcess) (lifecyclesvc.ThreadResumeResult, error) {
-		return lifecyclesvc.RunThreadResume(ctx, id, path, cwd, model, proc, a.ResolveCodexThreadCandidates, lifecyclesvc.NormalizeCodexThreadID, a.resumeThreadFromAny)
+		return lifecyclesvc.RunThreadResume(ctx, id, path, cwd, model, proc, a.ResolveCodexThreadCandidates, lifecyclesvc.NormalizeCodexThreadID, a.ResumeThread)
 	})
 }
 
 func (a *Adapter) ThreadFork(threadID string) (lifecyclesvc.ThreadForkResult, error) {
 	sourceThreadID := strings.TrimSpace(threadID)
 	return withProcess(a, "Server.threadFork", sourceThreadID, func(proc *codexsdk.AgentProcess) (lifecyclesvc.ThreadForkResult, error) {
-		return lifecyclesvc.RunThreadFork(sourceThreadID, proc, a.forkThreadFromAny, a.nowUnixMilli)
+		return lifecyclesvc.RunThreadFork(sourceThreadID, proc, a.ForkThread, a.nowUnixMilli)
 	})
 }
 
@@ -63,7 +63,7 @@ func (a *Adapter) ReviewStart(threadID, reviewArgs string) (map[string]any, erro
 
 func (a *Adapter) sendThreadCommand(methodName, threadID, command, args, wrapMsg string) (map[string]any, error) {
 	return withProcess(a, methodName, threadID, func(proc *codexsdk.AgentProcess) (map[string]any, error) {
-		return lifecyclesvc.RunThreadCommand(proc, methodName, command, args, wrapMsg, a.sendCommandFromAny)
+		return lifecyclesvc.RunThreadCommand(proc, methodName, command, args, wrapMsg, a.SendCommand)
 	})
 }
 
@@ -95,7 +95,7 @@ func (a *Adapter) ThreadNameSet(ctx context.Context, threadID, name string) (map
 
 func (a *Adapter) ThreadRead(_ context.Context, threadID string) (map[string]any, error) {
 	return withProcess(a, "Server.threadRead", threadID, func(proc *codexsdk.AgentProcess) (map[string]any, error) {
-		return lifecyclesvc.RunThreadRead(proc, a.listThreadsFromAny)
+		return lifecyclesvc.RunThreadRead(proc, a.ListThreads)
 	})
 }
 
@@ -108,11 +108,45 @@ func (a *Adapter) ResolveCodexThreadCandidates(ctx context.Context, agentID stri
 	if preview == nil {
 		preview = lifecyclesvc.PreviewResumeCandidates
 	}
-	return historysvc.ResolveCodexThreadCandidates(ctx, agentID, 0, appendUniqueThreadID, a.bindingCodexThreadID, a.statusSessionID, preview)
+	return historysvc.ResolveCodexThreadCandidates(
+		ctx,
+		agentID,
+		0,
+		appendUniqueThreadID,
+		func(ctx context.Context, agentID string) (string, error) {
+			binding, err := a.findBindingByAgentID(ctx, agentID)
+			if err != nil || binding == nil {
+				return "", err
+			}
+			return binding.CodexThreadID, nil
+		},
+		func(ctx context.Context, agentID string) (string, error) {
+			status, err := a.findStatusByAgentID(ctx, agentID)
+			if err != nil || status == nil {
+				return "", err
+			}
+			return status.SessionID, nil
+		},
+		preview,
+	)
 }
 
 func (a *Adapter) ThreadExistsInHistory(ctx context.Context, threadID string) bool {
-	return historysvc.ThreadExistsInHistory(ctx, threadID, 0, lifecyclesvc.IsLikelyCodexThreadID, a.bindingExists, a.agentStatusExists, a.loadThreadArchiveMap)
+	return historysvc.ThreadExistsInHistory(
+		ctx,
+		threadID,
+		0,
+		lifecyclesvc.IsLikelyCodexThreadID,
+		func(ctx context.Context, agentID string) (bool, error) {
+			binding, err := a.findBindingByAgentID(ctx, agentID)
+			return binding != nil, err
+		},
+		func(ctx context.Context, agentID string) (bool, error) {
+			status, err := a.findStatusByAgentID(ctx, agentID)
+			return status != nil, err
+		},
+		a.loadThreadArchiveMap,
+	)
 }
 
 func (a *Adapter) firstResolvedCodexThreadID(ctx context.Context, threadID string) string {

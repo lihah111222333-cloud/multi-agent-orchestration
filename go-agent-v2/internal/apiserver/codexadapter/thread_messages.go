@@ -14,11 +14,8 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-const (
-	prefKeyShowInjectedPromptInChat = "settings.showInjectedPromptInChat"
-)
+const prefKeyShowInjectedPromptInChat = "settings.showInjectedPromptInChat"
 
-// ThreadMessages handles rollout history paging and runtime hydration.
 func (a *Adapter) ThreadMessages(ctx context.Context, threadID string, limit int, before int64) (map[string]any, error) {
 	id, err := requireThreadID("Server.threadMessages", threadID)
 	if err != nil {
@@ -42,6 +39,7 @@ func (a *Adapter) ThreadMessages(ctx context.Context, threadID string, limit int
 	logger.Info("thread/messages: page selected", append(threadLogFields(id), "before", before, "limit", limit, "page_count", len(msgs), "total", total)...)
 
 	runtime := a.uiRuntime()
+	diffLen, timelineLen := 0, 0
 	if runtime != nil {
 		messagessvc.HandleThreadMessagesHydration(
 			id,
@@ -72,9 +70,6 @@ func (a *Adapter) ThreadMessages(ctx context.Context, threadID string, limit int
 			},
 			util.SafeGo,
 		)
-	}
-	diffLen, timelineLen := 0, 0
-	if runtime != nil {
 		diffLen, timelineLen = len(runtime.ThreadDiff(id)), len(runtime.ThreadTimeline(id))
 	}
 	logger.Info("thread/messages: response prepared", append(threadLogFields(id), "page_count", len(msgs), "total", total, "timeline_len", timelineLen, "diff_len", diffLen)...)
@@ -95,46 +90,36 @@ func (a *Adapter) showInjectedPromptInChat(ctx context.Context) bool {
 }
 
 func (a *Adapter) resolveRolloutHistorySource(ctx context.Context, threadID string) (string, string) {
-	runningCodexThreadID := func(threadID string) string {
-		return rolloutsvc.RunningCodexThreadIDFromManager(threadID, a.managerProcess, func(proc any) string {
-			typed, _ := proc.(*codexsdk.AgentProcess)
-			return a.GetThreadID(typed)
-		})
-	}
-	bindingRolloutSourceByAgentID := func(ctx context.Context, agentID string) (string, string, error) {
-		bindingStore := a.bindingStore()
-		if bindingStore == nil {
-			return "", "", nil
-		}
-		binding, err := bindingStore.FindByAgentID(ctx, agentID)
-		if err != nil {
-			return "", "", err
-		}
-		if binding == nil {
-			return "", "", nil
-		}
-		return binding.CodexThreadID, binding.RolloutPath, nil
-	}
-	statusSessionIDByAgentID := func(ctx context.Context, agentID string) (string, error) {
-		return a.statusSessionID(ctx, agentID)
-	}
 	return rolloutsvc.ResolveRolloutHistorySource(
 		ctx,
 		threadID,
-		runningCodexThreadID,
-		bindingRolloutSourceByAgentID,
-		statusSessionIDByAgentID,
+		func(threadID string) string {
+			return rolloutsvc.RunningCodexThreadIDFromManager(threadID, a.managerProcess, func(proc any) string {
+				typed, _ := proc.(*codexsdk.AgentProcess)
+				return a.GetThreadID(typed)
+			})
+		},
+		func(ctx context.Context, agentID string) (string, string, error) {
+			binding, err := a.findBindingByAgentID(ctx, agentID)
+			if err != nil || binding == nil {
+				return "", "", err
+			}
+			return binding.CodexThreadID, binding.RolloutPath, nil
+		},
+		func(ctx context.Context, agentID string) (string, error) {
+			status, err := a.findStatusByAgentID(ctx, agentID)
+			if err != nil || status == nil {
+				return "", err
+			}
+			return status.SessionID, nil
+		},
 		lifecyclesvc.NormalizeCodexThreadID,
 	)
 }
 
 func toHistoryRecords(msgs []messagessvc.ThreadHistoryMessage) []uistate.HistoryRecord {
-	if len(msgs) == 0 {
-		return nil
-	}
-	out := make([]uistate.HistoryRecord, 0, len(msgs))
-	for _, msg := range msgs {
-		out = append(out, uistate.HistoryRecord{
+	return mapSlice(msgs, func(msg messagessvc.ThreadHistoryMessage) uistate.HistoryRecord {
+		return uistate.HistoryRecord{
 			ID:        msg.ID,
 			Role:      msg.Role,
 			EventType: msg.EventType,
@@ -142,7 +127,6 @@ func toHistoryRecords(msgs []messagessvc.ThreadHistoryMessage) []uistate.History
 			Content:   msg.Content,
 			Metadata:  msg.Metadata,
 			CreatedAt: msg.CreatedAt,
-		})
-	}
-	return out
+		}
+	})
 }

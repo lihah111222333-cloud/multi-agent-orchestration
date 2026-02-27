@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	trackersvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/tracker"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -59,7 +60,7 @@ func maybeAutoReportOrchestrationCompletion(s *Server, agentID, eventType, metho
 	if s == nil || s.codexAdapter == nil {
 		return
 	}
-	_, status, reason, terminal, _ := s.codexAdapter.TrackedTurnTerminalFromEvent(eventType, method, payload)
+	_, status, reason, terminal, _ := trackersvc.TrackedTurnTerminalFromEvent(eventType, method, payload)
 	if !terminal {
 		return
 	}
@@ -69,9 +70,9 @@ func maybeAutoReportOrchestrationCompletion(s *Server, agentID, eventType, metho
 		return
 	}
 
-	summary := strings.TrimSpace(s.codexAdapter.TrackedTurnSummaryFromPayload(payload))
+	summary := strings.TrimSpace(trackersvc.TrackedTurnSummaryFromPayload(payload))
 	if summary == "" {
-		summary = s.codexAdapter.ExtractTrackedString(payload, "uiText", "summary", "text", "message", "output")
+		summary = trackersvc.ExtractTrackedString(payload, "uiText", "summary", "text", "message", "output")
 	}
 
 	report := tools.BuildOrchestrationCompletionReport(workerID, status, reason, summary)

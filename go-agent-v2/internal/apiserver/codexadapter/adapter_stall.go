@@ -2,7 +2,6 @@ package codexadapter
 
 import (
 	"strings"
-	"sync"
 	"time"
 
 	trackersvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/tracker"
@@ -12,16 +11,19 @@ func (a *Adapter) trackerStateAndNotify() (turnTrackerState, func(string, any)) 
 	if a == nil {
 		return turnTrackerState{}, nil
 	}
-	var notify func(string, any)
-	if deps := a.Context(); deps != nil {
-		notify = deps.Notify
+	if a.ctx != nil {
+		return a.tracker, a.ctx.Notify
 	}
-	return a.tracker, notify
+	return a.tracker, nil
+}
+
+func (a *Adapter) trackerState() turnTrackerState {
+	state, _ := a.trackerStateAndNotify()
+	return state
 }
 
 func (a *Adapter) applyTrackedTurnTransition(threadID string, req trackedTurnTransitionRequest) trackedTurnTransitionResult {
-	state, _ := a.trackerStateAndNotify()
-	return trackersvc.ApplyTrackedTurnTransitionCore(state, threadID, req)
+	return trackersvc.ApplyTrackedTurnTransitionCore(a.trackerState(), threadID, req)
 }
 
 func (a *Adapter) activeTrackedTurnID(threadID string) (string, bool) {
@@ -42,13 +44,11 @@ func (a *Adapter) markTrackedTurnInterruptRequested(threadID string) bool {
 }
 
 func (a *Adapter) waitTrackedTurnTerminal(threadID string, timeout time.Duration) (string, bool) {
-	state, _ := a.trackerStateAndNotify()
-	return trackersvc.WaitTrackedTurnTerminalCore(state, threadID, timeout)
+	return trackersvc.WaitTrackedTurnTerminalCore(a.trackerState(), threadID, timeout)
 }
 
 func (a *Adapter) completeTrackedTurnByID(threadID, turnID, status, reason string) (map[string]any, bool) {
-	state, _ := a.trackerStateAndNotify()
-	return trackersvc.CompleteTrackedTurnByIDCore(state, threadID, turnID, status, reason)
+	return trackersvc.CompleteTrackedTurnByIDCore(a.trackerState(), threadID, turnID, status, reason)
 }
 
 func (a *Adapter) beginTrackedTurn(threadID, turnID string) string {
@@ -57,22 +57,11 @@ func (a *Adapter) beginTrackedTurn(threadID, turnID string) string {
 }
 
 func (a *Adapter) trackerDuration(getter func(turnTrackerState) *time.Duration, fallback time.Duration) time.Duration {
-	state, _ := a.trackerStateAndNotify()
-	return trackersvc.TrackerDurationCore(state, getter, fallback)
+	return trackersvc.TrackerDurationCore(a.trackerState(), getter, fallback)
 }
 
 func (a *Adapter) setTrackerDuration(getter func(turnTrackerState) *time.Duration, value time.Duration) {
-	state, _ := a.trackerStateAndNotify()
-	trackersvc.SetTrackerDurationCore(state, getter, value)
-}
-
-func (a *Adapter) trackerState() (map[string]*trackedTurn, *sync.Mutex, time.Duration, time.Duration) {
-	state, _ := a.trackerStateAndNotify()
-	return trackersvc.TrackerStateCore(state)
-}
-
-func (a *Adapter) stallThreshold() time.Duration {
-	return a.trackerDuration(func(state turnTrackerState) *time.Duration { return state.StallThreshold }, defaultStallThreshold)
+	trackersvc.SetTrackerDurationCore(a.trackerState(), getter, value)
 }
 
 func (a *Adapter) SetStallThreshold(threshold time.Duration) {
@@ -84,27 +73,23 @@ func (a *Adapter) SetStallHeartbeat(interval time.Duration) {
 }
 
 func (a *Adapter) touchTrackedTurnLastEvent(threadID string) {
-	state, _ := a.trackerStateAndNotify()
-	trackersvc.TouchTrackedTurnLastEventCore(state, threadID)
+	trackersvc.TouchTrackedTurnLastEventCore(a.trackerState(), threadID)
 }
 
 func (a *Adapter) StartApprovalStallHeartbeat(threadID string) func() {
-	_, _, _, stallThreshold := a.trackerState()
-	return trackersvc.StartStallHeartbeat(threadID, stallThreshold, defaultStallThreshold, defaultStallThreshold, a.touchTrackedTurnLastEvent)
+	return a.StartDynamicToolStallHeartbeat(threadID)
 }
 
 func (a *Adapter) StartDynamicToolStallHeartbeat(threadID string) func() {
-	return trackersvc.StartStallHeartbeat(threadID, a.stallThreshold(), defaultStallThreshold, defaultStallThreshold, a.touchTrackedTurnLastEvent)
+	return trackersvc.StartStallHeartbeat(threadID, a.trackerDuration(func(state turnTrackerState) *time.Duration { return state.StallThreshold }, defaultStallThreshold), defaultStallThreshold, defaultStallThreshold, a.touchTrackedTurnLastEvent)
 }
 
 func (a *Adapter) checkTurnStall(threadID string, turnID string) {
-	state, _ := a.trackerStateAndNotify()
-	trackersvc.CheckTurnStallCore(state, threadID, turnID, a.handleStallGracePeriod, a.executeStallAutoInterrupt, a.checkTurnStall)
+	trackersvc.CheckTurnStallCore(a.trackerState(), threadID, turnID, a.handleStallGracePeriod, a.executeStallAutoInterrupt, a.checkTurnStall)
 }
 
 func (a *Adapter) handleStallGracePeriod(threadID, turnID string, silent, threshold time.Duration) {
-	state, _ := a.trackerStateAndNotify()
-	trackersvc.HandleStallGracePeriodCore(state, threadID, turnID, silent, threshold, trackersvc.TrackerRuntimePushAlert(a.uiRuntime()), a.checkTurnStall)
+	trackersvc.HandleStallGracePeriodCore(a.trackerState(), threadID, turnID, silent, threshold, trackersvc.TrackerRuntimePushAlert(a.uiRuntime()), a.checkTurnStall)
 }
 
 func (a *Adapter) executeStallAutoInterrupt(threadID string, turnID string, silent time.Duration, threshold time.Duration) {

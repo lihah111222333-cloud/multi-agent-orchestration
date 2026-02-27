@@ -14,13 +14,11 @@ import (
 
 // RuntimeManager stores UI business runtime state in Go.
 type RuntimeManager struct {
-	mu sync.RWMutex // 保护 snapshot/runtime/seq
+	mu sync.RWMutex
 
 	snapshot RuntimeSnapshot
 	runtime  map[string]*threadRuntime
 	seq      uint64
-	// sanitizeInjectedUserMessage 控制是否在 UI timeline 中裁剪自动注入提示词。
-	// true  = 保持当前行为(裁剪)；false = 调试模式(完整显示)。
 	sanitizeInjectedUserMessage bool
 }
 
@@ -46,7 +44,6 @@ func NewRuntimeManager() *RuntimeManager {
 	}
 }
 
-// SetSanitizeInjectedUserMessage 设置是否裁剪自动注入提示词。
 func (m *RuntimeManager) SetSanitizeInjectedUserMessage(enabled bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

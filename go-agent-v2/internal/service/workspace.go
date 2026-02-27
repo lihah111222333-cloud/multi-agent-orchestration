@@ -146,7 +146,6 @@ func (m *WorkspaceManager) updateRunStatusOrLog(ctx context.Context, runKey, sta
 	}
 }
 
-// saveFileAndRecord 在保存文件状态后统一写入合并结果记录与计数。
 func (m *WorkspaceManager) saveFileAndRecord(
 	ctx context.Context,
 	result *WorkspaceMergeResult,
@@ -403,12 +402,10 @@ func recordMergeResult(result *WorkspaceMergeResult, counter *int, path, action,
 	result.Files = append(result.Files, row)
 }
 
-// recordMergeError 记录一条合并错误到结果集。
 func recordMergeError(result *WorkspaceMergeResult, path, reason string) {
 	recordMergeResult(result, &result.Errors, path, "error", reason)
 }
 
-// mergeOneFile 处理单个工作区文件的合并逻辑 (验证 → hash → 冲突检测 → 拷贝)。
 func (m *WorkspaceManager) mergeOneFile(
 	ctx context.Context, run *store.WorkspaceRun,
 	wsPath, rel string,
@@ -550,7 +547,6 @@ func (m *WorkspaceManager) applyMergeCandidate(
 	)
 }
 
-// handleDeletedFiles 处理工作区中不再存在但 tracked 记录仍在的文件。
 func (m *WorkspaceManager) handleDeletedFiles(
 	ctx context.Context, run *store.WorkspaceRun,
 	tracked map[string]store.WorkspaceRunFile, seen map[string]bool,

@@ -1,6 +1,8 @@
 package archive
 
 import (
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -93,79 +95,56 @@ type ThreadArchiveRestoreNotice struct {
 }
 
 type ThreadArchiveRestoreDeps struct {
-	resolveThreadArchiveRoot  func() (string, error)
-	sanitizeArchiveNameStrict func(string) (string, error)
-	resolveCodexRootDir       func() (string, error)
-	pathWithinRoot            func(root, path string) (bool, error)
-	copyFileOverwrite         func(srcPath, targetPath string) error
-	fileSHA256                func(path string) (string, error)
-	findLatestManifestPath    func(threadDir string) (manifestPath string, found bool, err error)
-	readManifestFile          func(manifestPath string) (ThreadArchiveManifest, error)
-	fileState                 func(path string) (ThreadArchiveFileState, error)
-	removeFile                func(path string) error
-}
-
-type threadArchiveManifestScope struct {
-	ThreadID     string
-	ManifestPath string
-	Manifest     ThreadArchiveManifest
+	resolveThreadArchiveRoot, resolveCodexRootDir func() (string, error)
+	sanitizeArchiveNameStrict                      func(string) (string, error)
+	pathWithinRoot                                 func(root, path string) (bool, error)
+	copyFileOverwrite                              func(srcPath, targetPath string) error
+	fileSHA256                                     func(path string) (string, error)
+	findLatestManifestPath                         func(threadDir string) (manifestPath string, found bool, err error)
+	readManifestFile                               func(manifestPath string) (ThreadArchiveManifest, error)
+	fileState                                      func(path string) (ThreadArchiveFileState, error)
+	removeFile                                     func(path string) error
 }
 
 func (deps ThreadArchiveRestoreDeps) validateInspect() error {
-	if deps.resolveThreadArchiveRoot == nil ||
-		deps.sanitizeArchiveNameStrict == nil ||
-		deps.pathWithinRoot == nil ||
-		deps.fileSHA256 == nil ||
-		deps.findLatestManifestPath == nil ||
-		deps.readManifestFile == nil ||
-		deps.fileState == nil {
+	if deps.resolveThreadArchiveRoot == nil || deps.sanitizeArchiveNameStrict == nil || deps.pathWithinRoot == nil || deps.fileSHA256 == nil || deps.findLatestManifestPath == nil || deps.readManifestFile == nil || deps.fileState == nil {
 		return apperrors.New("inspectThreadArchiveForRestore", "inspect dependencies are not configured")
 	}
 	return nil
 }
 
 func (deps ThreadArchiveRestoreDeps) validateRestore() error {
-	if err := deps.validateInspect(); err != nil {
-		return apperrors.New("restoreThreadArchiveSources", "restore dependencies are not configured")
-	}
-	if deps.resolveCodexRootDir == nil || deps.copyFileOverwrite == nil {
+	if deps.resolveCodexRootDir == nil || deps.copyFileOverwrite == nil || deps.validateInspect() != nil {
 		return apperrors.New("restoreThreadArchiveSources", "restore dependencies are not configured")
 	}
 	return nil
 }
 
-func loadThreadArchiveManifestScope(threadID, op string, deps ThreadArchiveRestoreDeps) (threadArchiveManifestScope, bool, error) {
-	scope := threadArchiveManifestScope{}
+func loadThreadArchiveManifestScope(threadID, op string, deps ThreadArchiveRestoreDeps) (manifestPath string, manifest ThreadArchiveManifest, found bool, err error) {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
-		return scope, false, nil
+		return "", ThreadArchiveManifest{}, false, nil
 	}
-
 	rootDir, err := deps.resolveThreadArchiveRoot()
 	if err != nil {
-		return scope, false, apperrors.Wrap(err, op, "resolve archive root")
+		return "", ThreadArchiveManifest{}, false, apperrors.Wrap(err, op, "resolve archive root")
 	}
 	safeThreadID, err := deps.sanitizeArchiveNameStrict(id)
 	if err != nil {
-		return scope, false, apperrors.Wrap(err, op, "sanitize thread id")
+		return "", ThreadArchiveManifest{}, false, apperrors.Wrap(err, op, "sanitize thread id")
 	}
-	threadDir := pathutil.Join(rootDir, safeThreadID)
-	manifestPath, found, err := deps.findLatestManifestPath(threadDir)
+	manifestPath, found, err = deps.findLatestManifestPath(pathutil.Join(rootDir, safeThreadID))
+	if err != nil || !found {
+		if err != nil {
+			err = apperrors.Wrap(err, op, "find latest manifest")
+		}
+		return "", ThreadArchiveManifest{}, found, err
+	}
+	manifest, err = deps.readManifestFile(manifestPath)
 	if err != nil {
-		return scope, false, apperrors.Wrap(err, op, "find latest manifest")
+		return "", ThreadArchiveManifest{}, false, apperrors.Wrap(err, op, "read manifest")
 	}
-	if !found {
-		return scope, false, nil
-	}
-	manifest, err := deps.readManifestFile(manifestPath)
-	if err != nil {
-		return scope, false, apperrors.Wrap(err, op, "read manifest")
-	}
-
-	scope.ThreadID = id
-	scope.ManifestPath = manifestPath
-	scope.Manifest = manifest
-	return scope, true, nil
+	return manifestPath, manifest, true, nil
 }
 
 func MergeThreadArchiveMaps(dst map[string]int64, src map[string]int64) map[string]int64 {
@@ -215,50 +194,82 @@ func resolveArchivedPath(archiveDir string, archivedPath string) string {
 	return pathutil.Join(baseDir, resolved)
 }
 
+func validateOptionalChecksum(fileSHA256 func(path string) (string, error), path, checksum, computeReason, mismatchReason string) (string, error) {
+	checksum = strings.TrimSpace(checksum)
+	if checksum == "" {
+		return "", nil
+	}
+	actualSHA256, err := fileSHA256(path)
+	if err != nil {
+		return computeReason, err
+	}
+	if strings.EqualFold(checksum, actualSHA256) {
+		return "", nil
+	}
+	return mismatchReason, nil
+}
+
+func validateArchivedArtifact(
+	meta ThreadArchiveFile,
+	archiveDir string,
+	pathWithinRoot func(root, path string) (bool, error),
+	fileState func(path string) (ThreadArchiveFileState, error),
+	fileSHA256 func(path string) (string, error),
+	checkSize bool,
+	emptyPathReason string,
+) (archivedPath string, reason string, err error) {
+	archivedPath = resolveArchivedPath(archiveDir, meta.ArchivedPath)
+	if archivedPath == "" {
+		return "", emptyPathReason, nil
+	}
+	if strings.TrimSpace(archiveDir) != "" {
+		withinArchive, err := pathWithinRoot(archiveDir, archivedPath)
+		if err != nil {
+			return archivedPath, "validate archived path scope", err
+		}
+		if !withinArchive {
+			return archivedPath, "archived path is outside archive root", nil
+		}
+	}
+	state, err := fileState(archivedPath)
+	if err != nil {
+		return archivedPath, "stat archived file", err
+	}
+	if !state.Exists {
+		return archivedPath, "archived file missing", nil
+	}
+	if state.IsDir {
+		return archivedPath, "archived path is a directory", nil
+	}
+	if checkSize && meta.SizeBytes > 0 && state.SizeBytes != meta.SizeBytes {
+		return archivedPath, "archived file size mismatch", nil
+	}
+	reason, err = validateOptionalChecksum(fileSHA256, archivedPath, meta.SHA256, "compute archived checksum", "archived checksum mismatch")
+	return archivedPath, reason, err
+}
+
 func inspectThreadArchiveForRestoreWithDeps(threadID string, deps ThreadArchiveRestoreDeps) (ThreadArchiveRestoreNotice, error) {
 	notice := ThreadArchiveRestoreNotice{ModifiedFiles: []string{}}
 	if err := deps.validateInspect(); err != nil {
 		return notice, err
 	}
 
-	scope, ok, err := loadThreadArchiveManifestScope(threadID, "inspectThreadArchiveForRestore", deps)
+	manifestPath, manifest, ok, err := loadThreadArchiveManifestScope(threadID, "inspectThreadArchiveForRestore", deps)
 	if err != nil {
 		return notice, err
 	}
 	if !ok {
 		return notice, nil
 	}
-
-	manifest := scope.Manifest
-	notice.ManifestPath = scope.ManifestPath
+	notice.ManifestPath = manifestPath
 	modified := make([]string, 0, len(manifest.Files))
 	for _, meta := range manifest.Files {
-		archivedPath := resolveArchivedPath(manifest.ArchiveDir, meta.ArchivedPath)
+		archivedPath, reason, err := validateArchivedArtifact(meta, manifest.ArchiveDir, deps.pathWithinRoot, deps.fileState, deps.fileSHA256, true, "")
 		if archivedPath == "" {
 			continue
 		}
-		if strings.TrimSpace(manifest.ArchiveDir) != "" {
-			withinRoot, err := deps.pathWithinRoot(manifest.ArchiveDir, archivedPath)
-			if err != nil || !withinRoot {
-				modified = append(modified, archivedPath)
-				continue
-			}
-		}
-		state, err := deps.fileState(archivedPath)
-		if err != nil || !state.Exists || state.IsDir {
+		if err != nil || reason != "" {
 			modified = append(modified, archivedPath)
-			continue
-		}
-		if meta.SizeBytes > 0 && state.SizeBytes != meta.SizeBytes {
-			modified = append(modified, archivedPath)
-			continue
-		}
-		if checksum := strings.TrimSpace(meta.SHA256); checksum != "" {
-			actualSHA256, err := deps.fileSHA256(archivedPath)
-			if err != nil || !strings.EqualFold(checksum, actualSHA256) {
-				modified = append(modified, archivedPath)
-				continue
-			}
 		}
 	}
 	if len(modified) > 0 {
@@ -281,10 +292,7 @@ func PruneArchivedCodexSourceFiles(
 	removeFile func(path string) error,
 	removeEmptyCodexParentDir func(startDir, codexRoot string),
 ) {
-	if len(files) == 0 {
-		return
-	}
-	if resolveCodexRootDir == nil || pathWithinRoot == nil || fileSHA256 == nil || fileState == nil || removeFile == nil {
+	if len(files) == 0 || resolveCodexRootDir == nil || pathWithinRoot == nil || fileSHA256 == nil || fileState == nil || removeFile == nil {
 		return
 	}
 	threadID = strings.TrimSpace(threadID)
@@ -294,42 +302,24 @@ func PruneArchivedCodexSourceFiles(
 		return
 	}
 
-	archiveRoot := strings.TrimSpace(archiveDir)
-	seen := make(map[string]struct{}, len(files))
-	deleted := 0
+	archiveRoot, seen, deleted := strings.TrimSpace(archiveDir), make(map[string]struct{}, len(files)), 0
 	for _, meta := range files {
 		srcPath := strings.TrimSpace(meta.SourcePath)
-		if srcPath == "" {
-			continue
-		}
-		if _, ok := seen[srcPath]; ok {
-			continue
-		}
+		if srcPath == "" { continue }
+		if _, ok := seen[srcPath]; ok { continue }
 		seen[srcPath] = struct{}{}
-
-		withinCodex, err := pathWithinRoot(codexRoot, srcPath)
-		if err != nil || !withinCodex {
-			continue
-		}
+		if withinCodex, err := pathWithinRoot(codexRoot, srcPath); err != nil || !withinCodex { continue }
 		if archiveRoot != "" {
-			if withinArchive, err := pathWithinRoot(archiveRoot, srcPath); err == nil && withinArchive {
-				continue
-			}
+			if withinArchive, err := pathWithinRoot(archiveRoot, srcPath); err == nil && withinArchive { continue }
 		}
-
 		state, err := fileState(srcPath)
 		if err != nil {
 			logger.Error("thread/archive: stat source artifact failed", logger.FieldThreadID, threadID, "source_path", srcPath, logger.FieldError, err)
 			continue
 		}
-		if !state.Exists || state.IsDir {
-			continue
-		}
-
+		if !state.Exists || state.IsDir { continue }
 		expectedSHA256 := strings.TrimSpace(meta.SHA256)
-		if expectedSHA256 == "" {
-			continue
-		}
+		if expectedSHA256 == "" { continue }
 		sourceSHA256, err := fileSHA256(srcPath)
 		if err != nil {
 			logger.Error("thread/archive: source artifact checksum failed", logger.FieldThreadID, threadID, "source_path", srcPath, logger.FieldError, err)
@@ -339,167 +329,51 @@ func PruneArchivedCodexSourceFiles(
 			logger.Error("thread/archive: source artifact changed after backup, skip delete", logger.FieldThreadID, threadID, "source_path", srcPath, "expected_sha256", expectedSHA256, "actual_sha256", sourceSHA256)
 			continue
 		}
-
 		if err := removeFile(srcPath); err != nil {
 			logger.Error("thread/archive: remove source artifact failed", logger.FieldThreadID, threadID, "source_path", srcPath, logger.FieldError, err)
 			continue
 		}
 		deleted++
-		if removeEmptyCodexParentDir != nil {
-			removeEmptyCodexParentDir(pathutil.Dir(srcPath), codexRoot)
-		}
+		if removeEmptyCodexParentDir != nil { removeEmptyCodexParentDir(pathutil.Dir(srcPath), codexRoot) }
 	}
-
-	if deleted > 0 {
-		logger.Info("thread/archive: pruned codex source artifacts", logger.FieldThreadID, threadID, "deleted_count", deleted)
-	}
-}
-
-func restoreThreadArchiveEntry(
-	threadID string,
-	meta ThreadArchiveFile,
-	manifest ThreadArchiveManifest,
-	codexRoot string,
-	pathWithinRoot func(root, path string) (bool, error),
-	copyFileOverwrite func(srcPath, targetPath string) error,
-	fileSHA256 func(path string) (string, error),
-	fileState func(path string) (ThreadArchiveFileState, error),
-	removeFile func(path string) error,
-	restoredSet map[string]struct{},
-	restored *[]string,
-	skippedSet map[string]struct{},
-	skipped *[]string,
-) {
-	srcPath := strings.TrimSpace(meta.SourcePath)
-	if srcPath == "" {
-		return
-	}
-	withinCodex, err := pathWithinRoot(codexRoot, srcPath)
-	if err != nil {
-		appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, "", "validate source path scope", err)
-		return
-	}
-	if !withinCodex {
-		appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, "", "source path is outside codex root", nil)
-		return
-	}
-
-	archivedPath := resolveArchivedPath(manifest.ArchiveDir, meta.ArchivedPath)
-	if archivedPath == "" {
-		appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, "", "archived path is empty", nil)
-		return
-	}
-	if strings.TrimSpace(manifest.ArchiveDir) != "" {
-		withinArchive, err := pathWithinRoot(manifest.ArchiveDir, archivedPath)
-		if err != nil {
-			appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, archivedPath, "validate archived path scope", err)
-			return
-		}
-		if !withinArchive {
-			appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, archivedPath, "archived path is outside archive root", nil)
-			return
-		}
-	}
-
-	archiveState, err := fileState(archivedPath)
-	if err != nil {
-		appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, archivedPath, "stat archived file", err)
-		return
-	}
-	if !archiveState.Exists {
-		appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, archivedPath, "archived file missing", nil)
-		return
-	}
-	if archiveState.IsDir {
-		appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, archivedPath, "archived path is a directory", nil)
-		return
-	}
-
-	expectedSHA256 := strings.TrimSpace(meta.SHA256)
-	if expectedSHA256 != "" {
-		actualArchiveSHA256, err := fileSHA256(archivedPath)
-		if err != nil {
-			appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, archivedPath, "compute archived checksum", err)
-			return
-		}
-		if !strings.EqualFold(expectedSHA256, actualArchiveSHA256) {
-			appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, archivedPath, "archived checksum mismatch", nil)
-			return
-		}
-	}
-
-	if err := copyFileOverwrite(archivedPath, srcPath); err != nil {
-		appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, archivedPath, "restore file to source path", err)
-		return
-	}
-	if expectedSHA256 != "" {
-		actualSourceSHA256, err := fileSHA256(srcPath)
-		if err != nil {
-			if removeFile != nil {
-				_ = removeFile(srcPath)
-			}
-			appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, archivedPath, "compute restored source checksum", err)
-			return
-		}
-		if !strings.EqualFold(expectedSHA256, actualSourceSHA256) {
-			if removeFile != nil {
-				_ = removeFile(srcPath)
-			}
-			appendRestoreSkippedSource(threadID, skipped, skippedSet, srcPath, archivedPath, "restored source checksum mismatch", nil)
-			return
-		}
-	}
-	if _, ok := restoredSet[srcPath]; !ok {
-		restoredSet[srcPath] = struct{}{}
-		*restored = append(*restored, srcPath)
-	}
+	if deleted > 0 { logger.Info("thread/archive: pruned codex source artifacts", logger.FieldThreadID, threadID, "deleted_count", deleted) }
 }
 
 func appendRestoreSkippedSource(
 	threadID string,
-	skipped *[]string,
 	skippedSet map[string]struct{},
 	sourcePath string,
 	archivedPath string,
 	reason string,
 	skipErr error,
 ) {
-	if skipped == nil {
-		return
-	}
 	value := strings.TrimSpace(sourcePath)
 	if value == "" {
 		return
 	}
+	logFields := []any{logger.FieldThreadID, threadID, "source_path", value, "archived_path", strings.TrimSpace(archivedPath), "reason", reason}
 	if skipErr != nil {
-		logger.Error("thread/unarchive: restore artifact skipped", logger.FieldThreadID, threadID, "source_path", value, "archived_path", strings.TrimSpace(archivedPath), "reason", reason, logger.FieldError, skipErr)
-	} else {
-		logger.Error("thread/unarchive: restore artifact skipped", logger.FieldThreadID, threadID, "source_path", value, "archived_path", strings.TrimSpace(archivedPath), "reason", reason)
+		logFields = append(logFields, logger.FieldError, skipErr)
 	}
-	if _, ok := skippedSet[value]; ok {
-		return
-	}
+	logger.Error("thread/unarchive: restore artifact skipped", logFields...)
 	skippedSet[value] = struct{}{}
-	*skipped = append(*skipped, value)
 }
 
 func restoreThreadArchiveSourcesWithDeps(threadID string, deps ThreadArchiveRestoreDeps) ([]string, []string, error) {
-	restored := []string{}
-	skipped := []string{}
 	id := strings.TrimSpace(threadID)
 	if id == "" {
-		return restored, skipped, nil
+		return []string{}, []string{}, nil
 	}
 	if err := deps.validateRestore(); err != nil {
 		return nil, nil, err
 	}
 
-	scope, ok, err := loadThreadArchiveManifestScope(id, "restoreThreadArchiveSources", deps)
+	_, manifest, ok, err := loadThreadArchiveManifestScope(id, "restoreThreadArchiveSources", deps)
 	if err != nil {
 		return nil, nil, err
 	}
 	if !ok {
-		return restored, skipped, nil
+		return []string{}, []string{}, nil
 	}
 
 	codexRoot, err := deps.resolveCodexRootDir()
@@ -507,14 +381,38 @@ func restoreThreadArchiveSourcesWithDeps(threadID string, deps ThreadArchiveRest
 		return nil, nil, apperrors.Wrap(err, "restoreThreadArchiveSources", "resolve codex root")
 	}
 
-	manifest := scope.Manifest
-	restoredSet := map[string]struct{}{}
-	skippedSet := map[string]struct{}{}
-
+	restoredSet, skippedSet := map[string]struct{}{}, map[string]struct{}{}
 	for _, meta := range manifest.Files {
-		restoreThreadArchiveEntry(id, meta, manifest, codexRoot, deps.pathWithinRoot, deps.copyFileOverwrite, deps.fileSHA256, deps.fileState, deps.removeFile, restoredSet, &restored, skippedSet, &skipped)
+		sourcePath := strings.TrimSpace(meta.SourcePath)
+		if sourcePath == "" {
+			continue
+		}
+		withinCodex, err := deps.pathWithinRoot(codexRoot, sourcePath)
+		if err != nil {
+			appendRestoreSkippedSource(id, skippedSet, sourcePath, "", "validate source path scope", err)
+			continue
+		}
+		if !withinCodex {
+			appendRestoreSkippedSource(id, skippedSet, sourcePath, "", "source path is outside codex root", nil)
+			continue
+		}
+		archivedPath, reason, skipErr := validateArchivedArtifact(meta, manifest.ArchiveDir, deps.pathWithinRoot, deps.fileState, deps.fileSHA256, false, "archived path is empty")
+		if reason != "" || skipErr != nil {
+			appendRestoreSkippedSource(id, skippedSet, sourcePath, archivedPath, reason, skipErr)
+			continue
+		}
+		if err := deps.copyFileOverwrite(archivedPath, sourcePath); err != nil {
+			appendRestoreSkippedSource(id, skippedSet, sourcePath, archivedPath, "restore file to source path", err)
+			continue
+		}
+		if reason, err := validateOptionalChecksum(deps.fileSHA256, sourcePath, meta.SHA256, "compute restored source checksum", "restored source checksum mismatch"); err != nil || reason != "" {
+			if deps.removeFile != nil {
+				_ = deps.removeFile(sourcePath)
+			}
+			appendRestoreSkippedSource(id, skippedSet, sourcePath, archivedPath, reason, err)
+			continue
+		}
+		restoredSet[sourcePath] = struct{}{}
 	}
-	sort.Strings(restored)
-	sort.Strings(skipped)
-	return restored, skipped, nil
+	return slices.Sorted(maps.Keys(restoredSet)), slices.Sorted(maps.Keys(skippedSet)), nil
 }

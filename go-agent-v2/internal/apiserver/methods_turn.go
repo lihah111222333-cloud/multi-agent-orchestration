@@ -36,13 +36,11 @@ type turnStartParams struct {
 	OutputSchema   json.RawMessage `json:"outputSchema,omitempty"`
 }
 
-// turnInfo 通用 turn 信息。
 type turnInfo struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
 }
 
-// turnStartResponse turn/start 响应。
 type turnStartResponse struct {
 	Turn turnInfo `json:"turn"`
 }
@@ -114,7 +112,6 @@ type threadRealtimeAppendTextParams struct {
 
 type threadRealtimeStopParams = threadIDParams
 
-// reviewStartParams review/start 请求参数。
 type reviewTarget struct {
 	Type         string `json:"type"`
 	Instructions string `json:"instructions,omitempty"`
@@ -140,28 +137,28 @@ type reviewStartResponse struct {
 }
 
 func buildReviewStartArgs(p reviewStartParams) (string, error) {
-	required := func(raw, field, targetType string) (string, error) {
-		if value := strings.TrimSpace(raw); value != "" {
-			return value, nil
-		}
-		return "", pkgerr.New("Server.reviewStart", "target."+field+" is required when target.type is "+targetType)
-	}
 	targetType := strings.TrimSpace(p.Target.Type)
 	if targetType == "" {
 		return "", pkgerr.New("Server.reviewStart", "target.type is required")
 	}
+	raw := ""
+	field := ""
 	switch targetType {
 	case "custom":
-		return required(p.Target.Instructions, "instructions", "custom")
+		raw, field = p.Target.Instructions, "instructions"
 	case "baseBranch":
-		return required(p.Target.Branch, "branch", "baseBranch")
+		raw, field = p.Target.Branch, "branch"
 	case "commit":
-		return required(p.Target.Sha, "sha", "commit")
+		raw, field = p.Target.Sha, "sha"
 	case "uncommittedChanges":
 		return strings.TrimSpace(p.Delivery), nil
 	default:
 		return "", pkgerr.New("Server.reviewStart", "target.type must be one of: uncommittedChanges, baseBranch, commit, custom")
 	}
+	if value := strings.TrimSpace(raw); value != "" {
+		return value, nil
+	}
+	return "", pkgerr.New("Server.reviewStart", "target."+field+" is required when target.type is "+targetType)
 }
 
 func validateReviewStartParams(p reviewStartParams) (string, error) {

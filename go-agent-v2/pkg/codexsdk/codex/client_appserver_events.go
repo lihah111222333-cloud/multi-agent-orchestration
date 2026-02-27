@@ -148,13 +148,7 @@ func (c *AppServerClient) readLoopDispatchMessage(message []byte) bool {
 		logger.Warn("codex: readLoop unparseable JSON-RPC message", logger.FieldAgentID, c.AgentID, logger.FieldError, err, "raw_prefix", truncateBytes(message, 200))
 		return false
 	}
-	if dropped, preview, convID := shouldDropLegacyMirrorNotification(msg); dropped {
-		seq := c.legacyMirrorDropCount.Add(1)
-		if shouldLogLegacyMirrorDrop(seq) {
-			logger.Info("codex: dropped legacy mirror stream notification", logger.FieldAgentID, c.AgentID, logger.FieldMethod, msg.Method, "conversation_id", convID, "preview", preview, "drop_count", seq)
-		} else {
-			logger.Debug("codex: dropped legacy mirror stream notification", logger.FieldAgentID, c.AgentID, logger.FieldMethod, msg.Method, "conversation_id", convID, "preview", preview)
-		}
+	if c.dropLegacyMirrorNotification(msg) {
 		return false
 	}
 	if c.handleRPCResponse(msg) {
@@ -643,20 +637,57 @@ func shouldLogLegacyMirrorDrop(seq int64) bool {
 	return seq == 1 || seq%legacyMirrorDropLogSampleInterval == 0
 }
 
-var legacyMirrorStreamMethods = map[string]struct{}{
-	"agent/event/agent_message_delta":         {},
-	"agent/event/agent_message_content_delta": {},
-	"codex/event/agent_message_delta":         {},
-	"codex/event/agent_message_content_delta": {},
-	"agent/event/agent_reasoning_delta":       {},
-	"agent/event/agent_reasoning_raw_delta":   {},
-	"codex/event/agent_reasoning_delta":       {},
-	"codex/event/agent_reasoning_raw_delta":   {},
-	"codex/event/reasoning_content_delta":     {},
-	"agent/event/exec_command_output_delta":   {},
-	"codex/event/exec_command_output_delta":   {},
-	"codex/event/plan_delta":                  {},
+func (c *AppServerClient) dropLegacyMirrorNotification(msg jsonRPCMessage) bool {
+	dropped, preview, conversationID := shouldDropLegacyMirrorNotification(msg)
+	if !dropped {
+		return false
+	}
+	c.logLegacyMirrorDrop(msg.Method, conversationID, preview)
+	return true
 }
+
+func (c *AppServerClient) logLegacyMirrorDrop(method, conversationID, preview string) {
+	seq := c.legacyMirrorDropCount.Add(1)
+	logArgs := []any{
+		logger.FieldAgentID, c.AgentID,
+		logger.FieldMethod, method,
+		"conversation_id", conversationID,
+		"preview", preview,
+	}
+	if shouldLogLegacyMirrorDrop(seq) {
+		logger.Info("codex: dropped legacy mirror stream notification", append(logArgs, "drop_count", seq)...)
+		return
+	}
+	logger.Debug("codex: dropped legacy mirror stream notification", logArgs...)
+}
+
+var sharedLegacyMirrorStreamMethodSuffixes = [...]string{
+	"agent_message_delta",
+	"agent_message_content_delta",
+	"agent_reasoning_delta",
+	"agent_reasoning_raw_delta",
+	"exec_command_output_delta",
+}
+
+var codexOnlyLegacyMirrorStreamMethodSuffixes = [...]string{
+	"reasoning_content_delta",
+	"plan_delta",
+}
+
+func buildLegacyMirrorStreamMethods() map[string]struct{} {
+	methods := make(map[string]struct{}, len(sharedLegacyPrefixes)*len(sharedLegacyMirrorStreamMethodSuffixes)+len(codexOnlyLegacyMirrorStreamMethodSuffixes))
+	for _, prefix := range sharedLegacyPrefixes {
+		for _, suffix := range sharedLegacyMirrorStreamMethodSuffixes {
+			methods[prefix+suffix] = struct{}{}
+		}
+	}
+	for _, suffix := range codexOnlyLegacyMirrorStreamMethodSuffixes {
+		methods["codex/event/"+suffix] = struct{}{}
+	}
+	return methods
+}
+
+var legacyMirrorStreamMethods = buildLegacyMirrorStreamMethods()
 
 func shouldDropLegacyMirrorNotification(msg jsonRPCMessage) (bool, string, string) {
 	if msg.ID != nil {
@@ -671,8 +702,8 @@ func shouldDropLegacyMirrorNotification(msg jsonRPCMessage) (bool, string, strin
 		return false, "", ""
 	}
 
-	conversationID, hasConversationID := payload["conversationId"].(string)
-	if !hasConversationID || strings.TrimSpace(conversationID) == "" {
+	conversationID := firstTrimmedString(payload, "conversationId")
+	if conversationID == "" {
 		return false, "", ""
 	}
 

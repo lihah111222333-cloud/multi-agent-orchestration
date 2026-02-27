@@ -136,6 +136,25 @@ func isNullRaw(raw json.RawMessage) bool {
 	return len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null"
 }
 
+func decodeRawArray(raw json.RawMessage, errPrefix string) ([]json.RawMessage, error) {
+	var arr []json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return nil, fmt.Errorf("%s: %w", errPrefix, err)
+	}
+	return arr, nil
+}
+
+func decodeNullableSlice[T any](raw json.RawMessage, errPrefix string) ([]T, error) {
+	if isNullRaw(raw) {
+		return nil, nil
+	}
+	var items []T
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, fmt.Errorf("%s: %w", errPrefix, err)
+	}
+	return items, nil
+}
+
 // decodeLocationsLike 兼容解码:
 // Location | []Location | []LocationLink | null
 func decodeLocationsLike(raw json.RawMessage) ([]LocationResult, error) {
@@ -207,10 +226,9 @@ func decodeWorkspaceSymbols(raw json.RawMessage) ([]WorkspaceSymbolResult, error
 	if isNullRaw(raw) {
 		return nil, nil
 	}
-
-	var arr []json.RawMessage
-	if err := json.Unmarshal(raw, &arr); err != nil {
-		return nil, fmt.Errorf("decode workspace symbols: %w", err)
+	arr, err := decodeRawArray(raw, "decode workspace symbols")
+	if err != nil {
+		return nil, err
 	}
 
 	out := make([]WorkspaceSymbolResult, 0, len(arr))
@@ -251,10 +269,9 @@ func decodeCodeActions(raw json.RawMessage) ([]CodeActionResult, error) {
 	if isNullRaw(raw) {
 		return nil, nil
 	}
-
-	var arr []json.RawMessage
-	if err := json.Unmarshal(raw, &arr); err != nil {
-		return nil, fmt.Errorf("decode code actions: %w", err)
+	arr, err := decodeRawArray(raw, "decode code actions")
+	if err != nil {
+		return nil, err
 	}
 
 	out := make([]CodeActionResult, 0, len(arr))
@@ -352,10 +369,9 @@ func decodeDocumentSymbols(raw json.RawMessage) ([]DocumentSymbol, error) {
 	if isNullRaw(raw) {
 		return nil, nil
 	}
-
-	var arr []json.RawMessage
-	if err := json.Unmarshal(raw, &arr); err != nil {
-		return nil, fmt.Errorf("decode document symbols: %w", err)
+	arr, err := decodeRawArray(raw, "decode document symbols")
+	if err != nil {
+		return nil, err
 	}
 
 	out := make([]DocumentSymbol, 0, len(arr))
@@ -392,42 +408,23 @@ func decodeDocumentSymbols(raw json.RawMessage) ([]DocumentSymbol, error) {
 // decodePrepareCallHierarchyItems 兼容解码:
 // []CallHierarchyItem | null
 func decodePrepareCallHierarchyItems(raw json.RawMessage) ([]CallHierarchyItem, error) {
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-	var items []CallHierarchyItem
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, fmt.Errorf("decode prepareCallHierarchy: %w", err)
-	}
-	return items, nil
+	return decodeNullableSlice[CallHierarchyItem](raw, "decode prepareCallHierarchy")
 }
 
 // decodePrepareTypeHierarchyItems 兼容解码:
 // []TypeHierarchyItem | null
 func decodePrepareTypeHierarchyItems(raw json.RawMessage) ([]TypeHierarchyItem, error) {
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-	var items []TypeHierarchyItem
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, fmt.Errorf("decode prepareTypeHierarchy: %w", err)
-	}
-	return items, nil
+	return decodeNullableSlice[TypeHierarchyItem](raw, "decode prepareTypeHierarchy")
 }
 
 func decodeSemanticTokensLegend(provider any) *SemanticTokensLegend {
-	if provider == nil {
+	if provider == nil || provider == true {
 		return nil
 	}
-	if isBool, ok := provider.(bool); ok && isBool {
-		return nil
-	}
-
 	raw, err := json.Marshal(provider)
 	if err != nil {
 		return nil
 	}
-
 	var options SemanticTokensOptions
 	if err := json.Unmarshal(raw, &options); err != nil {
 		return nil
@@ -438,21 +435,18 @@ func decodeSemanticTokensLegend(provider any) *SemanticTokensLegend {
 	return &options.Legend
 }
 
-// PrepareCallHierarchyParams textDocument/prepareCallHierarchy 请求参数。
-type PrepareCallHierarchyParams struct {
-	TextDocument TextDocumentIdentifier `json:"textDocument"`
-	Position     Position               `json:"position"`
+type itemRequest[T any] struct {
+	Item T `json:"item"`
 }
+
+// PrepareCallHierarchyParams textDocument/prepareCallHierarchy 请求参数。
+type PrepareCallHierarchyParams = TextDocumentPositionParams
 
 // CallHierarchyIncomingCallsParams callHierarchy/incomingCalls 请求参数。
-type CallHierarchyIncomingCallsParams struct {
-	Item CallHierarchyItem `json:"item"`
-}
+type CallHierarchyIncomingCallsParams = itemRequest[CallHierarchyItem]
 
 // CallHierarchyOutgoingCallsParams callHierarchy/outgoingCalls 请求参数。
-type CallHierarchyOutgoingCallsParams struct {
-	Item CallHierarchyItem `json:"item"`
-}
+type CallHierarchyOutgoingCallsParams = itemRequest[CallHierarchyItem]
 
 // CallHierarchyIncomingCall incoming 调用边。
 type CallHierarchyIncomingCall struct {
@@ -467,20 +461,13 @@ type CallHierarchyOutgoingCall struct {
 }
 
 // PrepareTypeHierarchyParams textDocument/prepareTypeHierarchy 请求参数。
-type PrepareTypeHierarchyParams struct {
-	TextDocument TextDocumentIdentifier `json:"textDocument"`
-	Position     Position               `json:"position"`
-}
+type PrepareTypeHierarchyParams = TextDocumentPositionParams
 
 // TypeHierarchySupertypesParams typeHierarchy/supertypes 请求参数。
-type TypeHierarchySupertypesParams struct {
-	Item TypeHierarchyItem `json:"item"`
-}
+type TypeHierarchySupertypesParams = itemRequest[TypeHierarchyItem]
 
 // TypeHierarchySubtypesParams typeHierarchy/subtypes 请求参数。
-type TypeHierarchySubtypesParams struct {
-	Item TypeHierarchyItem `json:"item"`
-}
+type TypeHierarchySubtypesParams = itemRequest[TypeHierarchyItem]
 
 // CallHierarchyResult 是稳定字段输出结构。
 type CallHierarchyResult struct {
@@ -681,9 +668,7 @@ func decodeTextEdits(raw json.RawMessage) ([]TextEdit, error) {
 const SemanticTokenResultLimit = 200
 
 // SemanticTokensParams textDocument/semanticTokens/full 请求参数。
-type SemanticTokensParams struct {
-	TextDocument TextDocumentIdentifier `json:"textDocument"`
-}
+type SemanticTokensParams = DocumentSymbolParams
 
 // SemanticTokens textDocument/semanticTokens/full 原始返回。
 type SemanticTokens struct {
@@ -708,9 +693,7 @@ type SemanticTokensResult struct {
 }
 
 // FoldingRangeParams textDocument/foldingRange 请求参数。
-type FoldingRangeParams struct {
-	TextDocument TextDocumentIdentifier `json:"textDocument"`
-}
+type FoldingRangeParams = DocumentSymbolParams
 
 // FoldingRange 是折叠区间。
 type FoldingRange struct {

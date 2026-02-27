@@ -38,10 +38,7 @@ func (c *Client) CodeAction(
 
 // SignatureHelp 查询指定位置的函数签名提示。
 func (c *Client) SignatureHelp(_ context.Context, uri string, line, character int) (*SignatureHelpResult, error) {
-	raw, err := c.callRawWhenRunning("textDocument/signatureHelp", SignatureHelpParams{
-		TextDocument: TextDocumentIdentifier{URI: uri},
-		Position:     Position{Line: line, Character: character},
-	})
+	raw, err := c.callPositionRaw("textDocument/signatureHelp", uri, line, character)
 	if err != nil {
 		return nil, err
 	}
@@ -135,10 +132,7 @@ func (c *Client) FoldingRange(_ context.Context, uri string) ([]FoldingRange, er
 
 // Implementation 返回实现位置，兼容 Location/Location[]/LocationLink[]。
 func (c *Client) Implementation(_ context.Context, uri string, line, character int) ([]LocationResult, error) {
-	raw, err := c.callRawWhenRunning("textDocument/implementation", DefinitionParams{
-		TextDocument: TextDocumentIdentifier{URI: uri},
-		Position:     Position{Line: line, Character: character},
-	})
+	raw, err := c.callPositionRaw("textDocument/implementation", uri, line, character)
 	if err != nil {
 		return nil, err
 	}
@@ -147,10 +141,7 @@ func (c *Client) Implementation(_ context.Context, uri string, line, character i
 
 // TypeDefinition 返回类型定义位置，兼容 Location/Location[]/LocationLink[]。
 func (c *Client) TypeDefinition(_ context.Context, uri string, line, character int) ([]LocationResult, error) {
-	raw, err := c.callRawWhenRunning("textDocument/typeDefinition", DefinitionParams{
-		TextDocument: TextDocumentIdentifier{URI: uri},
-		Position:     Position{Line: line, Character: character},
-	})
+	raw, err := c.callPositionRaw("textDocument/typeDefinition", uri, line, character)
 	if err != nil {
 		return nil, err
 	}
@@ -194,45 +185,16 @@ func (c *Client) CallHierarchy(ctx context.Context, uri string, line, character 
 	return out, nil
 }
 
-func (c *Client) prepareCallHierarchy(ctx context.Context, uri string, line, character int) ([]CallHierarchyItem, error) {
-	raw, err := c.callRawWhenRunning("textDocument/prepareCallHierarchy", PrepareCallHierarchyParams{
-		TextDocument: TextDocumentIdentifier{URI: uri},
-		Position:     Position{Line: line, Character: character},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return decodePrepareCallHierarchyItems(raw)
+func (c *Client) prepareCallHierarchy(_ context.Context, uri string, line, character int) ([]CallHierarchyItem, error) {
+	return prepareHierarchyItems(c, "textDocument/prepareCallHierarchy", uri, line, character, decodePrepareCallHierarchyItems)
 }
 
-func (c *Client) callHierarchyIncoming(ctx context.Context, item CallHierarchyItem) ([]CallHierarchyIncomingCall, error) {
-	raw, err := c.callRawWhenRunning("callHierarchy/incomingCalls", CallHierarchyIncomingCallsParams{Item: item})
-	if err != nil {
-		return nil, err
-	}
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-	var calls []CallHierarchyIncomingCall
-	if err := json.Unmarshal(raw, &calls); err != nil {
-		return nil, fmt.Errorf("decode callHierarchy incoming: %w", err)
-	}
-	return calls, nil
+func (c *Client) callHierarchyIncoming(_ context.Context, item CallHierarchyItem) ([]CallHierarchyIncomingCall, error) {
+	return callNullableSlice[CallHierarchyIncomingCall](c, "callHierarchy/incomingCalls", CallHierarchyIncomingCallsParams{Item: item}, "decode callHierarchy incoming")
 }
 
-func (c *Client) callHierarchyOutgoing(ctx context.Context, item CallHierarchyItem) ([]CallHierarchyOutgoingCall, error) {
-	raw, err := c.callRawWhenRunning("callHierarchy/outgoingCalls", CallHierarchyOutgoingCallsParams{Item: item})
-	if err != nil {
-		return nil, err
-	}
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-	var calls []CallHierarchyOutgoingCall
-	if err := json.Unmarshal(raw, &calls); err != nil {
-		return nil, fmt.Errorf("decode callHierarchy outgoing: %w", err)
-	}
-	return calls, nil
+func (c *Client) callHierarchyOutgoing(_ context.Context, item CallHierarchyItem) ([]CallHierarchyOutgoingCall, error) {
+	return callNullableSlice[CallHierarchyOutgoingCall](c, "callHierarchy/outgoingCalls", CallHierarchyOutgoingCallsParams{Item: item}, "decode callHierarchy outgoing")
 }
 
 // TypeHierarchy 查询类型层级。
@@ -272,43 +234,49 @@ func (c *Client) TypeHierarchy(ctx context.Context, uri string, line, character 
 	return out, nil
 }
 
-func (c *Client) prepareTypeHierarchy(ctx context.Context, uri string, line, character int) ([]TypeHierarchyItem, error) {
-	raw, err := c.callRawWhenRunning("textDocument/prepareTypeHierarchy", PrepareTypeHierarchyParams{
+func (c *Client) prepareTypeHierarchy(_ context.Context, uri string, line, character int) ([]TypeHierarchyItem, error) {
+	return prepareHierarchyItems(c, "textDocument/prepareTypeHierarchy", uri, line, character, decodePrepareTypeHierarchyItems)
+}
+
+func (c *Client) typeHierarchySupertypes(_ context.Context, item TypeHierarchyItem) ([]TypeHierarchyItem, error) {
+	return callNullableSlice[TypeHierarchyItem](c, "typeHierarchy/supertypes", TypeHierarchySupertypesParams{Item: item}, "decode typeHierarchy supertypes")
+}
+
+func (c *Client) typeHierarchySubtypes(_ context.Context, item TypeHierarchyItem) ([]TypeHierarchyItem, error) {
+	return callNullableSlice[TypeHierarchyItem](c, "typeHierarchy/subtypes", TypeHierarchySubtypesParams{Item: item}, "decode typeHierarchy subtypes")
+}
+
+func (c *Client) callPositionRaw(method, uri string, line, character int) (json.RawMessage, error) {
+	return c.callRawWhenRunning(method, TextDocumentPositionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     Position{Line: line, Character: character},
 	})
+}
+
+func prepareHierarchyItems[T any](
+	client *Client,
+	method, uri string,
+	line, character int,
+	decode func(json.RawMessage) ([]T, error),
+) ([]T, error) {
+	raw, err := client.callPositionRaw(method, uri, line, character)
 	if err != nil {
 		return nil, err
 	}
-	return decodePrepareTypeHierarchyItems(raw)
+	return decode(raw)
 }
 
-func (c *Client) typeHierarchySupertypes(ctx context.Context, item TypeHierarchyItem) ([]TypeHierarchyItem, error) {
-	raw, err := c.callRawWhenRunning("typeHierarchy/supertypes", TypeHierarchySupertypesParams{Item: item})
+func callNullableSlice[T any](client *Client, method string, params any, errPrefix string) ([]T, error) {
+	raw, err := client.callRawWhenRunning(method, params)
 	if err != nil {
 		return nil, err
 	}
 	if isNullRaw(raw) {
 		return nil, nil
 	}
-	var items []TypeHierarchyItem
+	var items []T
 	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, fmt.Errorf("decode typeHierarchy supertypes: %w", err)
-	}
-	return items, nil
-}
-
-func (c *Client) typeHierarchySubtypes(ctx context.Context, item TypeHierarchyItem) ([]TypeHierarchyItem, error) {
-	raw, err := c.callRawWhenRunning("typeHierarchy/subtypes", TypeHierarchySubtypesParams{Item: item})
-	if err != nil {
-		return nil, err
-	}
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-	var items []TypeHierarchyItem
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, fmt.Errorf("decode typeHierarchy subtypes: %w", err)
+		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 	return items, nil
 }

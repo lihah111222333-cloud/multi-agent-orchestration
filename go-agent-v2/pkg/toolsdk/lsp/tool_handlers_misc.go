@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -1074,26 +1075,16 @@ func decodeReplaceRangeRequest(call *lspToolCallLogger, args json.RawMessage) (l
 }
 
 func validateReplaceRangePosition(call *lspToolCallLogger, params lspReplaceRangeParam) (int, int, int, int, error) {
-	line, err := requireIntParam("line", params.Line)
+	values, err := readRequiredInts(call,
+		namedIntParam{name: "line", value: params.Line},
+		namedIntParam{name: "column", value: params.Column},
+		namedIntParam{name: "end_line", value: params.EndLine},
+		namedIntParam{name: "end_column", value: params.EndColumn},
+	)
 	if err != nil {
-		call.fail(err, "stage", "validate")
 		return 0, 0, 0, 0, err
 	}
-	column, err := requireIntParam("column", params.Column)
-	if err != nil {
-		call.fail(err, "stage", "validate")
-		return 0, 0, 0, 0, err
-	}
-	endLine, err := requireIntParam("end_line", params.EndLine)
-	if err != nil {
-		call.fail(err, "stage", "validate")
-		return 0, 0, 0, 0, err
-	}
-	endColumn, err := requireIntParam("end_column", params.EndColumn)
-	if err != nil {
-		call.fail(err, "stage", "validate")
-		return 0, 0, 0, 0, err
-	}
+	line, column, endLine, endColumn := values[0], values[1], values[2], values[3]
 	if err := requireNonNegativePosition(line, column); err != nil {
 		call.fail(err, "stage", "validate")
 		return 0, 0, 0, 0, err
@@ -1108,6 +1099,24 @@ func validateReplaceRangePosition(call *lspToolCallLogger, params lspReplaceRang
 		return 0, 0, 0, 0, err
 	}
 	return line, column, endLine, endColumn, nil
+}
+
+type namedIntParam struct {
+	name  string
+	value *int
+}
+
+func readRequiredInts(call *lspToolCallLogger, params ...namedIntParam) ([]int, error) {
+	out := make([]int, 0, len(params))
+	for _, param := range params {
+		value, err := requireIntParam(param.name, param.value)
+		if err != nil {
+			call.fail(err, "stage", "validate")
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, nil
 }
 
 func (h *ToolHandlers) resolveReplaceRangeOffsets(
@@ -1538,50 +1547,24 @@ func normalizeLSPRequestID(value any) (string, bool) {
 	if value == nil {
 		return "", false
 	}
-	switch v := value.(type) {
-	case string:
-		trimmed := strings.TrimSpace(v)
-		if trimmed == "" {
-			return "", false
-		}
-		return trimmed, true
-	case int:
-		return strconv.FormatInt(int64(v), 10), true
-	case int8:
-		return strconv.FormatInt(int64(v), 10), true
-	case int16:
-		return strconv.FormatInt(int64(v), 10), true
-	case int32:
-		return strconv.FormatInt(int64(v), 10), true
-	case int64:
-		return strconv.FormatInt(v, 10), true
-	case uint:
-		return strconv.FormatUint(uint64(v), 10), true
-	case uint8:
-		return strconv.FormatUint(uint64(v), 10), true
-	case uint16:
-		return strconv.FormatUint(uint64(v), 10), true
-	case uint32:
-		return strconv.FormatUint(uint64(v), 10), true
-	case uint64:
-		return strconv.FormatUint(v, 10), true
-	case float64:
-		if v == 0 {
-			return "0", true
-		}
-		return strconv.FormatInt(int64(v), 10), true
-	case float32:
-		if v == 0 {
-			return "0", true
-		}
-		return strconv.FormatInt(int64(v), 10), true
-	default:
-		text := strings.TrimSpace(fmt.Sprint(value))
-		if text == "" || text == "<nil>" {
-			return "", false
-		}
-		return text, true
+	if text, ok := value.(string); ok {
+		text = strings.TrimSpace(text)
+		return text, text != ""
 	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatInt(rv.Int(), 10), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return strconv.FormatUint(rv.Uint(), 10), true
+	case reflect.Float32, reflect.Float64:
+		return strconv.FormatInt(int64(rv.Float()), 10), true
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "" || text == "<nil>" {
+		return "", false
+	}
+	return text, true
 }
 
 func runAndMarshalLogged[T any](
@@ -1894,25 +1877,9 @@ func runSearchCommand(binaryPath string, args []string, workDir string) ([]byte,
 }
 
 func parseRipgrepVimgrepOutput(output []byte, workspaceRoot string, limit int) []lspSearchMatch {
-	if len(output) == 0 {
-		return nil
-	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) == 0 {
-		return nil
-	}
-	matches := make([]lspSearchMatch, 0, lspSearchMinInt(limit, len(lines)))
-	for _, raw := range lines {
-		if len(matches) >= limit {
-			break
-		}
-		match, ok := parseRipgrepVimgrepLine(raw, workspaceRoot)
-		if !ok {
-			continue
-		}
-		matches = append(matches, match)
-	}
-	return matches
+	return parseSearchOutputLines(output, limit, func(raw string) (lspSearchMatch, bool) {
+		return parseRipgrepVimgrepLine(raw, workspaceRoot)
+	})
 }
 
 func parseRipgrepVimgrepLine(raw, workspaceRoot string) (lspSearchMatch, bool) {
@@ -1945,6 +1912,27 @@ func parseRipgrepVimgrepLine(raw, workspaceRoot string) (lspSearchMatch, bool) {
 }
 
 func parseASTGrepOutput(output []byte, workspaceRoot string, limit int) []lspSearchMatch {
+	return parseSearchOutputLines(output, limit, func(raw string) (lspSearchMatch, bool) {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			return lspSearchMatch{}, false
+		}
+		match, ok := parseASTGrepLine(trimmed, workspaceRoot)
+		if !ok {
+			match = lspSearchMatch{Path: ".", Text: truncateSearchText(trimmed)}
+		}
+		if isExcludedPath(match.Path) {
+			return lspSearchMatch{}, false
+		}
+		return match, true
+	})
+}
+
+func parseSearchOutputLines(
+	output []byte,
+	limit int,
+	parse func(string) (lspSearchMatch, bool),
+) []lspSearchMatch {
 	if len(output) == 0 {
 		return nil
 	}
@@ -1957,15 +1945,8 @@ func parseASTGrepOutput(output []byte, workspaceRoot string, limit int) []lspSea
 		if len(matches) >= limit {
 			break
 		}
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
-			continue
-		}
-		match, ok := parseASTGrepLine(trimmed, workspaceRoot)
+		match, ok := parse(raw)
 		if !ok {
-			match = lspSearchMatch{Path: ".", Text: truncateSearchText(trimmed)}
-		}
-		if isExcludedPath(match.Path) {
 			continue
 		}
 		matches = append(matches, match)
@@ -2074,34 +2055,19 @@ func firstString(payload map[string]any, keys ...string) string {
 }
 
 func toInt(value any) int {
-	switch typed := value.(type) {
-	case int:
-		return typed
-	case int8:
-		return int(typed)
-	case int16:
-		return int(typed)
-	case int32:
-		return int(typed)
-	case int64:
-		return int(typed)
-	case uint:
-		return int(typed)
-	case uint8:
-		return int(typed)
-	case uint16:
-		return int(typed)
-	case uint32:
-		return int(typed)
-	case uint64:
-		return int(typed)
-	case float32:
-		return int(typed)
-	case float64:
-		return int(typed)
-	default:
+	if value == nil {
 		return 0
 	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return int(rv.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return int(rv.Uint())
+	case reflect.Float32, reflect.Float64:
+		return int(rv.Float())
+	}
+	return 0
 }
 
 func lspSearchMinInt(a, b int) int {
@@ -2258,20 +2224,19 @@ func (h *ToolHandlers) TypeDefinition(args json.RawMessage) string {
 }
 
 func limitWorkspaceSymbolResults(in []WorkspaceSymbolResult) []WorkspaceSymbolResult {
-	if len(in) <= XRefResultLimit {
-		return in
-	}
-	out := make([]WorkspaceSymbolResult, XRefResultLimit)
-	copy(out, in[:XRefResultLimit])
-	return out
+	return limitResults(in, XRefResultLimit)
 }
 
 func limitLocationResults(in []LocationResult) []LocationResult {
-	if len(in) <= XRefResultLimit {
+	return limitResults(in, XRefResultLimit)
+}
+
+func limitResults[T any](in []T, limit int) []T {
+	if len(in) <= limit {
 		return in
 	}
-	out := make([]LocationResult, XRefResultLimit)
-	copy(out, in[:XRefResultLimit])
+	out := make([]T, limit)
+	copy(out, in[:limit])
 	return out
 }
 

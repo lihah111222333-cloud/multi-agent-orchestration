@@ -360,48 +360,18 @@ func canMergeToolCall(last TimelineItem, tool, file, preview string, elapsedMS *
 func (m *RuntimeManager) showApprovalLocked(threadID, command string, requestID int64, ts time.Time) {
 	command = strings.TrimSpace(command)
 	list := m.timelineLocked(threadID)
-	if len(list) > 0 {
-		// 同一 requestId 的重复事件只更新信息，不重复落卡片。
-		if requestID > 0 {
-			for i := len(list) - 1; i >= 0; i-- {
-				item := list[i]
-				if item.Kind != "approval" || item.Status != "pending" {
-					continue
+	if index, fillRequestID := findPendingApprovalUpdateTarget(list, requestID); index >= 0 {
+		if fillRequestID || (command != "" && list[index].Command == "") {
+			m.patchTimelineItemLocked(threadID, index, func(item *TimelineItem) {
+				if fillRequestID {
+					item.RequestID = requestID
 				}
-				if item.RequestID != requestID {
-					continue
+				if item.Command == "" && command != "" {
+					item.Command = command
 				}
-				m.patchTimelineItemLocked(threadID, i, func(v *TimelineItem) {
-					if v.Command == "" && command != "" {
-						v.Command = command
-					}
-				})
-				return
-			}
+			})
 		}
-
-		// 兼容先到的无 requestId 审批事件: 后续有 requestId 时回填并复用该条。
-		lastIndex := len(list) - 1
-		last := list[lastIndex]
-		if last.Kind == "approval" && last.Status == "pending" {
-			switch {
-			case requestID > 0 && last.RequestID == 0:
-				m.patchTimelineItemLocked(threadID, lastIndex, func(v *TimelineItem) {
-					v.RequestID = requestID
-					if v.Command == "" && command != "" {
-						v.Command = command
-					}
-				})
-				return
-			case requestID == 0 && last.RequestID == 0:
-				if command != "" && last.Command == "" {
-					m.patchTimelineItemLocked(threadID, lastIndex, func(v *TimelineItem) {
-						v.Command = command
-					})
-				}
-				return
-			}
-		}
+		return
 	}
 
 	item := TimelineItem{
@@ -413,6 +383,34 @@ func (m *RuntimeManager) showApprovalLocked(threadID, command string, requestID 
 		item.RequestID = requestID
 	}
 	m.pushTimelineItemLocked(threadID, item, ts)
+}
+
+func findPendingApprovalUpdateTarget(list []TimelineItem, requestID int64) (int, bool) {
+	if requestID > 0 {
+		for i := len(list) - 1; i >= 0; i-- {
+			item := list[i]
+			if isPendingApproval(item) && item.RequestID == requestID {
+				return i, false
+			}
+		}
+	}
+
+	lastIndex := len(list) - 1
+	if lastIndex < 0 {
+		return -1, false
+	}
+	last := list[lastIndex]
+	if !isPendingApproval(last) || last.RequestID != 0 {
+		return -1, false
+	}
+	if requestID > 0 {
+		return lastIndex, true
+	}
+	return lastIndex, false
+}
+
+func isPendingApproval(item TimelineItem) bool {
+	return item.Kind == "approval" && item.Status == "pending"
 }
 
 func (m *RuntimeManager) appendPlanLocked(threadID, delta string, ts time.Time) {

@@ -133,25 +133,25 @@ var trackedTurnTerminalByMethod = map[string]trackedTurnTerminalKind{
 
 var trackedTurnSummaryKeys = []string{"lastAgentMessage", "last_agent_message", "summary", "result", "message"}
 
+func ensureTrackedMap[K comparable, V any](target *map[K]V) {
+	if target != nil && *target == nil {
+		*target = make(map[K]V)
+	}
+}
+
+func ensureTrackedDuration(target *time.Duration, fallback time.Duration) {
+	if target != nil && *target <= 0 {
+		*target = fallback
+	}
+}
+
 func EnsureTurnTrackerStateLocked(state TurnTrackerState) {
-	if state.ActiveTurns != nil && *state.ActiveTurns == nil {
-		*state.ActiveTurns = make(map[string]*trackedTurn)
-	}
-	if state.TurnWatchdogTimeout != nil && *state.TurnWatchdogTimeout <= 0 {
-		*state.TurnWatchdogTimeout = DefaultTurnWatchdogTimeout
-	}
-	if state.TurnSummaryCache != nil && *state.TurnSummaryCache == nil {
-		*state.TurnSummaryCache = make(map[string]TrackedTurnSummaryCacheEntry)
-	}
-	if state.TurnSummaryTTL != nil && *state.TurnSummaryTTL <= 0 {
-		*state.TurnSummaryTTL = DefaultTrackedTurnSummaryTTL
-	}
-	if state.StallThreshold != nil && *state.StallThreshold <= 0 {
-		*state.StallThreshold = DefaultStallThreshold
-	}
-	if state.StallHeartbeat != nil && *state.StallHeartbeat <= 0 {
-		*state.StallHeartbeat = DefaultStallHeartbeat
-	}
+	ensureTrackedMap(state.ActiveTurns)
+	ensureTrackedDuration(state.TurnWatchdogTimeout, DefaultTurnWatchdogTimeout)
+	ensureTrackedMap(state.TurnSummaryCache)
+	ensureTrackedDuration(state.TurnSummaryTTL, DefaultTrackedTurnSummaryTTL)
+	ensureTrackedDuration(state.StallThreshold, DefaultStallThreshold)
+	ensureTrackedDuration(state.StallHeartbeat, DefaultStallHeartbeat)
 }
 func TrackerDurationOrDefault(value *time.Duration, fallback time.Duration) time.Duration {
 	if value != nil && *value > 0 {
@@ -217,10 +217,7 @@ func TrackerInterruptSender(getProcess func(string) any, sendCommand func(any, s
 
 func threadLogFields(threadID string) []any {
 	id := strings.TrimSpace(threadID)
-	return []any{
-		logger.FieldAgentID, id,
-		logger.FieldThreadID, id,
-	}
+	return []any{logger.FieldAgentID, id, logger.FieldThreadID, id}
 }
 func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time) bool {
 	if IsTerminalEventType(eventType, method) {
@@ -502,26 +499,27 @@ func buildTrackedTurnCompletionPayload(threadID, turnID, status, reason string) 
 		"reason": reason,
 	}
 }
+
+func mergeTrackedTurnFields(target, source map[string]any, keys ...string) {
+	for _, key := range keys {
+		if value, ok := source[key]; ok {
+			target[key] = value
+		}
+	}
+}
+
 func MergeTrackedTurnCompletionPayload(target map[string]any, completion map[string]any) {
 	if target == nil || completion == nil {
 		return
 	}
-	for _, key := range []string{"threadId", "status", "reason", "summary"} {
-		if value, ok := completion[key]; ok {
-			target[key] = value
-		}
-	}
+	mergeTrackedTurnFields(target, completion, "threadId", "status", "reason", "summary")
 	if completionTurn, ok := completion["turn"].(map[string]any); ok {
 		targetTurn, ok := target["turn"].(map[string]any)
 		if !ok || targetTurn == nil {
 			targetTurn = map[string]any{}
 			target["turn"] = targetTurn
 		}
-		for _, key := range []string{"id", "status", "reason", "summary"} {
-			if value, ok := completionTurn[key]; ok {
-				targetTurn[key] = value
-			}
-		}
+		mergeTrackedTurnFields(targetTurn, completionTurn, "id", "status", "reason", "summary")
 	}
 }
 func WithTrackerStateLockCore(state TurnTrackerState, fn func(TurnTrackerState)) {
@@ -591,13 +589,12 @@ func sendTrackedTurnDone(turn *trackedTurn, status string) bool {
 }
 
 func removeActiveTrackedTurn(activeTurns map[string]*trackedTurn, threadID string) (*trackedTurn, bool) {
-	turn := activeTurns[threadID]
-	if turn == nil {
-		return nil, false
+	if turn := activeTurns[threadID]; turn != nil {
+		delete(activeTurns, threadID)
+		stopTrackedTurnTimers(turn)
+		return turn, true
 	}
-	delete(activeTurns, threadID)
-	stopTrackedTurnTimers(turn)
-	return turn, true
+	return nil, false
 }
 
 func withActiveTrackedTurnCore(

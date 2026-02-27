@@ -54,7 +54,6 @@ type Deps struct {
 	SetAgentWorkDir          func(agentID, cwd string)
 	CancelCodeRuns           func(agentID string) int
 	ReadSkillContent         func(skillName string) (string, error)
-	ListSkillNames           func() ([]string, error)
 	ListSkillMatchCandidates func() ([]contracts.SkillMatchCandidate, error)
 	GetAgentSkills           func(agentID string) []string
 	Notify                   func(method string, params any)
@@ -76,9 +75,6 @@ func normalizeDeps(deps Deps) *Deps {
 	}
 	if d.ReadSkillContent == nil {
 		d.ReadSkillContent = defaultReadSkillContentProvider
-	}
-	if d.ListSkillNames == nil {
-		d.ListSkillNames = defaultListSkillNamesProvider
 	}
 	if d.ListSkillMatchCandidates == nil {
 		d.ListSkillMatchCandidates = defaultListSkillMatchCandidatesProvider
@@ -173,45 +169,41 @@ func (a *Adapter) notify(method string, payload any) {
 }
 
 func (a *Adapter) bindingExists(ctx context.Context, agentID string) (bool, error) {
-	bindingStore := a.bindingStore()
-	if bindingStore == nil {
-		return false, nil
+	if bindingStore := a.bindingStore(); bindingStore != nil {
+		binding, err := bindingStore.FindByAgentID(ctx, agentID)
+		return binding != nil, err
 	}
-	binding, err := bindingStore.FindByAgentID(ctx, agentID)
-	return binding != nil, err
+	return false, nil
 }
 
 func (a *Adapter) agentStatusExists(ctx context.Context, agentID string) (bool, error) {
-	statusStore := a.statusStore()
-	if statusStore == nil {
-		return false, nil
+	if statusStore := a.statusStore(); statusStore != nil {
+		status, err := statusStore.Get(ctx, agentID)
+		return status != nil, err
 	}
-	status, err := statusStore.Get(ctx, agentID)
-	return status != nil, err
+	return false, nil
 }
 
 func (a *Adapter) bindingCodexThreadID(ctx context.Context, agentID string) (string, error) {
-	bindingStore := a.bindingStore()
-	if bindingStore == nil {
-		return "", nil
+	if bindingStore := a.bindingStore(); bindingStore != nil {
+		binding, err := bindingStore.FindByAgentID(ctx, agentID)
+		if err != nil || binding == nil {
+			return "", err
+		}
+		return binding.CodexThreadID, nil
 	}
-	binding, err := bindingStore.FindByAgentID(ctx, agentID)
-	if err != nil || binding == nil {
-		return "", err
-	}
-	return binding.CodexThreadID, nil
+	return "", nil
 }
 
 func (a *Adapter) statusSessionID(ctx context.Context, agentID string) (string, error) {
-	statusStore := a.statusStore()
-	if statusStore == nil {
-		return "", nil
+	if statusStore := a.statusStore(); statusStore != nil {
+		status, err := statusStore.Get(ctx, agentID)
+		if err != nil || status == nil {
+			return "", err
+		}
+		return status.SessionID, nil
 	}
-	status, err := statusStore.Get(ctx, agentID)
-	if err != nil || status == nil {
-		return "", err
-	}
-	return status.SessionID, nil
+	return "", nil
 }
 
 func (a *Adapter) storeGetter() func(context.Context, string) (any, error) {
@@ -240,21 +232,16 @@ func (a *Adapter) renderAutoMatchedSkillPrompt(agentID string, matches []contrac
 }
 
 func (a *Adapter) runningAgents() []codexsdk.AgentInfo {
-	if m := a.manager(); m != nil {
-		return m.List()
+	if manager := a.manager(); manager != nil {
+		return manager.List()
 	}
 	return nil
 }
 
 func toListingAgentInfos(items []codexsdk.AgentInfo) []listingsvc.AgentInfo {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]listingsvc.AgentInfo, len(items))
-	for i, item := range items {
-		out[i] = listingsvc.AgentInfo{ID: item.ID, Name: item.Name, State: string(item.State)}
-	}
-	return out
+	return mapSlice(items, func(item codexsdk.AgentInfo) listingsvc.AgentInfo {
+		return listingsvc.AgentInfo{ID: item.ID, Name: item.Name, State: string(item.State)}
+	})
 }
 
 func (a *Adapter) ThreadList(ctx context.Context) ([]contracts.ThreadListItem, error) {
@@ -269,11 +256,9 @@ func (a *Adapter) ThreadList(ctx context.Context) ([]contracts.ThreadListItem, e
 			if err != nil {
 				return nil, err
 			}
-			out := make([]listingsvc.AgentCodexBinding, 0, len(items))
-			for _, item := range items {
-				out = append(out, listingsvc.AgentCodexBinding{AgentID: item.AgentID})
-			}
-			return out, nil
+			return mapSlice(items, func(item store.AgentCodexBinding) listingsvc.AgentCodexBinding {
+				return listingsvc.AgentCodexBinding{AgentID: item.AgentID}
+			}), nil
 		})
 	}
 	appendStatus := func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
@@ -286,11 +271,9 @@ func (a *Adapter) ThreadList(ctx context.Context) ([]contracts.ThreadListItem, e
 			if err != nil {
 				return nil, err
 			}
-			out := make([]listingsvc.AgentStatus, 0, len(items))
-			for _, item := range items {
-				out = append(out, listingsvc.AgentStatus{AgentID: item.AgentID, AgentName: item.AgentName})
-			}
-			return out, nil
+			return mapSlice(items, func(item store.AgentStatus) listingsvc.AgentStatus {
+				return listingsvc.AgentStatus{AgentID: item.AgentID, AgentName: item.AgentName}
+			}), nil
 		})
 	}
 	appendArchive := func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
@@ -308,11 +291,9 @@ func (a *Adapter) ThreadList(ctx context.Context) ([]contracts.ThreadListItem, e
 		if runtime == nil {
 			return
 		}
-		snapshots := make([]uistate.ThreadSnapshot, 0, len(threads))
-		for _, item := range threads {
-			snapshots = append(snapshots, uistate.ThreadSnapshot{ID: item.ID, Name: item.Name, State: item.State})
-		}
-		runtime.ReplaceThreads(snapshots)
+		runtime.ReplaceThreads(mapSlice(threads, func(item listingsvc.ThreadListItem) uistate.ThreadSnapshot {
+			return uistate.ThreadSnapshot{ID: item.ID, Name: item.Name, State: item.State}
+		}))
 	}
 	items, err := listingsvc.BuildThreadList(
 		ctx,

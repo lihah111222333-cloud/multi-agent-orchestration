@@ -22,9 +22,6 @@ func defaultCancelCodeRunsProvider(string) int         { return 0 }
 func defaultReadSkillContentProvider(string) (string, error) {
 	return "", appErrors.New("codexadapter.readSkillContent", "server context is not configured")
 }
-func defaultListSkillNamesProvider() ([]string, error) {
-	return nil, appErrors.New("codexadapter.listSkillNames", "server context is not configured")
-}
 func defaultListSkillMatchCandidatesProvider() ([]contracts.SkillMatchCandidate, error) {
 	return nil, appErrors.New("codexadapter.listSkillMatchCandidates", "server context is not configured")
 }
@@ -130,4 +127,15 @@ func fuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern
 		})
 	}
 	return results
+}
+
+func mapSlice[T any, R any](src []T, mapper func(T) R) []R {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]R, 0, len(src))
+	for _, item := range src {
+		out = append(out, mapper(item))
+	}
+	return out
 }

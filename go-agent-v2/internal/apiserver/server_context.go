@@ -2,7 +2,6 @@ package apiserver
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
@@ -21,25 +20,6 @@ func (h codexAdapterHooks) readSkillContent(skillName string) (string, error) {
 		return "", pkgerr.New("Server.skillService", "skill service is not initialized")
 	}
 	return h.server.skillSvc.ReadSkillContent(skillName)
-}
-
-func (h codexAdapterHooks) listSkillNames() ([]string, error) {
-	if h.server == nil || h.server.skillSvc == nil {
-		return []string{}, nil
-	}
-	list, err := h.server.skillSvc.ListSkills()
-	if err != nil {
-		return nil, err
-	}
-	skillNames := make([]string, 0, len(list))
-	for _, item := range list {
-		name := strings.TrimSpace(item.Name)
-		if name == "" {
-			continue
-		}
-		skillNames = append(skillNames, name)
-	}
-	return skillNames, nil
 }
 
 func (h codexAdapterHooks) listSkillMatchCandidates() ([]contracts.SkillMatchCandidate, error) {
@@ -81,7 +61,6 @@ func newCodexAdapter(s *Server) *codexadapter.Adapter {
 		SetAgentWorkDir:          hooks.setAgentWorkDir,
 		CancelCodeRuns:           hooks.cancelCodeRuns,
 		ReadSkillContent:         hooks.readSkillContent,
-		ListSkillNames:           hooks.listSkillNames,
 		ListSkillMatchCandidates: hooks.listSkillMatchCandidates,
 		GetAgentSkills:           hooks.getAgentSkills,
 		Notify:                   hooks.notify,

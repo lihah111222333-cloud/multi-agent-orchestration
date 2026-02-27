@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -18,21 +17,19 @@ import (
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
-func allocateUniquePath(primary string, next func(index int) string) (string, error) {
-	if _, err := os.Stat(primary); os.IsNotExist(err) {
-		return primary, nil
-	} else if err != nil {
-		return "", err
-	}
-	for i := 2; i <= 9999; i++ {
-		candidate := next(i)
+func resolveUniquePath(op, exhaustedMsg, statMsg, primary string, next func(index int) string) (string, error) {
+	for i := 1; i <= 9999; i++ {
+		candidate := primary
+		if i > 1 {
+			candidate = next(i)
+		}
 		if _, err := os.Stat(candidate); os.IsNotExist(err) {
 			return candidate, nil
 		} else if err != nil {
-			return "", err
+			return "", apperrors.Wrap(err, op, statMsg)
 		}
 	}
-	return "", os.ErrExist
+	return "", apperrors.New(op, exhaustedMsg)
 }
 
 func resolveUserHome(op string) (string, error) {
@@ -40,8 +37,7 @@ func resolveUserHome(op string) (string, error) {
 	if err != nil {
 		return "", apperrors.Wrap(err, op, "resolve user home")
 	}
-	homeDir = strings.TrimSpace(homeDir)
-	if homeDir == "" {
+	if homeDir = strings.TrimSpace(homeDir); homeDir == "" {
 		return "", apperrors.New(op, "user home is empty")
 	}
 	return homeDir, nil
@@ -64,7 +60,7 @@ func ResolveThreadArchiveRootDir() (string, error) {
 }
 
 func ResolveThreadArchiveSnapshotDir(rootDir string, threadID string, archivedAt string) (string, error) {
-	safeThreadID, err := archivesvc.SanitizeArchiveNameStrict(threadID)
+	safeThreadID, err := archivesvc.SanitizeArchiveNameStrict(strings.TrimSpace(threadID))
 	if err != nil {
 		return "", apperrors.Wrap(err, "ResolveThreadArchiveSnapshotDir", "sanitize thread id")
 	}
@@ -76,43 +72,38 @@ func ResolveThreadArchiveSnapshotDir(rootDir string, threadID string, archivedAt
 	if err != nil {
 		return "", apperrors.Wrap(err, "ResolveThreadArchiveSnapshotDir", "sanitize archive timestamp")
 	}
-	path, err := allocateUniquePath(filepath.Join(threadDir, snapshotName), func(i int) string {
-		return filepath.Join(threadDir, fmt.Sprintf("%s-%d", snapshotName, i))
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return "", apperrors.New("ResolveThreadArchiveSnapshotDir", "unable to allocate unique archive snapshot dir")
-		}
-		return "", apperrors.Wrap(err, "ResolveThreadArchiveSnapshotDir", "stat snapshot candidate")
-	}
-	return path, nil
+	return resolveUniquePath(
+		"ResolveThreadArchiveSnapshotDir",
+		"unable to allocate unique archive snapshot dir",
+		"stat snapshot candidate",
+		filepath.Join(threadDir, snapshotName),
+		func(i int) string { return filepath.Join(threadDir, fmt.Sprintf("%s-%d", snapshotName, i)) },
+	)
 }
 
 func CollectThreadArtifactCandidates(codexThreadID string, rolloutPath string) []archivesvc.ThreadArtifactCandidate {
 	candidates := make([]archivesvc.ThreadArtifactCandidate, 0, 8)
 	seen := make(map[string]struct{}, 8)
 	addCandidate := func(kind, path string) {
-		cleaned := strings.TrimSpace(path)
-		if cleaned == "" {
+		if path = strings.TrimSpace(path); path == "" {
 			return
 		}
-		if _, ok := seen[cleaned]; ok {
+		if _, ok := seen[path]; ok {
 			return
 		}
-		seen[cleaned] = struct{}{}
-		candidates = append(candidates, archivesvc.ThreadArtifactCandidate{Kind: kind, Path: cleaned})
+		seen[path] = struct{}{}
+		candidates = append(candidates, archivesvc.ThreadArtifactCandidate{Kind: kind, Path: path})
 	}
 
+	codexThreadID = strings.TrimSpace(codexThreadID)
 	resolvedRollout := strings.TrimSpace(rolloutPath)
-	if resolvedRollout == "" && strings.TrimSpace(codexThreadID) != "" {
+	if resolvedRollout == "" && codexThreadID != "" {
 		if found, err := codex.FindRolloutPath(codexThreadID); err == nil {
-			resolvedRollout = found
+			resolvedRollout = strings.TrimSpace(found)
 		}
 	}
-	if resolvedRollout != "" {
-		addCandidate("rollout", resolvedRollout)
-	}
-	if codexThreadID = strings.TrimSpace(codexThreadID); codexThreadID == "" {
+	addCandidate("rollout", resolvedRollout)
+	if codexThreadID == "" {
 		return candidates
 	}
 
@@ -122,17 +113,12 @@ func CollectThreadArtifactCandidates(codexThreadID string, rolloutPath string) [
 	}
 	addCandidate("shell_snapshot", filepath.Join(homeDir, ".codex", "shell_snapshots", codexThreadID+".sh"))
 
-	for _, root := range []string{
-		filepath.Join(homeDir, ".codex", "sessions"),
-		filepath.Join(homeDir, ".codex", "shell_snapshots"),
-		filepath.Join(homeDir, ".codex", "archived_sessions"),
-		filepath.Join(homeDir, ".codex", "tmp"),
-	} {
+	for _, name := range []string{"sessions", "shell_snapshots", "archived_sessions", "tmp"} {
+		root := filepath.Join(homeDir, ".codex", name)
 		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil || d == nil || d.IsDir() || !strings.Contains(d.Name(), codexThreadID) {
-				return nil
+			if walkErr == nil && d != nil && !d.IsDir() && strings.Contains(d.Name(), codexThreadID) {
+				addCandidate(archivesvc.InferThreadArtifactKind(d.Name()), path)
 			}
-			addCandidate(archivesvc.InferThreadArtifactKind(d.Name()), path)
 			return nil
 		})
 	}
@@ -152,16 +138,13 @@ func NextArchiveFilePath(dir, filename string) (string, error) {
 	}
 	ext := filepath.Ext(base)
 	stem := strings.TrimSuffix(base, ext)
-	path, err := allocateUniquePath(filepath.Join(dir, base), func(i int) string {
-		return filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, i, ext))
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return "", apperrors.New("NextArchiveFilePath", "unable to allocate unique archive filename")
-		}
-		return "", apperrors.Wrap(err, "NextArchiveFilePath", "stat archive target candidate")
-	}
-	return path, nil
+	return resolveUniquePath(
+		"NextArchiveFilePath",
+		"unable to allocate unique archive filename",
+		"stat archive target candidate",
+		filepath.Join(dir, base),
+		func(i int) string { return filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, i, ext)) },
+	)
 }
 
 func copyFileAtomic(srcPath, targetPath string, overwrite bool) error {
@@ -176,18 +159,17 @@ func copyFileAtomic(srcPath, targetPath string, overwrite bool) error {
 			return apperrors.Wrap(err, op, "stat target path")
 		}
 	}
-	src, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = src.Close() }()
-	info, err := src.Stat()
+	info, err := os.Stat(srcPath)
 	if err != nil {
 		return err
 	}
 	mode := info.Mode().Perm()
 	if mode == 0 {
 		mode = 0o644
+	}
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		return err
 	}
 	targetDir := filepath.Dir(targetPath)
 	if overwrite {
@@ -200,16 +182,11 @@ func copyFileAtomic(srcPath, targetPath string, overwrite bool) error {
 		return err
 	}
 	tmpPath := tmpFile.Name()
-	if _, err := io.Copy(tmpFile, src); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
 	if err := tmpFile.Close(); err != nil {
 		_ = os.Remove(tmpPath)
 		return err
 	}
-	if err := os.Chmod(tmpPath, mode); err != nil {
+	if err := os.WriteFile(tmpPath, data, mode); err != nil {
 		_ = os.Remove(tmpPath)
 		return err
 	}
@@ -251,40 +228,37 @@ func FindLatestThreadArchiveManifestPath(threadDir string) (string, bool, error)
 	if !info.IsDir() {
 		return "", false, apperrors.Newf("FindLatestThreadArchiveManifestPath", "thread archive path is not a directory: %s", threadDir)
 	}
-
-	var latestPath string
-	var latestAt int64
-	checkCandidate := func(path, action string) error {
-		stat, err := os.Stat(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return apperrors.Wrap(err, "FindLatestThreadArchiveManifestPath", action)
-		}
-		if stat.IsDir() {
-			return nil
-		}
-		modAt := stat.ModTime().UnixNano()
-		if latestPath == "" || modAt > latestAt || (modAt == latestAt && path > latestPath) {
-			latestPath, latestAt = path, modAt
-		}
-		return nil
-	}
-
-	if err := checkCandidate(filepath.Join(threadDir, "manifest.json"), "stat legacy manifest"); err != nil {
-		return "", false, err
-	}
 	entries, err := os.ReadDir(threadDir)
 	if err != nil {
 		return "", false, apperrors.Wrap(err, "FindLatestThreadArchiveManifestPath", "read thread archive dir")
 	}
-	for _, entry := range entries {
-		if entry == nil || !entry.IsDir() {
-			continue
+
+	var latestPath string
+	var latestAt int64
+	pick := func(path, action string) error {
+		stat, statErr := os.Stat(path)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				return nil
+			}
+			return apperrors.Wrap(statErr, "FindLatestThreadArchiveManifestPath", action)
 		}
-		if err := checkCandidate(filepath.Join(threadDir, entry.Name(), "manifest.json"), fmt.Sprintf("stat manifest for snapshot %s", entry.Name())); err != nil {
-			return "", false, err
+		if !stat.IsDir() {
+			modAt := stat.ModTime().UnixNano()
+			if latestPath == "" || modAt > latestAt || (modAt == latestAt && path > latestPath) {
+				latestPath, latestAt = path, modAt
+			}
+		}
+		return nil
+	}
+	if err := pick(filepath.Join(threadDir, "manifest.json"), "stat legacy manifest"); err != nil {
+		return "", false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			if err := pick(filepath.Join(threadDir, entry.Name(), "manifest.json"), fmt.Sprintf("stat manifest for snapshot %s", entry.Name())); err != nil {
+				return "", false, err
+			}
 		}
 	}
 	return latestPath, latestPath != "", nil
@@ -337,8 +311,7 @@ func FileState(path string) (archivesvc.ThreadArchiveFileState, error) {
 func RemoveFile(path string) error { return os.Remove(path) }
 
 func RemoveEmptyCodexParentDirs(startDir string, codexRoot string) {
-	current := strings.TrimSpace(startDir)
-	root := strings.TrimSpace(codexRoot)
+	current, root := strings.TrimSpace(startDir), strings.TrimSpace(codexRoot)
 	if current == "" || root == "" {
 		return
 	}
@@ -356,17 +329,17 @@ func RemoveEmptyCodexParentDirs(startDir string, codexRoot string) {
 			return
 		}
 		entries, err := os.ReadDir(currentAbs)
-		if err != nil || len(entries) > 0 {
+		if err != nil || len(entries) != 0 {
 			return
 		}
 		if err := os.Remove(currentAbs); err != nil {
 			return
 		}
-		parent := filepath.Dir(currentAbs)
-		if parent == currentAbs {
+		if parent := filepath.Dir(currentAbs); parent == currentAbs {
 			return
+		} else {
+			current = parent
 		}
-		current = parent
 	}
 }
 
@@ -401,33 +374,23 @@ func collectThreadArchiveMapFromRoot(rootDir string) (map[string]int64, error) {
 			continue
 		}
 		threadDir := filepath.Join(root, entry.Name())
-
-		var archivedAt int64
-		if snapshots, readErr := os.ReadDir(threadDir); readErr == nil {
+		archivedAt := int64(0)
+		if snapshots, err := os.ReadDir(threadDir); err == nil {
 			for _, snapshot := range snapshots {
-				if snapshot != nil && snapshot.IsDir() {
-					if parsed := archivesvc.ParseArchiveTimestamp(snapshot.Name()); parsed > archivedAt {
-						archivedAt = parsed
-					}
+				if snapshot.IsDir() {
+					archivedAt = max(archivedAt, archivesvc.ParseArchiveTimestamp(snapshot.Name()))
 				}
 			}
 		}
-
-		manifestPath, found, manifestErr := FindLatestThreadArchiveManifestPath(threadDir)
-		if manifestErr == nil && found {
+		if manifestPath, found, manifestErr := FindLatestThreadArchiveManifestPath(threadDir); manifestErr == nil && found {
 			if manifest, readErr := ReadThreadArchiveManifest(manifestPath); readErr == nil {
 				if id := strings.TrimSpace(manifest.ThreadID); id != "" {
 					threadID = id
 				}
-				if parsed := archivesvc.ParseArchiveTimestamp(manifest.ArchivedAt); parsed > 0 {
-					archivedAt = parsed
-				}
+				archivedAt = max(archivedAt, archivesvc.ParseArchiveTimestamp(manifest.ArchivedAt))
 			}
 		}
-		if archivedAt > 0 {
-			if current, ok := result[threadID]; ok && archivedAt <= current {
-				continue
-			}
+		if archivedAt > result[threadID] {
 			result[threadID] = archivedAt
 		}
 	}

@@ -272,7 +272,7 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 
 	c.replaceWSConn(conn)
 	c.listenerEnsureNeeded.Store(true)
-	c.ensureListenerIfNeededAsync(c.call)
+	util.SafeGo(func() { c.ensureListenerIfNeeded(c.call) })
 	util.SafeGo(func() { c.pingLoop(conn) })
 	health := c.noteReconnectSuccess(time.Now())
 	c.emitBackgroundEvent(
@@ -515,21 +515,8 @@ func (c *AppServerClient) notify(method string, params any) error {
 	})
 }
 
-func (c *AppServerClient) respond(id int64, result any) error {
-	return c.respondWithID(newJSONRPCIntID(id), result)
-}
-
-func (c *AppServerClient) writeRPCResponse(id jsonRPCID, result any, rpcErr *jsonRPCError) error {
-	return c.asWriteJSON(jsonRPCResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result:  result,
-		Error:   rpcErr,
-	})
-}
-
 func (c *AppServerClient) respondWithID(id jsonRPCID, result any) error {
-	return c.writeRPCResponse(id, result, nil)
+	return c.asWriteJSON(jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: result})
 }
 
 func (c *AppServerClient) RespondError(id int64, code int, message string) error {
@@ -537,5 +524,9 @@ func (c *AppServerClient) RespondError(id int64, code int, message string) error
 }
 
 func (c *AppServerClient) respondErrorWithID(id jsonRPCID, code int, message string) error {
-	return c.writeRPCResponse(id, nil, &jsonRPCError{Code: code, Message: message})
+	return c.asWriteJSON(jsonRPCResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error:   &jsonRPCError{Code: code, Message: message},
+	})
 }

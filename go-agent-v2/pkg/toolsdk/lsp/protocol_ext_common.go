@@ -155,31 +155,53 @@ func decodeNullableSlice[T any](raw json.RawMessage, errPrefix string) ([]T, err
 	return items, nil
 }
 
-// decodeLocationsLike 兼容解码:
-// Location | []Location | []LocationLink | null
-func decodeLocationsLike(raw json.RawMessage) ([]LocationResult, error) {
+func decodeRawItems[T any](arr []json.RawMessage, decodeOne func(json.RawMessage) (T, error)) ([]T, error) {
+	out := make([]T, 0, len(arr))
+	for _, item := range arr {
+		decoded, err := decodeOne(item)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, decoded)
+	}
+	return out, nil
+}
+
+func decodeArrayLike[T any](
+	raw json.RawMessage,
+	errPrefix string,
+	allowSingle bool,
+	decodeOne func(json.RawMessage) (T, error),
+) ([]T, error) {
 	if isNullRaw(raw) {
 		return nil, nil
 	}
-
-	var arr []json.RawMessage
-	if err := json.Unmarshal(raw, &arr); err == nil {
-		out := make([]LocationResult, 0, len(arr))
-		for _, item := range arr {
-			one, err := decodeLocationLikeOne(item)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, one)
-		}
-		return out, nil
+	arr, err := decodeRawArray(raw, errPrefix)
+	if err == nil {
+		return decodeRawItems(arr, decodeOne)
 	}
-
-	one, err := decodeLocationLikeOne(raw)
+	if !allowSingle {
+		return nil, err
+	}
+	one, err := decodeOne(raw)
 	if err != nil {
 		return nil, err
 	}
-	return []LocationResult{one}, nil
+	return []T{one}, nil
+}
+
+func decodeRawObject(item json.RawMessage, errPrefix string) (map[string]json.RawMessage, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(item, &obj); err != nil {
+		return nil, fmt.Errorf("%s: %w", errPrefix, err)
+	}
+	return obj, nil
+}
+
+// decodeLocationsLike 兼容解码:
+// Location | []Location | []LocationLink | null
+func decodeLocationsLike(raw json.RawMessage) ([]LocationResult, error) {
+	return decodeArrayLike(raw, "decode location-like", true, decodeLocationLikeOne)
 }
 
 func decodeLocationLikeOne(raw json.RawMessage) (LocationResult, error) {
@@ -223,72 +245,48 @@ func decodeLocationLikeOne(raw json.RawMessage) (LocationResult, error) {
 // decodeWorkspaceSymbols 兼容解码:
 // []SymbolInformation | []WorkspaceSymbol | null
 func decodeWorkspaceSymbols(raw json.RawMessage) ([]WorkspaceSymbolResult, error) {
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-	arr, err := decodeRawArray(raw, "decode workspace symbols")
+	return decodeArrayLike(raw, "decode workspace symbols", false, decodeWorkspaceSymbolOne)
+}
+
+func decodeWorkspaceSymbolOne(item json.RawMessage) (WorkspaceSymbolResult, error) {
+	obj, err := decodeRawObject(item, "decode workspace symbol item")
 	if err != nil {
-		return nil, err
+		return WorkspaceSymbolResult{}, err
 	}
 
-	out := make([]WorkspaceSymbolResult, 0, len(arr))
-	for _, item := range arr {
-		var obj map[string]json.RawMessage
-		if err := json.Unmarshal(item, &obj); err != nil {
-			return nil, fmt.Errorf("decode workspace symbol item: %w", err)
-		}
-
-		locationRaw := obj["location"]
-		if len(locationRaw) > 0 {
-			var locObj map[string]json.RawMessage
-			if err := json.Unmarshal(locationRaw, &locObj); err == nil {
-				if _, hasRange := locObj["range"]; hasRange {
-					var legacy SymbolInformation
-					if err := json.Unmarshal(item, &legacy); err != nil {
-						return nil, fmt.Errorf("decode SymbolInformation: %w", err)
-					}
-					out = append(out, WorkspaceSymbolResult{SymbolInformation: &legacy})
-					continue
+	locationRaw := obj["location"]
+	if len(locationRaw) > 0 {
+		var locObj map[string]json.RawMessage
+		if err := json.Unmarshal(locationRaw, &locObj); err == nil {
+			if _, hasRange := locObj["range"]; hasRange {
+				var legacy SymbolInformation
+				if err := json.Unmarshal(item, &legacy); err != nil {
+					return WorkspaceSymbolResult{}, fmt.Errorf("decode SymbolInformation: %w", err)
 				}
+				return WorkspaceSymbolResult{SymbolInformation: &legacy}, nil
 			}
 		}
-
-		var modern WorkspaceSymbol
-		if err := json.Unmarshal(item, &modern); err != nil {
-			return nil, fmt.Errorf("decode WorkspaceSymbol: %w", err)
-		}
-		out = append(out, WorkspaceSymbolResult{WorkspaceSymbol: &modern})
 	}
 
-	return out, nil
+	var modern WorkspaceSymbol
+	if err := json.Unmarshal(item, &modern); err != nil {
+		return WorkspaceSymbolResult{}, fmt.Errorf("decode WorkspaceSymbol: %w", err)
+	}
+	return WorkspaceSymbolResult{WorkspaceSymbol: &modern}, nil
 }
 
 // decodeCodeActions 兼容解码:
 // (CodeAction | Command)[] | null
 func decodeCodeActions(raw json.RawMessage) ([]CodeActionResult, error) {
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-	arr, err := decodeRawArray(raw, "decode code actions")
+	return decodeArrayLike(raw, "decode code actions", false, decodeCodeActionOne)
+}
+
+func decodeCodeActionOne(item json.RawMessage) (CodeActionResult, error) {
+	obj, err := decodeRawObject(item, "decode code action item")
 	if err != nil {
-		return nil, err
+		return CodeActionResult{}, err
 	}
-
-	out := make([]CodeActionResult, 0, len(arr))
-	for _, item := range arr {
-		var obj map[string]json.RawMessage
-		if err := json.Unmarshal(item, &obj); err != nil {
-			return nil, fmt.Errorf("decode code action item: %w", err)
-		}
-
-		decoded, err := decodeCodeActionOrCommand(item, obj)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, decoded)
-	}
-
-	return out, nil
+	return decodeCodeActionOrCommand(item, obj)
 }
 
 func decodeCodeActionOrCommand(item json.RawMessage, obj map[string]json.RawMessage) (CodeActionResult, error) {
@@ -313,31 +311,16 @@ func decodeCodeActionOrCommand(item json.RawMessage, obj map[string]json.RawMess
 }
 
 func isCodeActionLike(obj map[string]json.RawMessage) bool {
-	if _, ok := obj["kind"]; ok {
-		return true
+	for _, key := range []string{"kind", "edit", "diagnostics", "isPreferred", "disabled", "data"} {
+		if _, ok := obj[key]; ok {
+			return true
+		}
 	}
-	if _, ok := obj["edit"]; ok {
-		return true
-	}
-	if _, ok := obj["diagnostics"]; ok {
-		return true
-	}
-	if _, ok := obj["isPreferred"]; ok {
-		return true
-	}
-	if _, ok := obj["disabled"]; ok {
-		return true
-	}
-	if _, ok := obj["data"]; ok {
-		return true
-	}
-	commandRaw, hasCommand := obj["command"]
-	if hasCommand {
+	if commandRaw, hasCommand := obj["command"]; hasCommand {
 		var commandName string
 		if err := json.Unmarshal(commandRaw, &commandName); err == nil {
 			return false
 		}
-		// command 为对象时属于 CodeAction.command，而非顶层 Command.command。
 		return true
 	}
 	return false
@@ -346,17 +329,13 @@ func isCodeActionLike(obj map[string]json.RawMessage) bool {
 // decodeCompletionItems 兼容解码:
 // []CompletionItem | CompletionList | null
 func decodeCompletionItems(raw json.RawMessage) ([]CompletionItem, error) {
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-
 	var list CompletionList
 	if err := json.Unmarshal(raw, &list); err == nil && list.Items != nil {
 		return list.Items, nil
 	}
 
-	var items []CompletionItem
-	if err := json.Unmarshal(raw, &items); err == nil {
+	items, err := decodeNullableSlice[CompletionItem](raw, "decode completion")
+	if err == nil {
 		return items, nil
 	}
 
@@ -653,15 +632,7 @@ func decodeParameterLabel(raw json.RawMessage) (string, []int) {
 // decodeTextEdits 兼容解码 formatting 返回:
 // []TextEdit | null
 func decodeTextEdits(raw json.RawMessage) ([]TextEdit, error) {
-	if isNullRaw(raw) {
-		return nil, nil
-	}
-
-	var edits []TextEdit
-	if err := json.Unmarshal(raw, &edits); err != nil {
-		return nil, fmt.Errorf("decode text edits: %w", err)
-	}
-	return edits, nil
+	return decodeNullableSlice[TextEdit](raw, "decode text edits")
 }
 
 // SemanticTokenResultLimit 是 semantic_tokens decoded 输出上限。

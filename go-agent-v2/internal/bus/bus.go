@@ -49,6 +49,8 @@ const (
 	MsgAgentOutput = "agent_output"
 	// MsgAgentEvent Agent 事件转发 (turn_started/turn_complete/idle 等)。
 	MsgAgentEvent = "agent_event"
+	// MsgUserMessage 用户消息 (主 agent → 子 agent 的指令, 用于 UI 展示)。
+	MsgUserMessage = "user_message"
 	// MsgError 异常消息。
 	MsgError = "error"
 	// MsgOrchestration 编排状态变化。

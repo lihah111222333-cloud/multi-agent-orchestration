@@ -174,7 +174,8 @@ func (m *AgentManager) SetOnOutput(fn func(agentID string, data []byte)) {
 }
 
 // maxPortRetries 最多尝试的连续端口数 (防止耗尽)。
-const maxPortRetries = 20
+// 设置为 200 以支持大量子 agent, 超出后自动回退到内核随机端口分配。
+const maxPortRetries = 200
 
 // findFreePort 从 nextPort 开始探测, 跳过被占用端口, 返回可用端口。
 //
@@ -431,7 +432,42 @@ func (m *AgentManager) Submit(id, prompt string, images, files []string) error {
 	if err != nil {
 		return err
 	}
+	// 发射 user_message 事件 → UI 可见主 agent 对子 agent 的消息
+	m.emitUserMessageEvent(proc, prompt, images, files)
 	return proc.Client.Submit(prompt, images, files, nil)
+}
+
+// emitUserMessageEvent 构造并发射 user_message 事件，使 UI 能看到发给 agent 的消息。
+func (m *AgentManager) emitUserMessageEvent(proc *AgentProcess, prompt string, images, files []string) {
+	if proc == nil {
+		return
+	}
+	m.mu.RLock()
+	handler := m.onEvent
+	m.mu.RUnlock()
+	if handler == nil {
+		return
+	}
+
+	payloadMap := map[string]any{
+		"role":    "user",
+		"content": prompt,
+	}
+	if len(images) > 0 {
+		payloadMap["images"] = images
+	}
+	if len(files) > 0 {
+		payloadMap["files"] = files
+	}
+	data, err := json.Marshal(payloadMap)
+	if err != nil {
+		logger.Warn("runner: emitUserMessageEvent marshal failed", logger.FieldAgentID, proc.ID, logger.FieldError, err)
+		return
+	}
+	handler(proc.ID, agentcore.Event{
+		Type: "user_message",
+		Data: data,
+	})
 }
 
 // SendCommand 向 Agent 发送斜杠命令。
@@ -740,8 +776,8 @@ func extractLastAgentMessageFromMap(payload map[string]any) string {
 	if payload == nil {
 		return ""
 	}
-	// 顶层: last_agent_message / lastAgentMessage
-	for _, key := range []string{"last_agent_message", "lastAgentMessage"} {
+	// 顶层: last_agent_message / lastAgentMessage + 与 trackedTurnSummaryKeys 对齐的扩展 key
+	for _, key := range []string{"last_agent_message", "lastAgentMessage", "summary", "result", "message", "output", "content", "response", "text"} {
 		if v, ok := payload[key].(string); ok && strings.TrimSpace(v) != "" {
 			return strings.TrimSpace(v)
 		}

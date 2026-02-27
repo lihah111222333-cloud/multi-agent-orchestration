@@ -5,65 +5,29 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/common"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/support"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 func normalizeInterruptState(raw string) string {
-	state := strings.ToLower(strings.TrimSpace(raw))
-	if state == "" {
-		return "idle"
-	}
-	switch state {
-	case "completed", "complete", "done", "success", "succeeded", "ready", "stopped", "ended", "closed":
-		return "idle"
-	case "failed", "fail":
-		return "error"
-	default:
-		return state
-	}
+	return support.NormalizeInterruptState(raw)
 }
 
 func isInterruptNoActiveTurnError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "no active turn") ||
-		strings.Contains(message, "nothing to interrupt") ||
-		strings.Contains(message, "not interruptible")
+	return support.IsInterruptNoActiveTurnError(err)
 }
 
 func isInterruptTimeoutError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(message, "timeout") || strings.Contains(message, "deadline exceeded")
+	return support.IsInterruptTimeoutError(err)
 }
 
 func isInterruptActiveState(state string) bool {
-	s := normalizeInterruptState(state)
-	switch s {
-	case "inprogress", "in_progress", "running", "streaming", "thinking", "starting", "responding", "editing", "waiting", "syncing":
-		return true
-	default:
-		return false
-	}
+	return support.IsInterruptActiveState(state)
 }
 
 func interruptSettleMode(confirmed bool, afterState string) string {
-	if confirmed {
-		return "interrupt_confirmed"
-	}
-	switch normalizeInterruptState(afterState) {
-	case "error":
-		return "interrupt_terminal_failed"
-	case "idle":
-		return "interrupt_terminal_completed"
-	default:
-		return "interrupt_timeout"
-	}
+	return support.InterruptSettleMode(confirmed, afterState)
 }
 
 func readThreadRuntimeStateByHooks(threadID string, readRuntimeStatus func(string) string, hasActiveTrackedTurn func(string) bool) string {
@@ -164,6 +128,21 @@ func notifyTurnCompleted(
 	})
 }
 
+func interruptPayload(confirmed bool, mode string, sent bool, beforeState, afterState string, waitedMS int64, activeObserved bool) map[string]any {
+	payload := map[string]any{
+		"confirmed":     confirmed,
+		"mode":          mode,
+		"interruptSent": sent,
+		"stateBefore":   beforeState,
+		"stateAfter":    afterState,
+	}
+	if sent {
+		payload["waitedMs"] = waitedMS
+		payload["activeObserved"] = activeObserved
+	}
+	return payload
+}
+
 func turnInterrupt(
 	threadID string,
 	readThreadRuntimeState func(string) string,
@@ -211,13 +190,7 @@ func turnInterrupt(
 				logger.Info("turn/interrupt: timeout with no active state, treating as no active turn",
 					fields("state_before", beforeState, logger.FieldError, err, logger.FieldDurationMS, durationMS)...,
 				)
-				return map[string]any{
-					"confirmed":     false,
-					"mode":          "no_active_turn",
-					"interruptSent": false,
-					"stateBefore":   beforeState,
-					"stateAfter":    beforeState,
-				}, nil
+				return interruptPayload(false, "no_active_turn", false, beforeState, beforeState, 0, false), nil
 			}
 			logger.Warn("turn/interrupt: send command failed", fields(logger.FieldError, err, logger.FieldDurationMS, durationMS)...)
 			return nil, err
@@ -230,13 +203,7 @@ func turnInterrupt(
 			logger.Info("turn/interrupt: no active turn",
 				fields("state_before", beforeState, logger.FieldDurationMS, time.Since(start).Milliseconds())...,
 			)
-			return map[string]any{
-				"confirmed":     false,
-				"mode":          "no_active_turn",
-				"interruptSent": false,
-				"stateBefore":   beforeState,
-				"stateAfter":    beforeState,
-			}, nil
+			return interruptPayload(false, "no_active_turn", false, beforeState, beforeState, 0, false), nil
 		}
 
 		logger.Info("turn/interrupt: command sent", fields(logger.FieldDurationMS, time.Since(start).Milliseconds())...)
@@ -265,15 +232,7 @@ func turnInterrupt(
 			"waited_ms", waitedMS,
 			logger.FieldDurationMS, time.Since(start).Milliseconds(),
 		)...)
-		return map[string]any{
-			"confirmed":      confirmed,
-			"mode":           mode,
-			"interruptSent":  true,
-			"stateBefore":    beforeState,
-			"stateAfter":     afterState,
-			"waitedMs":       waitedMS,
-			"activeObserved": observedActive,
-		}, nil
+		return interruptPayload(confirmed, mode, true, beforeState, afterState, waitedMS, observedActive), nil
 	})
 }
 

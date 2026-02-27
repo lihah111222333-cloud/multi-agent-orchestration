@@ -373,11 +373,7 @@ func ThreadStatusTerminalFromPayload(payload map[string]any) (status string, rea
 	if payload == nil {
 		return "", "", false
 	}
-	statusType := extractThreadStatusType(payload)
-	if statusType == "" {
-		return "", "", false
-	}
-	if terminal, ok := threadStatusTerminalMap[statusType]; ok {
+	if terminal, ok := threadStatusTerminalMap[extractThreadStatusType(payload)]; ok {
 		return terminal.status, terminal.reason, true
 	}
 	return "", "", false
@@ -517,14 +513,11 @@ func TrackedTurnSummaryFromPayload(payload map[string]any) string {
 	if summary := ExtractTrackedString(payload, trackedTurnSummaryKeys...); summary != "" {
 		return summary
 	}
-	if turn, ok := payload["turn"].(map[string]any); ok {
-		if summary := ExtractTrackedString(turn, trackedTurnSummaryKeys...); summary != "" {
-			return summary
-		}
-	}
-	if msg, ok := payload["msg"].(map[string]any); ok {
-		if summary := ExtractTrackedString(msg, trackedTurnSummaryKeys...); summary != "" {
-			return summary
+	for _, key := range []string{"turn", "msg"} {
+		if section, ok := payload[key].(map[string]any); ok {
+			if summary := ExtractTrackedString(section, trackedTurnSummaryKeys...); summary != "" {
+				return summary
+			}
 		}
 	}
 	return ""
@@ -537,22 +530,17 @@ func InjectTrackedTurnSummary(payload map[string]any, summary string) {
 	if text == "" {
 		return
 	}
-	if strings.TrimSpace(ExtractTrackedString(payload, "lastAgentMessage")) == "" {
-		payload["lastAgentMessage"] = text
-	}
-	if strings.TrimSpace(ExtractTrackedString(payload, "summary")) == "" {
-		payload["summary"] = text
-	}
-	turn, ok := payload["turn"].(map[string]any)
-	if !ok || turn == nil {
+	turn, _ := payload["turn"].(map[string]any)
+	if turn == nil {
 		turn = map[string]any{}
 		payload["turn"] = turn
 	}
-	if strings.TrimSpace(ExtractTrackedString(turn, "lastAgentMessage")) == "" {
-		turn["lastAgentMessage"] = text
-	}
-	if strings.TrimSpace(ExtractTrackedString(turn, "summary")) == "" {
-		turn["summary"] = text
+	for _, target := range []map[string]any{payload, turn} {
+		for _, key := range []string{"lastAgentMessage", "summary"} {
+			if strings.TrimSpace(ExtractTrackedString(target, key)) == "" {
+				target[key] = text
+			}
+		}
 	}
 }
 func buildTrackedTurnCompletionPayload(threadID, turnID, status, reason string) map[string]any {
@@ -635,14 +623,10 @@ func stopTrackedTurnTimers(turn *trackedTurn) {
 	if turn == nil {
 		return
 	}
-	if turn.Timer != nil {
-		turn.Timer.Stop()
-	}
-	if turn.StallTimer != nil {
-		turn.StallTimer.Stop()
-	}
-	if turn.EarlySilenceTimer != nil {
-		turn.EarlySilenceTimer.Stop()
+	for _, timer := range []*time.Timer{turn.Timer, turn.StallTimer, turn.EarlySilenceTimer} {
+		if timer != nil {
+			timer.Stop()
+		}
 	}
 }
 
@@ -659,11 +643,8 @@ func sendTrackedTurnDone(turn *trackedTurn, status string) bool {
 }
 
 func removeActiveTrackedTurn(activeTurns map[string]*trackedTurn, threadID string) (*trackedTurn, bool) {
-	if activeTurns == nil {
-		return nil, false
-	}
-	turn, ok := activeTurns[threadID]
-	if !ok || turn == nil {
+	turn := activeTurns[threadID]
+	if turn == nil {
 		return nil, false
 	}
 	delete(activeTurns, threadID)
@@ -687,11 +668,8 @@ func withActiveTrackedTurnCore(
 	if ensureState {
 		EnsureTurnTrackerStateLocked(state)
 	}
-	if activeTurns == nil {
-		return false
-	}
-	turn, ok := activeTurns[id]
-	if !ok || turn == nil {
+	turn := activeTurns[id]
+	if turn == nil {
 		return false
 	}
 	return fn(id, turn, activeTurns)
@@ -718,10 +696,7 @@ func ApplyTrackedTurnTransitionCore(state TurnTrackerState, threadID string, req
 		}
 		if req.MarkStallHint {
 			wantTurnID := strings.TrimSpace(req.MarkStallHintForTurnID)
-			if wantTurnID != "" && !strings.EqualFold(result.TurnID, wantTurnID) {
-				return true
-			}
-			if !turn.StallHintLogged {
+			if (wantTurnID == "" || strings.EqualFold(result.TurnID, wantTurnID)) && !turn.StallHintLogged {
 				turn.StallHintLogged = true
 				result.StallHintLogged = true
 				result.StallHintApplied = true
@@ -730,9 +705,7 @@ func ApplyTrackedTurnTransitionCore(state TurnTrackerState, threadID string, req
 		if req.Finalize != nil {
 			wantTurnID := strings.TrimSpace(req.Finalize.TurnID)
 			result.ExpectedTurnID = wantTurnID
-			if wantTurnID != "" && !strings.EqualFold(result.TurnID, wantTurnID) {
-				result.TurnIDMismatch = true
-			}
+			result.TurnIDMismatch = wantTurnID != "" && !strings.EqualFold(result.TurnID, wantTurnID)
 			removeActiveTrackedTurn(activeTurns, id)
 			finalStatus := NormalizeTrackedTurnStatus(req.Finalize.Status)
 			if turn.InterruptRequested && finalStatus == "completed" {
@@ -785,8 +758,7 @@ func SupersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurn
 		"prev_stall_auto_interrupted", prev.StallAutoInterrupted,
 	)
 	logFn("turn tracker: superseding active turn", fields...)
-	payload := buildTrackedTurnCompletionPayload(threadID, prev.ID, "failed", "superseded_by_new_turn")
-	return payload, prev.ID, true
+	return buildTrackedTurnCompletionPayload(threadID, prev.ID, "failed", "superseded_by_new_turn"), prev.ID, true
 }
 func BeginTrackedTurnCore(
 	state TurnTrackerState,
@@ -1103,7 +1075,6 @@ func ExecuteStallAutoInterruptCore(
 				notify("turn/completed", completion)
 			}
 		}
-		// interrupt 失败/进程无响应时，触发进程恢复
 		if !interrupted && recoverProcess != nil {
 			logger.Warn("turn tracker: triggering process recovery after failed stall interrupt", append(threadLogFields(threadID),
 				logger.FieldTurnID, turnID,
@@ -1182,7 +1153,6 @@ func MaybeFinalizeTrackedTurnCore(
 	}
 	if strings.TrimSpace(eventTurnID) == "" {
 		logger.Warn("turn tracker: terminal event missing turn_id", diagFields...)
-		// Fallback: use tracker's known turn_id to avoid mismatched cleanup.
 		eventTurnID = turnID
 	}
 	completion, completed := CompleteTrackedTurnByIDCore(state, id, eventTurnID, status, reason)
@@ -1207,10 +1177,8 @@ func MaybeFinalizeTrackedTurnCore(
 		InjectTrackedTurnSummary(completion, summary)
 		RememberTrackedTurnSummary(state, state.Mu, id, util.FirstNonEmpty(ExtractTrackedTurnID(completion), eventTurnID, ExtractTrackedTurnID(payload)), summary)
 	}
-	if synthetic {
-		if notify != nil {
-			notify("turn/completed", completion)
-		}
+	if synthetic && notify != nil {
+		notify("turn/completed", completion)
 		return
 	}
 	MergeTrackedTurnCompletionPayload(payload, completion)

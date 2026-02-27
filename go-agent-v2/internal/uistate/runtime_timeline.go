@@ -35,7 +35,7 @@ func (m *RuntimeManager) markAgentActiveLocked(threadID string, ts time.Time) {
 }
 
 func (m *RuntimeManager) nextItemIDLocked(kind string) string {
-	m.seq += 1
+	m.seq++
 	if kind == "" {
 		kind = "item"
 	}
@@ -70,8 +70,7 @@ func (m *RuntimeManager) timelineLocked(threadID string) []TimelineItem {
 }
 
 func (m *RuntimeManager) appendUserLocked(threadID, text string, attachments []TimelineAttachment, ts time.Time) {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" && len(attachments) == 0 {
+	if strings.TrimSpace(text) == "" && len(attachments) == 0 {
 		return
 	}
 	m.pushTimelineItemLocked(threadID, TimelineItem{
@@ -229,12 +228,12 @@ func (m *RuntimeManager) finishCommandLocked(threadID string, exitCode *int) {
 	if exitCode != nil {
 		code = *exitCode
 	}
+	status := "failed"
+	if code == 0 {
+		status = "completed"
+	}
 	m.patchTimelineItemLocked(threadID, index, func(item *TimelineItem) {
-		if code == 0 {
-			item.Status = "completed"
-		} else {
-			item.Status = "failed"
-		}
+		item.Status = status
 		local := code
 		item.ExitCode = &local
 	})
@@ -297,8 +296,7 @@ func (m *RuntimeManager) flushEditingFilesAsSavedLocked(threadID string, ts time
 }
 
 func (m *RuntimeManager) appendToolCallLocked(threadID string, payload map[string]any, ts time.Time) {
-	tool := util.ExtractFirstString(payload, "tool", "tool_name")
-	tool = strings.TrimSpace(tool)
+	tool := strings.TrimSpace(util.ExtractFirstString(payload, "tool", "tool_name"))
 	if tool == "" {
 		return
 	}
@@ -360,10 +358,10 @@ func canMergeToolCall(last TimelineItem, tool, file, preview string, elapsedMS *
 func (m *RuntimeManager) showApprovalLocked(threadID, command string, requestID int64, ts time.Time) {
 	command = strings.TrimSpace(command)
 	list := m.timelineLocked(threadID)
-	if index, fillRequestID := findPendingApprovalUpdateTarget(list, requestID); index >= 0 {
-		if fillRequestID || (command != "" && list[index].Command == "") {
+	if index := findPendingApprovalUpdateTarget(list, requestID); index >= 0 {
+		if (requestID > 0 && list[index].RequestID == 0) || (command != "" && list[index].Command == "") {
 			m.patchTimelineItemLocked(threadID, index, func(item *TimelineItem) {
-				if fillRequestID {
+				if requestID > 0 && item.RequestID == 0 {
 					item.RequestID = requestID
 				}
 				if item.Command == "" && command != "" {
@@ -385,32 +383,25 @@ func (m *RuntimeManager) showApprovalLocked(threadID, command string, requestID 
 	m.pushTimelineItemLocked(threadID, item, ts)
 }
 
-func findPendingApprovalUpdateTarget(list []TimelineItem, requestID int64) (int, bool) {
+func findPendingApprovalUpdateTarget(list []TimelineItem, requestID int64) int {
 	if requestID > 0 {
 		for i := len(list) - 1; i >= 0; i-- {
 			item := list[i]
-			if isPendingApproval(item) && item.RequestID == requestID {
-				return i, false
+			if item.Kind == "approval" && item.Status == "pending" && item.RequestID == requestID {
+				return i
 			}
 		}
 	}
 
 	lastIndex := len(list) - 1
 	if lastIndex < 0 {
-		return -1, false
+		return -1
 	}
 	last := list[lastIndex]
-	if !isPendingApproval(last) || last.RequestID != 0 {
-		return -1, false
+	if last.Kind == "approval" && last.Status == "pending" && last.RequestID == 0 {
+		return lastIndex
 	}
-	if requestID > 0 {
-		return lastIndex, true
-	}
-	return lastIndex, false
-}
-
-func isPendingApproval(item TimelineItem) bool {
-	return item.Kind == "approval" && item.Status == "pending"
+	return -1
 }
 
 func (m *RuntimeManager) appendPlanLocked(threadID, delta string, ts time.Time) {
@@ -527,10 +518,7 @@ func parsePlanEntriesAny(raw any) []planEntry {
 }
 
 func extractPlanExplanation(raw any) string {
-	text, ok := raw.(string)
-	if !ok {
-		return ""
-	}
+	text, _ := raw.(string)
 	return strings.TrimSpace(text)
 }
 
@@ -573,9 +561,8 @@ func planStatusDone(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "completed", "success", "done", "finished":
 		return true
-	default:
-		return false
 	}
+	return false
 }
 
 func (m *RuntimeManager) completeTurnLocked(threadID string, ts time.Time) {
@@ -588,8 +575,7 @@ func (m *RuntimeManager) completeTurnLocked(threadID string, ts time.Time) {
 		m.finishCommandLocked(threadID, &zero)
 	}
 	if rt.planIndex >= 0 {
-		index := rt.planIndex
-		m.patchTimelineItemLocked(threadID, index, func(item *TimelineItem) {
+		m.patchTimelineItemLocked(threadID, rt.planIndex, func(item *TimelineItem) {
 			item.Done = true
 		})
 		rt.planIndex = -1
@@ -631,9 +617,8 @@ func isInterruptibleThreadState(state string) bool {
 	switch normalizeThreadState(state) {
 	case "starting", "thinking", "responding", "running", "editing", "waiting", "syncing":
 		return true
-	default:
-		return false
 	}
+	return false
 }
 
 func extractNestedFirstString(payload map[string]any, paths ...[]string) string {
@@ -742,11 +727,8 @@ func extractRunKey(raw map[string]any) string {
 		return ""
 	}
 	for _, key := range []string{"run_key", "runKey"} {
-		if value, ok := raw[key].(string); ok {
-			trimmed := strings.TrimSpace(value)
-			if trimmed != "" {
-				return trimmed
-			}
+		if value := strings.TrimSpace(util.ExtractFirstString(raw, key)); value != "" {
+			return value
 		}
 	}
 	return ""

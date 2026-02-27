@@ -565,9 +565,8 @@ func (m *AgentManager) List() []AgentInfo {
 
 func (m *AgentManager) Get(id string) *AgentProcess {
 	m.mu.RLock()
-	proc := m.agents[id]
-	m.mu.RUnlock()
-	return proc
+	defer m.mu.RUnlock()
+	return m.agents[id]
 }
 
 func (m *AgentManager) GetProcess(id string) agentcore.Process {
@@ -596,10 +595,8 @@ func (m *AgentManager) FirstAgentID() string {
 }
 
 func (m *AgentManager) get(id string) (*AgentProcess, error) {
-	m.mu.RLock()
-	proc, ok := m.agents[id]
-	m.mu.RUnlock()
-	if !ok {
+	proc := m.Get(id)
+	if proc == nil {
 		return nil, apperrors.Newf("AgentManager.get", "agent %s not found", id)
 	}
 	return proc, nil

@@ -18,18 +18,14 @@ func (rb *RingBuffer) Write(p []byte) {
 
 	rb.data = append(rb.data, p...)
 	if excess := len(rb.data) - rb.limit; excess > 0 {
-		n := copy(rb.data, rb.data[excess:])
-		rb.data = rb.data[:n]
+		rb.data = rb.data[:copy(rb.data, rb.data[excess:])]
 	}
 }
 
 func (rb *RingBuffer) Bytes() []byte {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
-
-	out := make([]byte, len(rb.data))
-	copy(out, rb.data)
-	return out
+	return append([]byte(nil), rb.data...)
 }
 
 func (rb *RingBuffer) String() string {
@@ -38,6 +34,6 @@ func (rb *RingBuffer) String() string {
 
 func (rb *RingBuffer) Reset() {
 	rb.mu.Lock()
-	defer rb.mu.Unlock()
 	rb.data = rb.data[:0]
+	rb.mu.Unlock()
 }

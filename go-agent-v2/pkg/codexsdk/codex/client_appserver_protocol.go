@@ -106,7 +106,6 @@ func (c *AppServerClient) ensureListenerIfNeeded(
 		return
 	}
 	defer c.listenerEnsureInFlight.Store(false)
-
 	callFn := rpcCall
 	if callFn == nil {
 		callFn = c.call
@@ -135,15 +134,12 @@ func (c *AppServerClient) ensureListenerIfNeededAsync(
 
 func (c *AppServerClient) Submit(prompt string, images, files []string, outputSchema json.RawMessage) error {
 	c.ensureListenerIfNeeded(c.call)
-
 	inputs := buildTurnStartInputs(prompt, images, files)
 	threadID := strings.TrimSpace(c.ThreadID)
-
 	params := withThreadIDParam(threadID, map[string]any{"input": inputs})
 	if len(outputSchema) > 0 {
 		params["outputSchema"] = json.RawMessage(outputSchema)
 	}
-
 	result, _, err := callWithNotInitializedRecovery(c.call, c.Initialize, "turn/start", params, 10*time.Second)
 	if err != nil {
 		return err
@@ -180,7 +176,6 @@ func (c *AppServerClient) tryInterruptCommand() (bool, error) {
 			appServerInterruptTimeout,
 		)
 	}
-
 	if turnID != "" {
 		err := callTurnInterrupt(turnID, "with_turn_id")
 		if err == nil {
@@ -194,7 +189,6 @@ func (c *AppServerClient) tryInterruptCommand() (bool, error) {
 			return true, nil
 		}
 	}
-
 	if c.callWithInitializeRecovery(
 		"interruptConversation",
 		map[string]any{"conversationId": threadID},
@@ -202,7 +196,6 @@ func (c *AppServerClient) tryInterruptCommand() (bool, error) {
 	) == nil {
 		return true, nil
 	}
-
 	return false, nil
 }
 
@@ -225,11 +218,9 @@ func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID
 		}},
 		Success: true,
 	}
-
 	if requestID != nil {
 		return c.respond(*requestID, result)
 	}
-
 	logger.Warn("codex: SendDynamicToolResult without requestID, falling back to notification",
 		logger.FieldAgentID, c.AgentID, logger.FieldCallID, callID)
 	params := withThreadIDParam(c.ThreadID, map[string]any{

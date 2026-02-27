@@ -123,7 +123,6 @@ func NewWorkspaceManager(
 
 func (m *WorkspaceManager) RootDir() string { return m.rootDir }
 
-// saveFileOrLog 保存文件状态记录, 失败时记录日志 (不中断流程)。
 func (m *WorkspaceManager) saveFileOrLog(ctx context.Context, file *store.WorkspaceRunFile) {
 	if _, err := m.runs.SaveFile(ctx, file); err != nil {
 		logger.Warn("workspace: save file state failed",
@@ -135,7 +134,6 @@ func (m *WorkspaceManager) saveFileOrLog(ctx context.Context, file *store.Worksp
 	}
 }
 
-// updateRunStatusOrLog 更新 run 状态, 失败时记录日志 (不中断流程)。
 func (m *WorkspaceManager) updateRunStatusOrLog(ctx context.Context, runKey, status, updatedBy string, meta map[string]any) {
 	if _, err := m.runs.UpdateRunStatus(ctx, runKey, status, updatedBy, meta); err != nil {
 		logger.Warn("workspace: update run status failed",
@@ -223,9 +221,7 @@ func (m *WorkspaceManager) CreateRun(ctx context.Context, req WorkspaceCreateReq
 	return saved, nil
 }
 
-func (m *WorkspaceManager) GetRun(ctx context.Context, runKey string) (*store.WorkspaceRun, error) {
-	return m.runs.GetRun(ctx, strings.TrimSpace(runKey))
-}
+func (m *WorkspaceManager) GetRun(ctx context.Context, runKey string) (*store.WorkspaceRun, error) { return m.runs.GetRun(ctx, strings.TrimSpace(runKey)) }
 
 func (m *WorkspaceManager) ListRuns(ctx context.Context, status, dagKey string, limit int) ([]store.WorkspaceRun, error) {
 	return m.runs.ListRuns(ctx, strings.TrimSpace(status), strings.TrimSpace(dagKey), limit)

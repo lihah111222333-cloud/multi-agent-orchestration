@@ -263,7 +263,6 @@ func runHierarchyTool[T any](
 	if err != nil {
 		return toolError(err)
 	}
-	doneAttrs := append(lspToolPathPositionAttrs(filePath, params.Line, params.Column), "direction", params.Direction)
 	return runAndMarshalLogged(
 		call,
 		func() (T, error) { return run(filePath, params.Line, params.Column, params.Direction) },
@@ -271,7 +270,7 @@ func runHierarchyTool[T any](
 		emptyMsg,
 		func(result T) bool { return isHierarchyResultEmpty(result) },
 		func(result T) []any { return []any{"result_count", hierarchyResultCount(result)} },
-		doneAttrs...,
+		append(lspToolPathPositionAttrs(filePath, params.Line, params.Column), "direction", params.Direction)...,
 	)
 }
 
@@ -417,16 +416,15 @@ func requireNonNegativePosition(line, column int) error {
 }
 
 func requireLineColumn(call *lspToolCallLogger, linePtr, columnPtr *int) (line, column int, err error) {
-	line, err = requireIntParam("line", linePtr)
+	values, err := readRequiredInts(
+		call,
+		namedIntParam{name: "line", value: linePtr},
+		namedIntParam{name: "column", value: columnPtr},
+	)
 	if err != nil {
-		call.fail(err, "stage", "validate")
 		return 0, 0, err
 	}
-	column, err = requireIntParam("column", columnPtr)
-	if err != nil {
-		call.fail(err, "stage", "validate")
-		return 0, 0, err
-	}
+	line, column = values[0], values[1]
 	if err = requireNonNegativePosition(line, column); err != nil {
 		call.fail(err, "stage", "validate")
 		return 0, 0, err
@@ -476,11 +474,7 @@ func lspToolPathAttrs(filePath string) []any {
 }
 
 func lspToolPathPositionAttrs(filePath string, line, column int) []any {
-	return []any{
-		logger.FieldPath, lspToolLogPath(filePath),
-		"line", line,
-		"column", column,
-	}
+	return []any{logger.FieldPath, lspToolLogPath(filePath), "line", line, "column", column}
 }
 
 func runFilePathManagerTool[T any](
@@ -707,7 +701,6 @@ func (h *ToolHandlers) bootstrapDiagnosticsIfNeeded(call *lspToolCallLogger, fil
 		call.fail(err, logger.FieldPath, resolvedPath, "stage", "bootstrap")
 		return err
 	}
-	// Diagnostics arrive asynchronously via notifications; wait once to improve first lookup hit rate.
 	time.Sleep(120 * time.Millisecond)
 	return nil
 }
@@ -1557,10 +1550,7 @@ func runAndMarshalLogged[T any](
 		return toolError(err)
 	}
 
-	empty := false
-	if isEmpty != nil {
-		empty = isEmpty(result)
-	}
+	empty := isEmpty != nil && isEmpty(result)
 
 	finalAttrs := append([]any(nil), doneAttrs...)
 	if resultAttrs != nil {

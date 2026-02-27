@@ -112,6 +112,9 @@ func orchestrationSendMessage(provider OrchestrationProvider, senderID string, a
 	if p.AgentID == "" || p.Message == "" {
 		return `{"error":"agent_id and message are required"}`
 	}
+	if strings.TrimSpace(senderID) != "" && strings.TrimSpace(p.AgentID) == strings.TrimSpace(senderID) {
+		return `{"error":"cannot send message to self"}`
+	}
 	if provider == nil {
 		return ToolError(apperrors.New("orchestrationSendMessage", "orchestration provider not initialized"))
 	}

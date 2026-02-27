@@ -67,29 +67,17 @@ func LoadAllThreadMessagesFromCodexRollout(
 	normalizeCodexThreadID func(string) string,
 	showInjectedPromptInChat bool,
 ) ([]ThreadHistoryMessage, error) {
-	items, err := rolloutconsumer.LoadAllThreadMessagesFromCodexRollout(
+	return rolloutconsumer.LoadAllThreadMessagesFromCodexRollout(
 		ctx,
 		threadID,
 		resolveRolloutHistorySource,
 		normalizeCodexThreadID,
 		showInjectedPromptInChat,
 	)
-	if err != nil {
-		return nil, err
-	}
-	return append([]ThreadHistoryMessage(nil), items...), nil
-}
-
-func FromRolloutMessages(items []rolloutconsumer.ThreadHistoryMessage) []ThreadHistoryMessage {
-	return append([]ThreadHistoryMessage(nil), items...)
-}
-
-func ToRolloutMessages(items []ThreadHistoryMessage) []rolloutconsumer.ThreadHistoryMessage {
-	return append([]rolloutconsumer.ThreadHistoryMessage(nil), items...)
 }
 
 func PaginateRolloutMessages(all []ThreadHistoryMessage, limit int, before int64) []ThreadHistoryMessage {
-	return append([]ThreadHistoryMessage(nil), rolloutconsumer.PaginateRolloutMessages(all, limit, before)...)
+	return rolloutconsumer.PaginateRolloutMessages(all, limit, before)
 }
 
 func HistoryMessagesToRecords(msgs []ThreadHistoryMessage) []uistate.HistoryRecord {
@@ -135,7 +123,6 @@ func StreamRemainingHistory(
 		before = first[len(first)-1].ID
 	}
 
-	remaining := make([]ThreadHistoryMessage, 0, limit-len(first))
 	pageNum := 1
 	loaded := len(first)
 	for loaded < limit {
@@ -144,7 +131,7 @@ func StreamRemainingHistory(
 		if len(batch) == 0 {
 			break
 		}
-		remaining = append(remaining, batch...)
+		appendHistory(threadID, HistoryMessagesToRecords(batch))
 		pageNum++
 		loaded += len(batch)
 		if len(batch) < batchLimit {
@@ -152,35 +139,18 @@ func StreamRemainingHistory(
 		}
 		before = batch[len(batch)-1].ID
 	}
-	if len(remaining) == 0 {
+	if loaded == len(first) {
 		return
 	}
-
-	appendHistory(threadID, HistoryMessagesToRecords(remaining))
-	diffLen := 0
 	if threadDiffLen != nil {
-		diffLen = threadDiffLen(threadID)
+		_ = threadDiffLen(threadID)
 	}
-	timelineLen := 0
 	if threadTimelineLen != nil {
-		timelineLen = threadTimelineLen(threadID)
+		_ = threadTimelineLen(threadID)
 	}
 	if notifyPage != nil {
 		notifyPage(threadID, loaded, pageNum)
 	}
-	logger.Debug("thread/messages: streaming hydration complete",
-		logger.FieldAgentID, threadID,
-		"total_loaded", loaded,
-		"pages", pageNum,
-	)
-	logger.Info("thread/messages: streaming page notified",
-		logger.FieldAgentID, threadID,
-		logger.FieldThreadID, threadID,
-		"total_loaded", loaded,
-		"pages", pageNum,
-		"timeline_len", timelineLen,
-		"diff_len", diffLen,
-	)
 }
 
 func HandleThreadMessagesHydration(
@@ -196,32 +166,28 @@ func HandleThreadMessagesHydration(
 	if hydrateHistory == nil {
 		return
 	}
-	total := int64(len(all))
 	if before == 0 {
 		firstRecords := HistoryMessagesToRecords(page)
 		hydrated := hydrateHistory(threadID, firstRecords)
 		logger.Debug("thread/messages: first page hydrated",
 			logger.FieldAgentID, threadID,
 			"first_page_count", len(page),
-			"total", total,
+			"total", len(all),
 			"hydrated", hydrated,
 		)
 		if hydrated && calculateHydrationLoadLimit != nil && streamRemainingHistory != nil {
-			hydrateLimit := calculateHydrationLoadLimit(len(page), total)
+			hydrateLimit := calculateHydrationLoadLimit(len(page), int64(len(all)))
 			if hydrateLimit > len(page) {
-				threadIDCopy := threadID
-				allCopy := append([]ThreadHistoryMessage(nil), all...)
-				firstCopy := append([]ThreadHistoryMessage(nil), page...)
 				runAsync := asyncGo
 				if runAsync == nil {
 					runAsync = util.SafeGo
 				}
 				runAsync(func() {
-					streamRemainingHistory(threadIDCopy, allCopy, firstCopy, hydrateLimit)
+					streamRemainingHistory(threadID, all, page, hydrateLimit)
 				})
 			}
 		}
 		return
 	}
-	_ = hydrateHistory(threadID, HistoryMessagesToRecords(page))
+	hydrateHistory(threadID, HistoryMessagesToRecords(page))
 }

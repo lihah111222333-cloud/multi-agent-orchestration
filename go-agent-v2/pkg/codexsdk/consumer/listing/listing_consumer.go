@@ -30,27 +30,10 @@ func mapSlice[S any, D any](in []S, mapFn func(S) D) []D {
 }
 
 var (
-	PaginateLoadedThreadIDs       = listingsvc.PaginateLoadedThreadIDs
-	BuildThreadList               = listingsvc.BuildThreadList
-	AppendThreadHistoryFromStores = listingsvc.AppendThreadHistoryFromStores
-	AppendHistoryFromBindingStore = listingsvc.AppendHistoryFromBindingStore
-	AppendHistoryFromStatusStore  = listingsvc.AppendHistoryFromStatusStore
-	AppendHistoryFromArchiveState = listingsvc.AppendHistoryFromArchiveState
-	AppendArchivedThreads         = listingsvc.AppendArchivedThreads
-	NormalizeThreadListItem       = listingsvc.NormalizeThreadListItem
-	AppendThreadListItem          = listingsvc.AppendThreadListItem
-	LoadThreadAliases             = listingsvc.LoadThreadAliases
-	PersistThreadAlias            = listingsvc.PersistThreadAlias
-	LoadedThreadIDsFromAgents     = listingsvc.LoadedThreadIDsFromAgents
+	PaginateLoadedThreadIDs   = listingsvc.PaginateLoadedThreadIDs
+	PersistThreadAlias        = listingsvc.PersistThreadAlias
+	LoadedThreadIDsFromAgents = listingsvc.LoadedThreadIDsFromAgents
 )
-
-func AppendThreadItems[T any](threads []ThreadListItem, seen map[string]struct{}, items []T) []ThreadListItem {
-	return listingsvc.AppendThreadItems(threads, seen, items)
-}
-
-func ToThreadSnapshots[T any](items []T) []ThreadSnapshot {
-	return listingsvc.ToThreadSnapshots(items)
-}
 
 func ToAgentInfos(items []codexsdk.AgentInfo) []AgentInfo {
 	return mapSlice(items, func(item codexsdk.AgentInfo) AgentInfo {
@@ -58,7 +41,6 @@ func ToAgentInfos(items []codexsdk.AgentInfo) []AgentInfo {
 	})
 }
 
-// ToThreadListItems is now identity — contracts.ThreadListItem == listing.ThreadListItem == agentcore.ThreadListItem.
 func ToThreadListItems(items []ThreadListItem) []contracts.ThreadListItem {
 	return items
 }
@@ -73,7 +55,7 @@ func BuildThreadListFromDeps(
 	loadThreadArchiveMap func(context.Context) (map[string]int64, error),
 ) ([]ThreadListItem, error) {
 	appendBinding := func(ctx context.Context, threads []ThreadListItem, seen map[string]struct{}, methodName string) []ThreadListItem {
-		return AppendHistoryFromBindingStore(ctx, threads, seen, methodName, func(ctx context.Context) ([]AgentCodexBinding, error) {
+		return listingsvc.AppendHistoryFromBindingStore(ctx, threads, seen, methodName, func(ctx context.Context) ([]AgentCodexBinding, error) {
 			if bindingStore == nil {
 				return nil, nil
 			}
@@ -87,7 +69,7 @@ func BuildThreadListFromDeps(
 		})
 	}
 	appendStatus := func(ctx context.Context, threads []ThreadListItem, seen map[string]struct{}, methodName string) []ThreadListItem {
-		return AppendHistoryFromStatusStore(ctx, threads, seen, methodName, func(ctx context.Context) ([]AgentStatus, error) {
+		return listingsvc.AppendHistoryFromStatusStore(ctx, threads, seen, methodName, func(ctx context.Context) ([]AgentStatus, error) {
 			if statusStore == nil {
 				return nil, nil
 			}
@@ -101,13 +83,13 @@ func BuildThreadListFromDeps(
 		})
 	}
 	appendArchive := func(ctx context.Context, threads []ThreadListItem, seen map[string]struct{}, methodName string) []ThreadListItem {
-		return AppendHistoryFromArchiveState(ctx, threads, seen, methodName, loadThreadArchiveMap)
+		return listingsvc.AppendHistoryFromArchiveState(ctx, threads, seen, methodName, loadThreadArchiveMap)
 	}
 	loadAliases := func(ctx context.Context) map[string]string {
 		if prefStore == nil {
 			return map[string]string{}
 		}
-		return LoadThreadAliases(ctx, prefStore.Get)
+		return listingsvc.LoadThreadAliases(ctx, prefStore.Get)
 	}
 	syncRuntimeThreads := func(threads []ThreadListItem) {
 		if uiRuntime == nil {
@@ -117,13 +99,13 @@ func BuildThreadListFromDeps(
 			return uistate.ThreadSnapshot{ID: item.ID, Name: item.Name, State: item.State}
 		}))
 	}
-	return BuildThreadList(
+	return listingsvc.BuildThreadList(
 		ctx,
 		"thread/list",
 		true,
 		func() []AgentInfo { return runningAgents },
 		func(ctx context.Context, threads []ThreadListItem, seen map[string]struct{}, methodName string) []ThreadListItem {
-			return AppendThreadHistoryFromStores(ctx, threads, seen, methodName, appendBinding, appendStatus, appendArchive)
+			return listingsvc.AppendThreadHistoryFromStores(ctx, threads, seen, methodName, appendBinding, appendStatus, appendArchive)
 		},
 		loadAliases,
 		syncRuntimeThreads,

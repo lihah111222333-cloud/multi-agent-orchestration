@@ -1,4 +1,3 @@
-// server_conn.go — WebSocket 连接管理、RPC 消息解析与方法分发。
 package apiserver
 
 import (
@@ -26,10 +25,9 @@ const (
 	connReadIdleTimeout = 75 * time.Second
 )
 
-// connEntry WebSocket 连接 + 写锁 (gorilla/websocket 不安全并发写)。
 type connEntry struct {
 	ws        *websocket.Conn
-	wrMu      sync.Mutex // 序列化所有写操作
+	wrMu      sync.Mutex
 	outbox    chan wsOutbound
 	closeCh   chan struct{}
 	closeOnce sync.Once
@@ -43,7 +41,6 @@ func newConnEntry(ws *websocket.Conn) *connEntry {
 	}
 }
 
-// writeMsg 线程安全地写入 WebSocket 消息。
 func (c *connEntry) writeMsg(msgType int, data []byte) error {
 	c.wrMu.Lock()
 	defer c.wrMu.Unlock()
@@ -99,20 +96,17 @@ func (c *connEntry) writePing() error {
 	return c.ws.WriteControl(websocket.PingMessage, []byte("ping"), deadline)
 }
 
-// checkLocalOrigin 仅允许 localhost 来源的 WebSocket 连接。
-//
-// 接受: 无 Origin header (本地工具), localhost, 127.0.0.1, [::1]。
 func checkLocalOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
-		return true // 无 Origin = 非浏览器客户端 (CLI/IDE)
+		return true
 	}
 	origin = strings.ToLower(origin)
 	for _, allowed := range []string{
 		"http://localhost", "https://localhost",
 		"http://127.0.0.1", "https://127.0.0.1",
 		"http://[::1]", "https://[::1]",
-		"wails://", // Wails 桌面应用 WebKit
+		"wails://",
 	} {
 		if strings.HasPrefix(origin, allowed) {
 			return true
@@ -122,10 +116,6 @@ func checkLocalOrigin(r *http.Request) bool {
 	return false
 }
 
-// InvokeMethod 内部调用 JSON-RPC 方法 (不经过 WebSocket)。
-//
-// 用于 Wails UI 等 Go 进程内客户端直接调用后端功能。
-// 复用 dispatchRequest 统一分发逻辑 (DRY)。
 func InvokeMethod(s *Server, ctx context.Context, method string, params json.RawMessage) (any, error) {
 	if s == nil { return nil, pkgerr.New("Server.InvokeMethod", "server is nil") }
 	resp := dispatchRequest(s, ctx, 1, method, params)
@@ -152,7 +142,6 @@ func broadcastNotification(s *Server, method string, params any) {
 		return
 	}
 
-	// SSE 广播 — 将事件推给浏览器调试客户端
 	clients := snapshotSSEClientsState(s)
 	if len(clients) > 0 {
 		logger.Debug("sse: broadcasting", logger.FieldMethod, method, "clients", len(clients), logger.FieldDataLen, len(data))
@@ -160,7 +149,6 @@ func broadcastNotification(s *Server, method string, params any) {
 			select {
 			case ch <- data:
 			default:
-				// 客户端跟不上, 丢弃 (非关键)
 				logger.Warn("sse: client channel full, dropping event")
 			}
 		}
@@ -194,10 +182,6 @@ func disconnectConn(s *Server, connID string) {
 	}
 }
 
-// SendRequest 向指定连接发送 Server→Client 请求并等待响应 (§ 二)。
-//
-// 用于 approval 流程: requestApproval → client 审批 → 返回结果。
-// 超时 5 分钟 (用户审批需要时间)。
 func sendRequest(s *Server, connID, method string, params any) (*Response, error) {
 	if s == nil { return nil, pkgerr.New("Server.SendRequest", "server is nil") }
 	reqID, ch, cleanupPending := allocPendingRequestState(s)
@@ -221,7 +205,6 @@ func sendRequest(s *Server, connID, method string, params any) (*Response, error
 		return nil, pkgerr.Wrap(err, "Server.SendRequest", "marshal request")
 	}
 
-	// 发送到指定连接
 	entry, ok := getConnState(s, connID)
 	if !ok {
 		return nil, pkgerr.Newf("Server.SendRequest", "connection %s not found", connID)
@@ -233,7 +216,6 @@ func sendRequest(s *Server, connID, method string, params any) (*Response, error
 
 	logger.Info("app-server: sent request to client", logger.FieldConn, connID, logger.FieldMethod, method, logger.FieldID, reqID)
 
-	// 等待客户端响应 (5 分钟超时)
 	timer := time.NewTimer(5 * time.Minute)
 	defer timer.Stop()
 	select {
@@ -244,9 +226,6 @@ func sendRequest(s *Server, connID, method string, params any) (*Response, error
 	}
 }
 
-// SendRequestToAll 向所有连接广播 Server→Client 请求, 返回第一个响应。
-//
-// 适用于只有一个 IDE 连接的场景。
 func sendRequestToAll(s *Server, method string, params any) (*Response, error) {
 	if s == nil { return nil, pkgerr.New("Server.SendRequestToAll", "server is nil") }
 	firstConn := firstConnIDState(s)
@@ -256,16 +235,6 @@ func sendRequestToAll(s *Server, method string, params any) (*Response, error) {
 	return sendRequest(s, firstConn, method, params)
 }
 
-// ResolvePendingRequest 由 Wails 前端调用, 将审批结果注入 pending channel。
-//
-// 当前端通过 CallAPI("approval/respond", {requestId, approved}) 回复审批时,
-// app.go 调用此方法将结果写入 handleApprovalRequest 正在等待的 channel。
-//
-// 参数:
-//   - reqID: handleApprovalRequest 分配的请求 ID
-//   - result: 审批结果 (如 {"approved": true})
-//
-// 返回 true 表示找到对应 pending 请求并已投递。
 func ResolvePendingRequest(s *Server, reqID int64, result map[string]any) bool {
 	if s == nil { return false }
 	resp := &Response{
@@ -289,15 +258,6 @@ func ResolvePendingRequest(s *Server, reqID int64, result map[string]any) bool {
 	return false
 }
 
-// AllocPendingRequest 分配一个新的 pending 请求 ID 和等待 channel。
-//
-// 用于 handleApprovalRequest 的 Wails 模式: 通过 broadcastNotification 推送审批请求,
-// 然后用返回的 channel 等待前端 ResolvePendingRequest 回复。
-//
-// 返回:
-//   - reqID: 分配的请求 ID
-//   - ch: 等待响应的 channel
-//   - cleanup: 清理函数 (defer 调用)
 func allocPendingRequest(s *Server) (reqID int64, ch <-chan *Response, cleanup func()) {
 	if s == nil { return 0, nil, func() {} }
 	return allocPendingRequestState(s)
@@ -308,7 +268,6 @@ func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server not ready", http.StatusServiceUnavailable)
 		return
 	}
-	// 连接数限制
 	numConns := connectionCountState(s)
 	if numConns >= maxConnections {
 		http.Error(w, "too many connections", http.StatusServiceUnavailable)
@@ -322,7 +281,6 @@ func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 消息大小限制
 	ws.SetReadLimit(maxMessageSize)
 	_ = ws.SetReadDeadline(time.Now().Add(connReadIdleTimeout))
 	ws.SetPongHandler(func(string) error {
@@ -375,11 +333,6 @@ func pingConnLoop(s *Server, entry *connEntry, connID string) {
 	}
 }
 
-// rpcEnvelope 统一信封: 一次 Unmarshal 路由所有消息类型。
-//
-// 所有字段使用 json.RawMessage 延迟解析, 避免任何中间分配:
-//   - ID: 保留原始 JSON 字节，response 分支直接解析为 int64 (零 alloc)
-//   - Params/Result/Error: 按需解析
 type rpcEnvelope struct {
 	JSONRPC string          `json:"jsonrpc,omitempty"`
 	ID      json.RawMessage `json:"id"`
@@ -393,15 +346,10 @@ func validIncomingJSONRPCVersion(version string) bool {
 	return strings.TrimSpace(version) == jsonrpcVersion
 }
 
-// parseIntID 从 JSON 原始字节直接解析 int64，无需 json.Unmarshal。
-//
-// 仅处理纯整数 "123"，不处理浮点/字符串/null。
-// 高并发热路径: 零分配、零反射。
 func parseIntID(raw json.RawMessage) (int64, bool) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return 0, false
 	}
-	// 快速路径: 纯数字字节 (JSON integer)
 	var n int64
 	neg := false
 	i := 0
@@ -415,7 +363,7 @@ func parseIntID(raw json.RawMessage) (int64, bool) {
 	for ; i < len(raw); i++ {
 		c := raw[i]
 		if c < '0' || c > '9' {
-			return 0, false // 非整数 (浮点/字符串/对象)
+			return 0, false
 		}
 		n = n*10 + int64(c-'0')
 	}
@@ -425,18 +373,13 @@ func parseIntID(raw json.RawMessage) (int64, bool) {
 	return n, true
 }
 
-// rawIDtoAny 将 json.RawMessage ID 转换为 Go any 值。
-//
-// 用于 dispatchRequest 路径 (需要 any 类型 ID 传给 Response)。
 func rawIDtoAny(raw json.RawMessage) any {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
 	}
-	// 优先尝试 int64 (我们自己的 ID 都是整数)
 	if n, ok := parseIntID(raw); ok {
 		return n
 	}
-	// fallback: 字符串 ID ("abc")
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
 		logger.Debug("app-server: rawIDtoAny unmarshal", logger.FieldError, err)
@@ -444,12 +387,6 @@ func rawIDtoAny(raw json.RawMessage) any {
 	return v
 }
 
-// readLoop 持续读取 WebSocket 消息并分发。
-//
-// 消息分为三类:
-//  1. Client→Server 请求 (有 method + id): 路由到 dispatchRequest
-//  2. Client→Server 通知 (有 method, 无 id): 路由到 dispatchRequest
-//  3. Client 对 Server 请求的响应 (有 id, 无 method): 直接匹配 pending map
 func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 	if s == nil { return }
 	defer func() {
@@ -469,7 +406,6 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 		}
 		_ = entry.ws.SetReadDeadline(time.Now().Add(connReadIdleTimeout))
 
-		// 单次 Unmarshal: 路由 + 延迟解析
 		var env rpcEnvelope
 		var resp *Response
 		reason := "request_response"
@@ -534,7 +470,6 @@ func handleClientResponse(s *Server, env rpcEnvelope) bool {
 	return found
 }
 
-// dispatchRequest 统一的方法分发逻辑。
 func dispatchRequest(s *Server, ctx context.Context, id any, method string, params json.RawMessage) *Response {
 	if s == nil { return newError(id, CodeInternalError, "server is nil") }
 	if method == "" { return newError(id, CodeInvalidRequest, "method is required") }
@@ -572,7 +507,6 @@ func dispatchRequest(s *Server, ctx context.Context, id any, method string, para
 		return newError(id, CodeInternalError, err.Error())
 	}
 
-	// JSON-RPC 2.0: 通知 (id == nil) 不返回响应
 	if id == nil {
 		return nil
 	}

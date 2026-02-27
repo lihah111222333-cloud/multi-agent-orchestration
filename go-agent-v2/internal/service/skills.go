@@ -333,10 +333,7 @@ func (s *SkillService) UpdateSkillSummary(name, summary string) (skillPath strin
 	if err := os.WriteFile(record.SkillPath, []byte(updated), 0o644); err != nil {
 		return "", "", err
 	}
-	resolvedName = skillDisplayName(record.StoredName, record.Meta, record.ID)
-	if resolvedName == "" {
-		resolvedName = strings.TrimSpace(name)
-	}
+	resolvedName = resolvedSkillName(record, name)
 	return record.SkillPath, resolvedName, nil
 }
 
@@ -349,11 +346,15 @@ func (s *SkillService) DeleteSkill(name string) (resolvedName string, dir string
 	if err := os.RemoveAll(record.DirPath); err != nil {
 		return "", "", err
 	}
-	resolvedName = skillDisplayName(record.StoredName, record.Meta, record.ID)
-	if resolvedName == "" {
-		resolvedName = strings.TrimSpace(name)
-	}
+	resolvedName = resolvedSkillName(record, name)
 	return resolvedName, record.DirPath, nil
+}
+
+func resolvedSkillName(record skillRecord, fallback string) string {
+	if resolved := skillDisplayName(record.StoredName, record.Meta, record.ID); resolved != "" {
+		return resolved
+	}
+	return strings.TrimSpace(fallback)
 }
 
 // ImportSkillDirectory 导入技能目录到 by-id 存储。

@@ -127,13 +127,9 @@ func checkLocalOrigin(r *http.Request) bool {
 // 用于 Wails UI 等 Go 进程内客户端直接调用后端功能。
 // 复用 dispatchRequest 统一分发逻辑 (DRY)。
 func InvokeMethod(s *Server, ctx context.Context, method string, params json.RawMessage) (any, error) {
-	if s == nil {
-		return nil, pkgerr.New("Server.InvokeMethod", "server is nil")
-	}
+	if s == nil { return nil, pkgerr.New("Server.InvokeMethod", "server is nil") }
 	resp := dispatchRequest(s, ctx, 1, method, params)
-	if resp == nil {
-		return nil, nil
-	}
+	if resp == nil { return nil, nil }
 	if resp.Error != nil {
 		return nil, pkgerr.Newf("Server.InvokeMethod", "%s (code %d)", resp.Error.Message, resp.Error.Code)
 	}
@@ -177,12 +173,8 @@ func broadcastNotification(s *Server, method string, params any) {
 }
 
 func enqueueConnMessage(s *Server, connID string, entry *connEntry, msgType int, data []byte, reason string) bool {
-	if s == nil || entry == nil {
-		return false
-	}
-	if entry.enqueue(msgType, data) {
-		return true
-	}
+	if s == nil || entry == nil { return false }
+	if entry.enqueue(msgType, data) { return true }
 	logger.Warn("app-server: client send queue overloaded, disconnecting",
 		logger.FieldConn, connID,
 		"reason", strings.TrimSpace(reason),
@@ -195,9 +187,7 @@ func enqueueConnMessage(s *Server, connID string, entry *connEntry, msgType int,
 
 func disconnectConn(s *Server, connID string) {
 	id := strings.TrimSpace(connID)
-	if s == nil || id == "" {
-		return
-	}
+	if s == nil || id == "" { return }
 	entry, ok := removeConnState(s, id)
 	if ok && entry != nil {
 		entry.closeNow()
@@ -209,9 +199,7 @@ func disconnectConn(s *Server, connID string) {
 // 用于 approval 流程: requestApproval → client 审批 → 返回结果。
 // 超时 5 分钟 (用户审批需要时间)。
 func sendRequest(s *Server, connID, method string, params any) (*Response, error) {
-	if s == nil {
-		return nil, pkgerr.New("Server.SendRequest", "server is nil")
-	}
+	if s == nil { return nil, pkgerr.New("Server.SendRequest", "server is nil") }
 	reqID, ch, cleanupPending := allocPendingRequestState(s)
 	defer cleanupPending()
 
@@ -260,9 +248,7 @@ func sendRequest(s *Server, connID, method string, params any) (*Response, error
 //
 // 适用于只有一个 IDE 连接的场景。
 func sendRequestToAll(s *Server, method string, params any) (*Response, error) {
-	if s == nil {
-		return nil, pkgerr.New("Server.SendRequestToAll", "server is nil")
-	}
+	if s == nil { return nil, pkgerr.New("Server.SendRequestToAll", "server is nil") }
 	firstConn := firstConnIDState(s)
 	if firstConn == "" {
 		return nil, pkgerr.New("Server.SendRequestToAll", "no connected clients")
@@ -281,9 +267,7 @@ func sendRequestToAll(s *Server, method string, params any) (*Response, error) {
 //
 // 返回 true 表示找到对应 pending 请求并已投递。
 func ResolvePendingRequest(s *Server, reqID int64, result map[string]any) bool {
-	if s == nil {
-		return false
-	}
+	if s == nil { return false }
 	resp := &Response{
 		JSONRPC: jsonrpcVersion,
 		ID:      reqID,
@@ -315,9 +299,7 @@ func ResolvePendingRequest(s *Server, reqID int64, result map[string]any) bool {
 //   - ch: 等待响应的 channel
 //   - cleanup: 清理函数 (defer 调用)
 func allocPendingRequest(s *Server) (reqID int64, ch <-chan *Response, cleanup func()) {
-	if s == nil {
-		return 0, nil, func() {}
-	}
+	if s == nil { return 0, nil, func() {} }
 	return allocPendingRequestState(s)
 }
 
@@ -469,9 +451,7 @@ func rawIDtoAny(raw json.RawMessage) any {
 //  2. Client→Server 通知 (有 method, 无 id): 路由到 dispatchRequest
 //  3. Client 对 Server 请求的响应 (有 id, 无 method): 直接匹配 pending map
 func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
-	if s == nil {
-		return
-	}
+	if s == nil { return }
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("app-server: readLoop panicked, disconnecting",
@@ -492,7 +472,7 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 		// 单次 Unmarshal: 路由 + 延迟解析
 		var env rpcEnvelope
 		var resp *Response
-		var reason string
+		reason := "request_response"
 		if err := json.Unmarshal(message, &env); err != nil {
 			_ = sendResponseViaOutbox(s, connID, entry, newError(nil, CodeParseError, "parse error: "+err.Error()), "parse_error_response")
 			continue
@@ -509,24 +489,15 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 			reason = "request_overloaded"
 		} else {
 			resp = dispatchRequest(s, ctx, rawIDtoAny(env.ID), env.Method, env.Params)
-			if resp == nil {
-				continue
-			}
-			reason = "request_response"
+			if resp == nil { continue }
 		}
-		if !sendResponseViaOutbox(s, connID, entry, resp, reason) {
-			return
-		}
+		if !sendResponseViaOutbox(s, connID, entry, resp, reason) { return }
 	}
 }
 
 func sendResponseViaOutbox(s *Server, connID string, entry *connEntry, resp *Response, reason string) bool {
-	if s == nil {
-		return false
-	}
-	if resp == nil {
-		return true
-	}
+	if s == nil { return false }
+	if resp == nil { return true }
 	data, err := json.Marshal(resp)
 	if err != nil {
 		logger.Error("app-server: marshal response failed", logger.FieldConn, connID, logger.FieldError, err)
@@ -536,19 +507,11 @@ func sendResponseViaOutbox(s *Server, connID string, entry *connEntry, resp *Res
 }
 
 func handleClientResponse(s *Server, env rpcEnvelope) bool {
-	if s == nil {
-		return false
-	}
-	if len(env.ID) == 0 || string(env.ID) == "null" || env.Method != "" {
-		return false
-	}
-	if len(env.Result) == 0 && len(env.Error) == 0 {
-		return false
-	}
+	if s == nil { return false }
+	if len(env.ID) == 0 || string(env.ID) == "null" || env.Method != "" { return false }
+	if len(env.Result) == 0 && len(env.Error) == 0 { return false }
 	reqID, ok := parseIntID(env.ID)
-	if !ok {
-		return false
-	}
+	if !ok { return false }
 	resp := &Response{
 		JSONRPC: jsonrpcVersion,
 		ID:      reqID,
@@ -573,12 +536,8 @@ func handleClientResponse(s *Server, env rpcEnvelope) bool {
 
 // dispatchRequest 统一的方法分发逻辑。
 func dispatchRequest(s *Server, ctx context.Context, id any, method string, params json.RawMessage) *Response {
-	if s == nil {
-		return newError(id, CodeInternalError, "server is nil")
-	}
-	if method == "" {
-		return newError(id, CodeInvalidRequest, "method is required")
-	}
+	if s == nil { return newError(id, CodeInternalError, "server is nil") }
+	if method == "" { return newError(id, CodeInvalidRequest, "method is required") }
 
 	handler, ok := s.methods[method]
 	if !ok {

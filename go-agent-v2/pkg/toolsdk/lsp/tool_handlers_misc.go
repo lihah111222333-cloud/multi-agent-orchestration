@@ -16,20 +16,17 @@ import (
 	"time"
 )
 
-// DiagnosticsAccessor defines the thread-safe diagnostics cache surface required by ToolHandlers.
 type DiagnosticsAccessor interface {
 	SetDiagnostics(uri string, diagnostics []Diagnostic)
 	GetDiagnostics(uri string) []Diagnostic
 	GetAllDiagnostics() map[string][]Diagnostic
 }
 
-// ToolHandlers provides dynamic-tool compatible LSP handlers backed by Manager.
 type ToolHandlers struct {
 	manager     *Manager
 	diagnostics DiagnosticsAccessor
 }
 
-// NewToolHandlers creates a ToolHandlers set with manager + diagnostics cache access.
 func NewToolHandlers(manager *Manager, diagnostics DiagnosticsAccessor) *ToolHandlers {
 	return &ToolHandlers{
 		manager:     manager,
@@ -48,13 +45,8 @@ func (h *ToolHandlers) diagnosticsAccessor() DiagnosticsAccessor {
 	return h.diagnostics
 }
 
-// BindDynamicTool is a no-op binder on ToolHandlers.
-//
-// Dynamic tool ext registration is assembled by tooladapter via its own
-// binding context. This method exists to satisfy tools.LSPProvider interface.
 func (h *ToolHandlers) BindDynamicTool(_ string, _ func(json.RawMessage) string) {}
 
-// AvailabilitySummary returns language server availability summary for UI/config use.
 func (h *ToolHandlers) AvailabilitySummary() map[string]any {
 	summary := map[string]any{
 		"hasManager":           !h.managerUnavailable(),
@@ -91,7 +83,6 @@ func (h *ToolHandlers) AvailabilitySummary() map[string]any {
 	return summary
 }
 
-// DiagnosticsQuery returns diagnostics in JSON-RPC compatible map form.
 func (h *ToolHandlers) DiagnosticsQuery(filePath string) map[string]any {
 	if h.managerUnavailable() {
 		return map[string]any{}
@@ -2043,7 +2034,6 @@ type lspWorkspaceSymbolParam struct {
 	Query    string `json:"query"`
 }
 
-// WorkspaceSymbol searches workspace symbols.
 func (h *ToolHandlers) WorkspaceSymbol(args json.RawMessage) string {
 	call, ok := h.startManagedToolCall("lsp_workspace_symbol", args)
 	if !ok {
@@ -2137,7 +2127,6 @@ func validateWorkspaceSymbolRequest(call *lspToolCallLogger, req workspaceSymbol
 	return nil
 }
 
-// Implementation finds symbol implementation locations.
 func (h *ToolHandlers) Implementation(args json.RawMessage) string {
 	return runFilePositionManagerTool(
 		h,
@@ -2160,7 +2149,6 @@ func (h *ToolHandlers) Implementation(args json.RawMessage) string {
 	)
 }
 
-// TypeDefinition finds symbol type definition locations.
 func (h *ToolHandlers) TypeDefinition(args json.RawMessage) string {
 	return runFilePositionManagerTool(
 		h,
@@ -2269,32 +2257,26 @@ func (h *ToolHandlers) dispatchMergedAction(args json.RawMessage, scope string, 
 	return handler(h, args)
 }
 
-// LSPFile routes file operations.
 func (h *ToolHandlers) LSPFile(args json.RawMessage) string {
 	return h.dispatchMergedAction(args, "lsp_file", lspFileActionHandlers)
 }
 
-// LSPInspect routes inspect operations.
 func (h *ToolHandlers) LSPInspect(args json.RawMessage) string {
 	return h.dispatchMergedAction(args, "lsp_inspect", lspInspectActionHandlers)
 }
 
-// LSPXRef routes cross-reference operations.
 func (h *ToolHandlers) LSPXRef(args json.RawMessage) string {
 	return h.dispatchMergedAction(args, "lsp_xref", lspXRefActionHandlers)
 }
 
-// LSPGrep routes text/ast search operations.
 func (h *ToolHandlers) LSPGrep(args json.RawMessage) string {
 	return h.dispatchMergedAction(args, "lsp_grep", lspGrepActionHandlers)
 }
 
-// LSPStructure routes structure/hierarchy operations.
 func (h *ToolHandlers) LSPStructure(args json.RawMessage) string {
 	return h.dispatchMergedAction(args, "lsp_structure", lspStructureActionHandlers)
 }
 
-// LSPEdit routes edit operations.
 func (h *ToolHandlers) LSPEdit(args json.RawMessage) string {
 	return h.dispatchMergedAction(args, "lsp_edit", lspEditActionHandlers)
 }

@@ -1,4 +1,3 @@
-// client_appserver.go — JSON-RPC client 结构体定义 & 配置常量。
 package codex
 
 import (
@@ -20,30 +19,26 @@ type jsonRPCRequest struct {
 	Params  any       `json:"params,omitempty"`
 }
 
-// jsonRPCNotification JSON-RPC 2.0 通知 (无 id)。
 type jsonRPCNotification struct {
 	JSONRPC string `json:"jsonrpc"`
 	Method  string `json:"method"`
 	Params  any    `json:"params,omitempty"`
 }
 
-// jsonRPCMessage JSON-RPC 通用消息 (用于读取解析)。
 type jsonRPCMessage struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      *jsonRPCID      `json:"id,omitempty"` // nil = 通知
+	ID      *jsonRPCID      `json:"id,omitempty"`
 	Method  string          `json:"method,omitempty"`
 	Params  json.RawMessage `json:"params,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *jsonRPCError   `json:"error,omitempty"`
 }
 
-// jsonRPCError JSON-RPC 错误。
 type jsonRPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
 
-// jsonRPCResponse JSON-RPC 2.0 响应 (用于回复 server request)。
 type jsonRPCResponse struct {
 	JSONRPC string        `json:"jsonrpc"`
 	ID      jsonRPCID     `json:"id"`
@@ -51,7 +46,6 @@ type jsonRPCResponse struct {
 	Error   *jsonRPCError `json:"error,omitempty"`
 }
 
-// pendingCall 等待响应的 JSON-RPC 调用。
 type pendingCall struct {
 	result json.RawMessage
 	err    error
@@ -67,27 +61,12 @@ func (p *pendingCall) resolve(result json.RawMessage, err error) {
 	})
 }
 
-// ========================================
-// App-Server 专用 Client
-// ========================================
-
-// AppServerClient codex app-server JSON-RPC 客户端。
-//
-// 替代 http-api REST 客户端, 支持 dynamicTools 注入。
 type AppServerClient struct {
 	Port           int
 	Cmd            *exec.Cmd
 	ThreadID       string
-	AgentID        string // 所属 Agent 标识, 用于日志关联
-	ApprovalPolicy string // 审批策略 ("never"|"on-failure"|...), 空=使用 codex 默认值
-
-	// ========================================
-	// 锁职责说明
-	// ========================================
-	// wsMu:      保护 ws (WebSocket 读写序列化)
-	// handlerMu: 保护 handler (事件回调注册/读取)
-	// 两者独立, 不存在嵌套获取关系。
-	// ========================================
+	AgentID        string
+	ApprovalPolicy string
 
 	ws              *websocket.Conn
 	wsMu            sync.Mutex
@@ -103,27 +82,18 @@ type AppServerClient struct {
 	nextID  atomic.Int64
 	pending sync.Map // id → *pendingCall
 
-	// 活跃 turn 跟踪: turn/started 存入, turn_complete/idle/error 清空。
 	activeTurnID atomic.Value // string
 
-	// listener 兜底标记: 仅在连接重连后需要在下次 turn/start 前执行 thread/resume 确保订阅。
 	listenerEnsureNeeded atomic.Bool
-	// listener ensure 并发保护: 避免重连和 submit 同时触发重复 ensure。
 	listenerEnsureInFlight atomic.Bool
 
-	// legacy mirror 丢弃计数: 用于采样日志输出。
 	legacyMirrorDropCount atomic.Int64
 
-	// 连接健康状态: 用于重连观测、熔断、升级恢复策略。
 	healthMu sync.Mutex
 	health   appServerConnectionHealth
-	// 防止并发执行多次 respawn recovery。
 	respawnRecoverInFlight atomic.Bool
-	// readLoop 单例保护: 确保同一时刻只有一个 readLoop 协程运行。
 	readLoopRunning atomic.Bool
 
-	// stream_error 恢复超时: willRetry=true 的 stream_error 后启动,
-	// 如果超时内无新事件到达, 自动清理 activeTurnID 并通知上层。
 	streamErrorRecoveryMu    sync.Mutex
 	streamErrorRecoveryTimer *time.Timer
 }
@@ -186,7 +156,6 @@ func setAppServerReadIdleTimeout(timeout time.Duration) {
 	appServerReadIdleTimeoutMs.Store(timeout.Milliseconds())
 }
 
-// SetAppServerReadIdleTimeout updates stream read-idle timeout for all app-server clients.
 func SetAppServerReadIdleTimeout(timeout time.Duration) {
 	if timeout <= 0 {
 		return
@@ -197,7 +166,6 @@ func SetAppServerReadIdleTimeout(timeout time.Duration) {
 	)
 }
 
-// GetAppServerReadIdleTimeout returns current stream read-idle timeout.
 func GetAppServerReadIdleTimeout() time.Duration {
 	return currentAppServerReadIdleTimeout()
 }
@@ -220,7 +188,6 @@ func appServerStreamMaxRetriesFromEnv() int {
 	return value
 }
 
-// NewAppServerClient 创建 app-server 客户端。
 func NewAppServerClient(port int, agentID string) *AppServerClient {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &AppServerClient{
@@ -232,30 +199,16 @@ func NewAppServerClient(port int, agentID string) *AppServerClient {
 	}
 }
 
-// GetPort 返回端口号。
 func (c *AppServerClient) GetPort() int { return c.Port }
 
-// GetThreadID 返回当前 thread ID。
 func (c *AppServerClient) GetThreadID() string { return c.ThreadID }
 
-// SetApprovalPolicy 设置审批策略 (在 SpawnAndConnect 之前调用)。
 func (c *AppServerClient) SetApprovalPolicy(policy string) { c.ApprovalPolicy = policy }
 
-// GetActiveTurnID 返回当前活跃 turn ID。
 func (c *AppServerClient) GetActiveTurnID() string { return c.getActiveTurnID() }
 
-// SetEventHandler 注册事件回调。
 func (c *AppServerClient) SetEventHandler(h EventHandler) {
 	c.handlerMu.Lock()
 	c.handler = h
 	c.handlerMu.Unlock()
 }
-
-// ========================================
-// 进程管理
-// ========================================
-
-// Spawn 启动 codex app-server --listen ws://IP:PORT。
-//
-// 子进程的生命周期独立于调用者 ctx — 用 Shutdown()/Kill() 管理。
-// ctx 仅用于启动超时控制。

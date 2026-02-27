@@ -1,4 +1,3 @@
-// runtime_timeline.go — timeline 操作、token 用量、plan 提取 & 通用工具函数。
 package uistate
 
 import (

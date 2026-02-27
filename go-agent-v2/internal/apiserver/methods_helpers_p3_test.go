@@ -62,7 +62,6 @@ func TestP3CodexEntryMethodsDelegateToCodexAdapter(t *testing.T) {
 		"threadResumeTyped",
 		"threadRecoverTyped",
 		"threadRollbackTyped",
-		"threadMessagesTyped",
 	}
 
 	files := parseAPIServerNonTestFiles(t)
@@ -210,7 +209,6 @@ func TestP4BoundaryMethodsAvoidDirectClientCalls(t *testing.T) {
 		method string
 	}{
 		{fn: "threadForkTyped", method: "ForkThread"},
-		{fn: "threadMessagesTyped", method: "ListThreads"},
 		{fn: "handleApprovalRequest", method: "Submit"},
 		{fn: "AgentEventHandler", method: "GetThreadID"},
 		{fn: "handleDynamicToolCall", method: "RespondError"},
@@ -302,13 +300,6 @@ func TestP4MethodsHelpersContainOnlySlashHandlers(t *testing.T) {
 	}
 
 	required := []string{
-		"func (s *Server) threadBgTerminalsClean(",
-		"func (s *Server) threadUndo(",
-		"func (s *Server) threadModelSet(",
-		"func (s *Server) threadPersonality(",
-		"func (s *Server) threadApprovals(",
-		"func (s *Server) threadMCPList(",
-		"func (s *Server) threadSkillsList(",
 		"func (s *Server) threadDebugMemory(",
 	}
 	for _, needle := range required {

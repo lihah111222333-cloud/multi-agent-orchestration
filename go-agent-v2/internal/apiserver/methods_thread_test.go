@@ -172,21 +172,9 @@ func TestP4ThreadTurnRegisteredRoutesDelegateToCodexAdapter(t *testing.T) {
 		"threadRollbackTyped",
 		"threadList",
 		"threadLoadedList",
-		"threadMessagesTyped",
-		"threadBgTerminalsClean",
 		"turnStartTyped",
 		"turnSteerTyped",
-		"threadRealtimeStartTyped",
-		"threadRealtimeAppendAudioTyped",
-		"threadRealtimeAppendTextTyped",
-		"threadRealtimeStopTyped",
 		"reviewStartTyped",
-		"threadUndo",
-		"threadModelSet",
-		"threadPersonality",
-		"threadApprovals",
-		"threadMCPList",
-		"threadSkillsList",
 		"threadDebugMemory",
 	}
 
@@ -299,24 +287,24 @@ func TestP4ThreadTurnRouteBindingsRemainDelegates(t *testing.T) {
 		"thread/list":                      "threadList",
 		"thread/loaded/list":               "threadLoadedList",
 		"thread/read":                      inlineRouteHandler,
-		"thread/realtime/start":            "threadRealtimeStartTyped",
-		"thread/realtime/appendAudio":      "threadRealtimeAppendAudioTyped",
-		"thread/realtime/appendText":       "threadRealtimeAppendTextTyped",
-		"thread/realtime/stop":             "threadRealtimeStopTyped",
+		"thread/realtime/start":            inlineRouteHandler,
+		"thread/realtime/appendAudio":      inlineRouteHandler,
+		"thread/realtime/appendText":       inlineRouteHandler,
+		"thread/realtime/stop":             inlineRouteHandler,
 		"thread/resolve":                   inlineRouteHandler,
-		"thread/messages":                  "threadMessagesTyped",
-		"thread/backgroundTerminals/clean": "threadBgTerminalsClean",
+		"thread/messages":                  inlineRouteHandler,
+		"thread/backgroundTerminals/clean": inlineRouteHandler,
 		"turn/start":                       "turnStartTyped",
 		"turn/steer":                       "turnSteerTyped",
 		"turn/interrupt":                   inlineRouteHandler,
 		"turn/forceComplete":               inlineRouteHandler,
 		"review/start":                     "reviewStartTyped",
-		"thread/undo":                      "threadUndo",
-		"thread/model/set":                 "threadModelSet",
-		"thread/personality/set":           "threadPersonality",
-		"thread/approvals/set":             "threadApprovals",
-		"thread/mcp/list":                  "threadMCPList",
-		"thread/skills/list":               "threadSkillsList",
+		"thread/undo":                      inlineRouteHandler,
+		"thread/model/set":                 inlineRouteHandler,
+		"thread/personality/set":           inlineRouteHandler,
+		"thread/approvals/set":             inlineRouteHandler,
+		"thread/mcp/list":                  inlineRouteHandler,
+		"thread/skills/list":               inlineRouteHandler,
 		"thread/debugMemory":               "threadDebugMemory",
 	}
 
@@ -384,7 +372,7 @@ func TestP4ThreadTurnBoundHandlersStayThin(t *testing.T) {
 		if forCount > 0 {
 			t.Fatalf("%s in %s must not contain for-loops", handler, fileName)
 		}
-		if rangeCount > 0 && handler != "threadSkillsList" {
+		if rangeCount > 0 {
 			t.Fatalf("%s in %s must not contain range-loops", handler, fileName)
 		}
 		if goCount > 0 || deferCount > 0 || selectCount > 0 {

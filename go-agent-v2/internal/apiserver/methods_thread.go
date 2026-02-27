@@ -39,7 +39,7 @@ type threadStartResponse struct {
 func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any, error) {
 	result, err := s.codexAdapter.ThreadStart(
 		ctx,
-		fmt.Sprintf("thread-%d-%d", time.Now().UnixMilli(), nextThreadSeq(s)),
+		fmt.Sprintf("thread-%d-%d", time.Now().UnixMilli(), nextThreadSeqState(s)),
 		p.Cwd,
 		p.Model,
 		p.ModelProvider,
@@ -168,10 +168,6 @@ type threadMessagesParams struct {
 	ThreadID string `json:"threadId"`
 	Limit    int    `json:"limit,omitempty"`
 	Before   int64  `json:"before,omitempty"` // cursor: id < before
-}
-
-func (s *Server) threadMessagesTyped(ctx context.Context, p threadMessagesParams) (any, error) {
-	return s.codexAdapter.ThreadMessages(ctx, p.ThreadID, p.Limit, p.Before)
 }
 
 // threadListResponse thread/list 响应。

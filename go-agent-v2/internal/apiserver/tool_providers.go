@@ -24,7 +24,7 @@ func (s *Server) LookupRuntimeTool(name string) (tooladapter.RuntimeToolHandler,
 }
 
 func (s *Server) IncrementToolCall(name string) int64 {
-	return incrementToolCall(s, name)
+	return incrementToolCallState(s, name)
 }
 
 func (s *Server) RegisterCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string {
@@ -107,7 +107,7 @@ func (s *Server) RememberReportRequest(senderID, workerID string) {
 }
 
 func (s *Server) NextThreadSeq() int64 {
-	return nextThreadSeq(s)
+	return nextThreadSeqState(s)
 }
 
 func (s *Server) CancelCodeRuns(agentID string) int {
@@ -127,7 +127,10 @@ func (s *Server) GetAgentWorkDir(agentID string) string {
 }
 
 func (s *Server) AllSchemas() []agentcore.DynamicTool {
-	return allSchemas(s)
+	if s == nil {
+		return nil
+	}
+	return tooladapter.AllSchemas(toolAdapterProviders(s))
 }
 
 func setRuntimeTool(s *Server, name string, handler tooladapter.RuntimeToolHandler) {
@@ -145,27 +148,6 @@ func lookupRuntimeTool(s *Server, name string) (tooladapter.RuntimeToolHandler, 
 		return nil, false
 	}
 	return tooladapter.GetRuntimeTool(s.dynTools, name)
-}
-
-func incrementToolCall(s *Server, name string) int64 {
-	if s == nil {
-		return 0
-	}
-	return incrementToolCallState(s, name)
-}
-
-func allSchemas(s *Server) []agentcore.DynamicTool {
-	if s == nil {
-		return nil
-	}
-	return tooladapter.AllSchemas(toolAdapterProviders(s))
-}
-
-func nextThreadSeq(s *Server) int64 {
-	if s == nil {
-		return 0
-	}
-	return nextThreadSeqState(s)
 }
 
 // codeRunApprovalNonce 用于生成审批 ID (code_run 执行审批)。

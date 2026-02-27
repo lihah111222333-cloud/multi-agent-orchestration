@@ -696,12 +696,10 @@ func splitFrontmatterContent(content string) (frontmatter, body string, ok bool)
 	if !strings.HasPrefix(content, "---\n") {
 		return "", content, false
 	}
-	rest := content[len("---\n"):]
-	frontmatter, tail, ok := strings.Cut(rest, "\n---")
-	if !ok {
-		return "", content, false
+	if frontmatter, tail, ok := strings.Cut(content[len("---\n"):], "\n---"); ok {
+		return frontmatter, strings.TrimPrefix(tail, "\n"), true
 	}
-	return frontmatter, strings.TrimPrefix(tail, "\n"), true
+	return "", content, false
 }
 
 func normalizeSkillContent(content string) string {
@@ -836,14 +834,21 @@ func parseWordsFromValue(value string) []string {
 		return nil
 	}
 	if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-		inside := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
-		if inside == "" {
+		trimmed = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
+		if trimmed == "" {
 			return nil
 		}
-		return parseWordParts(strings.Split(inside, ","))
+	} else {
+		trimmed = frontmatterWordDelimiterReplacer.Replace(trimmed)
 	}
-	normalizedComma := frontmatterWordDelimiterReplacer.Replace(trimmed)
-	return parseWordParts(strings.Split(normalizedComma, ","))
+	parts := strings.Split(trimmed, ",")
+	words := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if item := parseFrontmatterScalar(part); item != "" {
+			words = append(words, item)
+		}
+	}
+	return words
 }
 
 func parseFrontmatterScalar(value string) string {
@@ -860,16 +865,6 @@ func parseFrontmatterKeyValue(raw string) (key, value string, ok bool) {
 		return "", "", false
 	}
 	return strings.ToLower(strings.TrimSpace(line[:colon])), strings.TrimSpace(line[colon+1:]), true
-}
-
-func parseWordParts(parts []string) []string {
-	words := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if item := parseFrontmatterScalar(part); item != "" {
-			words = append(words, item)
-		}
-	}
-	return words
 }
 
 func uniqueWords(raw []string) []string {
@@ -900,24 +895,19 @@ func truncateRunes(value string, limit int) string {
 	if utf8.RuneCountInString(value) <= limit {
 		return value
 	}
-
-	const ellipsis = "..."
-	ellipsisRunes := utf8.RuneCountInString(ellipsis)
-	if limit <= ellipsisRunes {
-		return ellipsis
+	if limit <= 3 {
+		return "..."
 	}
-	maxContentRunes := limit - ellipsisRunes
+	maxContentRunes := limit - 3
 
 	var builder strings.Builder
 	builder.Grow(len(value))
-	usedRunes := 0
 	for _, r := range value {
-		if usedRunes >= maxContentRunes {
+		if maxContentRunes <= 0 {
 			break
 		}
 		builder.WriteRune(r)
-		usedRunes += 1
+		maxContentRunes--
 	}
-
-	return builder.String() + ellipsis
+	return builder.String() + "..."
 }

@@ -515,23 +515,24 @@ func (c *AppServerClient) handleReconnectExhausted(trigger, activeTurnID string,
 // JSON-RPC 请求/响应
 // ========================================
 
+func (c *AppServerClient) writeRPCMessage(v any) error {
+	return c.asWriteJSON(v)
+}
+
 // call 发送 JSON-RPC 请求并等待响应。
 func (c *AppServerClient) call(method string, params any, timeout time.Duration) (json.RawMessage, error) {
 	id := c.nextID.Add(1)
 	rpcID := newJSONRPCIntID(id)
-	req := jsonRPCRequest{
+	pc := &pendingCall{done: make(chan struct{})}
+	c.pending.Store(rpcID.pendingKey(), pc)
+	defer c.pending.Delete(rpcID.pendingKey())
+
+	if err := c.writeRPCMessage(jsonRPCRequest{
 		JSONRPC: "2.0",
 		ID:      rpcID,
 		Method:  method,
 		Params:  params,
-	}
-
-	pendingKey := rpcID.pendingKey()
-	pc := &pendingCall{done: make(chan struct{})}
-	c.pending.Store(pendingKey, pc)
-	defer c.pending.Delete(pendingKey)
-
-	if err := c.asWriteJSON(req); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 
@@ -549,12 +550,11 @@ func (c *AppServerClient) call(method string, params any, timeout time.Duration)
 
 // notify 发送 JSON-RPC 通知 (无需响应)。
 func (c *AppServerClient) notify(method string, params any) error {
-	msg := jsonRPCNotification{
+	return c.writeRPCMessage(jsonRPCNotification{
 		JSONRPC: "2.0",
 		Method:  method,
 		Params:  params,
-	}
-	return c.asWriteJSON(msg)
+	})
 }
 
 // respond 发送 JSON-RPC 响应 (回复 server request)。
@@ -563,7 +563,7 @@ func (c *AppServerClient) respond(id int64, result any) error {
 }
 
 func (c *AppServerClient) writeRPCResponse(id jsonRPCID, result any, rpcErr *jsonRPCError) error {
-	return c.asWriteJSON(jsonRPCResponse{
+	return c.writeRPCMessage(jsonRPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Result:  result,

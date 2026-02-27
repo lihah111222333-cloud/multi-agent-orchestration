@@ -25,20 +25,12 @@ func (a *Adapter) ResolveRolloutHistorySource(
 }
 
 func (a *Adapter) runningCodexThreadID(threadID string) string {
-	return rolloutsvc.RunningCodexThreadIDFromManager(
-		threadID,
-		func(threadID string) any {
-			manager := a.manager()
-			if manager == nil {
-				return nil
-			}
-			return manager.Get(threadID)
-		},
-		func(proc any) string {
-			typed, _ := proc.(*runner.AgentProcess)
-			return a.GetThreadID(typed)
-		},
-	)
+	return rolloutsvc.RunningCodexThreadIDFromManager(threadID, a.managerProcess, a.getThreadIDFromAny)
+}
+
+func (a *Adapter) getThreadIDFromAny(proc any) string {
+	typed, _ := proc.(*runner.AgentProcess)
+	return a.GetThreadID(typed)
 }
 
 func (a *Adapter) bindingRolloutSourceByAgentID(ctx context.Context, agentID string) (string, string, error) {

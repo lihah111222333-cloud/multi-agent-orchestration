@@ -30,21 +30,23 @@ func (a *Adapter) ThreadLoadedList(_ context.Context, cursor *string, limit *uin
 }
 
 func (a *Adapter) threadList(ctx context.Context, methodName string, syncRuntime bool) ([]threadListItem, error) {
-	items, err := listingsvc.BuildThreadList(
-		ctx,
-		methodName,
-		syncRuntime,
-		func() []listingsvc.AgentInfo { return toListingAgentInfos(a.runningAgents()) },
-		func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
-			return toServiceThreadListItems(a.appendThreadHistoryFromStores(ctx, toThreadListItemsFromService(threads), seen, methodName))
-		},
-		a.loadThreadAliases,
-		func(threads []listingsvc.ThreadListItem) { a.syncThreadListRuntime(toThreadListItemsFromService(threads)) },
-	)
+	items, err := listingsvc.BuildThreadList(ctx, methodName, syncRuntime, a.listingAgentInfos, a.appendThreadHistoryFromStoresService, a.loadThreadAliases, a.syncThreadListRuntimeService)
 	if err != nil {
 		return nil, err
 	}
 	return toThreadListItemsFromService(items), nil
+}
+
+func (a *Adapter) listingAgentInfos() []listingsvc.AgentInfo {
+	return toListingAgentInfos(a.runningAgents())
+}
+
+func (a *Adapter) appendThreadHistoryFromStoresService(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
+	return toServiceThreadListItems(a.appendThreadHistoryFromStores(ctx, toThreadListItemsFromService(threads), seen, methodName))
+}
+
+func (a *Adapter) syncThreadListRuntimeService(threads []listingsvc.ThreadListItem) {
+	a.syncThreadListRuntime(toThreadListItemsFromService(threads))
 }
 
 func (a *Adapter) runningAgents() []runner.AgentInfo {
@@ -77,25 +79,21 @@ func loadedThreadIDsFromAgents(agents []runner.AgentInfo) []string {
 }
 
 func (a *Adapter) appendThreadHistoryFromStores(ctx context.Context, threads []threadListItem, seen map[string]struct{}, methodName string) []threadListItem {
-	return toThreadListItemsFromService(
-		listingsvc.AppendThreadHistoryFromStores(
-			ctx,
-			toServiceThreadListItems(threads),
-			seen,
-			methodName,
-			func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
-				return toServiceThreadListItems(a.appendHistoryFromBindingStore(ctx, toThreadListItemsFromService(threads), seen, methodName))
-			},
-			func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
-				return toServiceThreadListItems(a.appendHistoryFromStatusStore(ctx, toThreadListItemsFromService(threads), seen, methodName))
-			},
-			func(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
-				return toServiceThreadListItems(a.appendHistoryFromArchiveState(ctx, toThreadListItemsFromService(threads), seen, methodName))
-			},
-		),
-	)
+	serviceItems := listingsvc.AppendThreadHistoryFromStores(ctx, toServiceThreadListItems(threads), seen, methodName, a.appendHistoryFromBindingStoreService, a.appendHistoryFromStatusStoreService, a.appendHistoryFromArchiveStateService)
+	return toThreadListItemsFromService(serviceItems)
 }
 
+func (a *Adapter) appendHistoryFromBindingStoreService(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
+	return toServiceThreadListItems(a.appendHistoryFromBindingStore(ctx, toThreadListItemsFromService(threads), seen, methodName))
+}
+
+func (a *Adapter) appendHistoryFromStatusStoreService(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
+	return toServiceThreadListItems(a.appendHistoryFromStatusStore(ctx, toThreadListItemsFromService(threads), seen, methodName))
+}
+
+func (a *Adapter) appendHistoryFromArchiveStateService(ctx context.Context, threads []listingsvc.ThreadListItem, seen map[string]struct{}, methodName string) []listingsvc.ThreadListItem {
+	return toServiceThreadListItems(a.appendHistoryFromArchiveState(ctx, toThreadListItemsFromService(threads), seen, methodName))
+}
 
 func (a *Adapter) appendHistoryFromBindingStore(
 	ctx context.Context,

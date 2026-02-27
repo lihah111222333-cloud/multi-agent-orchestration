@@ -367,54 +367,73 @@ func (a *Adapter) runtimeConsumerDeps() consumerruntime.Deps {
 	if a == nil {
 		return consumerruntime.Deps{}
 	}
-	return consumerruntime.Deps{
-		Manager:      a.manager(),
-		BindingStore: a.bindingStore(),
-		UIRuntime:    a.uiRuntime(),
+	deps := consumerruntime.Deps{Manager: a.manager(), BindingStore: a.bindingStore(), UIRuntime: a.uiRuntime()}
+	a.applyRuntimeConsumerSkillDeps(&deps)
+	a.applyRuntimeConsumerLaunchDeps(&deps)
+	a.applyRuntimeConsumerTurnDeps(&deps)
+	return deps
+}
 
-		BuildSelectedSkillPrompt: a.BuildSelectedSkillPrompt,
-		ListSkillMatchCandidates: a.listSkillMatchCandidates,
-		ListAgentSkills:          a.listAgentSkills,
-		CollectAutoMatchedSkillMatch: func(
-			prompt string,
-			inputs []contracts.AutoMatchInput,
-			configuredSkillNames []string,
-			candidates []contracts.SkillMatchCandidate,
-			options contracts.AutoSkillMatchOptions,
-		) []contracts.AutoMatchedSkillMatch {
-			return a.CollectAutoMatchedSkillMatches(prompt, inputs, configuredSkillNames, candidates, options)
-		},
-		RenderAutoMatchedSkillPrompt: a.RenderAutoMatchedSkillPrompt,
-		ActiveTrackedTurnID:          a.activeTrackedTurnID,
-		ShowInjectedPromptInChat:     a.showInjectedPromptInChat,
-		ResolveLSPUsagePromptHint:    a.ResolveLSPUsagePromptHint,
-
-		ThreadExistsInHistory: a.ThreadExistsInHistory,
-		AllDynamicToolSchemas: a.allDynamicToolSchemas,
-		ResolveStartInstructions: func(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
-			return a.resolveStartInstructionsForLaunch(ctx, dynamicTools)
-		},
-		SetAgentWorkDir: a.setAgentWorkDir,
-		GetThreadID:     a.GetThreadID,
-		CancelCodeRuns:  a.cancelCodeRuns,
-		ResolveCodexThreadCandidates: func(ctx context.Context, agentID string) []string {
-			return a.ResolveCodexThreadCandidates(ctx, agentID, appendUniqueThreadIDFallback, PreviewResumeCandidates)
-		},
-		ResumeThread: func(proc *runner.AgentProcess, req agentcore.ResumeThreadRequest) error {
-			return a.ResumeThread(proc, req)
-		},
-		IsCodexProcessCrashError:       IsCodexProcessCrashError,
-		IsHistoricalResumeCandidateErr: IsHistoricalResumeCandidateError,
-		PreviewResumeCandidates:        PreviewResumeCandidates,
-		Notify:                         a.notify,
-		Submit:                         a.Submit,
-		ResolveClientActiveTurnID: func(proc *runner.AgentProcess) string {
-			if proc == nil {
-				return ""
-			}
-			return resolveClientActiveTurnID(proc.Client)
-		},
-		BeginTrackedTurn: a.beginTrackedTurn,
-		TurnSteer:        a.TurnSteer,
+func (a *Adapter) applyRuntimeConsumerSkillDeps(deps *consumerruntime.Deps) {
+	if deps == nil {
+		return
 	}
+	deps.BuildSelectedSkillPrompt = a.BuildSelectedSkillPrompt
+	deps.ListSkillMatchCandidates = a.listSkillMatchCandidates
+	deps.ListAgentSkills = a.listAgentSkills
+	deps.CollectAutoMatchedSkillMatch = a.collectAutoMatchedSkillMatches
+	deps.RenderAutoMatchedSkillPrompt = a.RenderAutoMatchedSkillPrompt
+	deps.ActiveTrackedTurnID = a.activeTrackedTurnID
+	deps.ShowInjectedPromptInChat = a.showInjectedPromptInChat
+	deps.ResolveLSPUsagePromptHint = a.ResolveLSPUsagePromptHint
+}
+
+func (a *Adapter) applyRuntimeConsumerLaunchDeps(deps *consumerruntime.Deps) {
+	if deps == nil {
+		return
+	}
+	deps.ThreadExistsInHistory = a.ThreadExistsInHistory
+	deps.AllDynamicToolSchemas = a.allDynamicToolSchemas
+	deps.ResolveStartInstructions = a.resolveStartInstructionsForRuntime
+	deps.SetAgentWorkDir, deps.GetThreadID = a.setAgentWorkDir, a.GetThreadID
+	deps.CancelCodeRuns = a.cancelCodeRuns
+	deps.ResolveCodexThreadCandidates = a.resolveRuntimeCodexThreadCandidates
+	deps.ResumeThread = a.resumeRuntimeThread
+	deps.IsCodexProcessCrashError = IsCodexProcessCrashError
+	deps.IsHistoricalResumeCandidateErr = IsHistoricalResumeCandidateError
+	deps.PreviewResumeCandidates = PreviewResumeCandidates
+}
+
+func (a *Adapter) applyRuntimeConsumerTurnDeps(deps *consumerruntime.Deps) {
+	if deps == nil {
+		return
+	}
+	deps.Notify = a.notify
+	deps.Submit = a.Submit
+	deps.ResolveClientActiveTurnID = a.resolveClientActiveTurnIDForRuntime
+	deps.BeginTrackedTurn = a.beginTrackedTurn
+	deps.TurnSteer = a.TurnSteer
+}
+
+func (a *Adapter) collectAutoMatchedSkillMatches(prompt string, inputs []contracts.AutoMatchInput, configuredSkillNames []string, candidates []contracts.SkillMatchCandidate, options contracts.AutoSkillMatchOptions) []contracts.AutoMatchedSkillMatch {
+	return a.CollectAutoMatchedSkillMatches(prompt, inputs, configuredSkillNames, candidates, options)
+}
+
+func (a *Adapter) resolveStartInstructionsForRuntime(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
+	return a.resolveStartInstructionsForLaunch(ctx, dynamicTools)
+}
+
+func (a *Adapter) resolveRuntimeCodexThreadCandidates(ctx context.Context, agentID string) []string {
+	return a.ResolveCodexThreadCandidates(ctx, agentID, appendUniqueThreadIDFallback, PreviewResumeCandidates)
+}
+
+func (a *Adapter) resumeRuntimeThread(proc *runner.AgentProcess, req agentcore.ResumeThreadRequest) error {
+	return a.ResumeThread(proc, req)
+}
+
+func (a *Adapter) resolveClientActiveTurnIDForRuntime(proc *runner.AgentProcess) string {
+	if proc == nil {
+		return ""
+	}
+	return resolveClientActiveTurnID(proc.Client)
 }

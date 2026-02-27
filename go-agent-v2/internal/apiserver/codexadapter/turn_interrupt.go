@@ -67,20 +67,12 @@ func (a *Adapter) withProcessAny(
 
 // TurnInterrupt executes /interrupt using constructor-injected dependencies.
 func (a *Adapter) TurnInterrupt(threadID string) (any, error) {
-	return interruptsvc.TurnInterrupt(
-		threadID,
-		a.readThreadRuntimeState,
-		a.hasActiveTrackedTurn,
-		a.cancelCodeRuns,
-		func(proc any) (bool, error) {
-			typed, _ := proc.(*runner.AgentProcess)
-			return a.sendInterruptCommand(typed)
-		},
-		a.withProcessAny,
-		a.markTrackedTurnInterruptRequested,
-		a.waitInterruptOutcome,
-		a.notifyTurnCompleted,
-	)
+	return interruptsvc.TurnInterrupt(threadID, a.readThreadRuntimeState, a.hasActiveTrackedTurn, a.cancelCodeRuns, a.sendInterruptFromAny, a.withProcessAny, a.markTrackedTurnInterruptRequested, a.waitInterruptOutcome, a.notifyTurnCompleted)
+}
+
+func (a *Adapter) sendInterruptFromAny(proc any) (bool, error) {
+	typed, _ := proc.(*runner.AgentProcess)
+	return a.sendInterruptCommand(typed)
 }
 
 // TurnForceComplete forcibly finalizes current turn state using constructor-injected dependencies.
@@ -88,10 +80,7 @@ func (a *Adapter) TurnForceComplete(threadID string) (any, error) {
 	return interruptsvc.TurnForceComplete(
 		threadID,
 		a.cancelCodeRuns,
-		func(proc any) (bool, error) {
-			typed, _ := proc.(*runner.AgentProcess)
-			return a.sendInterruptCommand(typed)
-		},
+		a.sendInterruptFromAny,
 		a.notifyTurnCompleted,
 		a.withProcessAny,
 	)

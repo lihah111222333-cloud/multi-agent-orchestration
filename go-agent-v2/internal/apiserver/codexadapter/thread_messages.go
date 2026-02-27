@@ -143,16 +143,11 @@ func (a *Adapter) handleThreadMessagesHydration(threadID string, all, page []thr
 	if runtime == nil {
 		return
 	}
-	handleThreadMessagesHydration(
-		threadID,
-		all,
-		page,
-		before,
-		calculateHydrationLoadLimit,
-		runtime.HydrateHistory,
-		a.streamRemainingHistory,
-		util.SafeGo,
-	)
+	a.hydrateThreadMessagesWithRuntime(threadID, all, page, before, runtime)
+}
+
+func (a *Adapter) hydrateThreadMessagesWithRuntime(threadID string, all, page []threadHistoryMessage, before int64, runtime *uistate.RuntimeManager) {
+	handleThreadMessagesHydration(threadID, all, page, before, calculateHydrationLoadLimit, runtime.HydrateHistory, a.streamRemainingHistory, util.SafeGo)
 }
 
 func (a *Adapter) streamRemainingHistory(threadID string, all []threadHistoryMessage, firstPage []threadHistoryMessage, limit int) {

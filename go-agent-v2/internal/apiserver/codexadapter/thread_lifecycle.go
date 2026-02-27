@@ -17,36 +17,7 @@ type threadStartResult = lifecycle.ThreadStartResult
 
 // ThreadStart launches thread runtime and syncs UI snapshots.
 func (a *Adapter) ThreadStart(ctx context.Context, threadID, cwd, model, modelProvider, approvalPolicy string) (threadStartResult, error) {
-	manager := a.manager()
-	return lifecycle.RunThreadStart(
-		ctx,
-		threadID,
-		cwd,
-		model,
-		modelProvider,
-		approvalPolicy,
-		a.allDynamicToolSchemas(),
-		func(ctx context.Context, agentID, name, path, cwd, startInstructions string, dynamicTools []agentcore.DynamicTool) error {
-			if manager == nil {
-				return apperrors.New("Server.threadStart", "thread manager is not initialized")
-			}
-			return manager.Launch(ctx, agentID, name, path, cwd, startInstructions, dynamicTools)
-		},
-		func(threadID string) any {
-			if manager == nil {
-				return nil
-			}
-			return manager.Get(threadID)
-		},
-		func() []lifecycle.AgentInfo { return toLifecycleAgentInfos(a.runningAgents()) },
-		a.resolveStartInstructionsForLaunch,
-		func(ctx context.Context, threadID string, proc any) {
-			if typed, ok := proc.(*runner.AgentProcess); ok {
-				a.registerBinding(ctx, threadID, typed)
-			}
-		},
-		a.syncRuntimeThreads,
-	)
+	return lifecycle.RunThreadStart(ctx, threadID, cwd, model, modelProvider, approvalPolicy, a.allDynamicToolSchemas(), a.launchThreadRuntime, a.managerProcess, a.lifecycleAgents, a.resolveStartInstructionsForLaunch, a.registerBindingFromAny, a.syncRuntimeThreads)
 }
 
 // threadResumeResult is the normalized thread/resume payload.
@@ -59,20 +30,7 @@ func (a *Adapter) ThreadResume(ctx context.Context, threadID, path, cwd, model s
 		return threadResumeResult{}, err
 	}
 	return withProcess(a, "Server.threadResume", id, func(proc *runner.AgentProcess) (threadResumeResult, error) {
-		return lifecycle.RunThreadResume(
-			ctx,
-			id,
-			path,
-			cwd,
-			model,
-			proc,
-			a.ResolveCodexThreadCandidates,
-			lifecycle.NormalizeCodexThreadID,
-			func(proc any, req agentcore.ResumeThreadRequest) error {
-				typed, _ := proc.(*runner.AgentProcess)
-				return a.ResumeThread(typed, req)
-			},
-		)
+		return lifecycle.RunThreadResume(ctx, id, path, cwd, model, proc, a.ResolveCodexThreadCandidates, lifecycle.NormalizeCodexThreadID, a.resumeThreadFromAny)
 	})
 }
 
@@ -141,26 +99,43 @@ func (a *Adapter) sendThreadCommand(methodName, threadID, command, args, wrapMsg
 
 // ThreadNameSet sets codex thread name and persists alias.
 func (a *Adapter) ThreadNameSet(ctx context.Context, threadID, name string) (map[string]any, error) {
-	return lifecycle.RunThreadNameSet(
-		ctx,
-		threadID,
-		name,
-		func(threadID string) any {
-			manager := a.manager()
-			if manager == nil {
-				return nil
-			}
-			return manager.Get(threadID)
-		},
-		a.threadExistsInRuntime,
-		a.ThreadExistsInHistory,
-		func(proc any, command, args string) error {
-			typed, _ := proc.(*runner.AgentProcess)
-			return a.SendCommand(typed, command, args)
-		},
-		a.setRuntimeThreadName,
-		a.persistThreadAlias,
-	)
+	return lifecycle.RunThreadNameSet(ctx, threadID, name, a.managerProcess, a.threadExistsInRuntime, a.ThreadExistsInHistory, a.sendCommandFromAny, a.setRuntimeThreadName, a.persistThreadAlias)
+}
+
+func (a *Adapter) launchThreadRuntime(ctx context.Context, agentID, name, path, cwd, startInstructions string, dynamicTools []agentcore.DynamicTool) error {
+	manager := a.manager()
+	if manager == nil {
+		return apperrors.New("Server.threadStart", "thread manager is not initialized")
+	}
+	return manager.Launch(ctx, agentID, name, path, cwd, startInstructions, dynamicTools)
+}
+
+func (a *Adapter) managerProcess(threadID string) any {
+	manager := a.manager()
+	if manager == nil {
+		return nil
+	}
+	return manager.Get(threadID)
+}
+
+func (a *Adapter) lifecycleAgents() []lifecycle.AgentInfo {
+	return toLifecycleAgentInfos(a.runningAgents())
+}
+
+func (a *Adapter) registerBindingFromAny(ctx context.Context, threadID string, proc any) {
+	if typed, ok := proc.(*runner.AgentProcess); ok {
+		a.registerBinding(ctx, threadID, typed)
+	}
+}
+
+func (a *Adapter) resumeThreadFromAny(proc any, req agentcore.ResumeThreadRequest) error {
+	typed, _ := proc.(*runner.AgentProcess)
+	return a.ResumeThread(typed, req)
+}
+
+func (a *Adapter) sendCommandFromAny(proc any, command, args string) error {
+	typed, _ := proc.(*runner.AgentProcess)
+	return a.SendCommand(typed, command, args)
 }
 
 // ThreadRead fetches codex history list for the target thread.

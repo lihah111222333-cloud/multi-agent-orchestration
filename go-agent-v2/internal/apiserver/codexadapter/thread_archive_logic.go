@@ -2,14 +2,15 @@ package codexadapter
 
 import (
 	"context"
-	archive "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/archive"
-	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	archiveconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/archive"
+	archivesvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/archive"
+	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 func loadThreadArchiveMapFromStoreLogic(a *Adapter, ctx context.Context) (map[string]int64, error) {
@@ -20,7 +21,7 @@ func loadThreadArchiveMapFromStoreLogic(a *Adapter, ctx context.Context) (map[st
 		if err != nil {
 			return nil, err
 		}
-		archivedMap = archive.NormalizeThreadArchiveMap(value)
+		archivedMap = archivesvc.NormalizeThreadArchiveMap(value)
 	}
 	return archivedMap, nil
 }
@@ -30,12 +31,12 @@ func loadThreadArchiveMapLogic(a *Adapter, ctx context.Context) (map[string]int6
 	if err != nil {
 		return nil, err
 	}
-	fromDisk, err := archive.LoadThreadArchiveMapFromDisk()
+	fromDisk, err := archiveconsumer.LoadThreadArchiveMapFromDisk()
 	if err != nil {
 		logger.Warn("thread/archive: scan archive root failed", logger.FieldError, err)
 		return archivedMap, nil
 	}
-	return archive.MergeThreadArchiveMaps(archivedMap, fromDisk), nil
+	return archivesvc.MergeThreadArchiveMaps(archivedMap, fromDisk), nil
 }
 
 func persistThreadArchivedStateLogic(a *Adapter, ctx context.Context, threadID string, archivedAt int64) error {
@@ -126,7 +127,7 @@ func threadUnarchiveLogic(a *Adapter, ctx context.Context, threadID string) (map
 	}
 	_, wasArchived := archivedMap[id]
 
-	restoreNotice := archive.ThreadArchiveRestoreNotice{
+	restoreNotice := archivesvc.ThreadArchiveRestoreNotice{
 		Modified:      false,
 		ManifestPath:  "",
 		ModifiedFiles: []string{},
@@ -134,7 +135,7 @@ func threadUnarchiveLogic(a *Adapter, ctx context.Context, threadID string) (map
 	restoredFiles := []string{}
 	skippedRestoreFiles := []string{}
 	if wasArchived {
-		notice, err := inspectThreadArchiveForRestoreLogic(id)
+		notice, err := inspectArchivedRestoreNoticeLogic(id)
 		if err != nil {
 			logger.Error("thread/unarchive: inspect archive integrity failed",
 				logger.FieldThreadID, id,
@@ -209,18 +210,18 @@ func bindRolloutPathLogic(a *Adapter, ctx context.Context, agentID, codexThreadI
 	}
 }
 
-func archiveThreadArtifactsLogic(a *Adapter, ctx context.Context, threadID string) (archive.ThreadArchiveManifest, error) {
+func archiveThreadArtifactsLogic(a *Adapter, ctx context.Context, threadID string) (archivesvc.ThreadArchiveManifest, error) {
 	id := strings.TrimSpace(threadID)
-	manifest := archive.ThreadArchiveManifest{
+	manifest := archivesvc.ThreadArchiveManifest{
 		ThreadID:   id,
 		ArchivedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		Files:      []archive.ThreadArchiveFile{},
+		Files:      []archivesvc.ThreadArchiveFile{},
 	}
-	rootDir, err := archive.ResolveThreadArchiveRootDir()
+	rootDir, err := archiveconsumer.ResolveThreadArchiveRootDir()
 	if err != nil {
 		return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "resolve archive root")
 	}
-	archiveDir, err := archive.ResolveThreadArchiveSnapshotDir(rootDir, id, manifest.ArchivedAt)
+	archiveDir, err := archiveconsumer.ResolveThreadArchiveSnapshotDir(rootDir, id, manifest.ArchivedAt)
 	if err != nil {
 		return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "resolve archive dir")
 	}
@@ -231,22 +232,22 @@ func archiveThreadArtifactsLogic(a *Adapter, ctx context.Context, threadID strin
 
 	codexThreadID, rolloutPath := a.ResolveRolloutHistorySource(ctx, id, normalizeCodexThreadID)
 	manifest.CodexThreadID = normalizeCodexThreadID(codexThreadID)
-	candidates := archive.CollectThreadArtifactCandidates(manifest.CodexThreadID, rolloutPath)
+	candidates := archiveconsumer.CollectThreadArtifactCandidates(manifest.CodexThreadID, rolloutPath)
 
 	for _, candidate := range candidates {
 		srcPath := strings.TrimSpace(candidate.Path)
 		if srcPath == "" {
 			continue
 		}
-		info, err := os.Stat(srcPath)
-		if err != nil || info.IsDir() {
+		sourceState, err := archiveconsumer.FileState(srcPath)
+		if err != nil || !sourceState.Exists || sourceState.IsDir {
 			continue
 		}
-		targetPath, err := archive.NextArchiveFilePath(archiveDir, filepath.Base(srcPath))
+		targetPath, err := archiveconsumer.NextArchiveFilePath(archiveDir, srcPath)
 		if err != nil {
 			return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "resolve archive target")
 		}
-		if err := archive.CopyFile(srcPath, targetPath); err != nil {
+		if err := archiveconsumer.CopyFile(srcPath, targetPath); err != nil {
 			logger.Error("thread/archive: copy artifact failed",
 				logger.FieldThreadID, id,
 				"source_path", srcPath,
@@ -255,13 +256,13 @@ func archiveThreadArtifactsLogic(a *Adapter, ctx context.Context, threadID strin
 			)
 			continue
 		}
-		fileMeta := archive.ThreadArchiveFile{
+		fileMeta := archivesvc.ThreadArchiveFile{
 			Kind:         candidate.Kind,
 			SourcePath:   srcPath,
 			ArchivedPath: targetPath,
-			SizeBytes:    info.Size(),
+			SizeBytes:    sourceState.SizeBytes,
 		}
-		checksum, err := archive.FileSHA256(targetPath)
+		checksum, err := archiveconsumer.FileSHA256(targetPath)
 		if err != nil {
 			return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "compute archived file checksum")
 		}
@@ -275,50 +276,56 @@ func archiveThreadArtifactsLogic(a *Adapter, ctx context.Context, threadID strin
 		return manifest.Files[i].ArchivedPath < manifest.Files[j].ArchivedPath
 	})
 
-	if err := archive.WriteThreadArchiveManifest(manifest); err != nil {
+	if err := archiveconsumer.WriteThreadArchiveManifest(manifest); err != nil {
 		return manifest, apperrors.Wrap(err, "Server.archiveThreadArtifacts", "write manifest")
 	}
 	bindRolloutPathLogic(a, ctx, id, manifest.CodexThreadID, manifest.RolloutPath)
-	pruneArchivedCodexSourceFilesLogic(id, manifest.Files, manifest.ArchiveDir)
+	pruneArchivedSourceFilesLogic(id, manifest.Files, manifest.ArchiveDir)
 	return manifest, nil
 }
 
-func inspectThreadArchiveForRestoreLogic(threadID string) (archive.ThreadArchiveRestoreNotice, error) {
-	deps := archive.BuildThreadArchiveRestoreDeps(
-		archive.ResolveThreadArchiveRootDir,
-		archive.SanitizeArchiveNameStrict,
+func inspectArchivedRestoreNoticeLogic(threadID string) (archivesvc.ThreadArchiveRestoreNotice, error) {
+	deps := archivesvc.BuildThreadArchiveRestoreDeps(
+		archiveconsumer.ResolveThreadArchiveRootDir,
+		archivesvc.SanitizeArchiveNameStrict,
 		nil,
-		archive.PathWithinRoot,
+		archivesvc.PathWithinRoot,
 		nil,
-		archive.FileSHA256,
-		archive.FindLatestThreadArchiveManifestPath,
-		archive.ReadThreadArchiveManifest,
+		archiveconsumer.FileSHA256,
+		archiveconsumer.FindLatestThreadArchiveManifestPath,
+		archiveconsumer.ReadThreadArchiveManifest,
+		archiveconsumer.FileState,
+		nil,
 	)
-	return archive.InspectThreadArchiveForRestore(threadID, deps)
+	return archivesvc.InspectThreadArchiveForRestore(threadID, deps)
 }
 
 func restoreThreadArchiveSourcesLogic(threadID string) ([]string, []string, error) {
-	return archive.RestoreThreadArchiveSources(
+	return archivesvc.RestoreThreadArchiveSources(
 		threadID,
-		archive.ResolveThreadArchiveRootDir,
-		archive.SanitizeArchiveNameStrict,
-		archive.ResolveCodexRootDir,
-		archive.PathWithinRoot,
-		archive.CopyFileOverwrite,
-		archive.FileSHA256,
-		archive.FindLatestThreadArchiveManifestPath,
-		archive.ReadThreadArchiveManifest,
+		archiveconsumer.ResolveThreadArchiveRootDir,
+		archivesvc.SanitizeArchiveNameStrict,
+		archiveconsumer.ResolveCodexRootDir,
+		archivesvc.PathWithinRoot,
+		archiveconsumer.CopyFileOverwrite,
+		archiveconsumer.FileSHA256,
+		archiveconsumer.FindLatestThreadArchiveManifestPath,
+		archiveconsumer.ReadThreadArchiveManifest,
+		archiveconsumer.FileState,
+		archiveconsumer.RemoveFile,
 	)
 }
 
-func pruneArchivedCodexSourceFilesLogic(threadID string, files []archive.ThreadArchiveFile, archiveDir string) {
-	archive.PruneArchivedCodexSourceFiles(
+func pruneArchivedSourceFilesLogic(threadID string, files []archivesvc.ThreadArchiveFile, archiveDir string) {
+	archivesvc.PruneArchivedCodexSourceFiles(
 		threadID,
 		files,
 		archiveDir,
-		archive.ResolveCodexRootDir,
-		archive.PathWithinRoot,
-		archive.FileSHA256,
-		archive.RemoveEmptyCodexParentDirs,
+		archiveconsumer.ResolveCodexRootDir,
+		archivesvc.PathWithinRoot,
+		archiveconsumer.FileSHA256,
+		archiveconsumer.FileState,
+		archiveconsumer.RemoveFile,
+		archiveconsumer.RemoveEmptyCodexParentDirs,
 	)
 }

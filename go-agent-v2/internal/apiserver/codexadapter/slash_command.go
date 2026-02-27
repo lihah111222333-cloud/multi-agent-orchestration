@@ -101,24 +101,17 @@ func (a *Adapter) withProcessMap(
 }
 
 func (a *Adapter) resolveThreadForSlashCommand(ctx context.Context, threadID string, requireThreadID bool) (string, error) {
-	return commandsvc.ResolveThreadForSlashCommandLogic(
-		ctx,
-		threadID,
-		requireThreadID,
-		func(ctx context.Context) ([]commandsvc.ThreadListItem, error) {
-			items, err := a.ThreadList(ctx)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]commandsvc.ThreadListItem, 0, len(items))
-			for _, item := range items {
-				out = append(out, commandsvc.ThreadListItem{
-					ID:    item.ID,
-					Name:  item.Name,
-					State: item.State,
-				})
-			}
-			return out, nil
-		},
-	)
+	return commandsvc.ResolveThreadForSlashCommandLogic(ctx, threadID, requireThreadID, a.listSlashCommandThreads)
+}
+
+func (a *Adapter) listSlashCommandThreads(ctx context.Context) ([]commandsvc.ThreadListItem, error) {
+	items, err := a.ThreadList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]commandsvc.ThreadListItem, 0, len(items))
+	for _, item := range items {
+		out = append(out, commandsvc.ThreadListItem{ID: item.ID, Name: item.Name, State: item.State})
+	}
+	return out, nil
 }

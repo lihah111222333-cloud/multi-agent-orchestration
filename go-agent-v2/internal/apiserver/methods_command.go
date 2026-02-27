@@ -3,7 +3,6 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,20 +79,33 @@ type commandExecResponse struct {
 	Stderr   string `json:"stderr"`
 }
 
-func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any, error) {
-	if len(p.Argv) == 0 {
-		return nil, apperrors.New("Server.commandExec", "argv is required")
+func validateCommandExecParams(p commandExecParams) (string, error) {
+	if len(p.Argv) == 0 || strings.TrimSpace(p.Argv[0]) == "" {
+		return "", apperrors.New("Server.commandExec", "argv is required")
 	}
-
-	baseName := filepath.Base(p.Argv[0])
+	baseName := filepath.Base(strings.TrimSpace(p.Argv[0]))
 	if commandBlocklist[baseName] {
-		return nil, apperrors.Newf("Server.commandExec", "command %q is blocked for security", baseName)
+		return "", apperrors.Newf("Server.commandExec", "command %q is blocked for security", baseName)
 	}
-
 	for _, arg := range p.Argv {
 		if strings.ContainsAny(arg, "|;&$`") {
-			return nil, apperrors.New("Server.commandExec", "shell metacharacters not allowed in arguments")
+			return "", apperrors.New("Server.commandExec", "shell metacharacters not allowed in arguments")
 		}
+	}
+	return baseName, nil
+}
+
+func prefixOnce(s, prefix string) string {
+	if strings.HasPrefix(s, prefix) {
+		return s
+	}
+	return prefix + s
+}
+
+func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any, error) {
+	baseName, err := validateCommandExecParams(p)
+	if err != nil {
+		return nil, err
 	}
 
 	logger.Info("command/exec: starting",
@@ -127,7 +139,7 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 	cmd.Stderr = util.NewLimitedWriter(&stderr, maxOutputSize)
 
 	start := time.Now()
-	err := cmd.Run()
+	err = cmd.Run()
 	elapsed := time.Since(start)
 	exitCode := 0
 	if err != nil {
@@ -155,7 +167,7 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 		logger.Info("command/exec: read command detected, injecting LSP hint",
 			logger.FieldCommand, baseName,
 		)
-		outStr = fmt.Sprintf("%s%s", lspPreferenceHint, outStr)
+		outStr = prefixOnce(outStr, lspPreferenceHint)
 	}
 
 	return commandExecResponse{

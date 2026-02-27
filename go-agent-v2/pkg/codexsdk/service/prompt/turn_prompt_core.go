@@ -2,13 +2,11 @@ package prompt
 
 import (
 	"context"
-	"fmt"
-	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/common"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/support"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
@@ -117,18 +115,7 @@ func prependLSPAvailabilityWarning(
 }
 
 func collectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]struct{} {
-	if len(dynamicTools) == 0 {
-		return nil
-	}
-	toolNames := make(map[string]struct{}, len(dynamicTools))
-	for _, tool := range dynamicTools {
-		name := strings.TrimSpace(tool.Name)
-		if name == "" {
-			continue
-		}
-		toolNames[name] = struct{}{}
-	}
-	return toolNames
+	return support.CollectDynamicToolNames(dynamicTools)
 }
 
 type AutoMatchInput = agentcore.AutoMatchInput
@@ -178,14 +165,7 @@ func collectAutoMatchedSkillMatches(
 			continue
 		}
 		if _, configured := configuredSet[skillNameLower]; configured {
-			includeConfigured := false
-			switch matchedBy {
-			case "explicit":
-				includeConfigured = options.IncludeConfiguredExplicit
-			case "force":
-				includeConfigured = options.IncludeConfiguredForce
-			}
-			if !includeConfigured {
+			if !includeConfiguredAutoMatchedSkill(matchedBy, options) {
 				continue
 			}
 		}
@@ -196,6 +176,11 @@ func collectAutoMatchedSkillMatches(
 		})
 	}
 	return matches
+}
+
+func includeConfiguredAutoMatchedSkill(matchedBy string, options AutoSkillMatchOptions) bool {
+	return (matchedBy == "explicit" && options.IncludeConfiguredExplicit) ||
+		(matchedBy == "force" && options.IncludeConfiguredForce)
 }
 
 func renderAutoMatchedSkillPrompt(
@@ -245,108 +230,23 @@ func renderAutoMatchedSkillPrompt(
 }
 
 func lowerMatchedTerms(text string, candidates []string) []string {
-	if text == "" || len(candidates) == 0 {
-		return nil
-	}
-	terms := make([]string, 0, len(candidates))
-	seen := make(map[string]struct{}, len(candidates))
-	for _, raw := range candidates {
-		candidate := strings.TrimSpace(raw)
-		if candidate == "" {
-			continue
-		}
-		lowerCandidate := strings.ToLower(candidate)
-		if _, ok := seen[lowerCandidate]; ok {
-			continue
-		}
-		if !strings.Contains(text, lowerCandidate) {
-			continue
-		}
-		seen[lowerCandidate] = struct{}{}
-		terms = append(terms, candidate)
-	}
-	if len(terms) == 0 {
-		return nil
-	}
-	return terms
+	return support.LowerMatchedTerms(text, candidates)
 }
 
 func explicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords []string) []string {
-	candidates := make([]string, 0, 2+len(triggerWords))
-	if trimmedName := strings.TrimSpace(skillName); trimmedName != "" {
-		candidates = append(candidates, "@"+trimmedName, "[skill:"+trimmedName+"]")
-	}
-	for _, raw := range triggerWords {
-		word := strings.TrimSpace(raw)
-		if word == "" {
-			continue
-		}
-		lowerWord := strings.ToLower(word)
-		if strings.HasPrefix(lowerWord, "@") || strings.HasPrefix(lowerWord, "[skill:") {
-			candidates = append(candidates, word)
-		}
-	}
-	return lowerMatchedTerms(normalizedPrompt, candidates)
+	return support.ExplicitSkillMentionTerms(normalizedPrompt, skillName, triggerWords)
 }
 
 func classifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
-	forceTerms := lowerMatchedTerms(normalizedPrompt, forceWords)
-	if len(forceTerms) > 0 {
-		return "force", forceTerms
-	}
-	explicitTerms := explicitSkillMentionTerms(normalizedPrompt, skillName, triggerWords)
-	if len(explicitTerms) > 0 {
-		return "explicit", explicitTerms
-	}
-	triggerTerms := lowerMatchedTerms(normalizedPrompt, triggerWords)
-	if len(triggerTerms) > 0 {
-		return "trigger", triggerTerms
-	}
-	return "", nil
+	return support.ClassifyAutoSkillMatch(normalizedPrompt, skillName, forceWords, triggerWords)
 }
 
 func forceMatchedSkillInstruction(matchedTerms []string) string {
-	terms := common.CollectTrimmedUniqueValues(matchedTerms, func(value string) string {
-		return strings.ToLower(value)
-	})
-	if len(terms) == 0 {
-		return "执行要求: 本轮必须遵循该技能。"
-	}
-	return fmt.Sprintf("强制触发词: %s\n执行要求: 本轮必须遵循该技能。", strings.Join(terms, ", "))
+	return support.ForceMatchedSkillInstruction(matchedTerms)
 }
 
-var inlineCodeTokenPattern = regexp.MustCompile("`([^`\\n]+)`")
-
 func CollectReferencedLSPToolNames(hint string) []string {
-	trimmed := strings.TrimSpace(hint)
-	if trimmed == "" {
-		return nil
-	}
-	matches := inlineCodeTokenPattern.FindAllStringSubmatch(trimmed, -1)
-	if len(matches) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(matches))
-	names := make([]string, 0, len(matches))
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		name := strings.TrimSpace(match[1])
-		if !strings.HasPrefix(name, "lsp_") {
-			continue
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
-	}
-	if len(names) == 0 {
-		return nil
-	}
-	sort.Strings(names)
-	return names
+	return support.CollectReferencedLSPToolNames(hint)
 }
 
 var (

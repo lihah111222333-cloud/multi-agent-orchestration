@@ -2,12 +2,13 @@ package tracker
 
 import (
 	"fmt"
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
-	"github.com/multi-agent/go-agent-v2/pkg/util"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 const (
@@ -342,30 +343,41 @@ func trackedTurnReasonOr(payload map[string]any, fallback string) string {
 	}
 	return fallback
 }
+
+var threadStatusTerminalMap = map[string]struct {
+	status string
+	reason string
+}{
+	"idle":         {status: "completed", reason: "thread_status_idle"},
+	"systemerror":  {status: "failed", reason: "thread_status_system_error"},
+	"system_error": {status: "failed", reason: "thread_status_system_error"},
+	"error":        {status: "failed", reason: "thread_status_system_error"},
+	"notloaded":    {status: "failed", reason: "thread_status_not_loaded"},
+	"not_loaded":   {status: "failed", reason: "thread_status_not_loaded"},
+}
+
+func extractThreadStatusType(payload map[string]any) string {
+	switch raw := payload["status"].(type) {
+	case string:
+		return strings.ToLower(strings.TrimSpace(raw))
+	case map[string]any:
+		return strings.ToLower(strings.TrimSpace(ExtractTrackedString(raw, "type")))
+	default:
+		return ""
+	}
+}
 func ThreadStatusTerminalFromPayload(payload map[string]any) (status string, reason string, terminal bool) {
 	if payload == nil {
 		return "", "", false
 	}
-	statusType := ""
-	switch raw := payload["status"].(type) {
-	case string:
-		statusType = strings.ToLower(strings.TrimSpace(raw))
-	case map[string]any:
-		statusType = strings.ToLower(strings.TrimSpace(ExtractTrackedString(raw, "type")))
-	}
+	statusType := extractThreadStatusType(payload)
 	if statusType == "" {
 		return "", "", false
 	}
-	switch statusType {
-	case "idle":
-		return "completed", "thread_status_idle", true
-	case "systemerror", "system_error", "error":
-		return "failed", "thread_status_system_error", true
-	case "notloaded", "not_loaded":
-		return "failed", "thread_status_not_loaded", true
-	default:
-		return "", "", false
+	if terminal, ok := threadStatusTerminalMap[statusType]; ok {
+		return terminal.status, terminal.reason, true
 	}
+	return "", "", false
 }
 func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]any) (string, string, string, bool, bool) {
 	eventKey, methodKey := trackedTurnEventAndMethodKeys(eventType, method)
@@ -384,10 +396,7 @@ func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]a
 		return ExtractTrackedTurnID(payload), "completed", trackedTurnReasonOr(payload, "shutdown_complete"), true, true
 	case trackedTurnTerminalStreamError:
 		retryable, known := extractTrackedRetryable(payload)
-		if known && retryable {
-			return "", "", "", false, false
-		}
-		if !known {
+		if !known || retryable {
 			return "", "", "", false, false
 		}
 		reason := ExtractTrackedTurnReason(payload)

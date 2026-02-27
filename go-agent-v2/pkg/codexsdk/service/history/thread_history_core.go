@@ -29,6 +29,23 @@ func AppendUniqueThreadIDFallback(dst []string, seen map[string]struct{}, candid
 	return common.AppendUniqueThreadIDFallback(dst, seen, candidate)
 }
 
+func lookupWithTimeout[T any](ctx context.Context, timeout time.Duration, lookup func(context.Context) (T, error)) (T, error) {
+	var zero T
+	if lookup == nil {
+		return zero, nil
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return lookup(dbCtx)
+}
+
+func warnHistoryLookup(agentID, message string, err error) {
+	if err == nil {
+		return
+	}
+	logger.Warn(message, append(common.ThreadLogFields(agentID), logger.FieldError, err)...)
+}
+
 func ResolveCodexThreadCandidates(
 	ctx context.Context,
 	agentID string,
@@ -56,26 +73,22 @@ func ResolveCodexThreadCandidates(
 	seen := map[string]struct{}{}
 	ids = appendUnique(ids, seen, id)
 	if findBindingCodexThreadID != nil {
-		dbCtx, cancel := context.WithTimeout(ctx, timeout)
-		boundID, err := findBindingCodexThreadID(dbCtx, id)
-		cancel()
+		boundID, err := lookupWithTimeout(ctx, timeout, func(dbCtx context.Context) (string, error) {
+			return findBindingCodexThreadID(dbCtx, id)
+		})
 		if err != nil {
-			logger.Warn("turn/start: resolve codex thread id from binding failed",
-				append(common.ThreadLogFields(id), logger.FieldError, err)...,
-			)
-		} else {
+			warnHistoryLookup(id, "turn/start: resolve codex thread id from binding failed", err)
+		} else if boundID != "" {
 			ids = appendUnique(ids, seen, boundID)
 		}
 	}
 	if findStatusSessionID != nil {
-		dbCtx, cancel := context.WithTimeout(ctx, timeout)
-		sessionID, err := findStatusSessionID(dbCtx, id)
-		cancel()
+		sessionID, err := lookupWithTimeout(ctx, timeout, func(dbCtx context.Context) (string, error) {
+			return findStatusSessionID(dbCtx, id)
+		})
 		if err != nil {
-			logger.Warn("turn/start: resolve codex thread id from agent_status failed",
-				append(common.ThreadLogFields(id), logger.FieldError, err)...,
-			)
-		} else {
+			warnHistoryLookup(id, "turn/start: resolve codex thread id from agent_status failed", err)
+		} else if sessionID != "" {
 			ids = appendUnique(ids, seen, sessionID)
 		}
 	}
@@ -106,38 +119,26 @@ func ThreadExistsInHistory(
 	}
 	ctx = EnsureContext(ctx)
 	timeout = NormalizeHistoryTimeout(timeout)
-	if findBindingByAgentID != nil {
-		dbCtx, cancel := context.WithTimeout(ctx, timeout)
-		found, err := findBindingByAgentID(dbCtx, id)
-		cancel()
+	checkExists := func(message string, lookup func(context.Context, string) (bool, error)) bool {
+		found, err := lookupWithTimeout(ctx, timeout, func(dbCtx context.Context) (bool, error) {
+			return lookup(dbCtx, id)
+		})
 		if err != nil {
-			logger.Warn("turn/start: check thread history from agent_codex_binding failed",
-				append(common.ThreadLogFields(id), logger.FieldError, err)...,
-			)
-		} else if found {
-			return true
+			warnHistoryLookup(id, message, err)
+			return false
 		}
+		return found
 	}
-	if getAgentStatusByID != nil {
-		dbCtx, cancel := context.WithTimeout(ctx, timeout)
-		found, err := getAgentStatusByID(dbCtx, id)
-		cancel()
-		if err != nil {
-			logger.Warn("turn/start: check thread history from agent_status failed",
-				append(common.ThreadLogFields(id), logger.FieldError, err)...,
-			)
-		} else if found {
-			return true
-		}
+	if findBindingByAgentID != nil && checkExists("turn/start: check thread history from agent_codex_binding failed", findBindingByAgentID) {
+		return true
+	}
+	if getAgentStatusByID != nil && checkExists("turn/start: check thread history from agent_status failed", getAgentStatusByID) {
+		return true
 	}
 	if loadThreadArchiveMap != nil {
-		dbCtx, cancel := context.WithTimeout(ctx, timeout)
-		archivedMap, err := loadThreadArchiveMap(dbCtx)
-		cancel()
+		archivedMap, err := lookupWithTimeout(ctx, timeout, loadThreadArchiveMap)
 		if err != nil {
-			logger.Warn("turn/start: check thread history from threadArchives.chat failed",
-				append(common.ThreadLogFields(id), logger.FieldError, err)...,
-			)
+			warnHistoryLookup(id, "turn/start: check thread history from threadArchives.chat failed", err)
 		} else if _, ok := archivedMap[id]; ok {
 			return true
 		}

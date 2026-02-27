@@ -92,9 +92,13 @@ func (a *Adapter) withActiveTurnByID(threadID, turnID string, fn func(threadID s
 	return withActiveTurnByIDCore(a.trackerHelperState(), threadID, turnID, fn)
 }
 
-func supersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurnID string) (map[string]any, string, bool) {
-	return trackersvc.SupersedeActiveTurn(activeTurns, threadID, nextTurnID)
-}
+var (
+	supersedeActiveTurn               = trackersvc.SupersedeActiveTurn
+	normalizeTrackedTurnStatus        = trackersvc.NormalizeTrackedTurnStatus
+	extractTrackedString              = trackersvc.ExtractTrackedString
+	mergeTrackedTurnCompletionPayload = trackersvc.MergeTrackedTurnCompletionPayload
+	captureAndInjectTurnSummaryCore   = trackersvc.CaptureAndInjectTurnSummaryCore
+)
 
 // beginTrackedTurn establishes tracked turn state and supersedes old one when needed.
 func (a *Adapter) beginTrackedTurn(threadID, turnID string) string {
@@ -138,16 +142,8 @@ func (a *Adapter) completeTrackedTurnByID(threadID, turnID, status, reason strin
 	return completeTrackedTurnByIDCore(a.trackerHelperState(), threadID, turnID, status, reason)
 }
 
-func normalizeTrackedTurnStatus(status string) string {
-	return trackersvc.NormalizeTrackedTurnStatus(status)
-}
-
 func threadStatusTerminalFromPayload(payload map[string]any) (status string, reason string, terminal bool) {
 	return trackersvc.ThreadStatusTerminalFromPayload(payload)
-}
-
-func extractTrackedString(payload map[string]any, keys ...string) string {
-	return trackersvc.ExtractTrackedString(payload, keys...)
 }
 
 func extractTrackedTurnID(payload map[string]any) string {
@@ -176,10 +172,6 @@ func trackedTurnSummaryCacheKey(threadID, turnID string) string {
 
 func injectTrackedTurnSummary(payload map[string]any, summary string) {
 	trackersvc.InjectTrackedTurnSummary(payload, summary)
-}
-
-func mergeTrackedTurnCompletionPayload(target map[string]any, completion map[string]any) {
-	trackersvc.MergeTrackedTurnCompletionPayload(target, completion)
 }
 
 func isTerminalEventType(eventType, method string) bool {
@@ -313,10 +305,6 @@ func executeStallAutoInterruptCore(
 	notify func(string, any),
 ) {
 	trackersvc.ExecuteStallAutoInterruptCore(threadID, turnID, silent, threshold, pushAlert, markTrackedTurnInterruptRequested, cancelCodeRuns, sendInterrupt, completeTrackedTurnByID, notify)
-}
-
-func captureAndInjectTurnSummaryCore(state turnTrackerState, threadID, eventType, method string, payload map[string]any) {
-	trackersvc.CaptureAndInjectTurnSummaryCore(state, threadID, eventType, method, payload)
 }
 
 func maybeFinalizeTrackedTurnCore(state turnTrackerState, threadID, eventType, method string, payload map[string]any, notify func(string, any)) {

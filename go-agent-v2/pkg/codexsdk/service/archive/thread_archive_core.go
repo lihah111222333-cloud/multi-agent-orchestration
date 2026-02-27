@@ -10,7 +10,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-type threadArchiveFile struct {
+type ThreadArchiveFile struct {
 	Kind         string `json:"kind"`
 	SourcePath   string `json:"sourcePath"`
 	ArchivedPath string `json:"archivedPath"`
@@ -18,45 +18,26 @@ type threadArchiveFile struct {
 	SHA256       string `json:"sha256,omitempty"`
 }
 
-type threadArchiveManifest struct {
+type ThreadArchiveManifest struct {
 	ThreadID      string              `json:"threadId"`
 	CodexThreadID string              `json:"codexThreadId,omitempty"`
 	ArchivedAt    string              `json:"archivedAt"`
 	ArchiveDir    string              `json:"archiveDir"`
 	RolloutPath   string              `json:"rolloutPath,omitempty"`
-	Files         []threadArchiveFile `json:"files"`
+	Files         []ThreadArchiveFile `json:"files"`
 }
 
-type threadArchiveFileState struct {
+type ThreadArchiveFileState struct {
 	Exists    bool
 	IsDir     bool
 	SizeBytes int64
 }
 
-// InferThreadArtifactKind infers the artifact kind from filename.
 func InferThreadArtifactKind(filename string) string {
 	return inferThreadArtifactKind(filename)
 }
 
-type ThreadArchiveFile = threadArchiveFile
-
-type ThreadArchiveManifest = threadArchiveManifest
-
-type ThreadArchiveRestoreNotice = threadArchiveRestoreNotice
-
-type ThreadArchiveRestoreDeps = threadArchiveRestoreDeps
-
 type ThreadArtifactCandidate = threadArtifactCandidate
-
-type ThreadArchiveFileState = threadArchiveFileState
-
-func MergeThreadArchiveMaps(dst map[string]int64, src map[string]int64) map[string]int64 {
-	return mergeThreadArchiveMaps(dst, src)
-}
-
-func ParseArchiveTimestamp(raw string) int64 {
-	return parseArchiveTimestamp(raw)
-}
 
 func BuildThreadArchiveRestoreDeps(
 	resolveThreadArchiveRoot func() (string, error),
@@ -70,22 +51,22 @@ func BuildThreadArchiveRestoreDeps(
 	fileState func(path string) (ThreadArchiveFileState, error),
 	removeFile func(path string) error,
 ) ThreadArchiveRestoreDeps {
-	return buildThreadArchiveRestoreDeps(
-		resolveThreadArchiveRoot,
-		sanitizeArchiveNameStrict,
-		resolveCodexRootDir,
-		pathWithinRoot,
-		copyFileOverwrite,
-		fileSHA256,
-		findLatestManifestPath,
-		readManifestFile,
-		fileState,
-		removeFile,
-	)
+	return ThreadArchiveRestoreDeps{
+		resolveThreadArchiveRoot:  resolveThreadArchiveRoot,
+		sanitizeArchiveNameStrict: sanitizeArchiveNameStrict,
+		resolveCodexRootDir:       resolveCodexRootDir,
+		pathWithinRoot:            pathWithinRoot,
+		copyFileOverwrite:         copyFileOverwrite,
+		fileSHA256:                fileSHA256,
+		findLatestManifestPath:    findLatestManifestPath,
+		readManifestFile:          readManifestFile,
+		fileState:                 fileState,
+		removeFile:                removeFile,
+	}
 }
 
 func InspectThreadArchiveForRestore(threadID string, deps ThreadArchiveRestoreDeps) (ThreadArchiveRestoreNotice, error) {
-	return inspectThreadArchiveForRestore(threadID, deps)
+	return inspectThreadArchiveForRestoreWithDeps(threadID, deps)
 }
 
 func RestoreThreadArchiveSources(
@@ -101,53 +82,17 @@ func RestoreThreadArchiveSources(
 	fileState func(path string) (ThreadArchiveFileState, error),
 	removeFile func(path string) error,
 ) ([]string, []string, error) {
-	return restoreThreadArchiveSources(
-		threadID,
-		resolveThreadArchiveRoot,
-		sanitizeArchiveNameStrict,
-		resolveCodexRootDir,
-		pathWithinRoot,
-		copyFileOverwrite,
-		fileSHA256,
-		findLatestManifestPath,
-		readManifestFile,
-		fileState,
-		removeFile,
-	)
+	deps := BuildThreadArchiveRestoreDeps(resolveThreadArchiveRoot, sanitizeArchiveNameStrict, resolveCodexRootDir, pathWithinRoot, copyFileOverwrite, fileSHA256, findLatestManifestPath, readManifestFile, fileState, removeFile)
+	return restoreThreadArchiveSourcesWithDeps(threadID, deps)
 }
 
-func PruneArchivedCodexSourceFiles(
-	threadID string,
-	files []ThreadArchiveFile,
-	archiveDir string,
-	resolveCodexRootDir func() (string, error),
-	pathWithinRoot func(root, path string) (bool, error),
-	fileSHA256 func(path string) (string, error),
-	fileState func(path string) (ThreadArchiveFileState, error),
-	removeFile func(path string) error,
-	removeEmptyCodexParentDir func(startDir, codexRoot string),
-) {
-	pruneArchivedCodexSourceFiles(
-		threadID,
-		files,
-		archiveDir,
-		resolveCodexRootDir,
-		pathWithinRoot,
-		fileSHA256,
-		fileState,
-		removeFile,
-		removeEmptyCodexParentDir,
-	)
-}
-
-// threadArchiveRestoreNotice describes archive integrity status before restore.
-type threadArchiveRestoreNotice struct {
+type ThreadArchiveRestoreNotice struct {
 	Modified      bool
 	ManifestPath  string
 	ModifiedFiles []string
 }
 
-type threadArchiveRestoreDeps struct {
+type ThreadArchiveRestoreDeps struct {
 	resolveThreadArchiveRoot  func() (string, error)
 	sanitizeArchiveNameStrict func(string) (string, error)
 	resolveCodexRootDir       func() (string, error)
@@ -155,44 +100,18 @@ type threadArchiveRestoreDeps struct {
 	copyFileOverwrite         func(srcPath, targetPath string) error
 	fileSHA256                func(path string) (string, error)
 	findLatestManifestPath    func(threadDir string) (manifestPath string, found bool, err error)
-	readManifestFile          func(manifestPath string) (threadArchiveManifest, error)
-	fileState                 func(path string) (threadArchiveFileState, error)
+	readManifestFile          func(manifestPath string) (ThreadArchiveManifest, error)
+	fileState                 func(path string) (ThreadArchiveFileState, error)
 	removeFile                func(path string) error
 }
 
 type threadArchiveManifestScope struct {
 	ThreadID     string
 	ManifestPath string
-	Manifest     threadArchiveManifest
+	Manifest     ThreadArchiveManifest
 }
 
-func buildThreadArchiveRestoreDeps(
-	resolveThreadArchiveRoot func() (string, error),
-	sanitizeArchiveNameStrict func(string) (string, error),
-	resolveCodexRootDir func() (string, error),
-	pathWithinRoot func(root, path string) (bool, error),
-	copyFileOverwrite func(srcPath, targetPath string) error,
-	fileSHA256 func(path string) (string, error),
-	findLatestManifestPath func(threadDir string) (manifestPath string, found bool, err error),
-	readManifestFile func(manifestPath string) (threadArchiveManifest, error),
-	fileState func(path string) (threadArchiveFileState, error),
-	removeFile func(path string) error,
-) threadArchiveRestoreDeps {
-	return threadArchiveRestoreDeps{
-		resolveThreadArchiveRoot:  resolveThreadArchiveRoot,
-		sanitizeArchiveNameStrict: sanitizeArchiveNameStrict,
-		resolveCodexRootDir:       resolveCodexRootDir,
-		pathWithinRoot:            pathWithinRoot,
-		copyFileOverwrite:         copyFileOverwrite,
-		fileSHA256:                fileSHA256,
-		findLatestManifestPath:    findLatestManifestPath,
-		readManifestFile:          readManifestFile,
-		fileState:                 fileState,
-		removeFile:                removeFile,
-	}
-}
-
-func (deps threadArchiveRestoreDeps) validateInspect() error {
+func (deps ThreadArchiveRestoreDeps) validateInspect() error {
 	if deps.resolveThreadArchiveRoot == nil ||
 		deps.sanitizeArchiveNameStrict == nil ||
 		deps.pathWithinRoot == nil ||
@@ -205,7 +124,7 @@ func (deps threadArchiveRestoreDeps) validateInspect() error {
 	return nil
 }
 
-func (deps threadArchiveRestoreDeps) validateRestore() error {
+func (deps ThreadArchiveRestoreDeps) validateRestore() error {
 	if err := deps.validateInspect(); err != nil {
 		return apperrors.New("restoreThreadArchiveSources", "restore dependencies are not configured")
 	}
@@ -215,7 +134,7 @@ func (deps threadArchiveRestoreDeps) validateRestore() error {
 	return nil
 }
 
-func loadThreadArchiveManifestScope(threadID, op string, deps threadArchiveRestoreDeps) (threadArchiveManifestScope, bool, error) {
+func loadThreadArchiveManifestScope(threadID, op string, deps ThreadArchiveRestoreDeps) (threadArchiveManifestScope, bool, error) {
 	scope := threadArchiveManifestScope{}
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -249,7 +168,7 @@ func loadThreadArchiveManifestScope(threadID, op string, deps threadArchiveResto
 	return scope, true, nil
 }
 
-func mergeThreadArchiveMaps(dst map[string]int64, src map[string]int64) map[string]int64 {
+func MergeThreadArchiveMaps(dst map[string]int64, src map[string]int64) map[string]int64 {
 	if dst == nil {
 		dst = map[string]int64{}
 	}
@@ -265,7 +184,7 @@ func mergeThreadArchiveMaps(dst map[string]int64, src map[string]int64) map[stri
 	return dst
 }
 
-func parseArchiveTimestamp(raw string) int64 {
+func ParseArchiveTimestamp(raw string) int64 {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return 0
@@ -296,17 +215,8 @@ func resolveArchivedPath(archiveDir string, archivedPath string) string {
 	return pathutil.Join(baseDir, resolved)
 }
 
-// inspectThreadArchiveForRestore verifies archived files before restore.
-func inspectThreadArchiveForRestore(threadID string, deps threadArchiveRestoreDeps) (threadArchiveRestoreNotice, error) {
-	return inspectThreadArchiveForRestoreWithDeps(threadID, deps)
-}
-
-func inspectThreadArchiveForRestoreWithDeps(threadID string, deps threadArchiveRestoreDeps) (threadArchiveRestoreNotice, error) {
-	notice := threadArchiveRestoreNotice{
-		Modified:      false,
-		ManifestPath:  "",
-		ModifiedFiles: []string{},
-	}
+func inspectThreadArchiveForRestoreWithDeps(threadID string, deps ThreadArchiveRestoreDeps) (ThreadArchiveRestoreNotice, error) {
+	notice := ThreadArchiveRestoreNotice{ModifiedFiles: []string{}}
 	if err := deps.validateInspect(); err != nil {
 		return notice, err
 	}
@@ -359,15 +269,15 @@ func inspectThreadArchiveForRestoreWithDeps(threadID string, deps threadArchiveR
 	return notice, nil
 }
 
-// pruneArchivedCodexSourceFiles removes source codex files once archived safely.
-func pruneArchivedCodexSourceFiles(
+// PruneArchivedCodexSourceFiles removes source codex files once archived safely.
+func PruneArchivedCodexSourceFiles(
 	threadID string,
-	files []threadArchiveFile,
+	files []ThreadArchiveFile,
 	archiveDir string,
 	resolveCodexRootDir func() (string, error),
 	pathWithinRoot func(root, path string) (bool, error),
 	fileSHA256 func(path string) (string, error),
-	fileState func(path string) (threadArchiveFileState, error),
+	fileState func(path string) (ThreadArchiveFileState, error),
 	removeFile func(path string) error,
 	removeEmptyCodexParentDir func(startDir, codexRoot string),
 ) {
@@ -380,10 +290,7 @@ func pruneArchivedCodexSourceFiles(
 	threadID = strings.TrimSpace(threadID)
 	codexRoot, err := resolveCodexRootDir()
 	if err != nil {
-		logger.Error("thread/archive: resolve codex root failed",
-			logger.FieldThreadID, threadID,
-			logger.FieldError, err,
-		)
+		logger.Error("thread/archive: resolve codex root failed", logger.FieldThreadID, threadID, logger.FieldError, err)
 		return
 	}
 
@@ -412,11 +319,7 @@ func pruneArchivedCodexSourceFiles(
 
 		state, err := fileState(srcPath)
 		if err != nil {
-			logger.Error("thread/archive: stat source artifact failed",
-				logger.FieldThreadID, threadID,
-				"source_path", srcPath,
-				logger.FieldError, err,
-			)
+			logger.Error("thread/archive: stat source artifact failed", logger.FieldThreadID, threadID, "source_path", srcPath, logger.FieldError, err)
 			continue
 		}
 		if !state.Exists || state.IsDir {
@@ -429,29 +332,16 @@ func pruneArchivedCodexSourceFiles(
 		}
 		sourceSHA256, err := fileSHA256(srcPath)
 		if err != nil {
-			logger.Error("thread/archive: source artifact checksum failed",
-				logger.FieldThreadID, threadID,
-				"source_path", srcPath,
-				logger.FieldError, err,
-			)
+			logger.Error("thread/archive: source artifact checksum failed", logger.FieldThreadID, threadID, "source_path", srcPath, logger.FieldError, err)
 			continue
 		}
 		if !strings.EqualFold(expectedSHA256, sourceSHA256) {
-			logger.Error("thread/archive: source artifact changed after backup, skip delete",
-				logger.FieldThreadID, threadID,
-				"source_path", srcPath,
-				"expected_sha256", expectedSHA256,
-				"actual_sha256", sourceSHA256,
-			)
+			logger.Error("thread/archive: source artifact changed after backup, skip delete", logger.FieldThreadID, threadID, "source_path", srcPath, "expected_sha256", expectedSHA256, "actual_sha256", sourceSHA256)
 			continue
 		}
 
 		if err := removeFile(srcPath); err != nil {
-			logger.Error("thread/archive: remove source artifact failed",
-				logger.FieldThreadID, threadID,
-				"source_path", srcPath,
-				logger.FieldError, err,
-			)
+			logger.Error("thread/archive: remove source artifact failed", logger.FieldThreadID, threadID, "source_path", srcPath, logger.FieldError, err)
 			continue
 		}
 		deleted++
@@ -461,22 +351,19 @@ func pruneArchivedCodexSourceFiles(
 	}
 
 	if deleted > 0 {
-		logger.Info("thread/archive: pruned codex source artifacts",
-			logger.FieldThreadID, threadID,
-			"deleted_count", deleted,
-		)
+		logger.Info("thread/archive: pruned codex source artifacts", logger.FieldThreadID, threadID, "deleted_count", deleted)
 	}
 }
 
 func restoreThreadArchiveEntry(
 	threadID string,
-	meta threadArchiveFile,
-	manifest threadArchiveManifest,
+	meta ThreadArchiveFile,
+	manifest ThreadArchiveManifest,
 	codexRoot string,
 	pathWithinRoot func(root, path string) (bool, error),
 	copyFileOverwrite func(srcPath, targetPath string) error,
 	fileSHA256 func(path string) (string, error),
-	fileState func(path string) (threadArchiveFileState, error),
+	fileState func(path string) (ThreadArchiveFileState, error),
 	removeFile func(path string) error,
 	restoredSet map[string]struct{},
 	restored *[]string,
@@ -585,20 +472,9 @@ func appendRestoreSkippedSource(
 		return
 	}
 	if skipErr != nil {
-		logger.Error("thread/unarchive: restore artifact skipped",
-			logger.FieldThreadID, threadID,
-			"source_path", value,
-			"archived_path", strings.TrimSpace(archivedPath),
-			"reason", reason,
-			logger.FieldError, skipErr,
-		)
+		logger.Error("thread/unarchive: restore artifact skipped", logger.FieldThreadID, threadID, "source_path", value, "archived_path", strings.TrimSpace(archivedPath), "reason", reason, logger.FieldError, skipErr)
 	} else {
-		logger.Error("thread/unarchive: restore artifact skipped",
-			logger.FieldThreadID, threadID,
-			"source_path", value,
-			"archived_path", strings.TrimSpace(archivedPath),
-			"reason", reason,
-		)
+		logger.Error("thread/unarchive: restore artifact skipped", logger.FieldThreadID, threadID, "source_path", value, "archived_path", strings.TrimSpace(archivedPath), "reason", reason)
 	}
 	if _, ok := skippedSet[value]; ok {
 		return
@@ -607,36 +483,7 @@ func appendRestoreSkippedSource(
 	*skipped = append(*skipped, value)
 }
 
-// restoreThreadArchiveSources restores archived source files back to codex root.
-func restoreThreadArchiveSources(
-	threadID string,
-	resolveThreadArchiveRoot func() (string, error),
-	sanitizeArchiveNameStrict func(string) (string, error),
-	resolveCodexRootDir func() (string, error),
-	pathWithinRoot func(root, path string) (bool, error),
-	copyFileOverwrite func(srcPath, targetPath string) error,
-	fileSHA256 func(path string) (string, error),
-	findLatestManifestPath func(threadDir string) (manifestPath string, found bool, err error),
-	readManifestFile func(manifestPath string) (threadArchiveManifest, error),
-	fileState func(path string) (threadArchiveFileState, error),
-	removeFile func(path string) error,
-) ([]string, []string, error) {
-	deps := buildThreadArchiveRestoreDeps(
-		resolveThreadArchiveRoot,
-		sanitizeArchiveNameStrict,
-		resolveCodexRootDir,
-		pathWithinRoot,
-		copyFileOverwrite,
-		fileSHA256,
-		findLatestManifestPath,
-		readManifestFile,
-		fileState,
-		removeFile,
-	)
-	return restoreThreadArchiveSourcesWithDeps(threadID, deps)
-}
-
-func restoreThreadArchiveSourcesWithDeps(threadID string, deps threadArchiveRestoreDeps) ([]string, []string, error) {
+func restoreThreadArchiveSourcesWithDeps(threadID string, deps ThreadArchiveRestoreDeps) ([]string, []string, error) {
 	restored := []string{}
 	skipped := []string{}
 	id := strings.TrimSpace(threadID)
@@ -665,21 +512,7 @@ func restoreThreadArchiveSourcesWithDeps(threadID string, deps threadArchiveRest
 	skippedSet := map[string]struct{}{}
 
 	for _, meta := range manifest.Files {
-		restoreThreadArchiveEntry(
-			id,
-			meta,
-			manifest,
-			codexRoot,
-			deps.pathWithinRoot,
-			deps.copyFileOverwrite,
-			deps.fileSHA256,
-			deps.fileState,
-			deps.removeFile,
-			restoredSet,
-			&restored,
-			skippedSet,
-			&skipped,
-		)
+		restoreThreadArchiveEntry(id, meta, manifest, codexRoot, deps.pathWithinRoot, deps.copyFileOverwrite, deps.fileSHA256, deps.fileState, deps.removeFile, restoredSet, &restored, skippedSet, &skipped)
 	}
 	sort.Strings(restored)
 	sort.Strings(skipped)

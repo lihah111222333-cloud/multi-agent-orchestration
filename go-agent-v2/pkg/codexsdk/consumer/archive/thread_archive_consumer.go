@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	archivesvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/archive"
 	appErrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
@@ -108,13 +109,13 @@ func ThreadUnarchive(ctx context.Context, threadID string, deps ThreadArchiveDep
 	restoreNotice := ThreadArchiveRestoreNotice{}
 	var restoredFiles, skippedRestoreFiles []string
 	if wasArchived {
-		notice, inspectErr := inspectThreadArchiveForRestore(id)
+		notice, inspectErr := archivesvc.InspectThreadArchiveForRestore(id, archivesvc.BuildThreadArchiveRestoreDeps(ResolveThreadArchiveRootDir, SanitizeArchiveNameStrict, nil, PathWithinRoot, nil, FileSHA256, FindLatestThreadArchiveManifestPath, ReadThreadArchiveManifest, FileState, nil))
 		if inspectErr != nil {
 			logger.Error("thread/unarchive: inspect archive integrity failed", logger.FieldThreadID, id, logger.FieldError, inspectErr)
 		} else {
 			restoreNotice = notice
 		}
-		restored, skipped, restoreErr := restoreThreadArchiveSources(id)
+		restored, skipped, restoreErr := archivesvc.RestoreThreadArchiveSources(id, ResolveThreadArchiveRootDir, SanitizeArchiveNameStrict, ResolveCodexRootDir, PathWithinRoot, CopyFileOverwrite, FileSHA256, FindLatestThreadArchiveManifestPath, ReadThreadArchiveManifest, FileState, RemoveFile)
 		if restoreErr != nil {
 			logger.Error("thread/unarchive: restore archived codex artifacts failed", logger.FieldThreadID, id, logger.FieldError, restoreErr)
 		} else {
@@ -197,52 +198,6 @@ func ArchiveThreadArtifacts(ctx context.Context, threadID string, resolveRollout
 	if bindRolloutPath != nil {
 		bindRolloutPath(ctx, id, manifest.CodexThreadID, manifest.RolloutPath)
 	}
-	pruneArchivedCodexSourceFiles(id, manifest.Files, manifest.ArchiveDir)
+	archivesvc.PruneArchivedCodexSourceFiles(id, manifest.Files, manifest.ArchiveDir, ResolveCodexRootDir, PathWithinRoot, FileSHA256, FileState, RemoveFile, RemoveEmptyCodexParentDirs)
 	return manifest, nil
-}
-
-func inspectThreadArchiveForRestore(threadID string) (ThreadArchiveRestoreNotice, error) {
-	deps := BuildThreadArchiveRestoreDeps(
-		ResolveThreadArchiveRootDir,
-		SanitizeArchiveNameStrict,
-		nil,
-		PathWithinRoot,
-		nil,
-		FileSHA256,
-		FindLatestThreadArchiveManifestPath,
-		ReadThreadArchiveManifest,
-		FileState,
-		nil,
-	)
-	return InspectThreadArchiveForRestore(threadID, deps)
-}
-
-func restoreThreadArchiveSources(threadID string) ([]string, []string, error) {
-	return RestoreThreadArchiveSources(
-		threadID,
-		ResolveThreadArchiveRootDir,
-		SanitizeArchiveNameStrict,
-		ResolveCodexRootDir,
-		PathWithinRoot,
-		CopyFileOverwrite,
-		FileSHA256,
-		FindLatestThreadArchiveManifestPath,
-		ReadThreadArchiveManifest,
-		FileState,
-		RemoveFile,
-	)
-}
-
-func pruneArchivedCodexSourceFiles(threadID string, files []ThreadArchiveFile, archiveDir string) {
-	PruneArchivedCodexSourceFiles(
-		threadID,
-		files,
-		archiveDir,
-		ResolveCodexRootDir,
-		PathWithinRoot,
-		FileSHA256,
-		FileState,
-		RemoveFile,
-		RemoveEmptyCodexParentDirs,
-	)
 }

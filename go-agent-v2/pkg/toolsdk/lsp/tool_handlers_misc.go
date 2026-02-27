@@ -2244,6 +2244,48 @@ type lspMergedActionParam struct {
 	Action string `json:"action"`
 }
 
+type mergedActionHandler func(*ToolHandlers, json.RawMessage) string
+
+var lspFileActionHandlers = map[string]mergedActionHandler{
+	"open_file":   (*ToolHandlers).OpenFile,
+	"read_file":   (*ToolHandlers).ReadFile,
+	"did_change":  (*ToolHandlers).DidChange,
+	"diagnostics": (*ToolHandlers).Diagnostics,
+}
+
+var lspInspectActionHandlers = map[string]mergedActionHandler{
+	"hover":           (*ToolHandlers).Hover,
+	"definition":      (*ToolHandlers).Definition,
+	"implementation":  (*ToolHandlers).Implementation,
+	"type_definition": (*ToolHandlers).TypeDefinition,
+	"signature_help":  (*ToolHandlers).SignatureHelp,
+}
+
+var lspXRefActionHandlers = map[string]mergedActionHandler{
+	"call_hierarchy": (*ToolHandlers).CallHierarchy,
+	"type_hierarchy": (*ToolHandlers).TypeHierarchy,
+	"references":     (*ToolHandlers).References,
+}
+
+var lspGrepActionHandlers = map[string]mergedActionHandler{
+	"text_search": (*ToolHandlers).TextSearch,
+	"ast_search":  (*ToolHandlers).AstSearch,
+}
+
+var lspStructureActionHandlers = map[string]mergedActionHandler{
+	"document_symbol":  (*ToolHandlers).DocumentSymbol,
+	"workspace_symbol": (*ToolHandlers).WorkspaceSymbol,
+	"semantic_tokens":  (*ToolHandlers).SemanticTokens,
+	"folding_range":    (*ToolHandlers).FoldingRange,
+}
+
+var lspEditActionHandlers = map[string]mergedActionHandler{
+	"rename":        (*ToolHandlers).Rename,
+	"code_action":   (*ToolHandlers).CodeAction,
+	"format":        (*ToolHandlers).Format,
+	"replace_range": (*ToolHandlers).ReplaceRange,
+}
+
 func decodeMergedAction(args json.RawMessage) (string, error) {
 	p, err := decodeArgs[lspMergedActionParam](args)
 	if err != nil {
@@ -2255,71 +2297,44 @@ func decodeMergedAction(args json.RawMessage) (string, error) {
 	return p.Action, nil
 }
 
-func routeMergedAction(args json.RawMessage, group string, routes map[string]func(json.RawMessage) string) string {
+func (h *ToolHandlers) dispatchMergedAction(args json.RawMessage, scope string, handlers map[string]mergedActionHandler) string {
 	action, err := decodeMergedAction(args)
 	if err != nil {
 		return toolError(err)
 	}
-	if handler, ok := routes[action]; ok {
-		return handler(args)
+	handler, ok := handlers[action]
+	if !ok {
+		return toolError(fmt.Errorf("unsupported %s action: %s", scope, action))
 	}
-	return toolError(fmt.Errorf("unsupported %s action: %s", group, action))
+	return handler(h, args)
 }
 
 // LSPFile routes file operations.
 func (h *ToolHandlers) LSPFile(args json.RawMessage) string {
-	return routeMergedAction(args, "lsp_file", map[string]func(json.RawMessage) string{
-		"open_file":   h.OpenFile,
-		"read_file":   h.ReadFile,
-		"did_change":  h.DidChange,
-		"diagnostics": h.Diagnostics,
-	})
+	return h.dispatchMergedAction(args, "lsp_file", lspFileActionHandlers)
 }
 
 // LSPInspect routes inspect operations.
 func (h *ToolHandlers) LSPInspect(args json.RawMessage) string {
-	return routeMergedAction(args, "lsp_inspect", map[string]func(json.RawMessage) string{
-		"hover":           h.Hover,
-		"definition":      h.Definition,
-		"implementation":  h.Implementation,
-		"type_definition": h.TypeDefinition,
-		"signature_help":  h.SignatureHelp,
-	})
+	return h.dispatchMergedAction(args, "lsp_inspect", lspInspectActionHandlers)
 }
 
 // LSPXRef routes cross-reference operations.
 func (h *ToolHandlers) LSPXRef(args json.RawMessage) string {
-	return routeMergedAction(args, "lsp_xref", map[string]func(json.RawMessage) string{
-		"call_hierarchy": h.CallHierarchy,
-		"type_hierarchy": h.TypeHierarchy,
-		"references":     h.References,
-	})
+	return h.dispatchMergedAction(args, "lsp_xref", lspXRefActionHandlers)
 }
 
 // LSPGrep routes text/ast search operations.
 func (h *ToolHandlers) LSPGrep(args json.RawMessage) string {
-	return routeMergedAction(args, "lsp_grep", map[string]func(json.RawMessage) string{
-		"text_search": h.TextSearch,
-		"ast_search":  h.AstSearch,
-	})
+	return h.dispatchMergedAction(args, "lsp_grep", lspGrepActionHandlers)
 }
 
 // LSPStructure routes structure/hierarchy operations.
 func (h *ToolHandlers) LSPStructure(args json.RawMessage) string {
-	return routeMergedAction(args, "lsp_structure", map[string]func(json.RawMessage) string{
-		"document_symbol":  h.DocumentSymbol,
-		"workspace_symbol": h.WorkspaceSymbol,
-		"semantic_tokens":  h.SemanticTokens,
-		"folding_range":    h.FoldingRange,
-	})
+	return h.dispatchMergedAction(args, "lsp_structure", lspStructureActionHandlers)
 }
 
 // LSPEdit routes edit operations.
 func (h *ToolHandlers) LSPEdit(args json.RawMessage) string {
-	return routeMergedAction(args, "lsp_edit", map[string]func(json.RawMessage) string{
-		"rename":        h.Rename,
-		"code_action":   h.CodeAction,
-		"format":        h.Format,
-		"replace_range": h.ReplaceRange,
-	})
+	return h.dispatchMergedAction(args, "lsp_edit", lspEditActionHandlers)
 }

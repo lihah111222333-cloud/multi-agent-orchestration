@@ -295,6 +295,24 @@ func resourceJSON(v any) string {
 	return string(data)
 }
 
+func resourceDecodeArgs(args json.RawMessage, dst any, op string) string {
+	if err := json.Unmarshal(args, dst); err != nil {
+		return ToolError(pkgerr.Wrap(err, op, "invalid args"))
+	}
+	return ""
+}
+
+func resourceWorkspaceOps(provider ResourceProvider, op string) (WorkspaceOps, string) {
+	if provider == nil {
+		return nil, ToolError(pkgerr.New(op, "workspace manager not initialized"))
+	}
+	ops := provider.WorkspaceOps()
+	if ops == nil {
+		return nil, ToolError(pkgerr.New(op, "workspace manager not initialized"))
+	}
+	return ops, ""
+}
+
 func resourceTaskCreateDAG(provider ResourceProvider, args json.RawMessage) string {
 	var p struct {
 		DagKey      string `json:"dag_key"`
@@ -308,8 +326,8 @@ func resourceTaskCreateDAG(provider ResourceProvider, args json.RawMessage) stri
 			CommandRef string   `json:"command_ref"`
 		} `json:"nodes"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return ToolError(pkgerr.Wrap(err, "ResourceTool.CreateDAG", "invalid args"))
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.CreateDAG"); errMsg != "" {
+		return errMsg
 	}
 
 	ctx, cancel := resourceToolCtx()
@@ -355,8 +373,8 @@ func resourceTaskGetDAG(provider ResourceProvider, args json.RawMessage) string 
 	var p struct {
 		DagKey string `json:"dag_key"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return ToolError(pkgerr.Wrap(err, "ResourceTool.GetDAG", "invalid args"))
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.GetDAG"); errMsg != "" {
+		return errMsg
 	}
 
 	ctx, cancel := resourceToolCtx()
@@ -382,8 +400,8 @@ func resourceTaskUpdateNode(provider ResourceProvider, args json.RawMessage) str
 		Status  string `json:"status"`
 		Result  string `json:"result"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return ToolError(pkgerr.Wrap(err, "ResourceTool.UpdateNode", "invalid args"))
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.UpdateNode"); errMsg != "" {
+		return errMsg
 	}
 
 	var result any
@@ -426,8 +444,8 @@ func resourceCommandGet(provider ResourceProvider, args json.RawMessage) string 
 	var p struct {
 		CardKey string `json:"card_key"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return ToolError(pkgerr.Wrap(err, "ResourceTool.CommandGet", "invalid args"))
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.CommandGet"); errMsg != "" {
+		return errMsg
 	}
 
 	ctx, cancel := resourceToolCtx()
@@ -463,8 +481,8 @@ func resourcePromptGet(provider ResourceProvider, args json.RawMessage) string {
 	var p struct {
 		PromptKey string `json:"prompt_key"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return ToolError(pkgerr.Wrap(err, "ResourceTool.PromptGet", "invalid args"))
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.PromptGet"); errMsg != "" {
+		return errMsg
 	}
 
 	ctx, cancel := resourceToolCtx()
@@ -483,8 +501,8 @@ func resourceSharedFileRead(provider ResourceProvider, args json.RawMessage) str
 	var p struct {
 		Path string `json:"path"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return ToolError(pkgerr.Wrap(err, "ResourceTool.FileRead", "invalid args"))
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.FileRead"); errMsg != "" {
+		return errMsg
 	}
 
 	ctx, cancel := resourceToolCtx()
@@ -504,8 +522,8 @@ func resourceSharedFileWrite(provider ResourceProvider, args json.RawMessage) st
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return ToolError(pkgerr.Wrap(err, "ResourceTool.FileWrite", "invalid args"))
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.FileWrite"); errMsg != "" {
+		return errMsg
 	}
 	if strings.TrimSpace(p.Path) == "" {
 		return `{"error":"path is required"}`
@@ -523,8 +541,9 @@ func resourceSharedFileWrite(provider ResourceProvider, args json.RawMessage) st
 }
 
 func resourceWorkspaceCreateRun(provider ResourceProvider, args json.RawMessage) string {
-	if provider.WorkspaceOps() == nil {
-		return ToolError(pkgerr.New("ResourceTool.WorkspaceCreate", "workspace manager not initialized"))
+	ops, errMsg := resourceWorkspaceOps(provider, "ResourceTool.WorkspaceCreate")
+	if errMsg != "" {
+		return errMsg
 	}
 	var p struct {
 		RunKey     string   `json:"run_key"`
@@ -534,12 +553,12 @@ func resourceWorkspaceCreateRun(provider ResourceProvider, args json.RawMessage)
 		Files      []string `json:"files"`
 		Metadata   any      `json:"metadata"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return ToolError(pkgerr.Wrap(err, "ResourceTool.WorkspaceCreate", "invalid args"))
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.WorkspaceCreate"); errMsg != "" {
+		return errMsg
 	}
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
-	run, err := provider.WorkspaceOps().CreateRun(ctx, WorkspaceCreateRunRequest{
+	run, err := ops.CreateRun(ctx, WorkspaceCreateRunRequest{
 		RunKey:     p.RunKey,
 		DagKey:     p.DagKey,
 		SourceRoot: p.SourceRoot,
@@ -562,18 +581,19 @@ func resourceWorkspaceCreateRun(provider ResourceProvider, args json.RawMessage)
 }
 
 func resourceWorkspaceGetRun(provider ResourceProvider, args json.RawMessage) string {
-	if provider.WorkspaceOps() == nil {
-		return ToolError(pkgerr.New("ResourceTool.WorkspaceGet", "workspace manager not initialized"))
+	ops, errMsg := resourceWorkspaceOps(provider, "ResourceTool.WorkspaceGet")
+	if errMsg != "" {
+		return errMsg
 	}
 	var p struct {
 		RunKey string `json:"run_key"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return ToolError(pkgerr.Wrap(err, "ResourceTool.WorkspaceGet", "invalid args"))
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.WorkspaceGet"); errMsg != "" {
+		return errMsg
 	}
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
-	run, err := provider.WorkspaceOps().GetRun(ctx, p.RunKey)
+	run, err := ops.GetRun(ctx, p.RunKey)
 	if err != nil {
 		return ToolError(err)
 	}
@@ -584,8 +604,9 @@ func resourceWorkspaceGetRun(provider ResourceProvider, args json.RawMessage) st
 }
 
 func resourceWorkspaceListRuns(provider ResourceProvider, args json.RawMessage) string {
-	if provider.WorkspaceOps() == nil {
-		return ToolError(pkgerr.New("ResourceTool.WorkspaceList", "workspace manager not initialized"))
+	ops, errMsg := resourceWorkspaceOps(provider, "ResourceTool.WorkspaceList")
+	if errMsg != "" {
+		return errMsg
 	}
 	var p struct {
 		Status string `json:"status"`
@@ -600,7 +621,7 @@ func resourceWorkspaceListRuns(provider ResourceProvider, args json.RawMessage) 
 	}
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
-	runs, err := provider.WorkspaceOps().ListRuns(ctx, p.Status, p.DagKey, p.Limit)
+	runs, err := ops.ListRuns(ctx, p.Status, p.DagKey, p.Limit)
 	if err != nil {
 		return ToolError(err)
 	}
@@ -608,8 +629,9 @@ func resourceWorkspaceListRuns(provider ResourceProvider, args json.RawMessage) 
 }
 
 func resourceWorkspaceMergeRun(provider ResourceProvider, args json.RawMessage) string {
-	if provider.WorkspaceOps() == nil {
-		return ToolError(pkgerr.New("ResourceTool.WorkspaceMerge", "workspace manager not initialized"))
+	ops, errMsg := resourceWorkspaceOps(provider, "ResourceTool.WorkspaceMerge")
+	if errMsg != "" {
+		return errMsg
 	}
 	var p struct {
 		RunKey        string `json:"run_key"`
@@ -617,12 +639,12 @@ func resourceWorkspaceMergeRun(provider ResourceProvider, args json.RawMessage) 
 		DryRun        bool   `json:"dry_run"`
 		DeleteRemoved bool   `json:"delete_removed"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return ToolError(pkgerr.Wrap(err, "ResourceTool.WorkspaceMerge", "invalid args"))
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.WorkspaceMerge"); errMsg != "" {
+		return errMsg
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	result, err := provider.WorkspaceOps().MergeRun(ctx, WorkspaceMergeRunRequest{
+	result, err := ops.MergeRun(ctx, WorkspaceMergeRunRequest{
 		RunKey:        p.RunKey,
 		UpdatedBy:     p.UpdatedBy,
 		DryRun:        p.DryRun,
@@ -639,20 +661,21 @@ func resourceWorkspaceMergeRun(provider ResourceProvider, args json.RawMessage) 
 }
 
 func resourceWorkspaceAbortRun(provider ResourceProvider, args json.RawMessage) string {
-	if provider.WorkspaceOps() == nil {
-		return ToolError(pkgerr.New("ResourceTool.WorkspaceAbort", "workspace manager not initialized"))
+	ops, errMsg := resourceWorkspaceOps(provider, "ResourceTool.WorkspaceAbort")
+	if errMsg != "" {
+		return errMsg
 	}
 	var p struct {
 		RunKey    string `json:"run_key"`
 		UpdatedBy string `json:"updated_by"`
 		Reason    string `json:"reason"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return ToolError(pkgerr.Wrap(err, "ResourceTool.WorkspaceAbort", "invalid args"))
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.WorkspaceAbort"); errMsg != "" {
+		return errMsg
 	}
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
-	run, err := provider.WorkspaceOps().AbortRun(ctx, p.RunKey, p.UpdatedBy, p.Reason)
+	run, err := ops.AbortRun(ctx, p.RunKey, p.UpdatedBy, p.Reason)
 	if err != nil {
 		return ToolError(err)
 	}

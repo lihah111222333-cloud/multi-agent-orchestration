@@ -1,4 +1,3 @@
-// runtime_event_handlers.go — 事件处理器、overlay 与状态派生逻辑。
 package uistate
 
 import (
@@ -44,7 +43,6 @@ var runtimeEventHandlers = map[UIType]runtimeEventHandler{
 
 func resolveEventFields(normalized NormalizedEvent, payload map[string]any) resolvedFields {
 	fields := resolvedFields{
-		// Preserve streaming whitespace/newlines; trimming here breaks markdown/code formatting.
 		text:    normalized.Text,
 		command: strings.TrimSpace(normalized.Command),
 		file:    strings.TrimSpace(normalized.File),
@@ -171,10 +169,6 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 	m.applyUITypeDepthsLocked(threadID, rt, normalized.UIType, eventType, method, fields.text, payload)
 }
 
-// applyErrorOverlayLocked handles the 3-way error overlay branch:
-//   - UITypeError → set error text (and details + alert for stream_error)
-//   - non-Error AND non-stream_error → clear error state
-//   - non-Error BUT stream_error → keep existing error state
 func (m *RuntimeManager) applyErrorOverlayLocked(rt *threadRuntime, threadID string, uiType UIType, eventType, text string, payload map[string]any) {
 	if uiType == UITypeError {
 		trimmed := strings.TrimSpace(text)
@@ -214,7 +208,6 @@ func clearStreamErrorOverlay(rt *threadRuntime) {
 	rt.streamErrorDetails = ""
 }
 
-// applyOverlays updates terminal-wait, MCP-startup, and background overlays.
 func applyOverlays(rt *threadRuntime, eventType, method string, payload map[string]any) {
 	if isTerminalInteractionEvent(eventType, method) {
 		if isTerminalWaitPayload(payload) {
@@ -234,8 +227,6 @@ func applyOverlays(rt *threadRuntime, eventType, method string, payload map[stri
 	if isBackgroundEvent(eventType, method) {
 		if shouldClearBackgroundOverlay(payload) {
 			clearBackgroundOverlay(rt)
-			// 重连成功 (done=true) 时清除 stream_error 留下的残留错误文本,
-			// 避免 idle 状态下 "Reconnecting..." 永久卡住 (无后续事件来清除)。
 			clearStreamErrorOverlay(rt)
 		} else {
 			rt.backgroundOverlay = true
@@ -243,16 +234,11 @@ func applyOverlays(rt *threadRuntime, eventType, method string, payload map[stri
 			rt.backgroundDetails = deriveBackgroundDetails(payload)
 		}
 	}
-
-	// Auto-clear stale reconnecting background overlay on normal turn events.
-	// Background overlay is only emitted by reconnection logic; once non-background
-	// events resume flowing, the connection is healthy and the overlay is stale.
 	if rt.backgroundOverlay && !isBackgroundEvent(eventType, method) {
 		clearBackgroundOverlay(rt)
 	}
 }
 
-// applyCollabDepth adjusts the collaboration depth counter.
 func applyCollabDepth(rt *threadRuntime, eventType string) {
 	if eventType == "collab_agent_spawn_begin" || eventType == "collab_agent_interaction_begin" || eventType == "collab_waiting_begin" {
 		rt.collabDepth += 1
@@ -261,8 +247,6 @@ func applyCollabDepth(rt *threadRuntime, eventType string) {
 	}
 }
 
-// applyUITypeDepthsLocked updates turn/command/edit/approval/tool-call depth
-// counters based on the UIType. Must be called with m.mu held.
 type uiTypeDepthHandler func(*RuntimeManager, string, *threadRuntime, string, string, string, map[string]any)
 
 var uiTypeDepthHandlers = map[UIType]uiTypeDepthHandler{
@@ -287,8 +271,6 @@ func (m *RuntimeManager) applyUITypeDepthsLocked(threadID string, rt *threadRunt
 }
 
 func handleTurnStartedDepth(m *RuntimeManager, threadID string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
-	// Fix 2 & 3: 检测上一个 turn 的残留状态 — 如果 depth 计数器还没归零就收到新 turn,
-	// 说明事件丢失（WS 丢帧/乱序），强制重置以防状态永久卡住。
 	if rt.turnDepth > 0 || rt.commandDepth > 0 || rt.fileEditDepth > 0 || rt.toolCallDepth > 0 || rt.approvalDepth > 0 {
 		logger.Warn("uistate: stale turn detected on new turn_started — forcibly resetting depth counters",
 			logger.FieldThreadID, threadID,
@@ -305,13 +287,11 @@ func handleTurnStartedDepth(m *RuntimeManager, threadID string, rt *threadRuntim
 	rt.userInputDepth = 0
 	clearTerminalWaitOverlay(rt)
 	rt.statusHeader = "工作中"
-	rt.approvalContext = "" // 清空上一轮的审批上下文
+	rt.approvalContext = ""
 }
 
 func handleTurnCompleteDepth(m *RuntimeManager, threadID string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
 	m.clearTurnLifecycleLocked(threadID)
-	// mcp_startup_complete 为主清理信号，但历史/重连链路可能丢失 complete，
-	// turn 收敛时兜底清理，避免 "MCP 启动中" 状态残留。
 	clearMCPStartupOverlay(rt)
 }
 
@@ -356,29 +336,24 @@ func handleFileEditDoneDepth(_ *RuntimeManager, _ string, rt *threadRuntime, _, 
 
 func handleApprovalRequestDepth(_ *RuntimeManager, _ string, rt *threadRuntime, _, _, _ string, payload map[string]any) {
 	rt.approvalDepth += 1
-	// Fix 4: 缓存审批内容，在 statusHeader 中展示具体信息。
 	rt.approvalContext = extractApprovalContext(payload)
 }
 
-// extractApprovalContext 从审批请求 payload 中提取可展示的描述文本。
 func extractApprovalContext(payload map[string]any) string {
 	if payload == nil {
 		return ""
 	}
-	// 命令审批: 提取 command
 	for _, key := range []string{"command", "displayCommand", "command_display"} {
 		if v, ok := payload[key].(string); ok && strings.TrimSpace(v) != "" {
 			cmd := compactOneLine(v, 60)
 			return "执行: " + cmd
 		}
 	}
-	// 文件审批: 提取 file/path
 	for _, key := range []string{"file", "path", "filePath"} {
 		if v, ok := payload[key].(string); ok && strings.TrimSpace(v) != "" {
 			return "编辑: " + compactOneLine(v, 60)
 		}
 	}
-	// 嵌套提取
 	for _, wrapper := range []string{"msg", "data", "item"} {
 		if nested, ok := payload[wrapper].(map[string]any); ok {
 			result := extractApprovalContext(nested)
@@ -442,7 +417,7 @@ func (m *RuntimeManager) clearTurnLifecycleLocked(threadID string) {
 	clearStreamErrorOverlay(rt)
 	rt.statusHeader = ""
 	rt.reasoningHeaderBuf = ""
-	rt.approvalContext = "" // Fix 4: 清空审批上下文
+	rt.approvalContext = ""
 }
 
 func normalizeActivityToolName(name string) string {
@@ -615,7 +590,6 @@ func (m *RuntimeManager) deriveThreadStatusHeaderLocked(threadID, state string) 
 	case threadStatusBranchUserInput:
 		return "等待输入"
 	case threadStatusBranchApproval:
-		// Fix 4: 展示具体的审批上下文，而不是笼统的 "等待确认"。
 		if strings.TrimSpace(rt.approvalContext) != "" {
 			return "等待确认 · " + rt.approvalContext
 		}
@@ -623,20 +597,7 @@ func (m *RuntimeManager) deriveThreadStatusHeaderLocked(threadID, state string) 
 	case threadStatusBranchReasoningHeader:
 		return rt.statusHeader
 	}
-	switch state {
-	case "running", "editing", "thinking", "responding":
-		return "工作中"
-	case "starting":
-		return "启动中"
-	case "waiting":
-		return "等待确认"
-	case "syncing":
-		return "同步中"
-	case "error":
-		return "异常"
-	default:
-		return "等待指示"
-	}
+	return defaultStatusHeaderForState(state)
 }
 
 func defaultStatusHeaderForState(state string) string {

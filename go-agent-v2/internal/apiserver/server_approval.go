@@ -99,11 +99,6 @@ var approvalMethodAllowsSubmit = map[string]map[string]bool{
 	approvalMethodSkillRequest:     {"approve": true},
 }
 
-func normalizeApprovalDecisionString(raw string) (string, bool) {
-	normalized, ok := approvalStringAliases[strings.ToLower(strings.TrimSpace(raw))]
-	return normalized, ok
-}
-
 func normalizeStringDecisionForMethod(method, decision string) (string, bool) {
 	if method == approvalMethodSkillRequest && decision == "accept" {
 		decision = "approve"
@@ -151,7 +146,7 @@ func normalizeCommandAmendmentDecision(decisionObj map[string]any) (any, bool) {
 
 func normalizeApprovalDecision(method string, raw any) (any, bool) {
 	method = strings.TrimSpace(method)
-	if decision, ok := normalizeApprovalDecisionString(approvalStringValue(raw)); ok {
+	if decision, ok := approvalStringAliases[strings.ToLower(strings.TrimSpace(approvalStringValue(raw)))]; ok {
 		decision, ok = normalizeStringDecisionForMethod(method, decision)
 		if ok {
 			return decision, true
@@ -203,13 +198,12 @@ func mergeApprovalDecisionPayload(method string, current map[string]any, result 
 }
 
 func approvalDecisionPayload(method string, approved bool) map[string]any {
-	decision := "decline"
-	if approved {
-		if word, ok := approvalMethodAcceptWord[strings.TrimSpace(method)]; ok {
-			decision = word
-		} else {
-			decision = "accept"
-		}
+	if !approved {
+		return map[string]any{"decision": "decline"}
+	}
+	decision := approvalMethodAcceptWord[strings.TrimSpace(method)]
+	if decision == "" {
+		decision = "accept"
 	}
 	return map[string]any{"decision": decision}
 }
@@ -355,8 +349,7 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	if wsErr == nil && resp != nil && resp.Result != nil {
 		decisionPayload = mergeApprovalDecisionPayload(method, decisionPayload, resp.Result)
 	} else {
-		hasHook := hasNotifyHookState(s)
-		if hasHook {
+		if hasNotifyHookState(s) {
 			logger.Info("app-server: approval via Wails mode (no WS client)",
 				logger.FieldAgentID, agentID, logger.FieldMethod, method)
 
@@ -417,6 +410,10 @@ type approvalRespondParams struct {
 	Decision  any   `json:"decision,omitempty"`
 }
 
+func approvalRespondStatus(ok bool, status string) map[string]any {
+	return map[string]any{"ok": ok, "status": status}
+}
+
 func approvalRespondResultPayload(p approvalRespondParams) (map[string]any, bool) {
 	result := make(map[string]any, 2)
 	hasResult := false
@@ -433,35 +430,20 @@ func approvalRespondResultPayload(p approvalRespondParams) (map[string]any, bool
 
 func approvalRespondTyped(s *Server, _ context.Context, p approvalRespondParams) (any, error) {
 	if s == nil {
-		return map[string]any{
-			"ok":     false,
-			"status": "server_not_ready",
-		}, nil
+		return approvalRespondStatus(false, "server_not_ready"), nil
 	}
 	if p.RequestID <= 0 {
-		return map[string]any{
-			"ok":     false,
-			"status": "invalid_request_id",
-		}, nil
+		return approvalRespondStatus(false, "invalid_request_id"), nil
 	}
 
 	result, ok := approvalRespondResultPayload(p)
 	if !ok {
-		return map[string]any{
-			"ok":     false,
-			"status": "decision_or_approved_required",
-		}, nil
+		return approvalRespondStatus(false, "decision_or_approved_required"), nil
 	}
 
 	if !ResolvePendingRequest(s, p.RequestID, result) {
-		return map[string]any{
-			"ok":     false,
-			"status": "not_pending",
-		}, nil
+		return approvalRespondStatus(false, "not_pending"), nil
 	}
 
-	return map[string]any{
-		"ok":     true,
-		"status": "resolved",
-	}, nil
+	return approvalRespondStatus(true, "resolved"), nil
 }

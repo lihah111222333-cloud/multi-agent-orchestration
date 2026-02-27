@@ -14,29 +14,8 @@ type threadArtifactCandidate struct {
 	Path string
 }
 
-// NormalizeThreadArchiveMap normalizes archive state payload into map[string]int64.
 func NormalizeThreadArchiveMap(value any) map[string]int64 {
-	return normalizeThreadArchiveMap(value)
-}
-
-// SanitizeArchiveName sanitizes archive file and directory names.
-func SanitizeArchiveName(raw string) string {
-	return sanitizeArchiveName(raw)
-}
-
-// SanitizeArchiveNameStrict validates sanitized archive names.
-func SanitizeArchiveNameStrict(raw string) (string, error) {
-	return sanitizeArchiveNameStrict(raw)
-}
-
-// PathWithinRoot returns whether path is inside root (or equal root).
-func PathWithinRoot(root string, path string) (bool, error) {
-	return pathWithinRoot(root, path)
-}
-
-func normalizeThreadArchiveMap(value any) map[string]int64 {
 	result := map[string]int64{}
-
 	switch typed := value.(type) {
 	case map[string]int64:
 		for id, at := range typed {
@@ -61,48 +40,10 @@ func normalizeThreadArchiveMap(value any) map[string]int64 {
 			}
 		}
 	}
-
 	return result
 }
 
-func addThreadArchiveMapEntry(result map[string]int64, rawID string, rawAt any) {
-	if result == nil {
-		return
-	}
-	id := strings.TrimSpace(rawID)
-	if id == "" {
-		return
-	}
-	at := normalizeThreadArchiveTimestamp(rawAt)
-	if at <= 0 {
-		return
-	}
-	result[id] = at
-}
-
-func normalizeThreadArchiveTimestamp(rawAt any) int64 {
-	switch v := rawAt.(type) {
-	case int:
-		return int64(v)
-	case int64:
-		return v
-	case float64:
-		return int64(v)
-	case json.Number:
-		parsed, err := v.Int64()
-		if err == nil {
-			return parsed
-		}
-	case string:
-		parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-		if err == nil {
-			return parsed
-		}
-	}
-	return 0
-}
-
-func sanitizeArchiveName(raw string) string {
+func SanitizeArchiveName(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return ""
@@ -126,15 +67,17 @@ func sanitizeArchiveName(raw string) string {
 	return strings.Trim(b.String(), "._")
 }
 
-func sanitizeArchiveNameStrict(raw string) (string, error) {
-	sanitized := sanitizeArchiveName(raw)
+// SanitizeArchiveNameStrict validates sanitized archive names.
+func SanitizeArchiveNameStrict(raw string) (string, error) {
+	sanitized := SanitizeArchiveName(raw)
 	if sanitized == "" {
 		return "", apperrors.Newf("sanitizeArchiveNameStrict", "invalid archive name from %q", raw)
 	}
 	return sanitized, nil
 }
 
-func pathWithinRoot(root string, path string) (bool, error) {
+// PathWithinRoot returns whether path is inside root (or equal root).
+func PathWithinRoot(root string, path string) (bool, error) {
 	rootAbs, err := pathutil.Abs(strings.TrimSpace(root))
 	if err != nil {
 		return false, err
@@ -147,11 +90,40 @@ func pathWithinRoot(root string, path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	rel = pathutil.Clean(rel)
-	if rel == "." {
+	if rel = pathutil.Clean(rel); rel == "." {
 		return true, nil
 	}
 	return !strings.HasPrefix(rel, ".."+pathutil.Separator) && rel != "..", nil
+}
+
+func addThreadArchiveMapEntry(result map[string]int64, rawID string, rawAt any) {
+	id := strings.TrimSpace(rawID)
+	if result == nil || id == "" {
+		return
+	}
+	if at := normalizeThreadArchiveTimestamp(rawAt); at > 0 {
+		result[id] = at
+	}
+}
+
+func normalizeThreadArchiveTimestamp(rawAt any) int64 {
+	switch v := rawAt.(type) {
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	case json.Number:
+		if parsed, err := v.Int64(); err == nil {
+			return parsed
+		}
+	case string:
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 // inferThreadArtifactKind infers the artifact kind from filename.

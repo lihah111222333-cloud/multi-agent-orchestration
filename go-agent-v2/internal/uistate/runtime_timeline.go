@@ -314,26 +314,22 @@ func (m *RuntimeManager) appendToolCallLocked(threadID string, payload map[strin
 	}
 
 	list := m.timelineLocked(threadID)
-	lastIndex := len(list) - 1
-	if lastIndex >= 0 {
-		last := list[lastIndex]
-		if canMergeToolCall(last, tool, file, preview, elapsedMS) {
-			m.patchTimelineItemLocked(threadID, lastIndex, func(item *TimelineItem) {
-				if item.File == "" {
-					item.File = file
-				}
-				if item.Preview == "" {
-					item.Preview = preview
-				}
-				if item.ElapsedMS == nil {
-					item.ElapsedMS = elapsedMS
-				}
-				if status == "failed" {
-					item.Status = "failed"
-				}
-			})
-			return
-		}
+	if lastIndex := len(list) - 1; lastIndex >= 0 && canMergeToolCall(list[lastIndex], tool, file, preview, elapsedMS) {
+		m.patchTimelineItemLocked(threadID, lastIndex, func(item *TimelineItem) {
+			if item.File == "" {
+				item.File = file
+			}
+			if item.Preview == "" {
+				item.Preview = preview
+			}
+			if item.ElapsedMS == nil {
+				item.ElapsedMS = elapsedMS
+			}
+			if status == "failed" {
+				item.Status = "failed"
+			}
+		})
+		return
 	}
 
 	m.pushTimelineItemLocked(threadID, TimelineItem{
@@ -384,21 +380,15 @@ func (m *RuntimeManager) showApprovalLocked(threadID, command string, requestID 
 }
 
 func findPendingApprovalUpdateTarget(list []TimelineItem, requestID int64) int {
+	lastIndex := len(list) - 1
 	if requestID > 0 {
-		for i := len(list) - 1; i >= 0; i-- {
-			item := list[i]
-			if item.Kind == "approval" && item.Status == "pending" && item.RequestID == requestID {
+		for i := lastIndex; i >= 0; i-- {
+			if item := list[i]; item.Kind == "approval" && item.Status == "pending" && item.RequestID == requestID {
 				return i
 			}
 		}
 	}
-
-	lastIndex := len(list) - 1
-	if lastIndex < 0 {
-		return -1
-	}
-	last := list[lastIndex]
-	if last.Kind == "approval" && last.Status == "pending" && last.RequestID == 0 {
+	if lastIndex >= 0 && list[lastIndex].Kind == "approval" && list[lastIndex].Status == "pending" && list[lastIndex].RequestID == 0 {
 		return lastIndex
 	}
 	return -1
@@ -461,11 +451,10 @@ func extractPlanSnapshot(payload map[string]any) (string, bool, bool) {
 	if len(entries) == 0 {
 		return "", false, false
 	}
-	text, done := formatPlanSnapshot(entries, explanation)
-	if strings.TrimSpace(text) == "" {
-		return "", false, false
+	if text, done := formatPlanSnapshot(entries, explanation); strings.TrimSpace(text) != "" {
+		return text, done, true
 	}
-	return text, done, true
+	return "", false, false
 }
 
 func extractPlanEntries(payload map[string]any) ([]planEntry, string) {
@@ -558,11 +547,8 @@ func planStatusSymbol(status string) string {
 }
 
 func planStatusDone(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "completed", "success", "done", "finished":
-		return true
-	}
-	return false
+	s := strings.ToLower(strings.TrimSpace(status))
+	return s == "completed" || s == "success" || s == "done" || s == "finished"
 }
 
 func (m *RuntimeManager) completeTurnLocked(threadID string, ts time.Time) {
@@ -655,50 +641,27 @@ func extractNestedFirstString(payload map[string]any, paths ...[]string) string 
 }
 
 func normalizeFilesAny(value any) []string {
-	switch v := value.(type) {
-	case []string:
-		out := make([]string, 0, len(v))
-		seen := map[string]struct{}{}
-		for _, item := range v {
-			text := strings.TrimSpace(item)
-			if text == "" {
-				continue
-			}
-			if _, ok := seen[text]; ok {
-				continue
-			}
-			seen[text] = struct{}{}
-			out = append(out, text)
-		}
-		return out
-	case []any:
-		out := make([]string, 0, len(v))
-		seen := map[string]struct{}{}
-		for _, item := range v {
-			text, ok := item.(string)
-			if !ok {
-				continue
-			}
-			text = strings.TrimSpace(text)
-			if text == "" {
-				continue
-			}
-			if _, ok := seen[text]; ok {
-				continue
-			}
-			seen[text] = struct{}{}
-			out = append(out, text)
-		}
-		return out
-	case string:
+	if v, ok := value.(string); ok {
 		text := strings.TrimSpace(v)
 		if text == "" {
 			return nil
 		}
 		return []string{text}
-	default:
+	}
+	items := util.AsStringSlice(value)
+	if items == nil {
 		return nil
 	}
+	out := make([]string, 0, len(items))
+	seen := map[string]struct{}{}
+	for _, text := range items {
+		if _, ok := seen[text]; ok {
+			continue
+		}
+		seen[text] = struct{}{}
+		out = append(out, text)
+	}
+	return out
 }
 
 func extractExitCode(value any) (int, bool) {
@@ -726,10 +689,11 @@ func extractRunKey(raw map[string]any) string {
 	if raw == nil {
 		return ""
 	}
-	for _, key := range []string{"run_key", "runKey"} {
-		if value := strings.TrimSpace(util.ExtractFirstString(raw, key)); value != "" {
-			return value
-		}
+	if value := strings.TrimSpace(util.ExtractFirstString(raw, "run_key")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(util.ExtractFirstString(raw, "runKey")); value != "" {
+		return value
 	}
 	return ""
 }

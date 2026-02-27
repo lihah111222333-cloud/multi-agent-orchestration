@@ -87,7 +87,11 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 		logger.FieldPID, c.cmd.Process.Pid,
 	)
 
-	c.startBackgroundReaders()
+	util.SafeGo(func() { c.readLoop() })
+	if c.stderr != nil {
+		c.stderrCollector = logger.NewStderrCollector("lsp-" + c.language)
+		util.SafeGo(func() { _, _ = io.Copy(c.stderrCollector, c.stderr) })
+	}
 
 	// initialize 握手
 	initParams := InitializeParams{
@@ -136,7 +140,10 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 		return c.stopAfterStartFailure("initialize", err)
 	}
 
-	c.cacheInitializeResult(initResult)
+	c.capsMu.Lock()
+	c.initializeResult = initResult
+	c.semanticTokensLegend = decodeSemanticTokensLegend(initResult.Capabilities.SemanticTokensProvider)
+	c.capsMu.Unlock()
 
 	// initialized 通知 (无响应)
 	if err := c.notify("initialized", struct{}{}); err != nil {
@@ -145,22 +152,6 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 
 	logger.Info("lsp: initialize handshake complete", logger.FieldLanguage, c.language)
 	return nil
-}
-
-func (c *Client) startBackgroundReaders() {
-	util.SafeGo(func() { c.readLoop() })
-	if c.stderr == nil {
-		return
-	}
-	c.stderrCollector = logger.NewStderrCollector("lsp-" + c.language)
-	util.SafeGo(func() { _, _ = io.Copy(c.stderrCollector, c.stderr) })
-}
-
-func (c *Client) cacheInitializeResult(result InitializeResult) {
-	c.capsMu.Lock()
-	defer c.capsMu.Unlock()
-	c.initializeResult = result
-	c.semanticTokensLegend = decodeSemanticTokensLegend(result.Capabilities.SemanticTokensProvider)
 }
 
 func (c *Client) stopAfterStartFailure(stage string, err error) error {
@@ -588,26 +579,25 @@ func (c *Client) readFrame() ([]byte, error) {
 
 // handleNotification 处理 server→client 通知。
 func (c *Client) handleNotification(method string, raw []byte) {
-	switch method {
-	case "textDocument/publishDiagnostics":
-		var notif struct {
-			Params PublishDiagnosticsParams `json:"params"`
-		}
-		if err := json.Unmarshal(raw, &notif); err != nil {
-			logger.Warn("lsp: unmarshal diagnostics failed",
-				logger.FieldLanguage, c.language,
-				logger.FieldError, err,
-			)
-			return
-		}
-		c.mu.Lock()
-		handler := c.onDiag
-		c.mu.Unlock()
-		if handler != nil {
-			handler(notif.Params.URI, notif.Params.Diagnostics)
-		}
+	if method != "textDocument/publishDiagnostics" {
+		return
 	}
-	// 忽略其他通知
+	var notif struct {
+		Params PublishDiagnosticsParams `json:"params"`
+	}
+	if err := json.Unmarshal(raw, &notif); err != nil {
+		logger.Warn("lsp: unmarshal diagnostics failed",
+			logger.FieldLanguage, c.language,
+			logger.FieldError, err,
+		)
+		return
+	}
+	c.mu.Lock()
+	handler := c.onDiag
+	c.mu.Unlock()
+	if handler != nil {
+		handler(notif.Params.URI, notif.Params.Diagnostics)
+	}
 }
 
 // ========================================

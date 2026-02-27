@@ -18,10 +18,10 @@ const (
 	DefaultStallThreshold             = 480 * time.Second
 	DefaultStallHeartbeat             = 300 * time.Second
 	trackedTurnGracePeriod            = 30 * time.Second
-	// earlySilenceFirstTurn 首轮 turn 早期静默检测超时（含 MCP 启动开销）。
-	earlySilenceFirstTurn = 120 * time.Second
+	// earlySilenceFirstTurn 首轮 turn 早期静默检测超时（含 MCP 启动开销 + 多 agent 编排）。
+	earlySilenceFirstTurn = 300 * time.Second
 	// earlySilenceSubsequent 后续 turn 早期静默检测超时。
-	earlySilenceSubsequent = 60 * time.Second
+	earlySilenceSubsequent = 120 * time.Second
 )
 
 type TrackedTurn struct {

@@ -112,6 +112,9 @@ var eventMethodMap = map[string]string{
 
 	// ── Skills ──
 	agentcore.EventListSkillsResponse: "codex/event/list_skills_response",
+
+	// ── Agent 间消息 ──
+	"user_message": "codex/event/user_message",
 }
 
 var passthroughEventPrefixes = [...]string{

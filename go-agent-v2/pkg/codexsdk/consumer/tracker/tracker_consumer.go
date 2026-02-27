@@ -16,31 +16,15 @@ const (
 )
 
 type TrackedTurn = trackersvc.TrackedTurn
-type TrackedTurnFinalizeRequest = trackersvc.TrackedTurnFinalizeRequest
 type TrackedTurnTransitionRequest = trackersvc.TrackedTurnTransitionRequest
 type TrackedTurnTransitionResult = trackersvc.TrackedTurnTransitionResult
 type TrackedTurnSummaryCacheEntry = trackersvc.TrackedTurnSummaryCacheEntry
 type TurnTrackerState = trackersvc.TurnTrackerState
-type TrackedTurnStallAction = trackersvc.TrackedTurnStallAction
-type TrackedTurnStallDecision = trackersvc.TrackedTurnStallDecision
-type TrackerAlertRuntime = trackersvc.TrackerAlertRuntime
-
-const (
-	TrackedTurnStallNoop          = trackersvc.TrackedTurnStallNoop
-	TrackedTurnStallRescheduled   = trackersvc.TrackedTurnStallRescheduled
-	TrackedTurnStallEnterGrace    = trackersvc.TrackedTurnStallEnterGrace
-	TrackedTurnStallAutoInterrupt = trackersvc.TrackedTurnStallAutoInterrupt
-)
 
 var (
-	EnsureTurnTrackerStateLocked      = trackersvc.EnsureTurnTrackerStateLocked
-	TrackerDurationOrDefault          = trackersvc.TrackerDurationOrDefault
-	SupersedeActiveTurn               = trackersvc.SupersedeActiveTurn
 	NormalizeTrackedTurnStatus        = trackersvc.NormalizeTrackedTurnStatus
-	ExtractTrackedString              = trackersvc.ExtractTrackedString
-	MergeTrackedTurnCompletionPayload = trackersvc.MergeTrackedTurnCompletionPayload
-	CaptureAndInjectTurnSummaryCore   = trackersvc.CaptureAndInjectTurnSummaryCore
 	ThreadStatusTerminalFromPayload   = trackersvc.ThreadStatusTerminalFromPayload
+	ExtractTrackedString              = trackersvc.ExtractTrackedString
 	ExtractTrackedTurnID              = trackersvc.ExtractTrackedTurnID
 	ExtractTrackedTurnStatus          = trackersvc.ExtractTrackedTurnStatus
 	ExtractTrackedTurnReason          = trackersvc.ExtractTrackedTurnReason
@@ -48,28 +32,20 @@ var (
 	TrackedTurnSummaryFromPayload     = trackersvc.TrackedTurnSummaryFromPayload
 	TrackedTurnSummaryCacheKey        = trackersvc.TrackedTurnSummaryCacheKey
 	InjectTrackedTurnSummary          = trackersvc.InjectTrackedTurnSummary
-	IsTerminalEventType               = trackersvc.IsTerminalEventType
-	RememberTrackedTurnSummary        = trackersvc.RememberTrackedTurnSummary
-	LookupTrackedTurnSummary          = trackersvc.LookupTrackedTurnSummary
-	WithTrackerStateLockCore          = trackersvc.WithTrackerStateLockCore
+	MergeTrackedTurnCompletionPayload = trackersvc.MergeTrackedTurnCompletionPayload
 	TrackerDurationCore               = trackersvc.TrackerDurationCore
 	SetTrackerDurationCore            = trackersvc.SetTrackerDurationCore
 	TrackerStateCore                  = trackersvc.TrackerStateCore
 	ApplyTrackedTurnTransitionCore    = trackersvc.ApplyTrackedTurnTransitionCore
-	WithActiveTurnCore                = trackersvc.WithActiveTurnCore
-	WithActiveTurnByIDCore            = trackersvc.WithActiveTurnByIDCore
 	BeginTrackedTurnCore              = trackersvc.BeginTrackedTurnCore
 	WaitTrackedTurnTerminalCore       = trackersvc.WaitTrackedTurnTerminalCore
 	CompleteTrackedTurnByIDCore       = trackersvc.CompleteTrackedTurnByIDCore
-	PeekTrackedTurnMetaCore           = trackersvc.PeekTrackedTurnMetaCore
-	MarkTrackedTurnStallHintCore      = trackersvc.MarkTrackedTurnStallHintCore
 	TouchTrackedTurnLastEventCore     = trackersvc.TouchTrackedTurnLastEventCore
-	NextTrackedTurnStallDecisionCore  = trackersvc.NextTrackedTurnStallDecisionCore
 	CheckTurnStallCore                = trackersvc.CheckTurnStallCore
 	HandleStallGracePeriodCore        = trackersvc.HandleStallGracePeriodCore
 	TrackerRuntimePushAlert           = trackersvc.TrackerRuntimePushAlert
 	ExecuteStallAutoInterruptCore     = trackersvc.ExecuteStallAutoInterruptCore
-	MaybeFinalizeTrackedTurnCore      = trackersvc.MaybeFinalizeTrackedTurnCore
+	CaptureAndInjectTurnSummaryCore   = trackersvc.CaptureAndInjectTurnSummaryCore
 	FinalizeTrackedTurnEventCore      = trackersvc.FinalizeTrackedTurnEventCore
 )
 

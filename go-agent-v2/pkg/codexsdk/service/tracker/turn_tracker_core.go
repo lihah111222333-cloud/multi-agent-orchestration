@@ -1,16 +1,13 @@
 package tracker
-
 import (
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
-
 const (
 	DefaultTurnWatchdogTimeout        = 10 * time.Minute
 	DefaultTrackedTurnSummaryTTL      = 30 * time.Minute
@@ -18,13 +15,10 @@ const (
 	DefaultStallThreshold             = 480 * time.Second
 	DefaultStallHeartbeat             = 300 * time.Second
 )
-
 const (
 	defaultStallThreshold = DefaultStallThreshold
 	defaultStallHeartbeat = DefaultStallHeartbeat
 )
-
-// TrackedTurn is the turn lifecycle tracking state.
 type TrackedTurn struct {
 	ID                   string
 	ThreadID             string
@@ -39,17 +33,13 @@ type TrackedTurn struct {
 	Timer                *time.Timer
 	StallTimer           *time.Timer
 }
-
 type trackedTurn = TrackedTurn
-
 type TrackedTurnFinalizeRequest struct {
 	TurnID string
 	Status string
 	Reason string
 }
-
 type trackedTurnFinalizeRequest = TrackedTurnFinalizeRequest
-
 type TrackedTurnTransitionRequest struct {
 	TouchHeartbeat         bool
 	MarkInterruptRequested bool
@@ -57,9 +47,7 @@ type TrackedTurnTransitionRequest struct {
 	MarkStallHintForTurnID string
 	Finalize               *TrackedTurnFinalizeRequest
 }
-
 type trackedTurnTransitionRequest = TrackedTurnTransitionRequest
-
 type TrackedTurnTransitionResult struct {
 	Found              bool
 	ThreadID           string
@@ -69,7 +57,6 @@ type TrackedTurnTransitionResult struct {
 	InterruptRequested bool
 	StallHintLogged    bool
 	StallHintApplied   bool
-
 	Finalized      bool
 	FinalStatus    string
 	FinalReason    string
@@ -77,27 +64,21 @@ type TrackedTurnTransitionResult struct {
 	ExpectedTurnID string
 	TurnIDMismatch bool
 }
-
 type trackedTurnTransitionResult = TrackedTurnTransitionResult
-
 type TrackedTurnStallAction int
-
 const (
 	TrackedTurnStallNoop TrackedTurnStallAction = iota
 	TrackedTurnStallRescheduled
 	TrackedTurnStallEnterGrace
 	TrackedTurnStallAutoInterrupt
 )
-
 type trackedTurnStallAction = TrackedTurnStallAction
-
 const (
 	trackedTurnStallNoop          trackedTurnStallAction = TrackedTurnStallNoop
 	trackedTurnStallRescheduled   trackedTurnStallAction = TrackedTurnStallRescheduled
 	trackedTurnStallEnterGrace    trackedTurnStallAction = TrackedTurnStallEnterGrace
 	trackedTurnStallAutoInterrupt trackedTurnStallAction = TrackedTurnStallAutoInterrupt
 )
-
 type TrackedTurnStallDecision struct {
 	Action    TrackedTurnStallAction
 	ThreadID  string
@@ -105,19 +86,13 @@ type TrackedTurnStallDecision struct {
 	Silent    time.Duration
 	Threshold time.Duration
 }
-
 type trackedTurnStallDecision = TrackedTurnStallDecision
-
-// TrackedTurnSummaryCacheEntry caches the latest summary for one tracked turn.
 type TrackedTurnSummaryCacheEntry struct {
 	TurnID    string
 	Summary   string
 	UpdatedAt time.Time
 }
-
 type trackedTurnSummaryCacheEntry = TrackedTurnSummaryCacheEntry
-
-// TurnTrackerState carries mutable turn-tracker state owned by the caller.
 type TurnTrackerState struct {
 	Mu                  *sync.Mutex
 	ActiveTurns         *map[string]*trackedTurn
@@ -127,11 +102,8 @@ type TurnTrackerState struct {
 	StallThreshold      *time.Duration
 	StallHeartbeat      *time.Duration
 }
-
 type turnTrackerState = TurnTrackerState
-
-// ensureTurnTrackerStateLocked initializes turn-tracker state and defaults.
-func ensureTurnTrackerStateLocked(state turnTrackerState) {
+func EnsureTurnTrackerStateLocked(state turnTrackerState) {
 	if state.ActiveTurns != nil && *state.ActiveTurns == nil {
 		*state.ActiveTurns = make(map[string]*trackedTurn)
 	}
@@ -151,14 +123,12 @@ func ensureTurnTrackerStateLocked(state turnTrackerState) {
 		*state.StallHeartbeat = defaultStallHeartbeat
 	}
 }
-
-func trackerDurationOrDefault(value *time.Duration, fallback time.Duration) time.Duration {
+func TrackerDurationOrDefault(value *time.Duration, fallback time.Duration) time.Duration {
 	if value != nil && *value > 0 {
 		return *value
 	}
 	return fallback
 }
-
 func threadLogFields(threadID string) []any {
 	id := strings.TrimSpace(threadID)
 	return []any{
@@ -166,9 +136,8 @@ func threadLogFields(threadID string) []any {
 		logger.FieldThreadID, id,
 	}
 }
-
 func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time) bool {
-	if isTerminalEventType(eventType, method) {
+	if IsTerminalEventType(eventType, method) {
 		return false
 	}
 	if startedAt.IsZero() {
@@ -176,7 +145,6 @@ func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time
 	}
 	return time.Since(startedAt) >= 30*time.Second
 }
-
 func rescheduleStallCheck(turn *trackedTurn, threadID, turnID string, silent, threshold time.Duration, check func(string, string)) {
 	if turn == nil || check == nil {
 		return
@@ -188,9 +156,7 @@ func rescheduleStallCheck(turn *trackedTurn, threadID, turnID string, silent, th
 	next := max(remaining/2, 10*time.Second)
 	turn.StallTimer = time.AfterFunc(next, func() { check(threadID, turnID) })
 }
-
-// normalizeTrackedTurnStatus maps raw turn status strings to canonical values.
-func normalizeTrackedTurnStatus(status string) string {
+func NormalizeTrackedTurnStatus(status string) string {
 	s := strings.ToLower(strings.TrimSpace(status))
 	switch s {
 	case "completed", "complete", "done", "success", "succeeded":
@@ -206,9 +172,7 @@ func normalizeTrackedTurnStatus(status string) string {
 		return s
 	}
 }
-
-// extractTrackedString returns first non-empty trimmed string value by keys.
-func extractTrackedString(payload map[string]any, keys ...string) string {
+func ExtractTrackedString(payload map[string]any, keys ...string) string {
 	if payload == nil {
 		return ""
 	}
@@ -228,8 +192,6 @@ func extractTrackedString(payload map[string]any, keys ...string) string {
 	}
 	return ""
 }
-
-// extractTrackedRetryable reads retryability hint from event payload.
 func extractTrackedRetryable(payload map[string]any) (bool, bool) {
 	if payload == nil {
 		return false, false
@@ -253,51 +215,40 @@ func extractTrackedRetryable(payload map[string]any) (bool, bool) {
 	}
 	return false, false
 }
-
 func extractTrackedTurnNestedField(payload map[string]any, nestedKeys []string, rootKeys []string) string {
 	if payload == nil {
 		return ""
 	}
 	if turn, ok := payload["turn"].(map[string]any); ok {
-		if value := extractTrackedString(turn, nestedKeys...); value != "" {
+		if value := ExtractTrackedString(turn, nestedKeys...); value != "" {
 			return value
 		}
 	}
-	return extractTrackedString(payload, rootKeys...)
+	return ExtractTrackedString(payload, rootKeys...)
 }
-
-// extractTrackedTurnID reads turn id from payload.
-func extractTrackedTurnID(payload map[string]any) string {
+func ExtractTrackedTurnID(payload map[string]any) string {
 	return extractTrackedTurnNestedField(payload, []string{"id", "turnId", "turn_id"}, []string{"turnId", "turn_id", "id"})
 }
-
-// extractTrackedTurnStatus reads turn status from payload.
-func extractTrackedTurnStatus(payload map[string]any) string {
+func ExtractTrackedTurnStatus(payload map[string]any) string {
 	return extractTrackedTurnNestedField(payload, []string{"status", "state"}, []string{"status", "state"})
 }
-
-// extractTrackedTurnReason reads turn reason from payload.
-func extractTrackedTurnReason(payload map[string]any) string {
+func ExtractTrackedTurnReason(payload map[string]any) string {
 	return extractTrackedTurnNestedField(payload, []string{"reason", "message"}, []string{"reason", "message"})
 }
-
-// threadStatusTerminalFromPayload parses thread/status/changed payload terminal status.
-func threadStatusTerminalFromPayload(payload map[string]any) (status string, reason string, terminal bool) {
+func ThreadStatusTerminalFromPayload(payload map[string]any) (status string, reason string, terminal bool) {
 	if payload == nil {
 		return "", "", false
 	}
-
 	statusType := ""
 	switch raw := payload["status"].(type) {
 	case string:
 		statusType = strings.ToLower(strings.TrimSpace(raw))
 	case map[string]any:
-		statusType = strings.ToLower(strings.TrimSpace(extractTrackedString(raw, "type")))
+		statusType = strings.ToLower(strings.TrimSpace(ExtractTrackedString(raw, "type")))
 	}
 	if statusType == "" {
 		return "", "", false
 	}
-
 	switch statusType {
 	case "idle":
 		return "completed", "thread_status_idle", true
@@ -309,48 +260,43 @@ func threadStatusTerminalFromPayload(payload map[string]any) (status string, rea
 		return "", "", false
 	}
 }
-
-// trackedTurnTerminalFromEvent maps incoming event to tracked turn terminal state.
-func trackedTurnTerminalFromEvent(eventType, method string, payload map[string]any) (string, string, string, bool, bool) {
+func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]any) (string, string, string, bool, bool) {
 	eventKey := strings.ToLower(strings.TrimSpace(eventType))
 	methodKey := strings.ToLower(strings.TrimSpace(method))
-
 	switch {
 	case eventKey == "turn_aborted", methodKey == "turn/aborted":
-		reason := extractTrackedTurnReason(payload)
+		reason := ExtractTrackedTurnReason(payload)
 		if reason == "" {
 			reason = "turn_aborted"
 		}
-		return extractTrackedTurnID(payload), "interrupted", reason, true, false
+		return ExtractTrackedTurnID(payload), "interrupted", reason, true, false
 	case methodKey == "turn/completed",
 		eventKey == "turn_complete",
 		eventKey == "turn/completed",
 		eventKey == "idle",
 		eventKey == "codex/event/task_complete",
 		methodKey == "codex/event/task_complete":
-		status := extractTrackedTurnStatus(payload)
+		status := ExtractTrackedTurnStatus(payload)
 		if status == "" {
 			status = "completed"
 		}
-		reason := extractTrackedTurnReason(payload)
+		reason := ExtractTrackedTurnReason(payload)
 		if reason == "" {
 			reason = "turn_complete"
 		}
-		return extractTrackedTurnID(payload), status, reason, true, false
+		return ExtractTrackedTurnID(payload), status, reason, true, false
 	case eventKey == "connection_dead":
-		// connection_dead: 所有重连/重生尝试耗尽后发射, 无条件终结, 标记 failed。
-		reason := extractTrackedTurnReason(payload)
+		reason := ExtractTrackedTurnReason(payload)
 		if reason == "" {
 			reason = "connection_dead"
 		}
-		return extractTrackedTurnID(payload), "failed", reason, true, true
+		return ExtractTrackedTurnID(payload), "failed", reason, true, true
 	case eventKey == "shutdown_complete":
-		// shutdown_complete: codex 进程正常关停, 无条件终结, 标记 completed。
-		reason := extractTrackedTurnReason(payload)
+		reason := ExtractTrackedTurnReason(payload)
 		if reason == "" {
 			reason = "shutdown_complete"
 		}
-		return extractTrackedTurnID(payload), "completed", reason, true, true
+		return ExtractTrackedTurnID(payload), "completed", reason, true, true
 	case eventKey == "stream_error",
 		eventKey == "error",
 		methodKey == "error",
@@ -362,29 +308,27 @@ func trackedTurnTerminalFromEvent(eventType, method string, payload map[string]a
 		if !known {
 			return "", "", "", false, false
 		}
-		reason := extractTrackedTurnReason(payload)
+		reason := ExtractTrackedTurnReason(payload)
 		if reason == "" {
 			reason = util.FirstNonEmpty(
-				extractTrackedString(payload, "phase"),
+				ExtractTrackedString(payload, "phase"),
 				eventKey,
 				methodKey,
 				"stream_error",
 			)
 		}
-		return extractTrackedTurnID(payload), "failed", reason, true, true
+		return ExtractTrackedTurnID(payload), "failed", reason, true, true
 	case methodKey == "thread/status/changed", eventKey == "thread/status/changed":
-		status, reason, ok := threadStatusTerminalFromPayload(payload)
+		status, reason, ok := ThreadStatusTerminalFromPayload(payload)
 		if !ok {
 			return "", "", "", false, false
 		}
-		return extractTrackedTurnID(payload), status, reason, true, true
+		return ExtractTrackedTurnID(payload), status, reason, true, true
 	default:
 		return "", "", "", false, false
 	}
 }
-
-// isTerminalEventType reports whether event type or method indicates a turn terminal event.
-func isTerminalEventType(eventType, method string) bool {
+func IsTerminalEventType(eventType, method string) bool {
 	eventKey := strings.ToLower(strings.TrimSpace(eventType))
 	methodKey := strings.ToLower(strings.TrimSpace(method))
 	switch {
@@ -402,42 +346,9 @@ func isTerminalEventType(eventType, method string) bool {
 		return false
 	}
 }
-
-func trackedTurnPayloadDiagKV(payload map[string]any) []any {
-	if payload == nil {
-		return []any{"payload_nil", true}
-	}
-	keys := make([]string, 0, len(payload))
-	for key := range payload {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	const maxKeySample = 12
-	keysTruncated := false
-	if len(keys) > maxKeySample {
-		keys = keys[:maxKeySample]
-		keysTruncated = true
-	}
-	_, hasTurnObj := payload["turn"].(map[string]any)
-	return []any{
-		"payload_key_count", len(payload),
-		"payload_keys_sample", strings.Join(keys, ","),
-		"payload_keys_truncated", keysTruncated,
-		"payload_has_turn_obj", hasTurnObj,
-		"payload_turn_id", extractTrackedTurnID(payload),
-		"payload_turn_status", extractTrackedTurnStatus(payload),
-		"payload_turn_reason", extractTrackedTurnReason(payload),
-		"payload_status_raw", extractTrackedString(payload, "status", "state"),
-		"payload_reason_raw", extractTrackedString(payload, "reason", "message"),
-	}
-}
-
-func trackedTurnSummaryCacheKey(threadID, turnID string) string {
+func TrackedTurnSummaryCacheKey(threadID, turnID string) string {
 	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID)
 }
-
-// pruneTrackedTurnSummaryCacheLocked removes expired/overflow entries.
 func pruneTrackedTurnSummaryCacheLocked(cache map[string]trackedTurnSummaryCacheEntry, now time.Time, ttl time.Duration, maxEntries int) {
 	if cache == nil {
 		return
@@ -469,9 +380,7 @@ func pruneTrackedTurnSummaryCacheLocked(cache map[string]trackedTurnSummaryCache
 		keys = keys[1:]
 	}
 }
-
-// rememberTrackedTurnSummary stores summary in per-turn cache.
-func rememberTrackedTurnSummary(state turnTrackerState, turnMu *sync.Mutex, threadID, turnID, summary string) {
+func RememberTrackedTurnSummary(state turnTrackerState, turnMu *sync.Mutex, threadID, turnID, summary string) {
 	id := strings.TrimSpace(threadID)
 	tid := strings.TrimSpace(turnID)
 	text := strings.TrimSpace(summary)
@@ -482,7 +391,7 @@ func rememberTrackedTurnSummary(state turnTrackerState, turnMu *sync.Mutex, thre
 		turnMu.Lock()
 		defer turnMu.Unlock()
 	}
-	ensureTurnTrackerStateLocked(state)
+	EnsureTurnTrackerStateLocked(state)
 	if state.TurnSummaryCache == nil {
 		return
 	}
@@ -491,16 +400,14 @@ func rememberTrackedTurnSummary(state turnTrackerState, turnMu *sync.Mutex, thre
 		cache = make(map[string]trackedTurnSummaryCacheEntry)
 		*state.TurnSummaryCache = cache
 	}
-	cache[trackedTurnSummaryCacheKey(id, tid)] = trackedTurnSummaryCacheEntry{TurnID: tid, Summary: text, UpdatedAt: time.Now()}
+	cache[TrackedTurnSummaryCacheKey(id, tid)] = trackedTurnSummaryCacheEntry{TurnID: tid, Summary: text, UpdatedAt: time.Now()}
 	ttl := DefaultTrackedTurnSummaryTTL
 	if state.TurnSummaryTTL != nil && *state.TurnSummaryTTL > 0 {
 		ttl = *state.TurnSummaryTTL
 	}
 	pruneTrackedTurnSummaryCacheLocked(cache, time.Now(), ttl, TrackedTurnSummaryCacheMaxEntries)
 }
-
-// lookupTrackedTurnSummary retrieves summary from per-turn cache.
-func lookupTrackedTurnSummary(state turnTrackerState, turnMu *sync.Mutex, threadID, turnID string) string {
+func LookupTrackedTurnSummary(state turnTrackerState, turnMu *sync.Mutex, threadID, turnID string) string {
 	id := strings.TrimSpace(threadID)
 	tid := strings.TrimSpace(turnID)
 	if id == "" || tid == "" {
@@ -517,38 +424,33 @@ func lookupTrackedTurnSummary(state turnTrackerState, turnMu *sync.Mutex, thread
 	if cache == nil {
 		return ""
 	}
-	entry, ok := cache[trackedTurnSummaryCacheKey(id, tid)]
+	entry, ok := cache[TrackedTurnSummaryCacheKey(id, tid)]
 	if !ok {
 		return ""
 	}
 	return strings.TrimSpace(entry.Summary)
 }
-
-// trackedTurnSummaryFromPayload extracts summary text from terminal payload.
 var trackedTurnSummaryKeys = []string{"lastAgentMessage", "last_agent_message", "summary", "result", "message"}
-
-func trackedTurnSummaryFromPayload(payload map[string]any) string {
+func TrackedTurnSummaryFromPayload(payload map[string]any) string {
 	if payload == nil {
 		return ""
 	}
-	if summary := extractTrackedString(payload, trackedTurnSummaryKeys...); summary != "" {
+	if summary := ExtractTrackedString(payload, trackedTurnSummaryKeys...); summary != "" {
 		return summary
 	}
 	if turn, ok := payload["turn"].(map[string]any); ok {
-		if summary := extractTrackedString(turn, trackedTurnSummaryKeys...); summary != "" {
+		if summary := ExtractTrackedString(turn, trackedTurnSummaryKeys...); summary != "" {
 			return summary
 		}
 	}
 	if msg, ok := payload["msg"].(map[string]any); ok {
-		if summary := extractTrackedString(msg, trackedTurnSummaryKeys...); summary != "" {
+		if summary := ExtractTrackedString(msg, trackedTurnSummaryKeys...); summary != "" {
 			return summary
 		}
 	}
 	return ""
 }
-
-// injectTrackedTurnSummary injects summary into completion payload.
-func injectTrackedTurnSummary(payload map[string]any, summary string) {
+func InjectTrackedTurnSummary(payload map[string]any, summary string) {
 	if payload == nil {
 		return
 	}
@@ -556,10 +458,10 @@ func injectTrackedTurnSummary(payload map[string]any, summary string) {
 	if text == "" {
 		return
 	}
-	if strings.TrimSpace(extractTrackedString(payload, "lastAgentMessage")) == "" {
+	if strings.TrimSpace(ExtractTrackedString(payload, "lastAgentMessage")) == "" {
 		payload["lastAgentMessage"] = text
 	}
-	if strings.TrimSpace(extractTrackedString(payload, "summary")) == "" {
+	if strings.TrimSpace(ExtractTrackedString(payload, "summary")) == "" {
 		payload["summary"] = text
 	}
 	turn, ok := payload["turn"].(map[string]any)
@@ -567,16 +469,14 @@ func injectTrackedTurnSummary(payload map[string]any, summary string) {
 		turn = map[string]any{}
 		payload["turn"] = turn
 	}
-	if strings.TrimSpace(extractTrackedString(turn, "lastAgentMessage")) == "" {
+	if strings.TrimSpace(ExtractTrackedString(turn, "lastAgentMessage")) == "" {
 		turn["lastAgentMessage"] = text
 	}
-	if strings.TrimSpace(extractTrackedString(turn, "summary")) == "" {
+	if strings.TrimSpace(ExtractTrackedString(turn, "summary")) == "" {
 		turn["summary"] = text
 	}
 }
-
-// mergeTrackedTurnCompletionPayload merges tracker completion fields into terminal payload.
-func mergeTrackedTurnCompletionPayload(target map[string]any, completion map[string]any) {
+func MergeTrackedTurnCompletionPayload(target map[string]any, completion map[string]any) {
 	if target == nil || completion == nil {
 		return
 	}
@@ -598,91 +498,7 @@ func mergeTrackedTurnCompletionPayload(target map[string]any, completion map[str
 		}
 	}
 }
-
-func resolveTurnIDFromPayload(_ string, payload map[string]any) string {
-	return extractTrackedTurnID(payload)
-}
-
-// captureAndInjectTurnSummary captures terminal summaries and injects them into completion payloads.
-func captureAndInjectTurnSummary(
-	threadID string,
-	eventType string,
-	method string,
-	payload map[string]any,
-	resolveTurnID func(threadID string, payload map[string]any) string,
-	rememberTrackedTurnSummary func(threadID, turnID, summary string),
-	lookupTrackedTurnSummary func(threadID, turnID string) string,
-) {
-	if payload == nil {
-		return
-	}
-	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return
-	}
-
-	resolve := resolveTurnID
-	if resolve == nil {
-		resolve = resolveTurnIDFromPayload
-	}
-	remember := rememberTrackedTurnSummary
-	if remember == nil {
-		remember = func(string, string, string) {}
-	}
-	lookup := lookupTrackedTurnSummary
-	if lookup == nil {
-		lookup = func(string, string) string { return "" }
-	}
-
-	turnID := strings.TrimSpace(resolve(id, payload))
-	summary := trackedTurnSummaryFromPayload(payload)
-	if summary != "" {
-		_, _, _, terminal, _ := trackedTurnTerminalFromEvent(eventType, method, payload)
-		methodKey := strings.ToLower(strings.TrimSpace(method))
-		eventKey := strings.ToLower(strings.TrimSpace(eventType))
-		if terminal || methodKey == "codex/event/task_complete" || eventKey == "codex/event/task_complete" {
-			remember(id, turnID, summary)
-		}
-	}
-
-	if !strings.EqualFold(strings.TrimSpace(method), "turn/completed") {
-		return
-	}
-	if summary == "" {
-		summary = lookup(id, turnID)
-	}
-	if summary == "" {
-		return
-	}
-	injectTrackedTurnSummary(payload, summary)
-	remember(id, turnID, summary)
-}
-
-func maybeFinalizeDiagFields(
-	threadID string,
-	trackedTurnID string,
-	eventTurnID string,
-	eventType string,
-	method string,
-	status string,
-	reason string,
-	payload map[string]any,
-	extra ...any,
-) []any {
-	fields := append(threadLogFields(threadID),
-		"tracked_turn_id", strings.TrimSpace(trackedTurnID),
-		"event_turn_id", strings.TrimSpace(eventTurnID),
-		logger.FieldStatus, strings.TrimSpace(status),
-		"reason", strings.TrimSpace(reason),
-		logger.FieldEventType, strings.TrimSpace(eventType),
-		logger.FieldMethod, strings.TrimSpace(method),
-	)
-	fields = append(fields, extra...)
-	fields = append(fields, trackedTurnPayloadDiagKV(payload)...)
-	return fields
-}
-
-func withTrackerStateLockCore(state turnTrackerState, fn func(turnTrackerState)) {
+func WithTrackerStateLockCore(state turnTrackerState, fn func(turnTrackerState)) {
 	if fn == nil {
 		return
 	}
@@ -690,65 +506,57 @@ func withTrackerStateLockCore(state turnTrackerState, fn func(turnTrackerState))
 		state.Mu.Lock()
 		defer state.Mu.Unlock()
 	}
-	ensureTurnTrackerStateLocked(state)
+	EnsureTurnTrackerStateLocked(state)
 	fn(state)
 }
-
-func trackerDurationCore(state turnTrackerState, getter func(turnTrackerState) *time.Duration, fallback time.Duration) time.Duration {
+func TrackerDurationCore(state turnTrackerState, getter func(turnTrackerState) *time.Duration, fallback time.Duration) time.Duration {
 	if getter == nil {
 		return fallback
 	}
 	value := fallback
-	withTrackerStateLockCore(state, func(lockedState turnTrackerState) {
-		value = trackerDurationOrDefault(getter(lockedState), fallback)
+	WithTrackerStateLockCore(state, func(lockedState turnTrackerState) {
+		value = TrackerDurationOrDefault(getter(lockedState), fallback)
 	})
 	return value
 }
-
-func setTrackerDurationCore(state turnTrackerState, getter func(turnTrackerState) *time.Duration, value time.Duration) {
+func SetTrackerDurationCore(state turnTrackerState, getter func(turnTrackerState) *time.Duration, value time.Duration) {
 	if value <= 0 || getter == nil {
 		return
 	}
-	withTrackerStateLockCore(state, func(lockedState turnTrackerState) {
+	WithTrackerStateLockCore(state, func(lockedState turnTrackerState) {
 		target := getter(lockedState)
 		if target != nil {
 			*target = value
 		}
 	})
 }
-
-func trackerStateCore(state turnTrackerState) (map[string]*trackedTurn, *sync.Mutex, time.Duration, time.Duration) {
+func TrackerStateCore(state turnTrackerState) (map[string]*trackedTurn, *sync.Mutex, time.Duration, time.Duration) {
 	var activeTurns map[string]*trackedTurn
 	if state.ActiveTurns != nil {
 		activeTurns = *state.ActiveTurns
 	}
 	turnMu := state.Mu
-	watchdogTimeout := trackerDurationOrDefault(state.TurnWatchdogTimeout, DefaultTurnWatchdogTimeout)
-	stallThreshold := trackerDurationOrDefault(state.StallThreshold, defaultStallThreshold)
+	watchdogTimeout := TrackerDurationOrDefault(state.TurnWatchdogTimeout, DefaultTurnWatchdogTimeout)
+	stallThreshold := TrackerDurationOrDefault(state.StallThreshold, defaultStallThreshold)
 	return activeTurns, turnMu, watchdogTimeout, stallThreshold
 }
-
-func applyTrackedTurnTransitionCore(state turnTrackerState, threadID string, req trackedTurnTransitionRequest) trackedTurnTransitionResult {
+func ApplyTrackedTurnTransitionCore(state turnTrackerState, threadID string, req trackedTurnTransitionRequest) trackedTurnTransitionResult {
 	result := trackedTurnTransitionResult{}
 	id := strings.TrimSpace(threadID)
 	if id == "" {
 		return result
 	}
-
-	activeTurns, turnMu, _, _ := trackerStateCore(state)
+	activeTurns, turnMu, _, _ := TrackerStateCore(state)
 	if turnMu == nil || activeTurns == nil {
 		return result
 	}
-
 	turnMu.Lock()
 	defer turnMu.Unlock()
-	ensureTurnTrackerStateLocked(state)
-
+	EnsureTurnTrackerStateLocked(state)
 	turn, ok := activeTurns[id]
 	if !ok || turn == nil {
 		return result
 	}
-
 	result.Found = true
 	result.ThreadID = id
 	result.TurnID = strings.TrimSpace(turn.ID)
@@ -756,7 +564,6 @@ func applyTrackedTurnTransitionCore(state turnTrackerState, threadID string, req
 	result.LastEventAt = turn.LastEventAt
 	result.InterruptRequested = turn.InterruptRequested
 	result.StallHintLogged = turn.StallHintLogged
-
 	if req.TouchHeartbeat {
 		turn.LastEventAt = time.Now()
 		result.LastEventAt = turn.LastEventAt
@@ -777,14 +584,12 @@ func applyTrackedTurnTransitionCore(state turnTrackerState, threadID string, req
 			result.StallHintApplied = true
 		}
 	}
-
 	if req.Finalize != nil {
 		wantTurnID := strings.TrimSpace(req.Finalize.TurnID)
 		result.ExpectedTurnID = wantTurnID
 		if wantTurnID != "" && !strings.EqualFold(result.TurnID, wantTurnID) {
 			result.TurnIDMismatch = true
 		}
-
 		delete(activeTurns, id)
 		if turn.Timer != nil {
 			turn.Timer.Stop()
@@ -792,8 +597,7 @@ func applyTrackedTurnTransitionCore(state turnTrackerState, threadID string, req
 		if turn.StallTimer != nil {
 			turn.StallTimer.Stop()
 		}
-
-		finalStatus := normalizeTrackedTurnStatus(req.Finalize.Status)
+		finalStatus := NormalizeTrackedTurnStatus(req.Finalize.Status)
 		if turn.InterruptRequested && finalStatus == "completed" {
 			finalStatus = "interrupted"
 		}
@@ -817,12 +621,10 @@ func applyTrackedTurnTransitionCore(state turnTrackerState, threadID string, req
 			"reason": reasonText,
 		}
 	}
-
 	return result
 }
-
-func withActiveTurnCore(state turnTrackerState, threadID string, fn func(threadID string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool) bool {
-	activeTurns, turnMu, _, _ := trackerStateCore(state)
+func WithActiveTurnCore(state turnTrackerState, threadID string, fn func(threadID string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool) bool {
+	activeTurns, turnMu, _, _ := TrackerStateCore(state)
 	id := strings.TrimSpace(threadID)
 	if id == "" || turnMu == nil || fn == nil {
 		return false
@@ -838,21 +640,19 @@ func withActiveTurnCore(state turnTrackerState, threadID string, fn func(threadI
 	}
 	return fn(id, turn, activeTurns)
 }
-
-func withActiveTurnByIDCore(state turnTrackerState, threadID, turnID string, fn func(threadID string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool) bool {
+func WithActiveTurnByIDCore(state turnTrackerState, threadID, turnID string, fn func(threadID string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool) bool {
 	expectedTurnID := strings.TrimSpace(turnID)
 	if expectedTurnID == "" || fn == nil {
 		return false
 	}
-	return withActiveTurnCore(state, threadID, func(id string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool {
+	return WithActiveTurnCore(state, threadID, func(id string, turn *trackedTurn, activeTurns map[string]*trackedTurn) bool {
 		if !strings.EqualFold(strings.TrimSpace(turn.ID), expectedTurnID) {
 			return false
 		}
 		return fn(id, turn, activeTurns)
 	})
 }
-
-func supersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurnID string) (map[string]any, string, bool) {
+func SupersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurnID string) (map[string]any, string, bool) {
 	if activeTurns == nil {
 		return nil, "", false
 	}
@@ -875,7 +675,6 @@ func supersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurn
 		default:
 		}
 	}
-
 	prevAge := time.Since(prev.StartedAt)
 	prevLastEventAge := time.Since(prev.LastEventAt)
 	logFn := logger.Warn
@@ -894,7 +693,6 @@ func supersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurn
 		"prev_stall_auto_interrupted", prev.StallAutoInterrupted,
 	)
 	logFn("turn tracker: superseding active turn", fields...)
-
 	payload := map[string]any{
 		"threadId": threadID,
 		"turn": map[string]any{
@@ -906,8 +704,7 @@ func supersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurn
 	}
 	return payload, prev.ID, true
 }
-
-func beginTrackedTurnCore(
+func BeginTrackedTurnCore(
 	state turnTrackerState,
 	threadID string,
 	turnID string,
@@ -915,8 +712,7 @@ func beginTrackedTurnCore(
 	notify func(string, any),
 	checkTurnStall func(string, string),
 ) string {
-	activeTurns, turnMu, watchdogTimeout, stallThreshold := trackerStateCore(state)
-
+	activeTurns, turnMu, watchdogTimeout, stallThreshold := TrackerStateCore(state)
 	id := strings.TrimSpace(threadID)
 	if id == "" {
 		return ""
@@ -928,15 +724,12 @@ func beginTrackedTurnCore(
 	if turnMu == nil || activeTurns == nil {
 		return tid
 	}
-
 	var superseded map[string]any
 	var prevTurnID string
 	var hadPrevTurn bool
-
 	turnMu.Lock()
-	ensureTurnTrackerStateLocked(state)
-	superseded, prevTurnID, hadPrevTurn = supersedeActiveTurn(activeTurns, id, tid)
-
+	EnsureTurnTrackerStateLocked(state)
+	superseded, prevTurnID, hadPrevTurn = SupersedeActiveTurn(activeTurns, id, tid)
 	now := time.Now()
 	turn := &trackedTurn{
 		ID:          tid,
@@ -945,7 +738,6 @@ func beginTrackedTurnCore(
 		LastEventAt: now,
 		Done:        make(chan string, 1),
 	}
-
 	watchdogTurnID := tid
 	watchdogThreadID := id
 	watchdogStartedAt := turn.StartedAt
@@ -967,7 +759,6 @@ func beginTrackedTurnCore(
 			notify("turn/completed", completion)
 		}
 	})
-
 	activeTurns[id] = turn
 	if checkTurnStall != nil {
 		stallInterval := max(stallThreshold/3, 10*time.Second)
@@ -976,7 +767,6 @@ func beginTrackedTurnCore(
 		})
 	}
 	turnMu.Unlock()
-
 	logger.Info("turn tracker: begin turn tracking", append(threadLogFields(id),
 		logger.FieldTurnID, tid,
 		"source_turn_id", strings.TrimSpace(turnID),
@@ -984,19 +774,17 @@ func beginTrackedTurnCore(
 		"had_prev_turn", hadPrevTurn,
 		"prev_turn_id", prevTurnID,
 	)...)
-
 	if superseded != nil && notify != nil {
 		notify("turn/completed", superseded)
 	}
 	return tid
 }
-
-func waitTrackedTurnTerminalCore(state turnTrackerState, threadID string, timeout time.Duration) (string, bool) {
+func WaitTrackedTurnTerminalCore(state turnTrackerState, threadID string, timeout time.Duration) (string, bool) {
 	if timeout <= 0 {
 		return "", false
 	}
 	var done chan string
-	ok := withActiveTurnCore(state, threadID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
+	ok := WithActiveTurnCore(state, threadID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
 		if turn.Done == nil {
 			return false
 		}
@@ -1006,19 +794,17 @@ func waitTrackedTurnTerminalCore(state turnTrackerState, threadID string, timeou
 	if !ok || done == nil {
 		return "", false
 	}
-
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case status := <-done:
-		return normalizeTrackedTurnStatus(status), true
+		return NormalizeTrackedTurnStatus(status), true
 	case <-timer.C:
 		return "", false
 	}
 }
-
-func completeTrackedTurnByIDCore(state turnTrackerState, threadID, turnID, status, reason string) (map[string]any, bool) {
-	transition := applyTrackedTurnTransitionCore(state, threadID, trackedTurnTransitionRequest{
+func CompleteTrackedTurnByIDCore(state turnTrackerState, threadID, turnID, status, reason string) (map[string]any, bool) {
+	transition := ApplyTrackedTurnTransitionCore(state, threadID, trackedTurnTransitionRequest{
 		Finalize: &trackedTurnFinalizeRequest{
 			TurnID: turnID,
 			Status: status,
@@ -1028,7 +814,6 @@ func completeTrackedTurnByIDCore(state turnTrackerState, threadID, turnID, statu
 	if !transition.Finalized || transition.Completion == nil {
 		return nil, false
 	}
-
 	if transition.TurnIDMismatch {
 		logger.Info("turn tracker: turn id mismatch, completing anyway to avoid stuck state", append(threadLogFields(transition.ThreadID),
 			"active_turn_id", transition.TurnID,
@@ -1037,7 +822,6 @@ func completeTrackedTurnByIDCore(state turnTrackerState, threadID, turnID, statu
 			"reason", strings.TrimSpace(reason),
 		)...)
 	}
-
 	logger.Info("turn tracker: turn completed", append(threadLogFields(transition.ThreadID),
 		logger.FieldTurnID, transition.TurnID,
 		logger.FieldStatus, transition.FinalStatus,
@@ -1047,28 +831,24 @@ func completeTrackedTurnByIDCore(state turnTrackerState, threadID, turnID, statu
 	)...)
 	return transition.Completion, true
 }
-
-func peekTrackedTurnMetaCore(state turnTrackerState, threadID string) (string, time.Time, bool, bool) {
-	transition := applyTrackedTurnTransitionCore(state, threadID, trackedTurnTransitionRequest{})
+func PeekTrackedTurnMetaCore(state turnTrackerState, threadID string) (string, time.Time, bool, bool) {
+	transition := ApplyTrackedTurnTransitionCore(state, threadID, trackedTurnTransitionRequest{})
 	if !transition.Found {
 		return "", time.Time{}, false, false
 	}
 	return transition.TurnID, transition.StartedAt, transition.InterruptRequested, true
 }
-
-func markTrackedTurnStallHintCore(state turnTrackerState, threadID, turnID string) bool {
-	transition := applyTrackedTurnTransitionCore(state, threadID, trackedTurnTransitionRequest{
+func MarkTrackedTurnStallHintCore(state turnTrackerState, threadID, turnID string) bool {
+	transition := ApplyTrackedTurnTransitionCore(state, threadID, trackedTurnTransitionRequest{
 		MarkStallHint:          true,
 		MarkStallHintForTurnID: strings.TrimSpace(turnID),
 	})
 	return transition.StallHintApplied
 }
-
-func touchTrackedTurnLastEventCore(state turnTrackerState, threadID string) {
-	applyTrackedTurnTransitionCore(state, threadID, trackedTurnTransitionRequest{TouchHeartbeat: true})
+func TouchTrackedTurnLastEventCore(state turnTrackerState, threadID string) {
+	ApplyTrackedTurnTransitionCore(state, threadID, trackedTurnTransitionRequest{TouchHeartbeat: true})
 }
-
-func nextTrackedTurnStallDecisionCore(
+func NextTrackedTurnStallDecisionCore(
 	state turnTrackerState,
 	threadID string,
 	turnID string,
@@ -1081,20 +861,17 @@ func nextTrackedTurnStallDecisionCore(
 	if id == "" || tid == "" {
 		return decision
 	}
-
 	threshold := stallThreshold
 	if threshold <= 0 {
 		threshold = defaultStallThreshold
 	}
-
-	withActiveTurnByIDCore(state, id, tid, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
+	WithActiveTurnByIDCore(state, id, tid, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
 		currentTurnID := strings.TrimSpace(turn.ID)
 		silent := time.Since(turn.LastEventAt)
 		decision.ThreadID = id
 		decision.TurnID = currentTurnID
 		decision.Silent = silent
 		decision.Threshold = threshold
-
 		if silent < threshold {
 			rescheduleStallCheck(turn, id, currentTurnID, silent, threshold, checkTurnStall)
 			decision.Action = trackedTurnStallRescheduled
@@ -1108,16 +885,13 @@ func nextTrackedTurnStallDecisionCore(
 			decision.Action = trackedTurnStallEnterGrace
 			return true
 		}
-
 		turn.StallAutoInterrupted = true
 		decision.Action = trackedTurnStallAutoInterrupt
 		return true
 	})
-
 	return decision
 }
-
-func checkTurnStallCore(
+func CheckTurnStallCore(
 	state turnTrackerState,
 	threadID string,
 	turnID string,
@@ -1125,8 +899,8 @@ func checkTurnStallCore(
 	executeStallAutoInterrupt func(threadID, turnID string, silent, threshold time.Duration),
 	checkTurnStall func(string, string),
 ) {
-	_, _, _, stallThreshold := trackerStateCore(state)
-	decision := nextTrackedTurnStallDecisionCore(state, threadID, turnID, stallThreshold, checkTurnStall)
+	_, _, _, stallThreshold := TrackerStateCore(state)
+	decision := NextTrackedTurnStallDecisionCore(state, threadID, turnID, stallThreshold, checkTurnStall)
 	switch decision.Action {
 	case trackedTurnStallRescheduled, trackedTurnStallNoop:
 		return
@@ -1140,8 +914,7 @@ func checkTurnStallCore(
 		}
 	}
 }
-
-func handleStallGracePeriodCore(
+func HandleStallGracePeriodCore(
 	state turnTrackerState,
 	threadID string,
 	turnID string,
@@ -1156,12 +929,10 @@ func handleStallGracePeriodCore(
 		"threshold_ms", threshold.Milliseconds(),
 		"grace_ms", (30*time.Second).Milliseconds(),
 	)...)
-
 	if pushAlert != nil {
 		pushAlert(threadID, "stall_warning", "长时间无事件，若持续将自动中断")
 	}
-
-	withActiveTurnByIDCore(state, threadID, turnID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
+	WithActiveTurnByIDCore(state, threadID, turnID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
 		turn.StallTimer = time.AfterFunc(30*time.Second, func() {
 			if checkTurnStall != nil {
 				checkTurnStall(threadID, turnID)
@@ -1170,21 +941,17 @@ func handleStallGracePeriodCore(
 		return true
 	})
 }
-
 type TrackerAlertRuntime interface {
 	PushAlert(threadID, category, message string)
 }
-
 type trackerAlertRuntime = TrackerAlertRuntime
-
-func trackerRuntimePushAlert(runtime trackerAlertRuntime) func(threadID, category, message string) {
+func TrackerRuntimePushAlert(runtime trackerAlertRuntime) func(threadID, category, message string) {
 	if runtime == nil {
 		return nil
 	}
 	return runtime.PushAlert
 }
-
-func executeStallAutoInterruptCore(
+func ExecuteStallAutoInterruptCore(
 	threadID string,
 	turnID string,
 	silent time.Duration,
@@ -1201,11 +968,9 @@ func executeStallAutoInterruptCore(
 		"silent_ms", silent.Milliseconds(),
 		"threshold_ms", threshold.Milliseconds(),
 	)...)
-
 	if pushAlert != nil {
 		pushAlert(threadID, "stall", fmt.Sprintf("思考超时 %ds 未响应，自动中断", int(silent.Seconds())))
 	}
-
 	util.SafeGo(func() {
 		if markTrackedTurnInterruptRequested != nil {
 			markTrackedTurnInterruptRequested(threadID)
@@ -1218,7 +983,6 @@ func executeStallAutoInterruptCore(
 				)...)
 			}
 		}
-
 		interrupted := false
 		if sendInterrupt != nil {
 			attempted, err := sendInterrupt(threadID)
@@ -1237,35 +1001,43 @@ func executeStallAutoInterruptCore(
 		}
 	})
 }
-
-func captureAndInjectTurnSummaryCore(state turnTrackerState, threadID, eventType, method string, payload map[string]any) {
-	resolveTurnID := func(id string, source map[string]any) string {
-		turnID := extractTrackedTurnID(source)
-		if turnID != "" {
-			return turnID
-		}
-		activeTurnID, _, _, ok := peekTrackedTurnMetaCore(state, id)
-		if ok {
-			return activeTurnID
-		}
-		return ""
+func CaptureAndInjectTurnSummaryCore(state turnTrackerState, threadID, eventType, method string, payload map[string]any) {
+	if payload == nil {
+		return
 	}
-	captureAndInjectTurnSummary(
-		threadID,
-		eventType,
-		method,
-		payload,
-		resolveTurnID,
-		func(id, turnID, summary string) {
-			rememberTrackedTurnSummary(state, state.Mu, id, turnID, summary)
-		},
-		func(id, turnID string) string {
-			return lookupTrackedTurnSummary(state, state.Mu, id, turnID)
-		},
-	)
+	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return
+	}
+	turnID := ExtractTrackedTurnID(payload)
+	if turnID == "" {
+		if activeTurnID, _, _, ok := PeekTrackedTurnMetaCore(state, id); ok {
+			turnID = activeTurnID
+		}
+	}
+	turnID = strings.TrimSpace(turnID)
+	summary := TrackedTurnSummaryFromPayload(payload)
+	if summary != "" {
+		_, _, _, terminal, _ := TrackedTurnTerminalFromEvent(eventType, method, payload)
+		methodKey := strings.ToLower(strings.TrimSpace(method))
+		eventKey := strings.ToLower(strings.TrimSpace(eventType))
+		if terminal || methodKey == "codex/event/task_complete" || eventKey == "codex/event/task_complete" {
+			RememberTrackedTurnSummary(state, state.Mu, id, turnID, summary)
+		}
+	}
+	if !strings.EqualFold(strings.TrimSpace(method), "turn/completed") {
+		return
+	}
+	if summary == "" {
+		summary = LookupTrackedTurnSummary(state, state.Mu, id, turnID)
+	}
+	if summary == "" {
+		return
+	}
+	InjectTrackedTurnSummary(payload, summary)
+	RememberTrackedTurnSummary(state, state.Mu, id, turnID, summary)
 }
-
-func maybeFinalizeTrackedTurnCore(
+func MaybeFinalizeTrackedTurnCore(
 	state turnTrackerState,
 	threadID string,
 	eventType string,
@@ -1277,61 +1049,38 @@ func maybeFinalizeTrackedTurnCore(
 	if id == "" {
 		return
 	}
-
-	turnID, startedAt, interruptRequested, ok := peekTrackedTurnMetaCore(state, id)
+	turnID, startedAt, interruptRequested, ok := PeekTrackedTurnMetaCore(state, id)
 	if !ok {
 		return
 	}
-
-	eventTurnID, status, reason, terminal, synthetic := trackedTurnTerminalFromEvent(eventType, method, payload)
+	eventTurnID, status, reason, terminal, synthetic := TrackedTurnTerminalFromEvent(eventType, method, payload)
+	diagFields := append(threadLogFields(id),
+		"tracked_turn_id", turnID,
+		"event_turn_id", strings.TrimSpace(eventTurnID),
+		logger.FieldStatus, strings.TrimSpace(status),
+		"reason", strings.TrimSpace(reason),
+		logger.FieldEventType, strings.TrimSpace(eventType),
+		logger.FieldMethod, strings.TrimSpace(method),
+	)
 	if !terminal {
-		if shouldLogTrackedTurnStallHint(eventType, method, startedAt) && markTrackedTurnStallHintCore(state, id, turnID) {
-			logger.Warn("turn tracker: active turn not terminal yet at tail event", maybeFinalizeDiagFields(
-				id,
-				turnID,
-				eventTurnID,
-				eventType,
-				method,
-				status,
-				reason,
-				payload,
+		if shouldLogTrackedTurnStallHint(eventType, method, startedAt) && MarkTrackedTurnStallHintCore(state, id, turnID) {
+			logger.Warn("turn tracker: active turn not terminal yet at tail event", append(diagFields,
 				"turn_age_ms", time.Since(startedAt).Milliseconds(),
 				"interrupt_requested", interruptRequested,
 			)...)
 		}
 		return
 	}
-
 	if strings.TrimSpace(eventTurnID) == "" {
-		logger.Warn("turn tracker: terminal event missing turn_id", maybeFinalizeDiagFields(
-			id,
-			turnID,
-			eventTurnID,
-			eventType,
-			method,
-			status,
-			reason,
-			payload,
-		)...)
-		// Fallback: use tracker's known turn_id to avoid mismatched cleanup
+		logger.Warn("turn tracker: terminal event missing turn_id", diagFields...)
+		// Fallback: use tracker's known turn_id to avoid mismatched cleanup.
 		eventTurnID = turnID
 	}
-
-	completion, completed := completeTrackedTurnByIDCore(state, id, eventTurnID, status, reason)
+	completion, completed := CompleteTrackedTurnByIDCore(state, id, eventTurnID, status, reason)
 	if !completed {
-		logger.Warn("turn tracker: terminal event failed to close tracked turn", maybeFinalizeDiagFields(
-			id,
-			turnID,
-			eventTurnID,
-			eventType,
-			method,
-			status,
-			reason,
-			payload,
-		)...)
+		logger.Warn("turn tracker: terminal event failed to close tracked turn", diagFields...)
 		return
 	}
-
 	logger.Info("turn tracker: finalized by event", append(threadLogFields(id),
 		"tracked_turn_id", turnID,
 		"event_turn_id", eventTurnID,
@@ -1341,67 +1090,23 @@ func maybeFinalizeTrackedTurnCore(
 		logger.FieldEventType, strings.TrimSpace(eventType),
 		logger.FieldMethod, strings.TrimSpace(method),
 	)...)
-
-	summary := trackedTurnSummaryFromPayload(payload)
+	summary := TrackedTurnSummaryFromPayload(payload)
 	if summary == "" {
-		summary = lookupTrackedTurnSummary(state, state.Mu, id, util.FirstNonEmpty(eventTurnID, extractTrackedTurnID(payload), turnID))
+		summary = LookupTrackedTurnSummary(state, state.Mu, id, util.FirstNonEmpty(eventTurnID, ExtractTrackedTurnID(payload), turnID))
 	}
 	if summary != "" {
-		injectTrackedTurnSummary(completion, summary)
-		rememberTrackedTurnSummary(state, state.Mu, id, util.FirstNonEmpty(extractTrackedTurnID(completion), eventTurnID, extractTrackedTurnID(payload)), summary)
+		InjectTrackedTurnSummary(completion, summary)
+		RememberTrackedTurnSummary(state, state.Mu, id, util.FirstNonEmpty(ExtractTrackedTurnID(completion), eventTurnID, ExtractTrackedTurnID(payload)), summary)
 	}
-
 	if synthetic {
 		if notify != nil {
 			notify("turn/completed", completion)
 		}
 		return
 	}
-	mergeTrackedTurnCompletionPayload(payload, completion)
+	MergeTrackedTurnCompletionPayload(payload, completion)
 }
-
-func finalizeTrackedTurnEventCore(state turnTrackerState, threadID, eventType, method string, payload map[string]any, notify func(string, any)) {
-	touchTrackedTurnLastEventCore(state, threadID)
-	maybeFinalizeTrackedTurnCore(state, threadID, eventType, method, payload, notify)
+func FinalizeTrackedTurnEventCore(state turnTrackerState, threadID, eventType, method string, payload map[string]any, notify func(string, any)) {
+	TouchTrackedTurnLastEventCore(state, threadID)
+	MaybeFinalizeTrackedTurnCore(state, threadID, eventType, method, payload, notify)
 }
-
-var (
-	EnsureTurnTrackerStateLocked      = ensureTurnTrackerStateLocked
-	TrackerDurationOrDefault          = trackerDurationOrDefault
-	NormalizeTrackedTurnStatus        = normalizeTrackedTurnStatus
-	ThreadStatusTerminalFromPayload   = threadStatusTerminalFromPayload
-	ExtractTrackedString              = extractTrackedString
-	ExtractTrackedTurnID              = extractTrackedTurnID
-	ExtractTrackedTurnStatus          = extractTrackedTurnStatus
-	ExtractTrackedTurnReason          = extractTrackedTurnReason
-	TrackedTurnTerminalFromEvent      = trackedTurnTerminalFromEvent
-	TrackedTurnSummaryFromPayload     = trackedTurnSummaryFromPayload
-	TrackedTurnSummaryCacheKey        = trackedTurnSummaryCacheKey
-	InjectTrackedTurnSummary          = injectTrackedTurnSummary
-	MergeTrackedTurnCompletionPayload = mergeTrackedTurnCompletionPayload
-	IsTerminalEventType               = isTerminalEventType
-	RememberTrackedTurnSummary        = rememberTrackedTurnSummary
-	LookupTrackedTurnSummary          = lookupTrackedTurnSummary
-	WithTrackerStateLockCore          = withTrackerStateLockCore
-	TrackerDurationCore               = trackerDurationCore
-	SetTrackerDurationCore            = setTrackerDurationCore
-	TrackerStateCore                  = trackerStateCore
-	ApplyTrackedTurnTransitionCore    = applyTrackedTurnTransitionCore
-	WithActiveTurnCore                = withActiveTurnCore
-	WithActiveTurnByIDCore            = withActiveTurnByIDCore
-	SupersedeActiveTurn               = supersedeActiveTurn
-	BeginTrackedTurnCore              = beginTrackedTurnCore
-	WaitTrackedTurnTerminalCore       = waitTrackedTurnTerminalCore
-	CompleteTrackedTurnByIDCore       = completeTrackedTurnByIDCore
-	PeekTrackedTurnMetaCore           = peekTrackedTurnMetaCore
-	MarkTrackedTurnStallHintCore      = markTrackedTurnStallHintCore
-	TouchTrackedTurnLastEventCore     = touchTrackedTurnLastEventCore
-	NextTrackedTurnStallDecisionCore  = nextTrackedTurnStallDecisionCore
-	CheckTurnStallCore                = checkTurnStallCore
-	HandleStallGracePeriodCore        = handleStallGracePeriodCore
-	TrackerRuntimePushAlert           = trackerRuntimePushAlert
-	ExecuteStallAutoInterruptCore     = executeStallAutoInterruptCore
-	CaptureAndInjectTurnSummaryCore   = captureAndInjectTurnSummaryCore
-	MaybeFinalizeTrackedTurnCore      = maybeFinalizeTrackedTurnCore
-	FinalizeTrackedTurnEventCore      = finalizeTrackedTurnEventCore
-)

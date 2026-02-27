@@ -139,26 +139,24 @@ type reviewStartResponse struct {
 	ReviewThreadID string          `json:"reviewThreadId"`
 }
 
-func requireReviewTargetValue(raw, field, targetType string) (string, error) {
-	value := strings.TrimSpace(raw)
-	if value == "" {
+func buildReviewStartArgs(p reviewStartParams) (string, error) {
+	required := func(raw, field, targetType string) (string, error) {
+		if value := strings.TrimSpace(raw); value != "" {
+			return value, nil
+		}
 		return "", pkgerr.New("Server.reviewStart", "target."+field+" is required when target.type is "+targetType)
 	}
-	return value, nil
-}
-
-func buildReviewStartArgs(p reviewStartParams) (string, error) {
 	targetType := strings.TrimSpace(p.Target.Type)
 	if targetType == "" {
 		return "", pkgerr.New("Server.reviewStart", "target.type is required")
 	}
 	switch targetType {
 	case "custom":
-		return requireReviewTargetValue(p.Target.Instructions, "instructions", "custom")
+		return required(p.Target.Instructions, "instructions", "custom")
 	case "baseBranch":
-		return requireReviewTargetValue(p.Target.Branch, "branch", "baseBranch")
+		return required(p.Target.Branch, "branch", "baseBranch")
 	case "commit":
-		return requireReviewTargetValue(p.Target.Sha, "sha", "commit")
+		return required(p.Target.Sha, "sha", "commit")
 	case "uncommittedChanges":
 		return strings.TrimSpace(p.Delivery), nil
 	default:

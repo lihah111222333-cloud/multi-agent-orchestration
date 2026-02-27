@@ -15,12 +15,6 @@ func withThreadIDParam(threadID string, params map[string]any) map[string]any {
 	return params
 }
 
-func setProtocolAliases(params map[string]any, value any, keys ...string) {
-	for _, key := range keys {
-		params[key] = value
-	}
-}
-
 func (c *AppServerClient) Initialize() error {
 	_, err := c.call("initialize", map[string]any{
 		"clientInfo": map[string]any{
@@ -106,11 +100,10 @@ func (c *AppServerClient) ensureListenerIfNeeded(
 		return
 	}
 	defer c.listenerEnsureInFlight.Store(false)
-	callFn := rpcCall
-	if callFn == nil {
-		callFn = c.call
+	if rpcCall == nil {
+		rpcCall = c.call
 	}
-	resolvedID, _, err := ensureListenerWithAutoInitialize(threadID, callFn, c.Initialize)
+	resolvedID, _, err := ensureListenerWithAutoInitialize(threadID, rpcCall, c.Initialize)
 	if err != nil {
 		if isMethodNotFoundRPCError(err) || isInvalidParamsRPCError(err) {
 			c.listenerEnsureNeeded.Store(false)
@@ -135,8 +128,7 @@ func (c *AppServerClient) ensureListenerIfNeededAsync(
 func (c *AppServerClient) Submit(prompt string, images, files []string, outputSchema json.RawMessage) error {
 	c.ensureListenerIfNeeded(c.call)
 	inputs := buildTurnStartInputs(prompt, images, files)
-	threadID := strings.TrimSpace(c.ThreadID)
-	params := withThreadIDParam(threadID, map[string]any{"input": inputs})
+	params := withThreadIDParam(strings.TrimSpace(c.ThreadID), map[string]any{"input": inputs})
 	if len(outputSchema) > 0 {
 		params["outputSchema"] = json.RawMessage(outputSchema)
 	}
@@ -177,17 +169,11 @@ func (c *AppServerClient) tryInterruptCommand() (bool, error) {
 		)
 	}
 	if turnID != "" {
-		err := callTurnInterrupt(turnID, "with_turn_id")
-		if err == nil {
+		if err := callTurnInterrupt(turnID, "with_turn_id"); err == nil || (isInterruptTurnIDMismatchError(err) && callTurnInterrupt(turnID, "thread_scoped") == nil) {
 			return true, nil
 		}
-		if isInterruptTurnIDMismatchError(err) && callTurnInterrupt(turnID, "thread_scoped") == nil {
-			return true, nil
-		}
-	} else {
-		if callTurnInterrupt("", "thread_scoped") == nil {
-			return true, nil
-		}
+	} else if callTurnInterrupt("", "thread_scoped") == nil {
+		return true, nil
 	}
 	if c.callWithInitializeRecovery(
 		"interruptConversation",
@@ -200,13 +186,7 @@ func (c *AppServerClient) tryInterruptCommand() (bool, error) {
 }
 
 func (c *AppServerClient) callWithInitializeRecovery(method string, params any, timeout time.Duration) error {
-	_, _, err := callWithNotInitializedRecovery(
-		c.call,
-		c.Initialize,
-		method,
-		params,
-		timeout,
-	)
+	_, _, err := callWithNotInitializedRecovery(c.call, c.Initialize, method, params, timeout)
 	return err
 }
 
@@ -224,12 +204,14 @@ func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID
 	logger.Warn("codex: SendDynamicToolResult without requestID, falling back to notification",
 		logger.FieldAgentID, c.AgentID, logger.FieldCallID, callID)
 	params := withThreadIDParam(c.ThreadID, map[string]any{
+		"callId":       callID,
+		"toolCallId":   callID,
+		"tool_call_id": callID,
 		"output":       output,
 		"result":       result,
 		"contentItems": result.ContentItems,
 		"success":      true,
 	})
-	setProtocolAliases(params, callID, "callId", "toolCallId", "tool_call_id")
 	return c.notify("dynamic_tool_result", params)
 }
 

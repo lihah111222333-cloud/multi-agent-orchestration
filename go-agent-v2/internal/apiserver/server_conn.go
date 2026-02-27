@@ -515,7 +515,7 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 			})
 			reason = "request_overloaded"
 		} else {
-			resp = handleParsedMessage(s, ctx, env)
+			resp = dispatchRequest(s, ctx, rawIDtoAny(env.ID), env.Method, env.Params)
 			if resp == nil {
 				continue
 			}
@@ -576,11 +576,6 @@ func handleClientResponse(s *Server, env rpcEnvelope) bool {
 	}
 	found, _ := deliverPendingResponseState(s, reqID, resp)
 	return found
-}
-
-// handleParsedMessage 复用已解析的 rpcEnvelope 分发请求 (避免二次 Unmarshal)。
-func handleParsedMessage(s *Server, ctx context.Context, env rpcEnvelope) *Response {
-	return dispatchRequest(s, ctx, rawIDtoAny(env.ID), env.Method, env.Params)
 }
 
 // dispatchRequest 统一的方法分发逻辑。

@@ -244,8 +244,7 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 
 	// 子 agent 自动设置 approvalPolicy = "never" — 防止 codex 沙箱拦截文件操作。
 	// 仅首个 agent (主 agent) 保留默认审批策略。
-	isSubAgent := len(m.agents) > 0
-	if isSubAgent {
+	if len(m.agents) > 0 {
 		type approvalPolicySetter interface{ SetApprovalPolicy(string) }
 		if setter, ok := client.(approvalPolicySetter); ok {
 			setter.SetApprovalPolicy("never")
@@ -382,10 +381,10 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event agentcore.Event) {
 	}
 
 	// 特殊状态处理
-	if event.Type == agentcore.EventShutdownComplete {
+	switch event.Type {
+	case agentcore.EventShutdownComplete:
 		newState = StateStopped
-	}
-	if event.Type == agentcore.EventConnectionDead {
+	case agentcore.EventConnectionDead:
 		newState = StateError
 	}
 

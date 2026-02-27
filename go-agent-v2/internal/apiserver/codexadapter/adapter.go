@@ -265,14 +265,7 @@ func (a *Adapter) buildSelectedSkillPrompt(selectedSkills []string) (string, int
 func (a *Adapter) renderAutoMatchedSkillPrompt(agentID string, matches []contracts.AutoMatchedSkillMatch) (string, int) {
 	return promptconsumer.RenderAutoMatchedSkillPrompt(agentID, matches, a.readSkillContent, commonadapter.MergePromptText, commonadapter.SkillInputText)
 }
-func (a *Adapter) resolveCodexThreadCandidatesForRuntime(ctx context.Context, agentID string) []string {
-	return a.ResolveCodexThreadCandidates(
-		ctx,
-		agentID,
-		lifecycleconsumer.AppendUniqueThreadIDFallback,
-		lifecycleconsumer.PreviewResumeCandidates,
-	)
-}
+func (a *Adapter) resolveCodexThreadCandidatesForRuntime(ctx context.Context, agentID string) []string { return a.ResolveCodexThreadCandidates(ctx, agentID, lifecycleconsumer.AppendUniqueThreadIDFallback, lifecycleconsumer.PreviewResumeCandidates) }
 func (a *Adapter) runtimeConsumerDeps() consumerruntime.Deps {
 	if a == nil {
 		return consumerruntime.Deps{}
@@ -346,22 +339,9 @@ type threadForkResult = lifecycleconsumer.ThreadForkResult
 func (a *Adapter) ThreadStart(ctx context.Context, threadID, cwd, model, modelProvider, approvalPolicy string) (threadStartResult, error) { return a.threadStart(ctx, threadID, cwd, model, modelProvider, approvalPolicy) }
 func (a *Adapter) threadStart(ctx context.Context, threadID, cwd, model, modelProvider, approvalPolicy string) (threadStartResult, error) {
 	return lifecycleconsumer.RunThreadStart(ctx, threadID, cwd, model, modelProvider, approvalPolicy, a.allDynamicToolSchemas(), func(ctx context.Context, agentID, name, path, cwd, startInstructions string, dynamicTools []codexsdk.DynamicTool) error {
-		manager := a.manager()
-		if manager == nil {
-			return appErrors.New("Server.threadStart", "thread manager is not initialized")
-		}
-		return manager.Launch(ctx, agentID, name, path, cwd, startInstructions, dynamicTools)
-	}, a.managerProcess, func() []lifecycleconsumer.AgentInfo { return lifecycleconsumer.ToAgentInfos(a.runningAgents()) }, a.resolveStartInstructionsForLaunch, func(ctx context.Context, threadID string, proc any) {
-		if typed, ok := proc.(*codexsdk.AgentProcess); ok {
-			a.registerBinding(ctx, threadID, typed)
-		}
-	}, func(items []lifecycleconsumer.AgentInfo) {
-		runtime := a.uiRuntime()
-		if runtime == nil {
-			return
-		}
-		runtime.ReplaceThreads(lifecycleconsumer.ToRuntimeThreadSnapshots(items))
-	})
+		if manager := a.manager(); manager != nil { return manager.Launch(ctx, agentID, name, path, cwd, startInstructions, dynamicTools) }
+		return appErrors.New("Server.threadStart", "thread manager is not initialized")
+	}, a.managerProcess, func() []lifecycleconsumer.AgentInfo { return lifecycleconsumer.ToAgentInfos(a.runningAgents()) }, a.resolveStartInstructionsForLaunch, func(ctx context.Context, threadID string, proc any) { if typed, ok := proc.(*codexsdk.AgentProcess); ok { a.registerBinding(ctx, threadID, typed) } }, func(items []lifecycleconsumer.AgentInfo) { if runtime := a.uiRuntime(); runtime != nil { runtime.ReplaceThreads(lifecycleconsumer.ToRuntimeThreadSnapshots(items)) } })
 }
 func (a *Adapter) ThreadResume(ctx context.Context, threadID, path, cwd, model string) (threadResumeResult, error) {
 	id, err := requireThreadID("Server.threadResume", threadID)
@@ -388,12 +368,7 @@ func (a *Adapter) ThreadRealtimeStop(threadID string) (map[string]any, error) { 
 func (a *Adapter) ThreadNameSet(ctx context.Context, threadID, name string) (map[string]any, error) {
 	return lifecycleconsumer.RunThreadNameSet(ctx, threadID, name, a.managerProcess, func(threadID string) bool {
 		return lifecycleconsumer.ThreadExistsInRuntime(threadID, a.uiRuntime())
-	}, a.ThreadExistsInHistory, a.sendCommandFromAny, func(threadID, alias string) {
-		runtime := a.uiRuntime()
-		if runtime != nil {
-			runtime.SetThreadName(threadID, alias)
-		}
-	}, a.persistThreadAlias)
+	}, a.ThreadExistsInHistory, a.sendCommandFromAny, func(threadID, alias string) { if runtime := a.uiRuntime(); runtime != nil { runtime.SetThreadName(threadID, alias) } }, a.persistThreadAlias)
 }
 func (a *Adapter) ThreadRead(_ context.Context, threadID string) (map[string]any, error) {
 	return withProcess(a, "Server.threadRead", threadID, func(proc *codexsdk.AgentProcess) (map[string]any, error) { return lifecycleconsumer.RunThreadRead(proc, a.listThreadsFromAny) })
@@ -509,11 +484,7 @@ func (a *Adapter) persistThreadAlias(ctx context.Context, threadID, alias string
 func (a *Adapter) loadThreadArchiveMap(ctx context.Context) (map[string]int64, error) {
 	archivedMap := map[string]int64{}
 	if store := a.store(); store != nil {
-		value, err := store.Get(ctx, prefThreadArchivesChat)
-		if err != nil {
-			return nil, err
-		}
-		archivedMap = archiveconsumer.NormalizeThreadArchiveMap(value)
+		if value, err := store.Get(ctx, prefThreadArchivesChat); err != nil { return nil, err } else { archivedMap = archiveconsumer.NormalizeThreadArchiveMap(value) }
 	}
 	fromDisk, err := archiveconsumer.LoadThreadArchiveMapFromDisk()
 	if err != nil {
@@ -549,20 +520,16 @@ func (a *Adapter) markTrackedTurnInterruptRequested(threadID string) bool {
 }
 func (a *Adapter) waitTrackedTurnTerminal(threadID string, timeout time.Duration) (string, bool) { state, _ := a.trackerStateAndNotify(); return trackerconsumer.WaitTrackedTurnTerminalCore(state, threadID, timeout) }
 func (a *Adapter) completeTrackedTurnByID(threadID, turnID, status, reason string) (map[string]any, bool) {
-	state, _ := a.trackerStateAndNotify()
-	return trackerconsumer.CompleteTrackedTurnByIDCore(state, threadID, turnID, status, reason)
+	state, _ := a.trackerStateAndNotify(); return trackerconsumer.CompleteTrackedTurnByIDCore(state, threadID, turnID, status, reason)
 }
 func (a *Adapter) beginTrackedTurn(threadID, turnID string) string {
-	state, notify := a.trackerStateAndNotify()
-	return trackerconsumer.BeginTrackedTurnCore(state, threadID, turnID, a.completeTrackedTurnByID, notify, a.checkTurnStall)
+	state, notify := a.trackerStateAndNotify(); return trackerconsumer.BeginTrackedTurnCore(state, threadID, turnID, a.completeTrackedTurnByID, notify, a.checkTurnStall)
 }
 func (a *Adapter) trackerDuration(getter func(turnTrackerState) *time.Duration, fallback time.Duration) time.Duration {
-	state, _ := a.trackerStateAndNotify()
-	return trackerconsumer.TrackerDurationCore(state, getter, fallback)
+	state, _ := a.trackerStateAndNotify(); return trackerconsumer.TrackerDurationCore(state, getter, fallback)
 }
 func (a *Adapter) setTrackerDuration(getter func(turnTrackerState) *time.Duration, value time.Duration) {
-	state, _ := a.trackerStateAndNotify()
-	trackerconsumer.SetTrackerDurationCore(state, getter, value)
+	state, _ := a.trackerStateAndNotify(); trackerconsumer.SetTrackerDurationCore(state, getter, value)
 }
 func (a *Adapter) trackerState() (map[string]*trackedTurn, *sync.Mutex, time.Duration, time.Duration) { state, _ := a.trackerStateAndNotify(); return trackerconsumer.TrackerStateCore(state) }
 func (a *Adapter) stallThreshold() time.Duration {
@@ -583,12 +550,10 @@ func (a *Adapter) StartDynamicToolStallHeartbeat(threadID string) func() {
 	return trackerconsumer.StartStallHeartbeat(threadID, a.stallThreshold(), defaultStallThreshold, defaultStallThreshold, a.touchTrackedTurnLastEvent)
 }
 func (a *Adapter) checkTurnStall(threadID string, turnID string) {
-	state, _ := a.trackerStateAndNotify()
-	trackerconsumer.CheckTurnStallCore(state, threadID, turnID, a.handleStallGracePeriod, a.executeStallAutoInterrupt, a.checkTurnStall)
+	state, _ := a.trackerStateAndNotify(); trackerconsumer.CheckTurnStallCore(state, threadID, turnID, a.handleStallGracePeriod, a.executeStallAutoInterrupt, a.checkTurnStall)
 }
 func (a *Adapter) handleStallGracePeriod(threadID, turnID string, silent, threshold time.Duration) {
-	state, _ := a.trackerStateAndNotify()
-	trackerconsumer.HandleStallGracePeriodCore(state, threadID, turnID, silent, threshold, trackerconsumer.TrackerRuntimePushAlert(a.uiRuntime()), a.checkTurnStall)
+	state, _ := a.trackerStateAndNotify(); trackerconsumer.HandleStallGracePeriodCore(state, threadID, turnID, silent, threshold, trackerconsumer.TrackerRuntimePushAlert(a.uiRuntime()), a.checkTurnStall)
 }
 func (a *Adapter) executeStallAutoInterrupt(threadID string, turnID string, silent time.Duration, threshold time.Duration) {
 	_, notify := a.trackerStateAndNotify()
@@ -615,12 +580,10 @@ func (a *Adapter) TrackedTurnSummaryFromPayload(payload map[string]any) string {
 	return trackerconsumer.TrackedTurnSummaryFromPayload(payload)
 }
 func (a *Adapter) CaptureAndInjectTurnSummary(threadID, eventType, method string, payload map[string]any) {
-	state, _ := a.trackerStateAndNotify()
-	trackerconsumer.CaptureAndInjectTurnSummaryCore(state, threadID, eventType, method, payload)
+	state, _ := a.trackerStateAndNotify(); trackerconsumer.CaptureAndInjectTurnSummaryCore(state, threadID, eventType, method, payload)
 }
 func (a *Adapter) FinalizeTrackedTurnEvent(threadID string, eventType string, method string, payload map[string]any) {
-	state, notify := a.trackerStateAndNotify()
-	trackerconsumer.FinalizeTrackedTurnEventCore(state, threadID, eventType, method, payload, notify)
+	state, notify := a.trackerStateAndNotify(); trackerconsumer.FinalizeTrackedTurnEventCore(state, threadID, eventType, method, payload, notify)
 }
 func (a *Adapter) ThreadArchiveMap(ctx context.Context) (map[string]int64, error) { return a.loadThreadArchiveMap(ctx) }
 func (a *Adapter) threadExistsForArchive(ctx context.Context, threadID string) bool {
@@ -636,13 +599,7 @@ func (a *Adapter) threadExistsForArchive(ctx context.Context, threadID string) b
 	}
 	return a.ThreadExistsInHistory(ctx, id)
 }
-func (a *Adapter) saveThreadArchiveMap(ctx context.Context, archivedMap map[string]int64) error {
-	store := a.store()
-	if store == nil {
-		return nil
-	}
-	return store.Set(ctx, prefThreadArchivesChat, archivedMap)
-}
+func (a *Adapter) saveThreadArchiveMap(ctx context.Context, archivedMap map[string]int64) error { if store := a.store(); store != nil { return store.Set(ctx, prefThreadArchivesChat, archivedMap) }; return nil }
 func (a *Adapter) archiveDeps() archiveconsumer.ThreadArchiveDeps {
 	return archiveconsumer.ThreadArchiveDeps{
 		ThreadExists:                a.threadExistsForArchive,
@@ -652,12 +609,8 @@ func (a *Adapter) archiveDeps() archiveconsumer.ThreadArchiveDeps {
 		BindRolloutPath:             a.bindRolloutPath,
 	}
 }
-func (a *Adapter) ThreadArchive(ctx context.Context, threadID string) (map[string]any, error) {
-	return archiveconsumer.ThreadArchive(ctx, threadID, a.archiveDeps(), a.nowUnixMilli)
-}
-func (a *Adapter) ThreadUnarchive(ctx context.Context, threadID string) (map[string]any, error) {
-	return archiveconsumer.ThreadUnarchive(ctx, threadID, a.archiveDeps())
-}
+func (a *Adapter) ThreadArchive(ctx context.Context, threadID string) (map[string]any, error) { return archiveconsumer.ThreadArchive(ctx, threadID, a.archiveDeps(), a.nowUnixMilli) }
+func (a *Adapter) ThreadUnarchive(ctx context.Context, threadID string) (map[string]any, error) { return archiveconsumer.ThreadUnarchive(ctx, threadID, a.archiveDeps()) }
 func (a *Adapter) bindRolloutPath(ctx context.Context, agentID, codexThreadID, rolloutPath string) {
 	if strings.TrimSpace(codexThreadID) == "" || strings.TrimSpace(rolloutPath) == "" {
 		return

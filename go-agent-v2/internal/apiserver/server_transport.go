@@ -9,10 +9,7 @@ import (
 )
 
 func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
-	if s == nil {
-		http.Error(w, "server not ready", http.StatusServiceUnavailable)
-		return
-	}
+	if s == nil { http.Error(w, "server not ready", http.StatusServiceUnavailable); return }
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -41,11 +38,8 @@ func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 		writeJSONRPCError(w, req.ID, CodeInvalidRequest, "invalid request: method is required")
 		return
 	}
-
 	params := req.Params
-	if len(params) == 0 || string(params) == "null" {
-		params = json.RawMessage("{}")
-	}
+	if len(params) == 0 || string(params) == "null" { params = json.RawMessage("{}") }
 
 	resp := dispatchRequest(s, r.Context(), req.ID, req.Method, params)
 	if resp == nil {
@@ -88,12 +82,7 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rv := recover(); rv != nil {
-				logger.Error("http: handler panicked",
-					logger.FieldMethod, r.Method,
-					logger.FieldPath, r.URL.Path,
-					logger.FieldRemote, r.RemoteAddr,
-					logger.FieldError, rv,
-				)
+				logger.Error("http: handler panicked", logger.FieldMethod, r.Method, logger.FieldPath, r.URL.Path, logger.FieldRemote, r.RemoteAddr, logger.FieldError, rv)
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			}
 		}()
@@ -115,10 +104,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 func handleSSE(s *Server, w http.ResponseWriter, r *http.Request) {
-	if s == nil {
-		http.Error(w, "server not ready", http.StatusServiceUnavailable)
-		return
-	}
+	if s == nil { http.Error(w, "server not ready", http.StatusServiceUnavailable); return }
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "SSE not supported", http.StatusInternalServerError)
@@ -131,12 +117,8 @@ func handleSSE(s *Server, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	ch := make(chan []byte, 64)
-
 	addSSEClientState(s, ch)
-
-	defer func() {
-		removeSSEClientState(s, ch)
-	}()
+	defer func() { removeSSEClientState(s, ch) }()
 
 	logger.Info("sse: client connected", logger.FieldRemote, r.RemoteAddr)
 

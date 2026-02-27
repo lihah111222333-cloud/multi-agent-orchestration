@@ -72,9 +72,7 @@ func (c *AppServerClient) connectWS() error {
 	if err != nil {
 		return apperrors.Wrap(err, "AppServerClient.connectWS", "ws connect")
 	}
-	c.replaceWSConn(conn)
-	util.SafeGo(func() { c.readLoop() })
-	util.SafeGo(func() { c.pingLoop(conn) })
+	c.replaceWSConnAndStartLoops(conn, false)
 	return nil
 }
 
@@ -117,6 +115,15 @@ func (c *AppServerClient) replaceWSConn(conn *websocket.Conn) {
 	if prev != nil && prev != conn {
 		_ = prev.Close()
 	}
+}
+
+func (c *AppServerClient) replaceWSConnAndStartLoops(conn *websocket.Conn, resetReadLoopSignal bool) {
+	c.replaceWSConn(conn)
+	if resetReadLoopSignal {
+		c.wsDone = make(chan struct{})
+	}
+	util.SafeGo(func() { c.readLoop() })
+	util.SafeGo(func() { c.pingLoop(conn) })
 }
 
 // appServerReconnectBackoff 创建预配置的指数退避器。
@@ -180,14 +187,12 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 	}
 	now := time.Now()
 	if remaining, health := c.circuitRemaining(now); remaining > 0 {
-		c.emitBackgroundEvent("Reconnect paused (circuit breaker)", "reconnecting", true, false, map[string]any{
+		c.emitBackgroundEvent("Reconnect paused (circuit breaker)", "reconnecting", true, false, reconnectDetails(trigger, activeTurnID, map[string]any{
 			"phase":               "reconnect",
-			"trigger":             trigger,
-			"activeTurnId":        activeTurnID,
 			"circuit_remaining":   remaining.Milliseconds(),
 			"read_failure_streak": health.ReadFailureStreak,
 			"read_errors_window":  health.ReadErrorsWindow,
-		})
+		}))
 		logger.Warn("codex: reconnect paused by circuit breaker",
 			logger.FieldAgentID, c.AgentID,
 			"trigger", trigger,
@@ -243,19 +248,17 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 // attemptSingleReconnect tries a single WebSocket reconnection.
 // Returns true if reconnection succeeded.
 func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, attempt, maxRetries int) bool {
-	c.noteReconnectAttempt(time.Now())
+	c.noteReconnectAttempt()
 	c.emitBackgroundEvent(
 		"Reconnecting...",
 		"reconnecting",
 		true,
 		false,
-		map[string]any{
-			"phase":        "reconnect",
-			"trigger":      trigger,
-			"attempt":      attempt,
-			"max_retries":  maxRetries,
-			"activeTurnId": activeTurnID,
-		},
+		reconnectDetails(trigger, activeTurnID, map[string]any{
+			"phase":       "reconnect",
+			"attempt":     attempt,
+			"max_retries": maxRetries,
+		}),
 	)
 
 	conn, err := c.dialWS(c.ctx)
@@ -267,17 +270,12 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 		if !willRetry {
 			reconnectMessage = fmt.Sprintf("Reconnect failed %d/%d", attempt, maxRetries)
 		}
-		details := map[string]any{
-			"message":      reconnectMessage,
-			"attempt":      attempt,
-			"max_retries":  maxRetries,
-			"trigger":      trigger,
-			"activeTurnId": activeTurnID,
-		}
-		for key, value := range health.asDetailsMap() {
-			details[key] = value
-		}
-		c.emitStreamError(retryErr, "reconnect", false, willRetry, details)
+		details := reconnectDetails(trigger, activeTurnID, map[string]any{
+			"message":     reconnectMessage,
+			"attempt":     attempt,
+			"max_retries": maxRetries,
+		})
+		c.emitStreamError(retryErr, "reconnect", false, willRetry, mergeDetails(details, health.asDetailsMap()))
 		logger.Warn("codex: ws reconnect attempt failed",
 			logger.FieldAgentID, c.AgentID,
 			"trigger", trigger,
@@ -294,7 +292,7 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 
 	c.replaceWSConn(conn)
 	c.listenerEnsureNeeded.Store(true)
-	c.ensureListenerIfNeededAsync("reconnect", c.call)
+	c.ensureListenerIfNeededAsync(c.call)
 	util.SafeGo(func() { c.pingLoop(conn) })
 	health := c.noteReconnectSuccess(time.Now())
 	c.emitBackgroundEvent(
@@ -302,14 +300,12 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 		"completed",
 		false,
 		true,
-		map[string]any{
+		reconnectDetails(trigger, activeTurnID, map[string]any{
 			"phase":                     "reconnect",
-			"trigger":                   trigger,
 			"attempt":                   attempt,
 			"max_retries":               maxRetries,
-			"activeTurnId":              activeTurnID,
 			"total_reconnect_successes": health.TotalReconnectSuccess,
-		},
+		}),
 	)
 	logger.Info("codex: ws reconnected",
 		logger.FieldAgentID, c.AgentID,
@@ -344,11 +340,8 @@ func (c *AppServerClient) restartProcessAndReconnect() error {
 	if err != nil {
 		return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "dial ws")
 	}
-	c.replaceWSConn(conn)
 	// 重置 wsDone 以支持新的 readLoop 生命周期信号。
-	c.wsDone = make(chan struct{})
-	util.SafeGo(func() { c.readLoop() })
-	util.SafeGo(func() { c.pingLoop(conn) })
+	c.replaceWSConnAndStartLoops(conn, true)
 	return nil
 }
 
@@ -367,12 +360,10 @@ func (c *AppServerClient) recoverByRespawn(trigger, activeTurnID, reason string,
 	if reason == "" {
 		reason = "reconnect_recovery"
 	}
-	c.emitBackgroundEvent("Recovering connection (restart app-server)...", "reconnecting", true, false, map[string]any{
-		"phase":        "reconnect",
-		"reason":       reason,
-		"trigger":      trigger,
-		"activeTurnId": activeTurnID,
-	})
+	c.emitBackgroundEvent("Recovering connection (restart app-server)...", "reconnecting", true, false, reconnectDetails(trigger, activeTurnID, map[string]any{
+		"phase":  "reconnect",
+		"reason": reason,
+	}))
 	logger.Warn("codex: reconnect escalation to process restart",
 		logger.FieldAgentID, c.AgentID,
 		"trigger", trigger,
@@ -384,13 +375,11 @@ func (c *AppServerClient) recoverByRespawn(trigger, activeTurnID, reason string,
 
 	if err := c.restartProcessAndReconnect(); err != nil {
 		health := c.noteRespawnResult(time.Now(), false)
-		c.emitStreamError(err, "reconnect", false, false, map[string]any{
+		c.emitStreamError(err, "reconnect", false, false, reconnectDetails(trigger, activeTurnID, map[string]any{
 			"message":                "Reconnect recovery failed",
-			"trigger":                trigger,
 			"reason":                 reason,
-			"activeTurnId":           activeTurnID,
 			"total_respawn_failures": health.TotalRespawnFailure,
-		})
+		}))
 		logger.Warn("codex: process restart recovery failed",
 			logger.FieldAgentID, c.AgentID,
 			"trigger", trigger,
@@ -433,13 +422,11 @@ func (c *AppServerClient) recoverByRespawn(trigger, activeTurnID, reason string,
 			"reason", reason,
 		)
 	})
-	c.emitBackgroundEvent("Reconnected after restart", "completed", false, true, map[string]any{
+	c.emitBackgroundEvent("Reconnected after restart", "completed", false, true, reconnectDetails(trigger, activeTurnID, map[string]any{
 		"phase":                   "reconnect",
 		"reason":                  reason,
-		"trigger":                 trigger,
-		"activeTurnId":            activeTurnID,
 		"total_respawn_successes": health.TotalRespawnSuccess,
-	})
+	}))
 	logger.Info("codex: reconnected via process restart",
 		logger.FieldAgentID, c.AgentID,
 		"trigger", trigger,
@@ -486,9 +473,7 @@ func (c *AppServerClient) handleReconnectExhausted(trigger, activeTurnID string,
 	if activeTurnID != "" {
 		exhausted["activeTurnId"] = activeTurnID
 	}
-	for key, value := range health.asDetailsMap() {
-		exhausted[key] = value
-	}
+	exhausted = mergeDetails(exhausted, health.asDetailsMap())
 	c.emitBackgroundEvent("Reconnect failed", "failed", false, true, exhausted)
 	logger.Warn("codex: ws reconnect exhausted",
 		logger.FieldAgentID, c.AgentID,
@@ -553,13 +538,17 @@ func (c *AppServerClient) respond(id int64, result any) error {
 	return c.respondWithID(newJSONRPCIntID(id), result)
 }
 
-func (c *AppServerClient) respondWithID(id jsonRPCID, result any) error {
-	resp := jsonRPCResponse{
+func (c *AppServerClient) writeRPCResponse(id jsonRPCID, result any, rpcErr *jsonRPCError) error {
+	return c.asWriteJSON(jsonRPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Result:  result,
-	}
-	return c.asWriteJSON(resp)
+		Error:   rpcErr,
+	})
+}
+
+func (c *AppServerClient) respondWithID(id jsonRPCID, result any) error {
+	return c.writeRPCResponse(id, result, nil)
 }
 
 // RespondError 向 codex 发送 JSON-RPC 错误响应 (用于 server request 失败场景)。
@@ -572,16 +561,7 @@ func (c *AppServerClient) RespondError(id int64, code int, message string) error
 }
 
 func (c *AppServerClient) respondErrorWithID(id jsonRPCID, code int, message string) error {
-	resp := struct {
-		JSONRPC string        `json:"jsonrpc"`
-		ID      jsonRPCID     `json:"id"`
-		Error   *jsonRPCError `json:"error"`
-	}{
-		JSONRPC: "2.0",
-		ID:      id,
-		Error:   &jsonRPCError{Code: code, Message: message},
-	}
-	return c.asWriteJSON(resp)
+	return c.writeRPCResponse(id, nil, &jsonRPCError{Code: code, Message: message})
 }
 
 // ========================================

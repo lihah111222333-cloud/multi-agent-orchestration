@@ -182,8 +182,7 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 	trigger = strings.TrimSpace(trigger)
 	activeTurnID := c.getActiveTurnID()
 	maxRetries := max(appServerStreamMaxRetries, 0)
-	now := time.Now()
-	if remaining, health := c.circuitRemaining(now); remaining > 0 {
+	if remaining, health := c.circuitRemaining(time.Now()); remaining > 0 {
 		c.emitBackgroundEvent("Reconnect paused (circuit breaker)", "reconnecting", true, false, reconnectDetails(trigger, activeTurnID, map[string]any{
 			"phase":               "reconnect",
 			"circuit_remaining":   remaining.Milliseconds(),
@@ -201,10 +200,8 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 			return false
 		}
 	}
-	if c.shouldPreferRespawn(time.Now()) {
-		if c.recoverByRespawn(trigger, activeTurnID, "read_error_burst", lastErr) {
-			return true
-		}
+	if c.shouldPreferRespawn(time.Now()) && c.recoverByRespawn(trigger, activeTurnID, "read_error_burst", lastErr) {
+		return true
 	}
 
 	bo := appServerReconnectBackoff()
@@ -451,7 +448,7 @@ func (c *AppServerClient) RecoverConnection(reason string) error {
 	if recoveryReason == "" {
 		recoveryReason = "manual_recover"
 	}
-	if ok := c.recoverByRespawn("manual", c.getActiveTurnID(), recoveryReason, nil); !ok {
+	if !c.recoverByRespawn("manual", c.getActiveTurnID(), recoveryReason, nil) {
 		return apperrors.New("AppServerClient.RecoverConnection", "manual recovery failed")
 	}
 	return nil

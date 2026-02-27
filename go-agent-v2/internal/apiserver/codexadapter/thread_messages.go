@@ -90,8 +90,6 @@ func (a *Adapter) LoadAllThreadMessagesFromRollout(ctx context.Context, threadID
 		threadID,
 		a.resolveRolloutHistorySource,
 		normalizeCodexThreadID,
-		nil,
-		nil,
 		showInjectedPromptInChat,
 	)
 }

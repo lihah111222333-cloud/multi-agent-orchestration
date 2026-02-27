@@ -114,6 +114,7 @@ func TestLoadAllThreadMessagesFromCodexRollout(t *testing.T) {
 			func(context.Context, string) (string, string) { return " codex-1 ", path },
 			func(s string) string { return s },
 			nil,
+			nil,
 			func(_ string, trimInjected bool) ([]codex.RolloutMessage, error) {
 				trimInjectedArg = trimInjected
 				return []codex.RolloutMessage{
@@ -149,6 +150,7 @@ func TestLoadAllThreadMessagesFromCodexRollout(t *testing.T) {
 			func(context.Context, string) (string, string) { return "codex-2", "" },
 			nil,
 			func(string) (string, error) { return "", errors.New("not found") },
+			nil,
 			func(string, bool) ([]codex.RolloutMessage, error) {
 				readCalled = true
 				return nil, nil

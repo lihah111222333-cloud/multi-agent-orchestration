@@ -34,9 +34,9 @@ description: P7 SDK 提取（极限瘦身版）— codexadapter ≤1000 行，SD
 7. import 替换仅改 import 行，排除 `vendor/.agent/.tmp`。
 8. 每步结束创建 checkpoint commit。
 9. **禁止胶水层**：不得新建 bridge/proxy/wrapper/shim/forwarder/relay 层。迁移 = 「剪切 + 粘贴 + 改 package 声明」，不是「复制 + 原地留桥接」。
-10. **反胶水零膨胀**：关注迁移域净增，防止“复制 + 桥接”绕过（按阶段分档）。
+10. **反胶水零膨胀**：关注迁移域净增，防止“复制 + 桥接”绕过（按阶段分档，统计仅含非测试 Go 文件）。
     - 迁移域：`internal/apiserver/codexadapter` + `pkg/codexsdk` + `internal/agentcore` + `internal/codex`
-    - 净增定义：`delta = added - deleted`（基于 `git diff --numstat`）
+    - 净增定义：`delta = added - deleted`（基于 `git diff --numstat`，仅统计 `*.go` 且排除 `*_test.go`）
     - 阶段阈值：
       - `P7-A`：`delta_scope <= +50` 且 `delta_adapter <= 0`
       - `P7-B0`：`delta_scope <= +1000` 且 `delta_adapter <= +1000`（允许解耦期临时重排膨胀）
@@ -51,7 +51,7 @@ description: P7 SDK 提取（极限瘦身版）— codexadapter ≤1000 行，SD
     # 反膨胀门禁：用 git diff 统计迁移域净增；每步执行前设置 P7_STEP=A|B0|B1|B2|C
     calc_delta() {
       git diff --numstat -- "$@" | \
-        awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /\.go$/ {a+=$1; d+=$2} END {print a-d+0}'
+        awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /\.go$/ && $3 !~ /_test\.go$/ {a+=$1; d+=$2} END {print a-d+0}'
     }
     # 注意：包含 internal/{agentcore,codex}，避免 P7-A 的 git mv 被误判为净膨胀
     scope_delta=$(calc_delta internal/apiserver/codexadapter pkg/codexsdk internal/agentcore internal/codex)

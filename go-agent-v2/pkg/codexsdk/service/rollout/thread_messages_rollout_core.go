@@ -3,7 +3,6 @@ package rollout
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"strings"
 	"time"
 
@@ -28,6 +27,7 @@ func LoadAllThreadMessagesFromCodexRollout(
 	resolveRolloutHistorySource func(context.Context, string) (string, string),
 	normalizeCodexThreadID func(string) string,
 	findRolloutPath func(string) (string, error),
+	rolloutPathExists func(string) bool,
 	readRolloutMessagesWithTrim func(path string, trimInjected bool) ([]codex.RolloutMessage, error),
 	showInjectedPromptInChat bool,
 ) ([]ThreadHistoryMessage, error) {
@@ -43,14 +43,6 @@ func LoadAllThreadMessagesFromCodexRollout(
 	if normalize == nil {
 		normalize = strings.TrimSpace
 	}
-	findRollout := findRolloutPath
-	if findRollout == nil {
-		findRollout = codex.FindRolloutPath
-	}
-	readRollout := readRolloutMessagesWithTrim
-	if readRollout == nil {
-		readRollout = codex.ReadRolloutMessagesWithTrim
-	}
 	codexThreadID, rolloutPath := resolve(ctx, threadID)
 	codexThreadID = normalize(codexThreadID)
 	if codexThreadID == "" {
@@ -58,20 +50,26 @@ func LoadAllThreadMessagesFromCodexRollout(
 	}
 	path := strings.TrimSpace(rolloutPath)
 	if path == "" {
-		resolvedPath, err := findRollout(codexThreadID)
+		if findRolloutPath == nil {
+			return []ThreadHistoryMessage{}, nil
+		}
+		resolvedPath, err := findRolloutPath(codexThreadID)
 		if err != nil {
 			return []ThreadHistoryMessage{}, nil
 		}
-		path = resolvedPath
+		path = strings.TrimSpace(resolvedPath)
 	}
 	if path == "" {
 		return []ThreadHistoryMessage{}, nil
 	}
-	if _, err := os.Stat(path); err != nil {
+	if rolloutPathExists != nil && !rolloutPathExists(path) {
+		return []ThreadHistoryMessage{}, nil
+	}
+	if readRolloutMessagesWithTrim == nil {
 		return []ThreadHistoryMessage{}, nil
 	}
 	trimInjected := !showInjectedPromptInChat
-	rolloutMsgs, err := readRollout(path, trimInjected)
+	rolloutMsgs, err := readRolloutMessagesWithTrim(path, trimInjected)
 	if err != nil {
 		return nil, err
 	}

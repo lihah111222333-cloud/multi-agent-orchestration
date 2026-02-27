@@ -73,6 +73,11 @@ func parseSlashCommandArgParams(params json.RawMessage, argKey string) (slashCom
 	return parsed, nil
 }
 
+func (a *Adapter) sendCommandToAnyProcess(proc any, command, args string) error {
+	typed, _ := proc.(*runner.AgentProcess)
+	return a.SendCommand(typed, command, args)
+}
+
 func (a *Adapter) sendSlashCommand(ctx context.Context, methodName, threadID, command, args string, requireThreadID bool) (map[string]any, error) {
 	return commandsvc.RunSendSlashCommand(
 		ctx,
@@ -83,10 +88,7 @@ func (a *Adapter) sendSlashCommand(ctx context.Context, methodName, threadID, co
 		requireThreadID,
 		a.resolveThreadForSlashCommand,
 		a.withProcessMap,
-		func(proc any, command, args string) error {
-			typed, _ := proc.(*runner.AgentProcess)
-			return a.SendCommand(typed, command, args)
-		},
+		a.sendCommandToAnyProcess,
 	)
 }
 

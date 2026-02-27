@@ -90,11 +90,7 @@ func collectAutoMatchedSkillMatches(
 	return matches
 }
 
-// RenderAutoMatchedSkillPrompt renders matched-skill prompt using adapter-owned dependencies.
-func (a *Adapter) RenderAutoMatchedSkillPrompt(agentID string, matches []autoMatchedSkillMatch) (string, int) {
-	if a == nil {
-		return "", 0
-	}
+func toPromptServiceMatches(matches []autoMatchedSkillMatch) []promptsvc.AutoMatchedSkillMatch {
 	serviceMatches := make([]promptsvc.AutoMatchedSkillMatch, 0, len(matches))
 	for _, match := range matches {
 		serviceMatches = append(serviceMatches, promptsvc.AutoMatchedSkillMatch{
@@ -103,9 +99,17 @@ func (a *Adapter) RenderAutoMatchedSkillPrompt(agentID string, matches []autoMat
 			MatchedTerms: match.MatchedTerms,
 		})
 	}
+	return serviceMatches
+}
+
+// RenderAutoMatchedSkillPrompt renders matched-skill prompt using adapter-owned dependencies.
+func (a *Adapter) RenderAutoMatchedSkillPrompt(agentID string, matches []autoMatchedSkillMatch) (string, int) {
+	if a == nil {
+		return "", 0
+	}
 	return promptsvc.RenderAutoMatchedSkillPrompt(
 		agentID,
-		serviceMatches,
+		toPromptServiceMatches(matches),
 		a.readSkillContent,
 		commonadapter.MergePromptText,
 		commonadapter.SkillInputText,

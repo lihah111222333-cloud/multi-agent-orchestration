@@ -1,13 +1,14 @@
 package codexadapter
 
 import (
+	lifecycleconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/lifecycle"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/common"
 	lifecycle "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/lifecycle"
 )
 
 // FuzzyFileSearch walks directories and returns fuzzy-matched file paths.
 func (a *Adapter) FuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern string) bool) []map[string]any {
-	return lifecycle.FuzzyFileSearch(query, roots, fuzzyMatch)
+	return lifecycleconsumer.FuzzyFileSearch(query, roots, fuzzyMatch)
 }
 
 func appendUniqueThreadIDFallback(dst []string, seen map[string]struct{}, candidate string) []string {

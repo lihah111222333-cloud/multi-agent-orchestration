@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/multi-agent/go-agent-v2/internal/runner"
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/codex"
+	rolloutconsumer "github.com/multi-agent/go-agent-v2/pkg/codexsdk/consumer/rollout"
 	rolloutsvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/rollout"
 )
 
@@ -57,17 +57,13 @@ func loadAllThreadMessagesFromCodexRollout(
 	threadID string,
 	resolveRolloutHistorySource func(context.Context, string) (string, string),
 	normalizeCodexThreadID func(string) string,
-	findRolloutPath func(string) (string, error),
-	readRolloutMessagesWithTrim func(path string, trimInjected bool) ([]codex.RolloutMessage, error),
 	showInjectedPromptInChat bool,
 ) ([]threadHistoryMessage, error) {
-	items, err := rolloutsvc.LoadAllThreadMessagesFromCodexRollout(
+	items, err := rolloutconsumer.LoadAllThreadMessagesFromCodexRollout(
 		ctx,
 		threadID,
 		resolveRolloutHistorySource,
 		normalizeCodexThreadID,
-		findRolloutPath,
-		readRolloutMessagesWithTrim,
 		showInjectedPromptInChat,
 	)
 	if err != nil {

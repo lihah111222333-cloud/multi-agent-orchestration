@@ -636,107 +636,100 @@ func (h *ToolHandlers) ReadFile(args json.RawMessage) string {
 // Diagnostics returns current diagnostics from cache.
 func (h *ToolHandlers) Diagnostics(args json.RawMessage) string {
 	call := startLSPToolCallFromArgs("lsp_diagnostics", args)
-	params, err := decodeArgs[lspFilePathParam](args)
+	filePath, err := decodeDiagnosticsPath(args)
 	if err != nil {
 		call.fail(err, "stage", "decode")
 		return "error: unmarshal diagnostics params: " + err.Error()
 	}
-	params.FilePath = strings.TrimSpace(params.FilePath)
-	resolvedPath := lspToolLogPath(params.FilePath)
-
-	if params.FilePath != "" && !h.managerUnavailable() {
-		if err := h.manager.BootstrapDocument(params.FilePath); err != nil {
-			call.fail(err,
-				logger.FieldPath, resolvedPath,
-				"stage", "bootstrap",
-			)
-			return toolError(err)
-		}
-		// Diagnostics arrive asynchronously via notifications; wait once to improve first lookup hit rate.
-		time.Sleep(120 * time.Millisecond)
+	resolvedPath := lspToolLogPath(filePath)
+	if err := h.bootstrapDiagnosticsIfNeeded(call, filePath, resolvedPath); err != nil {
+		return toolError(err)
 	}
 
+	text, count, source := h.collectDiagnostics(filePath)
+	empty := text == ""
+	call.done(diagnosticsDoneAttrs(filePath, resolvedPath, empty, count, source)...)
+	if empty {
+		return "no diagnostics"
+	}
+	return text
+}
+
+func decodeDiagnosticsPath(args json.RawMessage) (string, error) {
+	params, err := decodeArgs[lspFilePathParam](args)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(params.FilePath), nil
+}
+
+func (h *ToolHandlers) bootstrapDiagnosticsIfNeeded(call *lspToolCallLogger, filePath, resolvedPath string) error {
+	if filePath == "" || h.managerUnavailable() {
+		return nil
+	}
+	if err := h.manager.BootstrapDocument(filePath); err != nil {
+		call.fail(err, logger.FieldPath, resolvedPath, "stage", "bootstrap")
+		return err
+	}
+	// Diagnostics arrive asynchronously via notifications; wait once to improve first lookup hit rate.
+	time.Sleep(120 * time.Millisecond)
+	return nil
+}
+
+func (h *ToolHandlers) collectDiagnostics(filePath string) (text string, count int, source string) {
 	accessor := h.diagnosticsAccessor()
 	if accessor == nil {
-		call.done(
-			logger.FieldPath, resolvedPath,
-			"result_empty", true,
-			"diagnostics_count", 0,
-			"diagnostics_source", "none",
-		)
-		return "no diagnostics"
+		return "", 0, "none"
 	}
-
-	if params.FilePath != "" {
-		uri := normalizeDiagnosticsURI(params.FilePath)
-		diags := accessor.GetDiagnostics(uri)
-		if len(diags) == 0 {
-			call.done(
-				logger.FieldPath, resolvedPath,
-				"result_empty", true,
-				"diagnostics_count", 0,
-				"diagnostics_source", "file",
-			)
-			return "no diagnostics"
-		}
-		var sb strings.Builder
-		for _, diagnostic := range diags {
-			fmt.Fprintf(
-				&sb,
-				"%s:%d:%d %s\n",
-				params.FilePath,
-				diagnostic.Range.Start.Line+1,
-				diagnostic.Range.Start.Character,
-				diagnostic.Message,
-			)
-		}
-		call.done(
-			logger.FieldPath, resolvedPath,
-			"result_empty", false,
-			"diagnostics_count", len(diags),
-			"diagnostics_source", "file",
-		)
-		return sb.String()
+	if filePath != "" {
+		diags := accessor.GetDiagnostics(normalizeDiagnosticsURI(filePath))
+		return diagnosticsString(filePath, diags), len(diags), "file"
 	}
-
 	all := accessor.GetAllDiagnostics()
 	if len(all) == 0 {
-		call.done(
-			"result_empty", true,
-			"diagnostics_count", 0,
-			"diagnostics_source", "all",
-		)
-		return "no diagnostics"
+		return "", 0, "all"
+	}
+	total := 0
+	var sb strings.Builder
+	for uri, diags := range all {
+		total += appendDiagnostics(&sb, uri, diags)
+	}
+	return sb.String(), total, "all"
+}
+
+func diagnosticsDoneAttrs(filePath, resolvedPath string, empty bool, count int, source string) []any {
+	attrs := []any{
+		"result_empty", empty,
+		"diagnostics_count", count,
+		"diagnostics_source", source,
+	}
+	if filePath != "" || source == "none" {
+		return append([]any{logger.FieldPath, resolvedPath}, attrs...)
+	}
+	return attrs
+}
+
+func diagnosticsString(label string, diags []Diagnostic) string {
+	if len(diags) == 0 {
+		return ""
 	}
 	var sb strings.Builder
-	totalCount := 0
-	for uri, diags := range all {
-		for _, diagnostic := range diags {
-			fmt.Fprintf(
-				&sb,
-				"%s:%d:%d %s\n",
-				uri,
-				diagnostic.Range.Start.Line+1,
-				diagnostic.Range.Start.Character,
-				diagnostic.Message,
-			)
-			totalCount++
-		}
-	}
-	if sb.Len() == 0 {
-		call.done(
-			"result_empty", true,
-			"diagnostics_count", 0,
-			"diagnostics_source", "all",
-		)
-		return "no diagnostics"
-	}
-	call.done(
-		"result_empty", false,
-		"diagnostics_count", totalCount,
-		"diagnostics_source", "all",
-	)
+	_ = appendDiagnostics(&sb, label, diags)
 	return sb.String()
+}
+
+func appendDiagnostics(sb *strings.Builder, label string, diags []Diagnostic) int {
+	for _, diagnostic := range diags {
+		fmt.Fprintf(
+			sb,
+			"%s:%d:%d %s\n",
+			label,
+			diagnostic.Range.Start.Line+1,
+			diagnostic.Range.Start.Character,
+			diagnostic.Message,
+		)
+	}
+	return len(diags)
 }
 
 // Definition performs go-to-definition.
@@ -874,89 +867,88 @@ func (h *ToolHandlers) Completion(args json.RawMessage) string {
 
 // DidChange notifies full content changes.
 func (h *ToolHandlers) DidChange(args json.RawMessage) string {
-	call := startLSPToolCallFromArgs("lsp_did_change", args)
-	if h.managerUnavailable() {
-		call.fail(errLSPManagerUnavailable, "stage", "precheck")
+	call, ok := h.startManagedToolCall("lsp_did_change", args)
+	if !ok {
 		return "error: lsp manager unavailable"
 	}
-	params, err := decodeArgs[lspDidChangeParam](args)
+	params, filePath, baseAttrs, err := decodeDidChangeRequest(call, args)
 	if err != nil {
-		call.fail(err, "stage", "decode")
 		return toolError(err)
 	}
-	filePath, err := requireFilePath(params.FilePath)
+	if err := persistDidChangeIfNeeded(call, filePath, params.NewContent, baseAttrs, params.PersistToDisk); err != nil {
+		return "error: writing file: " + err.Error()
+	}
+	if result, done := h.syncDidChange(call, filePath, params, baseAttrs); done {
+		return result
+	}
+	call.done(append(baseAttrs, "result_empty", false)...)
+	return didChangeSuccessText(params.PersistToDisk)
+}
+
+func decodeDidChangeRequest(call *lspToolCallLogger, args json.RawMessage) (lspDidChangeParam, string, []any, error) {
+	params, err := decodeToolParams[lspDidChangeParam](call, args)
 	if err != nil {
-		call.fail(err, "stage", "validate")
-		return toolError(err)
+		return lspDidChangeParam{}, "", nil, err
+	}
+	filePath, err := requireToolFilePath(call, params.FilePath)
+	if err != nil {
+		return lspDidChangeParam{}, "", nil, err
 	}
 	if params.Version == 0 {
 		params.Version = 2
 	}
-	resolvedPath := lspToolLogPath(filePath)
 	baseAttrs := []any{
-		logger.FieldPath, resolvedPath,
+		logger.FieldPath, lspToolLogPath(filePath),
 		logger.FieldVersion, params.Version,
 		logger.FieldBytes, len(params.NewContent),
 		"persist_to_disk", params.PersistToDisk,
 	}
+	return params, filePath, baseAttrs, nil
+}
 
-	if params.PersistToDisk {
-		call.step("persist_begin",
-			append(baseAttrs,
-				"phase", "persist",
-			)...,
-		)
-		if err := writeTextFileAtomic(filePath, params.NewContent); err != nil {
-			call.fail(err, append(baseAttrs,
-				"phase", "persist",
-				"stage", "persist_write",
-			)...)
-			return "error: writing file: " + err.Error()
-		}
-		call.step("persist_done",
-			append(baseAttrs,
-				"phase", "persist",
-			)...,
-		)
+func persistDidChangeIfNeeded(
+	call *lspToolCallLogger,
+	filePath, newContent string,
+	baseAttrs []any,
+	persist bool,
+) error {
+	if !persist {
+		return nil
 	}
+	call.step("persist_begin", append(baseAttrs, "phase", "persist")...)
+	if err := writeTextFileAtomic(filePath, newContent); err != nil {
+		call.fail(err, append(baseAttrs, "phase", "persist", "stage", "persist_write")...)
+		return err
+	}
+	call.step("persist_done", append(baseAttrs, "phase", "persist")...)
+	return nil
+}
 
-	call.step("lsp_sync_begin",
-		append(baseAttrs,
-			"phase", "lsp_sync",
-		)...,
-	)
+func (h *ToolHandlers) syncDidChange(
+	call *lspToolCallLogger,
+	filePath string,
+	params lspDidChangeParam,
+	baseAttrs []any,
+) (string, bool) {
+	call.step("lsp_sync_begin", append(baseAttrs, "phase", "lsp_sync")...)
 	if err := h.manager.ChangeFile(filePath, params.Version, params.NewContent); err != nil {
 		if params.PersistToDisk {
-			call.step("lsp_sync_unavailable_after_persist",
-				append(baseAttrs,
-					"phase", "lsp_sync",
-					"stage", "execute",
-					"warning", err.Error(),
-				)...,
+			call.step(
+				"lsp_sync_unavailable_after_persist",
+				append(baseAttrs, "phase", "lsp_sync", "stage", "execute", "warning", err.Error())...,
 			)
-			call.done(append(baseAttrs,
-				"result_empty", false,
-				"lsp_sync_warning", err.Error(),
-			)...)
-			return "ok: file content updated and persisted to disk (lsp sync unavailable: " + err.Error() + ")"
+			call.done(append(baseAttrs, "result_empty", false, "lsp_sync_warning", err.Error())...)
+			return "ok: file content updated and persisted to disk (lsp sync unavailable: " + err.Error() + ")", true
 		}
-		call.fail(err, append(baseAttrs,
-			"phase", "lsp_sync",
-			"stage", "execute",
-		)...)
-		return toolError(err)
+		call.fail(err, append(baseAttrs, "phase", "lsp_sync", "stage", "execute")...)
+		return toolError(err), true
 	}
+	call.step("lsp_sync_done", append(baseAttrs, "phase", "lsp_sync")...)
+	return "", false
+}
 
-	call.step("lsp_sync_done",
-		append(baseAttrs,
-			"phase", "lsp_sync",
-		)...,
-	)
-	call.done(append(baseAttrs,
-		"result_empty", false,
-	)...)
-
-	if params.PersistToDisk {
+func didChangeSuccessText(persist bool) string {
+	if persist {
 		return "ok: file content updated and persisted to disk"
 	}
 	return "ok: file content updated (lsp-only, disk not written)"
@@ -964,138 +956,185 @@ func (h *ToolHandlers) DidChange(args json.RawMessage) string {
 
 // ReplaceRange replaces text within [line:column, end_line:end_column) and applies the edit via did_change.
 func (h *ToolHandlers) ReplaceRange(args json.RawMessage) string {
-	call := startLSPToolCallFromArgs("lsp_replace_range", args)
-	if h.managerUnavailable() {
-		call.fail(errLSPManagerUnavailable, "stage", "precheck")
+	call, ok := h.startManagedToolCall("lsp_replace_range", args)
+	if !ok {
 		return "error: lsp manager unavailable"
 	}
-
-	params, err := decodeArgs[lspReplaceRangeParam](args)
+	req, err := decodeReplaceRangeRequest(call, args)
 	if err != nil {
-		call.fail(err, "stage", "decode")
 		return toolError(err)
 	}
-
-	filePath, err := requireFilePath(params.FilePath)
+	baseContent, contentSource, startOffset, endOffset, err := h.resolveReplaceRangeOffsets(call, req)
 	if err != nil {
-		call.fail(err, "stage", "validate")
 		return toolError(err)
 	}
-	line, err := requireIntParam("line", params.Line)
-	if err != nil {
-		call.fail(err, "stage", "validate")
-		return toolError(err)
-	}
-	column, err := requireIntParam("column", params.Column)
-	if err != nil {
-		call.fail(err, "stage", "validate")
-		return toolError(err)
-	}
-	endLine, err := requireIntParam("end_line", params.EndLine)
-	if err != nil {
-		call.fail(err, "stage", "validate")
-		return toolError(err)
-	}
-	endColumn, err := requireIntParam("end_column", params.EndColumn)
-	if err != nil {
-		call.fail(err, "stage", "validate")
-		return toolError(err)
-	}
-	if err := requireNonNegativePosition(line, column); err != nil {
-		call.fail(err, "stage", "validate")
-		return toolError(err)
-	}
-	if err := requireNonNegativePosition(endLine, endColumn); err != nil {
-		call.fail(err, "stage", "validate")
-		return toolError(err)
-	}
-	if endLine < line || (endLine == line && endColumn < column) {
-		err := fmt.Errorf("end position must be >= start position")
-		call.fail(err, "stage", "validate")
-		return toolError(err)
-	}
-
-	baseContent, contentSource, err := h.loadReplaceRangeBaseContent(filePath)
-	if err != nil {
-		call.fail(err,
-			logger.FieldPath, lspToolLogPath(filePath),
-			"stage", "load_content",
-		)
-		return toolError(err)
-	}
-
-	startOffset, err := lineColumnOffset(baseContent, line, column)
-	if err != nil {
-		call.fail(err,
-			logger.FieldPath, lspToolLogPath(filePath),
-			"line", line,
-			"column", column,
-			"stage", "resolve_start",
-		)
-		return toolError(err)
-	}
-	endOffset, err := lineColumnOffset(baseContent, endLine, endColumn)
-	if err != nil {
-		call.fail(err,
-			logger.FieldPath, lspToolLogPath(filePath),
-			"end_line", endLine,
-			"end_column", endColumn,
-			"stage", "resolve_end",
-		)
-		return toolError(err)
-	}
-	if endOffset < startOffset {
-		err := fmt.Errorf("invalid range: end offset before start offset")
-		call.fail(err, "stage", "validate")
-		return toolError(err)
-	}
-
-	nextContent := baseContent[:startOffset] + params.NewText + baseContent[endOffset:]
-	didChangePayload := map[string]any{
-		"file_path":       filePath,
-		"new_content":     nextContent,
-		"version":         params.Version,
-		"persist_to_disk": params.PersistToDisk,
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(args, &raw); err == nil && raw != nil {
-		if meta, ok := raw[lspToolCallMetaKey]; ok {
-			didChangePayload[lspToolCallMetaKey] = meta
-		}
-	}
-
-	didChangeArgs, err := json.Marshal(didChangePayload)
+	nextContent := baseContent[:startOffset] + req.NewText + baseContent[endOffset:]
+	didChangeArgs, err := buildReplaceRangeDidChangeArgs(args, req, nextContent)
 	if err != nil {
 		call.fail(err, "stage", "marshal_did_change")
 		return toolError(err)
 	}
 	result := h.DidChange(didChangeArgs)
-	normalizedResult := strings.ToLower(strings.TrimSpace(result))
-	if strings.HasPrefix(normalizedResult, "error:") {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(result)), "error:") {
 		call.fail(
 			errors.New(strings.TrimSpace(result)),
-			logger.FieldPath, lspToolLogPath(filePath),
-			"line", line,
-			"column", column,
-			"end_line", endLine,
-			"end_column", endColumn,
+			logger.FieldPath, lspToolLogPath(req.FilePath),
+			"line", req.Line,
+			"column", req.Column,
+			"end_line", req.EndLine,
+			"end_column", req.EndColumn,
 			"stage", "did_change",
 		)
 		return result
 	}
-
 	call.done(
-		logger.FieldPath, lspToolLogPath(filePath),
-		"line", line,
-		"column", column,
-		"end_line", endLine,
-		"end_column", endColumn,
-		"replacement_len", len(params.NewText),
+		logger.FieldPath, lspToolLogPath(req.FilePath),
+		"line", req.Line,
+		"column", req.Column,
+		"end_line", req.EndLine,
+		"end_column", req.EndColumn,
+		"replacement_len", len(req.NewText),
 		"replaced_len", endOffset-startOffset,
 		"content_source", contentSource,
-		"persist_to_disk", params.PersistToDisk,
+		"persist_to_disk", req.PersistToDisk,
 	)
 	return result
+}
+
+type lspReplaceRangeRequest struct {
+	FilePath      string
+	Line          int
+	Column        int
+	EndLine       int
+	EndColumn     int
+	NewText       string
+	Version       int
+	PersistToDisk bool
+}
+
+func decodeReplaceRangeRequest(call *lspToolCallLogger, args json.RawMessage) (lspReplaceRangeRequest, error) {
+	params, err := decodeToolParams[lspReplaceRangeParam](call, args)
+	if err != nil {
+		return lspReplaceRangeRequest{}, err
+	}
+	filePath, err := requireToolFilePath(call, params.FilePath)
+	if err != nil {
+		return lspReplaceRangeRequest{}, err
+	}
+	line, column, endLine, endColumn, err := validateReplaceRangePosition(call, params)
+	if err != nil {
+		return lspReplaceRangeRequest{}, err
+	}
+	return lspReplaceRangeRequest{
+		FilePath:      filePath,
+		Line:          line,
+		Column:        column,
+		EndLine:       endLine,
+		EndColumn:     endColumn,
+		NewText:       params.NewText,
+		Version:       params.Version,
+		PersistToDisk: params.PersistToDisk,
+	}, nil
+}
+
+func validateReplaceRangePosition(call *lspToolCallLogger, params lspReplaceRangeParam) (int, int, int, int, error) {
+	line, err := requireIntParam("line", params.Line)
+	if err != nil {
+		call.fail(err, "stage", "validate")
+		return 0, 0, 0, 0, err
+	}
+	column, err := requireIntParam("column", params.Column)
+	if err != nil {
+		call.fail(err, "stage", "validate")
+		return 0, 0, 0, 0, err
+	}
+	endLine, err := requireIntParam("end_line", params.EndLine)
+	if err != nil {
+		call.fail(err, "stage", "validate")
+		return 0, 0, 0, 0, err
+	}
+	endColumn, err := requireIntParam("end_column", params.EndColumn)
+	if err != nil {
+		call.fail(err, "stage", "validate")
+		return 0, 0, 0, 0, err
+	}
+	if err := requireNonNegativePosition(line, column); err != nil {
+		call.fail(err, "stage", "validate")
+		return 0, 0, 0, 0, err
+	}
+	if err := requireNonNegativePosition(endLine, endColumn); err != nil {
+		call.fail(err, "stage", "validate")
+		return 0, 0, 0, 0, err
+	}
+	if endLine < line || (endLine == line && endColumn < column) {
+		err := fmt.Errorf("end position must be >= start position")
+		call.fail(err, "stage", "validate")
+		return 0, 0, 0, 0, err
+	}
+	return line, column, endLine, endColumn, nil
+}
+
+func (h *ToolHandlers) resolveReplaceRangeOffsets(
+	call *lspToolCallLogger,
+	req lspReplaceRangeRequest,
+) (content, source string, startOffset, endOffset int, err error) {
+	content, source, err = h.loadReplaceRangeBaseContent(req.FilePath)
+	if err != nil {
+		call.fail(err, logger.FieldPath, lspToolLogPath(req.FilePath), "stage", "load_content")
+		return "", "", 0, 0, err
+	}
+	startOffset, err = lineColumnOffset(content, req.Line, req.Column)
+	if err != nil {
+		call.fail(
+			err,
+			logger.FieldPath, lspToolLogPath(req.FilePath),
+			"line", req.Line,
+			"column", req.Column,
+			"stage", "resolve_start",
+		)
+		return "", "", 0, 0, err
+	}
+	endOffset, err = lineColumnOffset(content, req.EndLine, req.EndColumn)
+	if err != nil {
+		call.fail(
+			err,
+			logger.FieldPath, lspToolLogPath(req.FilePath),
+			"end_line", req.EndLine,
+			"end_column", req.EndColumn,
+			"stage", "resolve_end",
+		)
+		return "", "", 0, 0, err
+	}
+	if endOffset < startOffset {
+		err = fmt.Errorf("invalid range: end offset before start offset")
+		call.fail(err, "stage", "validate")
+		return "", "", 0, 0, err
+	}
+	return content, source, startOffset, endOffset, nil
+}
+
+func buildReplaceRangeDidChangeArgs(
+	args json.RawMessage,
+	req lspReplaceRangeRequest,
+	newContent string,
+) (json.RawMessage, error) {
+	payload := map[string]any{
+		"file_path":       req.FilePath,
+		"new_content":     newContent,
+		"version":         req.Version,
+		"persist_to_disk": req.PersistToDisk,
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(args, &raw); err == nil && raw != nil {
+		if meta, ok := raw[lspToolCallMetaKey]; ok {
+			payload[lspToolCallMetaKey] = meta
+		}
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func (h *ToolHandlers) loadReplaceRangeBaseContent(filePath string) (string, string, error) {
@@ -1635,66 +1674,20 @@ func (h *ToolHandlers) TextSearch(args json.RawMessage) string {
 		return toolError(err)
 	}
 	limit := normalizeSearchLimit(params.MaxResults)
-
-	binaryPath, err := lspSearchLookPath("rg")
-	if err != nil {
-		err = errors.New("rg not found in PATH")
-		call.fail(err,
-			logger.FieldPath, target,
-			"query_len", len(params.Query),
-			"stage", "dependency",
-		)
-		return toolError(err)
-	}
-
-	cmdArgs := []string{"--vimgrep", "--no-heading", "--color", "never", "--max-count", strconv.Itoa(limit)}
-	if params.CaseSensitive {
-		cmdArgs = append(cmdArgs, "--case-sensitive")
-	} else {
-		cmdArgs = append(cmdArgs, "--ignore-case")
-	}
-	for _, excluded := range lspSearchExcludeDirs {
-		cmdArgs = append(cmdArgs, "--glob", "!"+excluded+"/**")
-	}
-	if glob := strings.TrimSpace(params.Glob); glob != "" {
-		cmdArgs = append(cmdArgs, "--glob", glob)
-	}
-	cmdArgs = append(cmdArgs, params.Query, target)
-
-	output, err := runSearchCommand(binaryPath, cmdArgs, workspaceRoot)
-	if err != nil {
-		call.fail(err,
-			logger.FieldPath, target,
-			"query_len", len(params.Query),
-			"stage", "execute",
-		)
-		return toolError(err)
-	}
-
-	matches := parseRipgrepVimgrepOutput(output, workspaceRoot, limit)
-	matches = filterAndCapSearchMatches(matches)
-	if len(matches) == 0 {
-		call.done(
-			logger.FieldPath, target,
-			"query_len", len(params.Query),
-			"result_count", 0,
-			"result_empty", true,
-		)
-		return "no matches found"
-	}
-
-	data, err := json.Marshal(matches)
-	if err != nil {
-		call.fail(err, "stage", "marshal")
-		return toolError(err)
-	}
-	call.done(
-		logger.FieldPath, target,
-		"query_len", len(params.Query),
-		"result_count", len(matches),
-		"result_empty", false,
+	cmdArgs := buildTextSearchArgs(params, target, limit)
+	return runExternalSearch(
+		call,
+		lspExternalSearch{
+			Binary:       "rg",
+			MissingError: "rg not found in PATH",
+			Workspace:    workspaceRoot,
+			Target:       target,
+			Limit:        limit,
+			CommandArgs:  cmdArgs,
+			Parse:        parseRipgrepVimgrepOutput,
+			LogAttrs:     []any{logger.FieldPath, target, "query_len", len(params.Query)},
+		},
 	)
-	return string(data)
 }
 
 // AstSearch performs AST pattern search via ast-grep.
@@ -1724,56 +1717,74 @@ func (h *ToolHandlers) AstSearch(args json.RawMessage) string {
 		return toolError(err)
 	}
 	limit := normalizeSearchLimit(params.MaxResults)
+	return runExternalSearch(
+		call,
+		lspExternalSearch{
+			Binary:       "sg",
+			MissingError: "sg not found in PATH",
+			Workspace:    workspaceRoot,
+			Target:       target,
+			Limit:        limit,
+			CommandArgs:  []string{"scan", "--json=stream", "-p", params.Symbol, "-l", params.Language, target},
+			Parse:        parseASTGrepOutput,
+			LogAttrs: []any{
+				logger.FieldPath, target,
+				logger.FieldLanguage, params.Language,
+				"symbol_len", len(params.Symbol),
+			},
+		},
+	)
+}
 
-	binaryPath, err := lspSearchLookPath("sg")
+type lspExternalSearch struct {
+	Binary       string
+	MissingError string
+	Workspace    string
+	Target       string
+	Limit        int
+	CommandArgs  []string
+	Parse        func(output []byte, workspaceRoot string, limit int) []lspSearchMatch
+	LogAttrs     []any
+}
+
+func buildTextSearchArgs(params lspTextSearchParam, target string, limit int) []string {
+	cmdArgs := []string{"--vimgrep", "--no-heading", "--color", "never", "--max-count", strconv.Itoa(limit)}
+	if params.CaseSensitive {
+		cmdArgs = append(cmdArgs, "--case-sensitive")
+	} else {
+		cmdArgs = append(cmdArgs, "--ignore-case")
+	}
+	for _, excluded := range lspSearchExcludeDirs {
+		cmdArgs = append(cmdArgs, "--glob", "!"+excluded+"/**")
+	}
+	if glob := strings.TrimSpace(params.Glob); glob != "" {
+		cmdArgs = append(cmdArgs, "--glob", glob)
+	}
+	return append(cmdArgs, params.Query, target)
+}
+
+func runExternalSearch(call *lspToolCallLogger, req lspExternalSearch) string {
+	binaryPath, err := lspSearchLookPath(req.Binary)
 	if err != nil {
-		err = errors.New("sg not found in PATH")
-		call.fail(err,
-			logger.FieldPath, target,
-			logger.FieldLanguage, params.Language,
-			"symbol_len", len(params.Symbol),
-			"stage", "dependency",
-		)
+		call.fail(errors.New(req.MissingError), append(req.LogAttrs, "stage", "dependency")...)
+		return toolError(errors.New(req.MissingError))
+	}
+	output, err := runSearchCommand(binaryPath, req.CommandArgs, req.Workspace)
+	if err != nil {
+		call.fail(err, append(req.LogAttrs, "stage", "execute")...)
 		return toolError(err)
 	}
-
-	cmdArgs := []string{"scan", "--json=stream", "-p", params.Symbol, "-l", params.Language, target}
-	output, err := runSearchCommand(binaryPath, cmdArgs, workspaceRoot)
-	if err != nil {
-		call.fail(err,
-			logger.FieldPath, target,
-			logger.FieldLanguage, params.Language,
-			"symbol_len", len(params.Symbol),
-			"stage", "execute",
-		)
-		return toolError(err)
-	}
-
-	matches := parseASTGrepOutput(output, workspaceRoot, limit)
-	matches = filterAndCapSearchMatches(matches)
+	matches := filterAndCapSearchMatches(req.Parse(output, req.Workspace, req.Limit))
 	if len(matches) == 0 {
-		call.done(
-			logger.FieldPath, target,
-			logger.FieldLanguage, params.Language,
-			"symbol_len", len(params.Symbol),
-			"result_count", 0,
-			"result_empty", true,
-		)
+		call.done(append(req.LogAttrs, "result_count", 0, "result_empty", true)...)
 		return "no matches found"
 	}
-
 	data, err := json.Marshal(matches)
 	if err != nil {
 		call.fail(err, "stage", "marshal")
 		return toolError(err)
 	}
-	call.done(
-		logger.FieldPath, target,
-		logger.FieldLanguage, params.Language,
-		"symbol_len", len(params.Symbol),
-		"result_count", len(matches),
-		"result_empty", false,
-	)
+	call.done(append(req.LogAttrs, "result_count", len(matches), "result_empty", false)...)
 	return string(data)
 }
 
@@ -2098,67 +2109,21 @@ type lspWorkspaceSymbolParam struct {
 
 // WorkspaceSymbol searches workspace symbols.
 func (h *ToolHandlers) WorkspaceSymbol(args json.RawMessage) string {
-	call := startLSPToolCallFromArgs("lsp_workspace_symbol", args)
-	if h.managerUnavailable() {
-		call.fail(errLSPManagerUnavailable, "stage", "precheck")
+	call, ok := h.startManagedToolCall("lsp_workspace_symbol", args)
+	if !ok {
 		return "error: lsp manager unavailable"
 	}
-	params, err := decodeArgs[lspWorkspaceSymbolParam](args)
+	req, err := decodeWorkspaceSymbolRequest(call, args)
 	if err != nil {
-		call.fail(err, "stage", "decode")
 		return toolError(err)
 	}
-
-	params.Query = strings.TrimSpace(params.Query)
-	params.Path = strings.TrimSpace(params.Path)
-	params.Language = strings.TrimSpace(params.Language)
-	resolvedPath := lspToolLogPath(params.Path)
-
-	if params.Query == "" {
-		call.fail(
-			errors.New("query is required"),
-			logger.FieldPath, resolvedPath,
-			logger.FieldLanguage, params.Language,
-			"query_len", 0,
-			"stage", "validate",
-		)
-		return "error: query is required"
+	if err := validateWorkspaceSymbolRequest(call, req); err != nil {
+		return toolError(err)
 	}
-	if params.Path == "" && params.Language == "" {
-		call.fail(
-			errors.New("exactly one of path or language is required"),
-			"query_len", len(params.Query),
-			"stage", "validate",
-		)
-		return "error: exactly one of path or language is required"
-	}
-	if params.Path != "" && params.Language != "" {
-		call.fail(
-			errors.New("exactly one of path or language is required"),
-			logger.FieldPath, resolvedPath,
-			logger.FieldLanguage, params.Language,
-			"query_len", len(params.Query),
-			"stage", "validate",
-		)
-		return "error: exactly one of path or language is required"
-	}
-	if params.Path != "" {
-		if info, statErr := os.Stat(params.Path); statErr == nil && info.IsDir() {
-			err := errors.New("directory path is not supported for workspace_symbol; use language instead")
-			call.fail(
-				err,
-				logger.FieldPath, resolvedPath,
-				"query_len", len(params.Query),
-				"stage", "validate",
-			)
-			return "error: " + err.Error()
-		}
-	}
-
 	return runAndMarshalLogged(
 		call,
 		func() ([]WorkspaceSymbolResult, error) {
-			result, err := h.manager.WorkspaceSymbol(params.Path, params.Language, params.Query)
+			result, err := h.manager.WorkspaceSymbol(req.Path, req.Language, req.Query)
 			if err != nil {
 				return nil, err
 			}
@@ -2168,10 +2133,72 @@ func (h *ToolHandlers) WorkspaceSymbol(args json.RawMessage) string {
 		"no symbols found",
 		func(result []WorkspaceSymbolResult) bool { return len(result) == 0 },
 		func(result []WorkspaceSymbolResult) []any { return []any{"result_count", len(result)} },
-		logger.FieldPath, resolvedPath,
-		logger.FieldLanguage, params.Language,
-		"query_len", len(params.Query),
+		logger.FieldPath, req.ResolvedPath,
+		logger.FieldLanguage, req.Language,
+		"query_len", len(req.Query),
 	)
+}
+
+type workspaceSymbolRequest struct {
+	Path         string
+	Language     string
+	Query        string
+	ResolvedPath string
+}
+
+func decodeWorkspaceSymbolRequest(call *lspToolCallLogger, args json.RawMessage) (workspaceSymbolRequest, error) {
+	params, err := decodeToolParams[lspWorkspaceSymbolParam](call, args)
+	if err != nil {
+		return workspaceSymbolRequest{}, err
+	}
+	params.Query = strings.TrimSpace(params.Query)
+	params.Path = strings.TrimSpace(params.Path)
+	params.Language = strings.TrimSpace(params.Language)
+	return workspaceSymbolRequest{
+		Path:         params.Path,
+		Language:     params.Language,
+		Query:        params.Query,
+		ResolvedPath: lspToolLogPath(params.Path),
+	}, nil
+}
+
+func validateWorkspaceSymbolRequest(call *lspToolCallLogger, req workspaceSymbolRequest) error {
+	if req.Query == "" {
+		err := errors.New("query is required")
+		call.fail(
+			err,
+			logger.FieldPath, req.ResolvedPath,
+			logger.FieldLanguage, req.Language,
+			"query_len", 0,
+			"stage", "validate",
+		)
+		return err
+	}
+	if req.Path == "" && req.Language == "" {
+		err := errors.New("exactly one of path or language is required")
+		call.fail(err, "query_len", len(req.Query), "stage", "validate")
+		return err
+	}
+	if req.Path != "" && req.Language != "" {
+		err := errors.New("exactly one of path or language is required")
+		call.fail(
+			err,
+			logger.FieldPath, req.ResolvedPath,
+			logger.FieldLanguage, req.Language,
+			"query_len", len(req.Query),
+			"stage", "validate",
+		)
+		return err
+	}
+	if req.Path == "" {
+		return nil
+	}
+	if info, statErr := os.Stat(req.Path); statErr == nil && info.IsDir() {
+		err := errors.New("directory path is not supported for workspace_symbol; use language instead")
+		call.fail(err, logger.FieldPath, req.ResolvedPath, "query_len", len(req.Query), "stage", "validate")
+		return err
+	}
+	return nil
 }
 
 // Implementation finds symbol implementation locations.

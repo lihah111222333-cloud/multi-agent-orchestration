@@ -258,10 +258,7 @@ func NormalizeTrackedTurnStatus(status string) string {
 	case "failed", "error", "timeout":
 		return "failed"
 	default:
-		if s == "" {
-			return "completed"
-		}
-		return s
+		return util.FirstNonEmpty(s, "completed")
 	}
 }
 func ExtractTrackedString(payload map[string]any, keys ...string) string {
@@ -269,17 +266,10 @@ func ExtractTrackedString(payload map[string]any, keys ...string) string {
 		return ""
 	}
 	for _, key := range keys {
-		value, ok := payload[key]
-		if !ok {
-			continue
-		}
-		text, ok := value.(string)
-		if !ok {
-			continue
-		}
-		text = strings.TrimSpace(text)
-		if text != "" {
-			return text
+		if text, ok := payload[key].(string); ok {
+			if text = strings.TrimSpace(text); text != "" {
+				return text
+			}
 		}
 	}
 	return ""
@@ -340,11 +330,7 @@ func trackedTurnTerminalKindFor(eventKey, methodKey string) trackedTurnTerminalK
 	return trackedTurnTerminalNone
 }
 func trackedTurnReasonOr(payload map[string]any, fallback string) string {
-	reason := ExtractTrackedTurnReason(payload)
-	if reason != "" {
-		return reason
-	}
-	return fallback
+	return util.FirstNonEmpty(ExtractTrackedTurnReason(payload), fallback)
 }
 
 var threadStatusTerminalMap = map[string]struct {
@@ -380,40 +366,34 @@ func ThreadStatusTerminalFromPayload(payload map[string]any) (status string, rea
 }
 func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]any) (string, string, string, bool, bool) {
 	eventKey, methodKey := trackedTurnEventAndMethodKeys(eventType, method)
+	turnID := ExtractTrackedTurnID(payload)
 	switch trackedTurnTerminalKindFor(eventKey, methodKey) {
 	case trackedTurnTerminalAborted:
-		return ExtractTrackedTurnID(payload), "interrupted", trackedTurnReasonOr(payload, "turn_aborted"), true, false
+		return turnID, "interrupted", trackedTurnReasonOr(payload, "turn_aborted"), true, false
 	case trackedTurnTerminalCompleted:
-		status := ExtractTrackedTurnStatus(payload)
-		if status == "" {
-			status = "completed"
-		}
-		return ExtractTrackedTurnID(payload), status, trackedTurnReasonOr(payload, "turn_complete"), true, false
+		return turnID, util.FirstNonEmpty(ExtractTrackedTurnStatus(payload), "completed"), trackedTurnReasonOr(payload, "turn_complete"), true, false
 	case trackedTurnTerminalConnectionDead:
-		return ExtractTrackedTurnID(payload), "failed", trackedTurnReasonOr(payload, "connection_dead"), true, true
+		return turnID, "failed", trackedTurnReasonOr(payload, "connection_dead"), true, true
 	case trackedTurnTerminalShutdownComplete:
-		return ExtractTrackedTurnID(payload), "completed", trackedTurnReasonOr(payload, "shutdown_complete"), true, true
+		return turnID, "completed", trackedTurnReasonOr(payload, "shutdown_complete"), true, true
 	case trackedTurnTerminalStreamError:
 		retryable, known := extractTrackedRetryable(payload)
 		if !known || retryable {
 			return "", "", "", false, false
 		}
-		reason := ExtractTrackedTurnReason(payload)
-		if reason == "" {
-			reason = util.FirstNonEmpty(
-				ExtractTrackedString(payload, "phase"),
-				eventKey,
-				methodKey,
-				"stream_error",
-			)
-		}
-		return ExtractTrackedTurnID(payload), "failed", reason, true, true
+		return turnID, "failed", util.FirstNonEmpty(
+			ExtractTrackedTurnReason(payload),
+			ExtractTrackedString(payload, "phase"),
+			eventKey,
+			methodKey,
+			"stream_error",
+		), true, true
 	case trackedTurnTerminalThreadStatusChanged:
 		status, reason, ok := ThreadStatusTerminalFromPayload(payload)
 		if !ok {
 			return "", "", "", false, false
 		}
-		return ExtractTrackedTurnID(payload), status, reason, true, true
+		return turnID, status, reason, true, true
 	default:
 		return "", "", "", false, false
 	}
@@ -426,9 +406,6 @@ func TrackedTurnSummaryCacheKey(threadID, turnID string) string {
 	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID)
 }
 func pruneTrackedTurnSummaryCacheLocked(cache map[string]TrackedTurnSummaryCacheEntry, now time.Time, ttl time.Duration, maxEntries int) {
-	if cache == nil {
-		return
-	}
 	if ttl > 0 {
 		for key, entry := range cache {
 			if entry.UpdatedAt.IsZero() || now.Sub(entry.UpdatedAt) > ttl {
@@ -497,9 +474,6 @@ func LookupTrackedTurnSummary(state TurnTrackerState, turnMu *sync.Mutex, thread
 		return ""
 	}
 	cache := *state.TurnSummaryCache
-	if cache == nil {
-		return ""
-	}
 	entry, ok := cache[TrackedTurnSummaryCacheKey(id, tid)]
 	if !ok {
 		return ""
@@ -863,11 +837,8 @@ func WaitTrackedTurnTerminalCore(state TurnTrackerState, threadID string, timeou
 	}
 	var done chan string
 	ok := WithActiveTurnCore(state, threadID, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
-		if turn.Done == nil {
-			return false
-		}
 		done = turn.Done
-		return true
+		return done != nil
 	})
 	if !ok || done == nil {
 		return "", false
@@ -939,9 +910,8 @@ func NextTrackedTurnStallDecisionCore(
 	if id == "" || tid == "" {
 		return decision
 	}
-	threshold := stallThreshold
-	if threshold <= 0 {
-		threshold = DefaultStallThreshold
+	if stallThreshold <= 0 {
+		stallThreshold = DefaultStallThreshold
 	}
 	WithActiveTurnByIDCore(state, id, tid, func(_ string, turn *trackedTurn, _ map[string]*trackedTurn) bool {
 		currentTurnID := strings.TrimSpace(turn.ID)
@@ -949,9 +919,9 @@ func NextTrackedTurnStallDecisionCore(
 		decision.ThreadID = id
 		decision.TurnID = currentTurnID
 		decision.Silent = silent
-		decision.Threshold = threshold
-		if silent < threshold {
-			rescheduleStallCheck(turn, id, currentTurnID, silent, threshold, checkTurnStall)
+		decision.Threshold = stallThreshold
+		if silent < stallThreshold {
+			rescheduleStallCheck(turn, id, currentTurnID, silent, stallThreshold, checkTurnStall)
 			decision.Action = TrackedTurnStallRescheduled
 			return true
 		}

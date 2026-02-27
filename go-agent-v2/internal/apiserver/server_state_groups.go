@@ -26,15 +26,11 @@ type connManagerState struct {
 }
 
 func (s *connManagerState) connectionCount() int {
-	if s == nil { return 0 }
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.conns)
+	if s == nil { return 0 }; s.mu.RLock(); defer s.mu.RUnlock(); return len(s.conns)
 }
 
 func (s *connManagerState) allocConnID() string {
-	if s == nil { return "" }
-	return fmt.Sprintf("conn-%d", s.nextID.Add(1))
+	if s == nil { return "" }; return fmt.Sprintf("conn-%d", s.nextID.Add(1))
 }
 
 func (s *connManagerState) firstConnID() string {
@@ -58,8 +54,7 @@ func (s *connManagerState) connsSnapshot() map[string]*connEntry {
 
 func (s *connManagerState) getConn(connID string) (*connEntry, bool) {
 	if s == nil { return nil, false }
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.RLock(); defer s.mu.RUnlock()
 	entry, ok := s.conns[connID]
 	return entry, ok
 }
@@ -67,9 +62,7 @@ func (s *connManagerState) getConn(connID string) (*connEntry, bool) {
 func (s *connManagerState) addConn(connID string, entry *connEntry) {
 	if s == nil || connID == "" || entry == nil { return }
 	s.mu.Lock()
-	if s.conns == nil {
-		s.conns = make(map[string]*connEntry)
-	}
+	if s.conns == nil { s.conns = make(map[string]*connEntry) }
 	s.conns[connID] = entry
 	s.mu.Unlock()
 }
@@ -105,9 +98,7 @@ func (s *connManagerState) allocPendingRequest() (reqID int64, ch <-chan *Respon
 
 func (s *connManagerState) pendingResponseChannel(reqID int64) (chan *Response, bool) {
 	if s == nil { return nil, false }
-	s.pendingMu.Lock()
-	ch, ok := s.pending[reqID]
-	s.pendingMu.Unlock()
+	s.pendingMu.Lock(); ch, ok := s.pending[reqID]; s.pendingMu.Unlock()
 	return ch, ok
 }
 
@@ -159,25 +150,19 @@ func (s *codeRunState) setAgentWorkDir(agentID, cwd string) {
 func (s *codeRunState) getAgentWorkDir(agentID string) string {
 	id := s.normalizeAgentID(agentID)
 	if id == "" { return "" }
-	s.agentWorkDirMu.RLock()
-	cwd := s.agentWorkDirs[id]
-	s.agentWorkDirMu.RUnlock()
+	s.agentWorkDirMu.RLock(); cwd := s.agentWorkDirs[id]; s.agentWorkDirMu.RUnlock()
 	return cwd
 }
 
 func (s *codeRunState) clearAgentWorkDir(agentID string) {
 	id := s.normalizeAgentID(agentID)
 	if id == "" { return }
-	s.agentWorkDirMu.Lock()
-	delete(s.agentWorkDirs, id)
-	s.agentWorkDirMu.Unlock()
+	s.agentWorkDirMu.Lock(); delete(s.agentWorkDirs, id); s.agentWorkDirMu.Unlock()
 }
 
 func (s *codeRunState) clearAllAgentWorkDirs() {
 	if s == nil { return }
-	s.agentWorkDirMu.Lock()
-	clear(s.agentWorkDirs)
-	s.agentWorkDirMu.Unlock()
+	s.agentWorkDirMu.Lock(); clear(s.agentWorkDirs); s.agentWorkDirMu.Unlock()
 }
 
 func (s *codeRunState) withCodeRunsByAgentID(id string, create bool, fn func(runs map[string]context.CancelFunc)) {
@@ -200,10 +185,8 @@ func (s *codeRunState) withCodeRunsByAgentID(id string, create bool, fn func(run
 }
 
 func (s *codeRunState) takeCodeRunsByAgentID(id string) map[string]context.CancelFunc {
-	s.codeRunMu.Lock()
-	defer s.codeRunMu.Unlock()
-	runs := s.activeCodeRuns[id]
-	delete(s.activeCodeRuns, id)
+	s.codeRunMu.Lock(); defer s.codeRunMu.Unlock()
+	runs := s.activeCodeRuns[id]; delete(s.activeCodeRuns, id)
 	return runs
 }
 
@@ -279,9 +262,7 @@ func (s *turnTrackingState) rememberFileChanges(threadID string, files []string)
 	if id == "" || len(files) == 0 { return }
 	copied := append([]string(nil), files...)
 	s.fileChangeMu.Lock()
-	if s.fileChangeByThread == nil {
-		s.fileChangeByThread = make(map[string][]string)
-	}
+	if s.fileChangeByThread == nil { s.fileChangeByThread = make(map[string][]string) }
 	s.fileChangeByThread[id] = copied
 	s.fileChangeMu.Unlock()
 }
@@ -289,10 +270,7 @@ func (s *turnTrackingState) rememberFileChanges(threadID string, files []string)
 func (s *turnTrackingState) consumeFileChanges(threadID string) []string {
 	id := s.normalizeThreadID(threadID)
 	if id == "" { return nil }
-	s.fileChangeMu.Lock()
-	files := s.fileChangeByThread[id]
-	delete(s.fileChangeByThread, id)
-	s.fileChangeMu.Unlock()
+	s.fileChangeMu.Lock(); files := s.fileChangeByThread[id]; delete(s.fileChangeByThread, id); s.fileChangeMu.Unlock()
 	return append([]string(nil), files...)
 }
 
@@ -317,8 +295,7 @@ func (s *turnTrackingState) pruneOrchestrationReportRequestsLocked(now time.Time
 
 func (s *turnTrackingState) withOrchestrationReportState(now time.Time, fn func()) {
 	if s == nil || fn == nil { return }
-	s.orchestrationReportMu.Lock()
-	defer s.orchestrationReportMu.Unlock()
+	s.orchestrationReportMu.Lock(); defer s.orchestrationReportMu.Unlock()
 	s.ensureOrchestrationReportStateLocked()
 	s.pruneOrchestrationReportRequestsLocked(now)
 	fn()
@@ -355,6 +332,7 @@ func (s *uiThrottleState) stageUIStateChanged(key string, payload map[string]any
 	k := strings.TrimSpace(key)
 	if k == "" { return nil, false }
 	s.uiThrottleMu.Lock()
+	defer s.uiThrottleMu.Unlock()
 	if s.uiThrottleEntries == nil {
 		s.uiThrottleEntries = make(map[string]*uiStateThrottleEntry)
 	}
@@ -368,7 +346,6 @@ func (s *uiThrottleState) stageUIStateChanged(key string, payload map[string]any
 		if entry.timer == nil && onFlush != nil {
 			entry.timer = time.AfterFunc(interval, onFlush)
 		}
-		s.uiThrottleMu.Unlock()
 		return nil, false
 	}
 	entry.lastEmit = now
@@ -378,7 +355,6 @@ func (s *uiThrottleState) stageUIStateChanged(key string, payload map[string]any
 		entry.timer.Stop()
 		entry.timer = nil
 	}
-	s.uiThrottleMu.Unlock()
 	return pending, true
 }
 
@@ -387,19 +363,18 @@ func (s *uiThrottleState) flushUIStateChanged(key string, now time.Time) (map[st
 	k := strings.TrimSpace(key)
 	if k == "" { return nil, false }
 	s.uiThrottleMu.Lock()
+	defer s.uiThrottleMu.Unlock()
 	entry := s.uiThrottleEntries[k]
 	if entry == nil || entry.pending == nil {
 		if entry != nil {
 			entry.timer = nil
 		}
-		s.uiThrottleMu.Unlock()
 		return nil, false
 	}
 	entry.lastEmit = now
 	pending := entry.pending
 	entry.pending = nil
 	entry.timer = nil
-	s.uiThrottleMu.Unlock()
 	return pending, true
 }
 
@@ -425,23 +400,17 @@ type safeSet[T comparable] struct {
 
 func (s *safeSet[T]) add(item T) {
 	s.mu.Lock()
-	if s.items == nil {
-		s.items = make(map[T]struct{})
-	}
+	if s.items == nil { s.items = make(map[T]struct{}) }
 	s.items[item] = struct{}{}
 	s.mu.Unlock()
 }
 
 func (s *safeSet[T]) remove(item T) {
-	s.mu.Lock()
-	delete(s.items, item)
-	s.mu.Unlock()
+	s.mu.Lock(); delete(s.items, item); s.mu.Unlock()
 }
 
 func (s *safeSet[T]) count() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.items)
+	s.mu.RLock(); defer s.mu.RUnlock(); return len(s.items)
 }
 
 func (s *safeSet[T]) snapshot() []T {
@@ -484,13 +453,12 @@ func (s *runtimeGuardState) endApproval(key string) {
 }
 
 func (s *runtimeGuardState) doCleanup(fn func()) {
+	if fn == nil { return }
 	if s == nil {
-		if fn != nil { fn() }
+		fn()
 		return
 	}
-	s.cleanupOnce.Do(func() {
-		if fn != nil { fn() }
-	})
+	s.cleanupOnce.Do(fn)
 }
 
 type threadAliasState struct {
@@ -498,13 +466,14 @@ type threadAliasState struct {
 }
 
 func (s *threadAliasState) withLock(fn func()) {
+	if fn == nil { return }
 	if s == nil {
-		if fn != nil { fn() }
+		fn()
 		return
 	}
 	s.threadAliasMu.Lock()
 	defer s.threadAliasMu.Unlock()
-	if fn != nil { fn() }
+	fn()
 }
 
 type storeBundle struct {

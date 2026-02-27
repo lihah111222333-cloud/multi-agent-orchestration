@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,9 +63,7 @@ func (s *connManagerState) connsSnapshot() map[string]*connEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	snapshot := make(map[string]*connEntry, len(s.conns))
-	for id, entry := range s.conns {
-		snapshot[id] = entry
-	}
+	maps.Copy(snapshot, s.conns)
 	return snapshot
 }
 
@@ -216,6 +215,37 @@ func (s *codeRunState) clearAllAgentWorkDirs() {
 	s.agentWorkDirMu.Unlock()
 }
 
+func (s *codeRunState) withCodeRunsByAgentID(id string, create bool, fn func(runs map[string]context.CancelFunc)) {
+	s.codeRunMu.Lock()
+	defer s.codeRunMu.Unlock()
+	if s.activeCodeRuns == nil {
+		if !create {
+			return
+		}
+		s.activeCodeRuns = make(map[string]map[string]context.CancelFunc)
+	}
+	runs := s.activeCodeRuns[id]
+	if runs == nil {
+		if !create {
+			return
+		}
+		runs = make(map[string]context.CancelFunc)
+		s.activeCodeRuns[id] = runs
+	}
+	fn(runs)
+	if !create && len(runs) == 0 {
+		delete(s.activeCodeRuns, id)
+	}
+}
+
+func (s *codeRunState) takeCodeRunsByAgentID(id string) map[string]context.CancelFunc {
+	s.codeRunMu.Lock()
+	defer s.codeRunMu.Unlock()
+	runs := s.activeCodeRuns[id]
+	delete(s.activeCodeRuns, id)
+	return runs
+}
+
 func (s *codeRunState) registerCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string {
 	if cancel == nil {
 		return ""
@@ -225,17 +255,9 @@ func (s *codeRunState) registerCodeRunCancel(agentID, callID string, cancel cont
 		return ""
 	}
 	key := fmt.Sprintf("%s#%d", strings.TrimSpace(callID), s.codeRunSeq.Add(1))
-	s.codeRunMu.Lock()
-	if s.activeCodeRuns == nil {
-		s.activeCodeRuns = make(map[string]map[string]context.CancelFunc)
-	}
-	runs := s.activeCodeRuns[id]
-	if runs == nil {
-		runs = make(map[string]context.CancelFunc)
-		s.activeCodeRuns[id] = runs
-	}
-	runs[key] = cancel
-	s.codeRunMu.Unlock()
+	s.withCodeRunsByAgentID(id, true, func(runs map[string]context.CancelFunc) {
+		runs[key] = cancel
+	})
 	return key
 }
 
@@ -244,14 +266,9 @@ func (s *codeRunState) unregisterCodeRunCancel(agentID, runKey string) {
 	if id == "" || key == "" {
 		return
 	}
-	s.codeRunMu.Lock()
-	if runs := s.activeCodeRuns[id]; runs != nil {
+	s.withCodeRunsByAgentID(id, false, func(runs map[string]context.CancelFunc) {
 		delete(runs, key)
-		if len(runs) == 0 {
-			delete(s.activeCodeRuns, id)
-		}
-	}
-	s.codeRunMu.Unlock()
+	})
 }
 
 func (s *codeRunState) cancelCodeRuns(agentID string) int {
@@ -259,10 +276,7 @@ func (s *codeRunState) cancelCodeRuns(agentID string) int {
 	if id == "" {
 		return 0
 	}
-	s.codeRunMu.Lock()
-	runs := s.activeCodeRuns[id]
-	delete(s.activeCodeRuns, id)
-	s.codeRunMu.Unlock()
+	runs := s.takeCodeRunsByAgentID(id)
 	if len(runs) == 0 {
 		return 0
 	}

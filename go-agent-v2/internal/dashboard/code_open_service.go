@@ -443,36 +443,6 @@ func supportsLSPFileType(path string) bool {
 	return false
 }
 
-func buildCodeOpenResult(
-	resolvedPath, relativePath string,
-	line, column int,
-	startLine, endLine, totalLines, context int,
-	snippet []map[string]any,
-	diagnostics []map[string]any,
-	lspOpened bool,
-	extra map[string]any,
-) map[string]any {
-	result := map[string]any{
-		"ok":          true,
-		"filePath":    resolvedPath,
-		"relative":    relativePath,
-		"line":        line,
-		"column":      column,
-		"startLine":   startLine,
-		"endLine":     endLine,
-		"totalLines":  totalLines,
-		"language":    fileLanguageByPath(resolvedPath),
-		"context":     context,
-		"snippet":     snippet,
-		"diagnostics": diagnostics,
-		"lspOpened":   lspOpened,
-	}
-	for key, value := range extra {
-		result[key] = value
-	}
-	return result
-}
-
 // Open resolves and reads a code/file reference for UI preview.
 func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 	logger.Info("ui/code/open: begin",
@@ -525,13 +495,33 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 	}
 
 	relativePath := resolveCodeOpenRelativePath(resolvedPath, p.Project, p.Projects)
+	buildSingleLineResult := func(line int, snippetText string, binary bool, mediaType string, sizeBytes int) map[string]any {
+		return map[string]any{
+			"ok":          true,
+			"filePath":    resolvedPath,
+			"relative":    relativePath,
+			"line":        line,
+			"column":      clampColumn(p.Column),
+			"startLine":   1,
+			"endLine":     1,
+			"totalLines":  1,
+			"language":    fileLanguageByPath(resolvedPath),
+			"context":     0,
+			"snippet":     []map[string]any{{"line": 1, "text": snippetText}},
+			"diagnostics": []map[string]any{},
+			"lspOpened":   false,
+			"binary":      binary,
+			"mediaType":   mediaType,
+			"sizeBytes":   sizeBytes,
+		}
+	}
+
 	if isImagePreviewExtension(resolvedPath) {
 		mediaType := detectMediaType(resolvedPath, content)
 		targetLine := 1
 		if p.Line > 0 {
 			targetLine = p.Line
 		}
-		targetColumn := clampColumn(p.Column)
 		fileURL := codePathToURI(resolvedPath)
 		previewURL := fileURL
 		thumbnailURL := fileURL
@@ -545,28 +535,18 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 			"media_type", mediaType,
 			"size_bytes", len(content),
 		)
-		return buildCodeOpenResult(
-			resolvedPath,
-			relativePath,
+		result := buildSingleLineResult(
 			targetLine,
-			targetColumn,
-			1,
-			1,
-			1,
-			0,
-			[]map[string]any{{"line": 1, "text": fmt.Sprintf("[image preview: %s, %d bytes]", mediaType, len(content))}},
-			[]map[string]any{},
-			false,
-			map[string]any{
-				"binary":       looksLikeBinaryContent(content),
-				"mediaType":    mediaType,
-				"sizeBytes":    len(content),
-				"image":        true,
-				"plugin":       "image-parser",
-				"previewURL":   previewURL,
-				"thumbnailURL": thumbnailURL,
-			},
-		), nil
+			fmt.Sprintf("[image preview: %s, %d bytes]", mediaType, len(content)),
+			looksLikeBinaryContent(content),
+			mediaType,
+			len(content),
+		)
+		result["image"] = true
+		result["plugin"] = "image-parser"
+		result["previewURL"] = previewURL
+		result["thumbnailURL"] = thumbnailURL
+		return result, nil
 	}
 
 	if looksLikeBinaryContent(content) {
@@ -575,33 +555,18 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 		if p.Line > 0 {
 			targetLine = p.Line
 		}
-		targetColumn := clampColumn(p.Column)
 		logger.Info("ui/code/open: binary content detected",
 			"resolved_path", resolvedPath,
 			"relative_path", relativePath,
 			"media_type", mediaType,
 			"size_bytes", len(content),
 		)
-		return buildCodeOpenResult(
-			resolvedPath,
-			relativePath,
+		return buildSingleLineResult(
 			targetLine,
-			targetColumn,
-			1,
-			1,
-			1,
-			0,
-			[]map[string]any{{
-				"line": 1,
-				"text": fmt.Sprintf("[binary file omitted: %s, %d bytes]", mediaType, len(content)),
-			}},
-			[]map[string]any{},
-			false,
-			map[string]any{
-				"binary":    true,
-				"mediaType": mediaType,
-				"sizeBytes": len(content),
-			},
+			fmt.Sprintf("[binary file omitted: %s, %d bytes]", mediaType, len(content)),
+			true,
+			mediaType,
+			len(content),
 		), nil
 	}
 
@@ -636,20 +601,21 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 	}
 	diagnostics := s.gatherCodeDiagnostics(resolvedPath, startLine, endLine)
 
-	result := buildCodeOpenResult(
-		resolvedPath,
-		relativePath,
-		targetLine,
-		targetColumn,
-		startLine,
-		endLine,
-		len(lines),
-		contextLines,
-		buildCodeSnippet(lines, startLine, endLine),
-		diagnostics,
-		lspOpened,
-		nil,
-	)
+	result := map[string]any{
+		"ok":          true,
+		"filePath":    resolvedPath,
+		"relative":    relativePath,
+		"line":        targetLine,
+		"column":      targetColumn,
+		"startLine":   startLine,
+		"endLine":     endLine,
+		"totalLines":  len(lines),
+		"language":    fileLanguageByPath(resolvedPath),
+		"context":     contextLines,
+		"snippet":     buildCodeSnippet(lines, startLine, endLine),
+		"diagnostics": diagnostics,
+		"lspOpened":   lspOpened,
+	}
 
 	logger.Info("ui/code/open: success",
 		"resolved_path", resolvedPath,

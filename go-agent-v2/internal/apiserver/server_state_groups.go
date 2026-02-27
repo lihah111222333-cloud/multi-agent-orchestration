@@ -416,10 +416,7 @@ func (s *runtimeGuardState) endApproval(key string) {
 
 func (s *runtimeGuardState) doCleanup(fn func()) {
 	if fn == nil { return }
-	if s == nil {
-		fn()
-		return
-	}
+	if s == nil { fn(); return }
 	s.cleanupOnce.Do(fn)
 }
 
@@ -429,10 +426,7 @@ type threadAliasState struct {
 
 func (s *threadAliasState) withLock(fn func()) {
 	if fn == nil { return }
-	if s == nil {
-		fn()
-		return
-	}
+	if s == nil { fn(); return }
 	s.threadAliasMu.Lock()
 	defer s.threadAliasMu.Unlock()
 	fn()

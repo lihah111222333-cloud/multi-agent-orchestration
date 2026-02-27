@@ -146,6 +146,18 @@ func (m *WorkspaceManager) updateRunStatusOrLog(ctx context.Context, runKey, sta
 	}
 }
 
+// saveFileAndRecord 在保存文件状态后统一写入合并结果记录与计数。
+func (m *WorkspaceManager) saveFileAndRecord(
+	ctx context.Context,
+	result *WorkspaceMergeResult,
+	file *store.WorkspaceRunFile,
+	counter *int,
+	action, reason string,
+) {
+	m.saveFileOrLog(ctx, file)
+	recordMergeResult(result, counter, file.RelativePath, action, reason)
+}
+
 func (m *WorkspaceManager) CreateRun(ctx context.Context, req WorkspaceCreateRequest) (*store.WorkspaceRun, error) {
 	runKey := strings.TrimSpace(req.RunKey)
 	if runKey == "" {
@@ -380,10 +392,20 @@ func (m *WorkspaceManager) walkMergeEntry(
 	return m.mergeOneFile(ctx, run, path, rel, tracked, result, req)
 }
 
+func recordMergeResult(result *WorkspaceMergeResult, counter *int, path, action, reason string) {
+	if counter != nil {
+		*counter = *counter + 1
+	}
+	row := WorkspaceMergeFileResult{Path: path, Action: action}
+	if reason != "" {
+		row.Reason = reason
+	}
+	result.Files = append(result.Files, row)
+}
+
 // recordMergeError 记录一条合并错误到结果集。
 func recordMergeError(result *WorkspaceMergeResult, path, reason string) {
-	result.Errors++
-	result.Files = append(result.Files, WorkspaceMergeFileResult{Path: path, Action: "error", Reason: reason})
+	recordMergeResult(result, &result.Errors, path, "error", reason)
 }
 
 // mergeOneFile 处理单个工作区文件的合并逻辑 (验证 → hash → 冲突检测 → 拷贝)。
@@ -411,6 +433,19 @@ type mergeCandidate struct {
 	baseline     string
 }
 
+func (c *mergeCandidate) toRunFile(runKey, state, sourceAfter, lastError string) *store.WorkspaceRunFile {
+	return &store.WorkspaceRunFile{
+		RunKey:             runKey,
+		RelativePath:       c.rel,
+		BaselineSHA256:     c.baseline,
+		WorkspaceSHA256:    c.wsHash,
+		SourceSHA256Before: c.sourceBefore,
+		SourceSHA256After:  sourceAfter,
+		State:              state,
+		LastError:          lastError,
+	}
+}
+
 func (m *WorkspaceManager) buildMergeCandidate(
 	ctx context.Context,
 	run *store.WorkspaceRun,
@@ -425,40 +460,36 @@ func (m *WorkspaceManager) buildMergeCandidate(
 	}
 	if wsInfo.Size() > m.maxFileBytes {
 		msg := fmt.Sprintf("workspace file too large: %d bytes > %d", wsInfo.Size(), m.maxFileBytes)
-		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+		m.saveFileAndRecord(ctx, result, &store.WorkspaceRunFile{
 			RunKey: run.RunKey, RelativePath: rel,
 			State: WorkspaceFileStateError, LastError: msg,
-		})
-		recordMergeError(result, rel, msg)
+		}, &result.Errors, "error", msg)
 		return nil, false
 	}
 	wsHash, err := hashFile(wsPath)
 	if err != nil {
-		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+		m.saveFileAndRecord(ctx, result, &store.WorkspaceRunFile{
 			RunKey: run.RunKey, RelativePath: rel,
 			State: WorkspaceFileStateError, LastError: err.Error(),
-		})
-		recordMergeError(result, rel, err.Error())
+		}, &result.Errors, "error", err.Error())
 		return nil, false
 	}
 	sourcePath := filepath.Join(run.SourceRoot, rel)
 	if !isPathWithinRoot(run.SourceRoot, sourcePath) {
 		msg := "target path escapes source root"
-		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+		m.saveFileAndRecord(ctx, result, &store.WorkspaceRunFile{
 			RunKey: run.RunKey, RelativePath: rel,
 			WorkspaceSHA256: wsHash, State: WorkspaceFileStateError, LastError: msg,
-		})
-		recordMergeError(result, rel, msg)
+		}, &result.Errors, "error", msg)
 		return nil, false
 	}
 	sourceBefore, err := hashFileIfExists(sourcePath)
 	if err != nil {
-		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+		m.saveFileAndRecord(ctx, result, &store.WorkspaceRunFile{
 			RunKey: run.RunKey, RelativePath: rel,
 			WorkspaceSHA256: wsHash, SourceSHA256Before: sourceBefore,
 			State: WorkspaceFileStateError, LastError: err.Error(),
-		})
-		recordMergeError(result, rel, err.Error())
+		}, &result.Errors, "error", err.Error())
 		return nil, false
 	}
 	baseline := sourceBefore
@@ -479,67 +510,44 @@ func (m *WorkspaceManager) applyMergeCandidate(
 	req WorkspaceMergeRequest,
 ) {
 	if candidate.baseline != "" && candidate.wsHash == candidate.baseline {
-		result.Unchanged++
-		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-			RunKey: run.RunKey, RelativePath: candidate.rel,
-			BaselineSHA256: candidate.baseline, WorkspaceSHA256: candidate.wsHash,
-			SourceSHA256Before: candidate.sourceBefore, SourceSHA256After: candidate.sourceBefore,
-			State: WorkspaceFileStateUnchanged,
-		})
-		result.Files = append(result.Files, WorkspaceMergeFileResult{Path: candidate.rel, Action: "unchanged"})
+		m.saveFileAndRecord(ctx, result,
+			candidate.toRunFile(run.RunKey, WorkspaceFileStateUnchanged, candidate.sourceBefore, ""),
+			&result.Unchanged, "unchanged", "",
+		)
 		return
 	}
 	if candidate.baseline != "" && candidate.sourceBefore != "" && candidate.sourceBefore != candidate.baseline {
-		result.Conflicts++
 		reason := "source changed since baseline"
-		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-			RunKey: run.RunKey, RelativePath: candidate.rel,
-			BaselineSHA256: candidate.baseline, WorkspaceSHA256: candidate.wsHash,
-			SourceSHA256Before: candidate.sourceBefore, State: WorkspaceFileStateConflict,
-			LastError: reason,
-		})
-		result.Files = append(result.Files, WorkspaceMergeFileResult{Path: candidate.rel, Action: "conflict", Reason: reason})
+		m.saveFileAndRecord(ctx, result,
+			candidate.toRunFile(run.RunKey, WorkspaceFileStateConflict, "", reason),
+			&result.Conflicts, "conflict", reason,
+		)
 		return
 	}
 	if req.DryRun {
-		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-			RunKey: run.RunKey, RelativePath: candidate.rel,
-			BaselineSHA256: candidate.baseline, WorkspaceSHA256: candidate.wsHash,
-			SourceSHA256Before: candidate.sourceBefore, State: WorkspaceFileStateChanged,
-		})
-		result.Merged++
-		result.Files = append(result.Files, WorkspaceMergeFileResult{Path: candidate.rel, Action: "would_merge"})
+		m.saveFileOrLog(ctx, candidate.toRunFile(run.RunKey, WorkspaceFileStateChanged, "", ""))
+		recordMergeResult(result, &result.Merged, candidate.rel, "would_merge", "")
 		return
 	}
 	if err := copyFileAtomic(candidate.wsPath, candidate.sourcePath, candidate.wsInfo.Mode().Perm()); err != nil {
-		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-			RunKey: run.RunKey, RelativePath: candidate.rel,
-			BaselineSHA256: candidate.baseline, WorkspaceSHA256: candidate.wsHash,
-			SourceSHA256Before: candidate.sourceBefore, State: WorkspaceFileStateError,
-			LastError: err.Error(),
-		})
-		recordMergeError(result, candidate.rel, err.Error())
+		m.saveFileAndRecord(ctx, result,
+			candidate.toRunFile(run.RunKey, WorkspaceFileStateError, "", err.Error()),
+			&result.Errors, "error", err.Error(),
+		)
 		return
 	}
 	sourceAfter, hashErr := hashFileIfExists(candidate.sourcePath)
 	if hashErr != nil {
-		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-			RunKey: run.RunKey, RelativePath: candidate.rel,
-			BaselineSHA256: candidate.baseline, WorkspaceSHA256: candidate.wsHash,
-			SourceSHA256Before: candidate.sourceBefore, State: WorkspaceFileStateError,
-			LastError: hashErr.Error(),
-		})
-		recordMergeError(result, candidate.rel, hashErr.Error())
+		m.saveFileAndRecord(ctx, result,
+			candidate.toRunFile(run.RunKey, WorkspaceFileStateError, "", hashErr.Error()),
+			&result.Errors, "error", hashErr.Error(),
+		)
 		return
 	}
-	result.Merged++
-	m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
-		RunKey: run.RunKey, RelativePath: candidate.rel,
-		BaselineSHA256: candidate.baseline, WorkspaceSHA256: candidate.wsHash,
-		SourceSHA256Before: candidate.sourceBefore, SourceSHA256After: sourceAfter,
-		State: WorkspaceFileStateMerged,
-	})
-	result.Files = append(result.Files, WorkspaceMergeFileResult{Path: candidate.rel, Action: "merged"})
+	m.saveFileAndRecord(ctx, result,
+		candidate.toRunFile(run.RunKey, WorkspaceFileStateMerged, sourceAfter, ""),
+		&result.Merged, "merged", "",
+	)
 }
 
 // handleDeletedFiles 处理工作区中不再存在但 tracked 记录仍在的文件。
@@ -567,48 +575,41 @@ func (m *WorkspaceManager) handleDeletedFiles(
 		}
 		sourceBefore, hashErr := hashFileIfExists(sourcePath)
 		if hashErr != nil {
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			m.saveFileAndRecord(ctx, result, &store.WorkspaceRunFile{
 				RunKey: run.RunKey, RelativePath: normalizedRel,
 				BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
 				State: WorkspaceFileStateError, LastError: hashErr.Error(),
-			})
-			recordMergeError(result, normalizedRel, hashErr.Error())
+			}, &result.Errors, "error", hashErr.Error())
 			continue
 		}
 		if trackedFile.BaselineSHA256 != "" && sourceBefore != "" && sourceBefore != trackedFile.BaselineSHA256 {
-			result.Conflicts++
 			reason := "delete conflict: source changed since baseline"
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			m.saveFileAndRecord(ctx, result, &store.WorkspaceRunFile{
 				RunKey: run.RunKey, RelativePath: normalizedRel,
 				BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
 				State: WorkspaceFileStateConflict, LastError: reason,
-			})
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: normalizedRel, Action: "conflict", Reason: reason})
+			}, &result.Conflicts, "conflict", reason)
 			continue
 		}
 
 		if req.DryRun {
-			result.Merged++
-			result.Files = append(result.Files, WorkspaceMergeFileResult{Path: normalizedRel, Action: "would_delete"})
+			recordMergeResult(result, &result.Merged, normalizedRel, "would_delete", "")
 			continue
 		}
 
 		if err := os.Remove(sourcePath); err != nil && !os.IsNotExist(err) {
-			m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+			m.saveFileAndRecord(ctx, result, &store.WorkspaceRunFile{
 				RunKey: run.RunKey, RelativePath: normalizedRel,
 				BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
 				State: WorkspaceFileStateError, LastError: err.Error(),
-			})
-			recordMergeError(result, normalizedRel, err.Error())
+			}, &result.Errors, "error", err.Error())
 			continue
 		}
-		result.Merged++
-		m.saveFileOrLog(ctx, &store.WorkspaceRunFile{
+		m.saveFileAndRecord(ctx, result, &store.WorkspaceRunFile{
 			RunKey: run.RunKey, RelativePath: normalizedRel,
 			BaselineSHA256: trackedFile.BaselineSHA256, SourceSHA256Before: sourceBefore,
 			SourceSHA256After: "", State: WorkspaceFileStateMerged,
-		})
-		result.Files = append(result.Files, WorkspaceMergeFileResult{Path: normalizedRel, Action: "deleted"})
+		}, &result.Merged, "deleted", "")
 	}
 }
 

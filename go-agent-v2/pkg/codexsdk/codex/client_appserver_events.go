@@ -606,11 +606,8 @@ func syncKeys(m map[string]any, k1, k2 string) {
 }
 
 func decodeJSONObject(raw json.RawMessage) (map[string]any, bool) {
-	if len(raw) == 0 {
-		return nil, false
-	}
 	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil || payload == nil {
 		return nil, false
 	}
 	return payload, true
@@ -632,12 +629,8 @@ func isShutdownReadError(err error) bool {
 
 const legacyMirrorDropLogSampleInterval int64 = 100
 
-func shouldLogLegacyMirrorDrop(seq int64) bool {
-	return seq == 1 || seq%legacyMirrorDropLogSampleInterval == 0
-}
-
 func logLegacyMirrorDrop(agentID, method, conversationID, preview string, seq int64) {
-	if shouldLogLegacyMirrorDrop(seq) {
+	if seq == 1 || seq%legacyMirrorDropLogSampleInterval == 0 {
 		logger.Info("codex: dropped legacy mirror stream notification", logger.FieldAgentID, agentID, logger.FieldMethod, method, "conversation_id", conversationID, "preview", preview, "drop_count", seq)
 		return
 	}
@@ -659,11 +652,8 @@ func shouldDropLegacyMirrorNotification(msg jsonRPCMessage) (bool, string, strin
 	}
 
 	msgObj, ok := payload["msg"].(map[string]any)
-	if !ok {
-		return false, "", ""
-	}
 	preview := extractLegacyMirrorPreview(msgObj)
-	if preview == "" {
+	if !ok || preview == "" {
 		return false, "", ""
 	}
 
@@ -807,10 +797,8 @@ func streamErrorWillRetry(raw json.RawMessage) bool {
 	if !ok {
 		return false
 	}
-	if value, ok := extractBoolValue(payload, "willRetry", "will_retry", "recoverable"); ok {
-		return value
-	}
-	return false
+	value, _ := extractBoolValue(payload, "willRetry", "will_retry", "recoverable")
+	return value
 }
 
 // startStreamErrorRecoveryTimer 启动恢复超时计时器。

@@ -295,10 +295,44 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 	}
 
 	// Fix 1: 子 agent 自动审批 — 多 agent 编排场景中，子 agent 不应阻塞等待人类审批。
-	// 仅主 agent 的审批请求走正常的交互式流程。
-	if s.uiRuntime != nil && !s.uiRuntime.IsMainAgent(agentID) {
+	// 双重检查:
+	//   (1) AgentManager 计数 — 多 agent 且非首个 → 视为子 agent (立即可用，无时序问题)
+	//   (2) uiRuntime.IsMainAgent — 已有明确标记时使用
+	isSubAgent := false
+	detectedBy := ""
+	agentCount := 0
+	firstID := ""
+	if s.mgr != nil {
+		agentCount = s.mgr.Count()
+		firstID = s.mgr.FirstAgentID()
+		if agentCount > 1 && firstID != "" && firstID != agentID {
+			isSubAgent = true
+			detectedBy = "mgr_count"
+		}
+	}
+	if !isSubAgent && s.uiRuntime != nil && !s.uiRuntime.IsMainAgent(agentID) {
+		isSubAgent = true
+		detectedBy = "uiRuntime_isMain"
+	}
+
+	// L1 诊断日志: 无论是否为子 agent，都记录审批事件到达时的上下文
+	logger.Info("app-server: approval request received",
+		logger.FieldAgentID, agentID,
+		logger.FieldMethod, method,
+		"agent_count", agentCount,
+		"first_agent_id", firstID,
+		"is_sub_agent", isSubAgent,
+		"detected_by", detectedBy,
+	)
+
+	if isSubAgent {
 		logger.Info("app-server: sub-agent auto-approved",
-			logger.FieldAgentID, agentID, logger.FieldMethod, method)
+			logger.FieldAgentID, agentID,
+			logger.FieldMethod, method,
+			"agent_count", agentCount,
+			"first_agent_id", firstID,
+			"detected_by", detectedBy,
+		)
 		autoApprovePayload := approvalDecisionPayload(method, true)
 		if event.RespondResultFunc != nil {
 			if err := event.RespondResultFunc(autoApprovePayload); err != nil {

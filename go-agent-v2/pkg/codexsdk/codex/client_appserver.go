@@ -75,10 +75,11 @@ func (p *pendingCall) resolve(result json.RawMessage, err error) {
 //
 // 替代 http-api REST 客户端, 支持 dynamicTools 注入。
 type AppServerClient struct {
-	Port     int
-	Cmd      *exec.Cmd
-	ThreadID string
-	AgentID  string // 所属 Agent 标识, 用于日志关联
+	Port           int
+	Cmd            *exec.Cmd
+	ThreadID       string
+	AgentID        string // 所属 Agent 标识, 用于日志关联
+	ApprovalPolicy string // 审批策略 ("never"|"on-failure"|...), 空=使用 codex 默认值
 
 	// ========================================
 	// 锁职责说明
@@ -236,6 +237,9 @@ func (c *AppServerClient) GetPort() int { return c.Port }
 
 // GetThreadID 返回当前 thread ID。
 func (c *AppServerClient) GetThreadID() string { return c.ThreadID }
+
+// SetApprovalPolicy 设置审批策略 (在 SpawnAndConnect 之前调用)。
+func (c *AppServerClient) SetApprovalPolicy(policy string) { c.ApprovalPolicy = policy }
 
 // GetActiveTurnID 返回当前活跃 turn ID。
 func (c *AppServerClient) GetActiveTurnID() string { return c.getActiveTurnID() }

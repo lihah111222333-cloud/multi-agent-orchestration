@@ -29,18 +29,26 @@ func (c *AppServerClient) Initialize() error {
 }
 
 type asThreadStartParams struct {
-	Cwd          string        `json:"cwd,omitempty"`
-	Model        string        `json:"model,omitempty"`
-	Instructions string        `json:"instructions,omitempty"`
-	DynamicTools []DynamicTool `json:"dynamicTools,omitempty"` // camelCase as required by app-server
+	Cwd            string        `json:"cwd,omitempty"`
+	Model          string        `json:"model,omitempty"`
+	Instructions   string        `json:"instructions,omitempty"`
+	DynamicTools   []DynamicTool `json:"dynamicTools,omitempty"` // camelCase as required by app-server
+	ApprovalPolicy string        `json:"approvalPolicy,omitempty"`
 }
 
 func (c *AppServerClient) ThreadStart(cwd, model, instructions string, dynamicTools []DynamicTool) (string, error) {
+	policy := strings.TrimSpace(c.ApprovalPolicy)
+	logger.Info("codex: thread/start with approval policy",
+		logger.FieldAgentID, c.AgentID,
+		logger.FieldPort, c.Port,
+		"approval_policy", policy,
+	)
 	result, err := c.call("thread/start", asThreadStartParams{
-		Cwd:          cwd,
-		Model:        model,
-		Instructions: instructions,
-		DynamicTools: dynamicTools,
+		Cwd:            cwd,
+		Model:          model,
+		Instructions:   instructions,
+		DynamicTools:   dynamicTools,
+		ApprovalPolicy: policy,
 	}, 30*time.Second)
 	if err != nil {
 		logger.Error("codex: thread/start FAILED", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldError, err)

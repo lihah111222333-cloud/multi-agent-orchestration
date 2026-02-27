@@ -223,6 +223,20 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 		return apperrors.New("AgentManager.Launch", "app-server client factory returned nil")
 	}
 
+	// 子 agent 自动设置 approvalPolicy = "never" — 防止 codex 沙箱拦截文件操作。
+	// 仅首个 agent (主 agent) 保留默认审批策略。
+	isSubAgent := len(m.agents) > 0
+	if isSubAgent {
+		type approvalPolicySetter interface{ SetApprovalPolicy(string) }
+		if setter, ok := client.(approvalPolicySetter); ok {
+			setter.SetApprovalPolicy("never")
+			logger.Info("runner: sub-agent approval policy set to never",
+				logger.FieldAgentID, id,
+				"agent_count_before", len(m.agents),
+			)
+		}
+	}
+
 	proc := &AgentProcess{
 		ID:     id,
 		Name:   name,
@@ -576,6 +590,30 @@ func (m *AgentManager) Get(id string) *AgentProcess {
 	proc := m.agents[id]
 	m.mu.RUnlock()
 	return proc
+}
+
+// Count 返回当前管理的 agent 数量 (线程安全)。
+func (m *AgentManager) Count() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.agents)
+}
+
+// FirstAgentID 返回按 ID 字典序最小的 agent ID (视为主 agent)。
+// 空字符串表示无 agent。
+func (m *AgentManager) FirstAgentID() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.agents) == 0 {
+		return ""
+	}
+	first := ""
+	for id := range m.agents {
+		if first == "" || id < first {
+			first = id
+		}
+	}
+	return first
 }
 
 // get 获取 Agent 进程 (线程安全, 返回 error)。

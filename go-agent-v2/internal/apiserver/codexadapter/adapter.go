@@ -15,7 +15,6 @@ import (
 	interruptsvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/interrupt"
 	listingsvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/listing"
 	promptsvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/prompt"
-	runtimesvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/runtime"
 	trackersvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/tracker"
 	appErrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
@@ -339,7 +338,19 @@ func (a *Adapter) ThreadLoadedList(_ context.Context, cursor *string, limit *uin
 }
 
 func (a *Adapter) registerBinding(ctx context.Context, agentID string, proc *codexsdk.AgentProcess) {
-	runtimesvc.RegisterBinding(a.runtimeServiceAdapter(), ctx, agentID, wrapProcess(proc))
+	bindingStore := a.bindingStore()
+	if bindingStore == nil || proc == nil {
+		return
+	}
+	codexThreadID := a.GetThreadID(proc)
+	if codexThreadID == "" {
+		return
+	}
+	if err := bindingStore.Bind(ctx, agentID, codexThreadID, ""); err != nil {
+		logger.Warn("turn/start: failed to register binding",
+			append(threadLogFields(agentID), "codex_thread_id", codexThreadID, logger.FieldError, err)...,
+		)
+	}
 }
 
 func (a *Adapter) persistThreadAlias(ctx context.Context, threadID, alias string) error {

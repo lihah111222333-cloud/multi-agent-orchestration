@@ -220,20 +220,26 @@ func (s *lspCacheStore) maybeCleanup() {
 	}
 	s.lastCleanup = now
 	s.cleanupRunning = true
-	s.mu.Unlock()
-
-	s.cleanupMemory(now)
-	go s.cleanupPersistentAsync(now)
-}
-
-func (s *lspCacheStore) cleanupMemory(now time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for key, record := range s.memory {
 		if record.expired(now, s.config.ttl) {
 			delete(s.memory, key)
 		}
 	}
+	s.mu.Unlock()
+
+	go func() {
+		defer func() {
+			s.mu.Lock()
+			s.cleanupRunning = false
+			s.mu.Unlock()
+		}()
+		if !s.ensurePersistentReady() {
+			return
+		}
+		if err := s.cleanupPersistent(now); err != nil {
+			logger.Warn("lsp cache: ttl cleanup failed", logger.FieldPath, s.config.dir, logger.FieldError, err)
+		}
+	}()
 }
 
 func (s *lspCacheStore) cleanupPersistent(now time.Time) error {
@@ -247,15 +253,10 @@ func (s *lspCacheStore) cleanupPersistent(now time.Time) error {
 		}
 		return err
 	}
-
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
+		if walkErr != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".json") {
 			return walkErr
 		}
-		if d.IsDir() || !strings.HasSuffix(d.Name(), ".json") {
-			return nil
-		}
-
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -263,40 +264,14 @@ func (s *lspCacheStore) cleanupPersistent(now time.Time) error {
 			}
 			return err
 		}
-
 		var record documentCacheRecord
-		if err := json.Unmarshal(data, &record); err != nil {
+		if err := json.Unmarshal(data, &record); err != nil || record.expired(now, s.config.ttl) {
 			if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
 				return rmErr
 			}
-			return nil
-		}
-		if !record.expired(now, s.config.ttl) {
-			return nil
-		}
-		if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
-			return rmErr
 		}
 		return nil
 	})
-}
-
-func (s *lspCacheStore) cleanupPersistentAsync(now time.Time) {
-	defer func() {
-		s.mu.Lock()
-		s.cleanupRunning = false
-		s.mu.Unlock()
-	}()
-
-	if !s.ensurePersistentReady() {
-		return
-	}
-	if err := s.cleanupPersistent(now); err != nil {
-		logger.Warn("lsp cache: ttl cleanup failed",
-			logger.FieldPath, s.config.dir,
-			logger.FieldError, err,
-		)
-	}
 }
 
 func (s *lspCacheStore) ensurePersistentReady() bool {

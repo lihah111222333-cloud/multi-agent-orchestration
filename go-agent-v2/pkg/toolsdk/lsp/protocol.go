@@ -104,6 +104,10 @@ type ClientCapabilities struct {
 	TextDocument *TextDocumentClientCapabilities `json:"textDocument,omitempty"`
 }
 
+type DynamicRegistrationCapability struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+}
+
 // TextDocumentClientCapabilities 文档级能力。
 type TextDocumentClientCapabilities struct {
 	PublishDiagnostics *PublishDiagnosticsCapability `json:"publishDiagnostics,omitempty"`
@@ -130,9 +134,7 @@ type HoverCapability struct {
 }
 
 // CompletionClientCapability completion 能力。
-type CompletionClientCapability struct {
-	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
-}
+type CompletionClientCapability = DynamicRegistrationCapability
 
 // RenameClientCapability rename 能力。
 type RenameClientCapability struct {
@@ -140,34 +142,22 @@ type RenameClientCapability struct {
 }
 
 // CallHierarchyCapability call hierarchy 能力。
-type CallHierarchyCapability struct {
-	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
-}
+type CallHierarchyCapability = DynamicRegistrationCapability
 
 // TypeHierarchyCapability type hierarchy 能力。
-type TypeHierarchyCapability struct {
-	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
-}
+type TypeHierarchyCapability = DynamicRegistrationCapability
 
 // CodeActionCapability code action 能力。
-type CodeActionCapability struct {
-	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
-}
+type CodeActionCapability = DynamicRegistrationCapability
 
 // SignatureHelpCapability signature help 能力。
-type SignatureHelpCapability struct {
-	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
-}
+type SignatureHelpCapability = DynamicRegistrationCapability
 
 // FormattingCapability formatting 能力。
-type FormattingCapability struct {
-	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
-}
+type FormattingCapability = DynamicRegistrationCapability
 
 // FoldingRangeCapability folding range 能力。
-type FoldingRangeCapability struct {
-	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
-}
+type FoldingRangeCapability = DynamicRegistrationCapability
 
 // SemanticTokensCapability semantic tokens 能力。
 type SemanticTokensCapability struct {
@@ -340,9 +330,7 @@ type ReferenceContext struct {
 // ========================================
 
 // DocumentSymbolParams textDocument/documentSymbol 请求参数。
-type DocumentSymbolParams struct {
-	TextDocument TextDocumentIdentifier `json:"textDocument"`
-}
+type DocumentSymbolParams = DidCloseTextDocumentParams
 
 // DocumentSymbol 文档符号 (大纲节点, 支持嵌套)。
 type DocumentSymbol struct {
@@ -412,10 +400,7 @@ func (k SymbolKind) String() string {
 // ========================================
 
 // CompletionParams 补全请求参数。
-type CompletionParams struct {
-	TextDocument TextDocumentIdentifier `json:"textDocument"`
-	Position     Position               `json:"position"`
-}
+type CompletionParams = TextDocumentPositionParams
 
 // CompletionItem 补全项。
 type CompletionItem struct {

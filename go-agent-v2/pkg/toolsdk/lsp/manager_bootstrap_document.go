@@ -70,10 +70,11 @@ func (m *Manager) bootstrapDocumentLocked(filePath, uri string) (*Client, *Serve
 	// 若磁盘已追平内存哈希，则切回 disk-backed。
 	if state.Open && !state.DiskBacked {
 		if content, stat, hash, readErr := loadDocumentSnapshot(filePath); readErr == nil && hash == state.ContentHash {
-			state.MtimeNS = stat.ModTime().UnixNano()
-			state.Size = stat.Size()
-			state.Content = content
-			state.DiskBacked = true
+			version := state.Version
+			if version <= 0 {
+				version = 1
+			}
+			state.openWith(version, stat.ModTime().UnixNano(), stat.Size(), hash, content, cfg.Language, true)
 			m.upsertDocumentStateCache(filePath, uri, state)
 		}
 		return client, cfg, state, nil
@@ -89,8 +90,7 @@ func (m *Manager) bootstrapDocumentLocked(filePath, uri string) (*Client, *Serve
 		if err := client.DidOpenVersioned(uri, cfg.Language, openVersion, content); err != nil {
 			return nil, nil, nil, apperrors.Wrap(err, "LSP.BootstrapDocument", "didOpen")
 		}
-		state.openWith(openVersion, stat.ModTime().UnixNano(), stat.Size(), hash, content, cfg.Language, true)
-		m.upsertDocumentStateCache(filePath, uri, state)
+		m.applyDocumentState(filePath, uri, state, openVersion, hash, content, cfg.Language, true)
 		return client, cfg, state, nil
 	}
 
@@ -104,19 +104,12 @@ func (m *Manager) bootstrapDocumentLocked(filePath, uri string) (*Client, *Serve
 		nextVersion = 1
 	}
 	if err := client.DidChange(uri, nextVersion, content); err == nil {
-		state.Version = nextVersion
-		state.MtimeNS = stat.ModTime().UnixNano()
-		state.Size = stat.Size()
-		state.ContentHash = hash
-		state.Content = content
-		state.DiskBacked = true
-		m.upsertDocumentStateCache(filePath, uri, state)
+		m.applyDocumentState(filePath, uri, state, nextVersion, hash, content, cfg.Language, true)
 		return client, cfg, state, nil
 	}
 
 	if err := m.reopenDocument(client, cfg, uri, nextVersion, content); err == nil {
-		state.openWith(nextVersion, stat.ModTime().UnixNano(), stat.Size(), hash, content, cfg.Language, true)
-		m.upsertDocumentStateCache(filePath, uri, state)
+		m.applyDocumentState(filePath, uri, state, nextVersion, hash, content, cfg.Language, true)
 		return client, cfg, state, nil
 	}
 
@@ -127,8 +120,7 @@ func (m *Manager) bootstrapDocumentLocked(filePath, uri string) (*Client, *Serve
 	if err := restarted.DidOpenVersioned(uri, restartedCfg.Language, nextVersion, content); err != nil {
 		return nil, nil, nil, apperrors.Wrap(err, "LSP.BootstrapDocument", "didOpen after restart")
 	}
-	state.openWith(nextVersion, stat.ModTime().UnixNano(), stat.Size(), hash, content, restartedCfg.Language, true)
-	m.upsertDocumentStateCache(filePath, uri, state)
+	m.applyDocumentState(filePath, uri, state, nextVersion, hash, content, restartedCfg.Language, true)
 	return restarted, restartedCfg, state, nil
 }
 
@@ -157,8 +149,7 @@ func (m *Manager) bootstrapDocumentWithoutClientLocked(filePath, uri, language s
 
 	if !state.Open {
 		openVersion := nextOpenVersionFromBaseline(state, stat.ModTime().UnixNano(), stat.Size(), hash)
-		state.openWith(openVersion, stat.ModTime().UnixNano(), stat.Size(), hash, content, language, true)
-		m.upsertDocumentStateCache(filePath, uri, state)
+		m.applyDocumentState(filePath, uri, state, openVersion, hash, content, language, true)
 		return state, nil
 	}
 
@@ -171,8 +162,7 @@ func (m *Manager) bootstrapDocumentWithoutClientLocked(filePath, uri, language s
 	if nextVersion <= 0 {
 		nextVersion = 1
 	}
-	state.openWith(nextVersion, stat.ModTime().UnixNano(), stat.Size(), hash, content, language, true)
-	m.upsertDocumentStateCache(filePath, uri, state)
+	m.applyDocumentState(filePath, uri, state, nextVersion, hash, content, language, true)
 	return state, nil
 }
 
@@ -208,15 +198,7 @@ func (m *Manager) openDocument(filePath, content string) error {
 	}
 
 	hash := hashBytes([]byte(content))
-
-	if stat, err := os.Stat(path); err == nil {
-		state.openWith(openVersion, stat.ModTime().UnixNano(), stat.Size(), hash, content, cfg.Language, true)
-		m.upsertDocumentStateCache(path, uri, state)
-		return nil
-	}
-
-	state.openWith(openVersion, 0, int64(len(content)), hash, content, cfg.Language, false)
-	m.upsertDocumentStateCache(path, uri, state)
+	m.applyDocumentState(path, uri, state, openVersion, hash, content, cfg.Language, true)
 	return nil
 }
 
@@ -233,14 +215,7 @@ func (m *Manager) openDocumentWithoutClient(filePath, content, language string) 
 	}
 
 	hash := hashBytes([]byte(content))
-	if stat, err := os.Stat(filePath); err == nil {
-		state.openWith(openVersion, stat.ModTime().UnixNano(), stat.Size(), hash, content, language, true)
-		m.upsertDocumentStateCache(filePath, uri, state)
-		return nil
-	}
-
-	state.openWith(openVersion, 0, int64(len(content)), hash, content, language, false)
-	m.upsertDocumentStateCache(filePath, uri, state)
+	m.applyDocumentState(filePath, uri, state, openVersion, hash, content, language, true)
 	return nil
 }
 
@@ -317,12 +292,7 @@ func (m *Manager) changeDocument(filePath string, version int, newContent string
 
 	if err := client.DidChange(uri, version, newContent); err != nil {
 		if reopenErr := m.reopenDocument(client, cfg, uri, version, newContent); reopenErr == nil {
-			if stat, statErr := os.Stat(path); statErr == nil {
-				state.openWith(version, stat.ModTime().UnixNano(), stat.Size(), hash, newContent, cfg.Language, true)
-			} else {
-				state.openWith(version, 0, int64(len(newContent)), hash, newContent, cfg.Language, false)
-			}
-			m.upsertDocumentStateCache(path, uri, state)
+			m.applyDocumentState(path, uri, state, version, hash, newContent, cfg.Language, true)
 			return nil
 		}
 		restarted, restartedCfg, restartErr := m.restartClientForLanguage(cfg.Language)
@@ -332,28 +302,11 @@ func (m *Manager) changeDocument(filePath string, version int, newContent string
 		if err := restarted.DidOpenVersioned(uri, restartedCfg.Language, version, newContent); err != nil {
 			return apperrors.Wrap(err, "LSP.changeDocument", "didOpen after restart")
 		}
-		if stat, statErr := os.Stat(path); statErr == nil {
-			state.openWith(version, stat.ModTime().UnixNano(), stat.Size(), hash, newContent, restartedCfg.Language, true)
-		} else {
-			state.openWith(version, 0, int64(len(newContent)), hash, newContent, restartedCfg.Language, false)
-		}
-		m.upsertDocumentStateCache(path, uri, state)
+		m.applyDocumentState(path, uri, state, version, hash, newContent, restartedCfg.Language, true)
 		return nil
 	}
 
-	state.Version = version
-	state.Content = newContent
-	state.ContentHash = hash
-	state.Size = int64(len(newContent))
-	state.DiskBacked = false
-	state.Language = normalizeLanguage(cfg.Language)
-	state.Open = true
-	if stat, err := os.Stat(path); err == nil {
-		state.MtimeNS = stat.ModTime().UnixNano()
-	} else {
-		state.MtimeNS = 0
-	}
-	m.upsertDocumentStateCache(path, uri, state)
+	m.applyDocumentState(path, uri, state, version, hash, newContent, cfg.Language, false)
 	return nil
 }
 
@@ -374,19 +327,7 @@ func (m *Manager) changeDocumentWithoutClient(filePath string, version int, newC
 		version = 1
 	}
 
-	state.Version = version
-	state.Content = newContent
-	state.ContentHash = hash
-	state.Size = int64(len(newContent))
-	state.DiskBacked = false
-	state.Language = normalizeLanguage(language)
-	state.Open = true
-	if stat, err := os.Stat(filePath); err == nil {
-		state.MtimeNS = stat.ModTime().UnixNano()
-	} else {
-		state.MtimeNS = 0
-	}
-	m.upsertDocumentStateCache(filePath, uri, state)
+	m.applyDocumentState(filePath, uri, state, version, hash, newContent, language, false)
 	return nil
 }
 
@@ -482,6 +423,26 @@ func (m *Manager) cacheWorkspaceHint(filePath string) string {
 		return workspaceID
 	}
 	return "default-workspace"
+}
+
+func (m *Manager) applyDocumentState(
+	filePath, uri string,
+	state *documentSyncState,
+	version int,
+	hash, content, language string,
+	diskBackedIfFileExists bool,
+) {
+	mtimeNS, size, diskBacked := resolveDocumentStateSnapshot(filePath, content, diskBackedIfFileExists)
+	state.openWith(version, mtimeNS, size, hash, content, language, diskBacked)
+	m.upsertDocumentStateCache(filePath, uri, state)
+}
+
+func resolveDocumentStateSnapshot(filePath, content string, diskBackedIfFileExists bool) (mtimeNS, size int64, diskBacked bool) {
+	size = int64(len(content))
+	if stat, err := os.Stat(filePath); err == nil {
+		return stat.ModTime().UnixNano(), stat.Size(), diskBackedIfFileExists
+	}
+	return 0, size, false
 }
 
 func (s *documentSyncState) openWith(

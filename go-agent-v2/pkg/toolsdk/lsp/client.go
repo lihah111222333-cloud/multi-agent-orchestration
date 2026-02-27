@@ -98,14 +98,7 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 		logger.FieldPID, c.cmd.Process.Pid,
 	)
 
-	// 后台读取 server→client 消息
-	util.SafeGo(func() { c.readLoop() })
-
-	// 收集 stderr (LSP 服务器错误输出 → 统一日志)
-	if c.stderr != nil {
-		c.stderrCollector = logger.NewStderrCollector("lsp-" + c.language)
-		util.SafeGo(func() { _, _ = io.Copy(c.stderrCollector, c.stderr) })
-	}
+	c.startBackgroundReaders()
 
 	// initialize 握手
 	initParams := InitializeParams{
@@ -151,23 +144,39 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 
 	var initResult InitializeResult
 	if err := c.call("initialize", initParams, &initResult); err != nil {
-		_ = c.Stop()
-		return apperrors.Wrap(err, "LSP.Start", "initialize")
+		return c.stopAfterStartFailure("initialize", err)
 	}
 
-	c.capsMu.Lock()
-	c.initializeResult = initResult
-	c.semanticTokensLegend = decodeSemanticTokensLegend(initResult.Capabilities.SemanticTokensProvider)
-	c.capsMu.Unlock()
+	c.cacheInitializeResult(initResult)
 
 	// initialized 通知 (无响应)
 	if err := c.notify("initialized", struct{}{}); err != nil {
-		_ = c.Stop()
-		return apperrors.Wrap(err, "LSP.Start", "initialized notify")
+		return c.stopAfterStartFailure("initialized notify", err)
 	}
 
 	logger.Info("lsp: initialize handshake complete", logger.FieldLanguage, c.language)
 	return nil
+}
+
+func (c *Client) startBackgroundReaders() {
+	util.SafeGo(func() { c.readLoop() })
+	if c.stderr == nil {
+		return
+	}
+	c.stderrCollector = logger.NewStderrCollector("lsp-" + c.language)
+	util.SafeGo(func() { _, _ = io.Copy(c.stderrCollector, c.stderr) })
+}
+
+func (c *Client) cacheInitializeResult(result InitializeResult) {
+	c.capsMu.Lock()
+	defer c.capsMu.Unlock()
+	c.initializeResult = result
+	c.semanticTokensLegend = decodeSemanticTokensLegend(result.Capabilities.SemanticTokensProvider)
+}
+
+func (c *Client) stopAfterStartFailure(stage string, err error) error {
+	_ = c.Stop()
+	return apperrors.Wrap(err, "LSP.Start", stage)
 }
 
 // InitializeResult 返回 initialize 响应缓存。
@@ -193,6 +202,28 @@ func (c *Client) SemanticTokensLegend() *SemanticTokensLegend {
 // Running 返回客户端是否正在运行。
 func (c *Client) Running() bool {
 	return !c.stopped.Load() && c.cmd != nil && c.cmd.Process != nil
+}
+
+func (c *Client) ensureRunning() error {
+	if !c.Running() {
+		return fmt.Errorf("lsp client not running")
+	}
+	return nil
+}
+
+func (c *Client) callWhenRunning(method string, params any, result any) error {
+	if err := c.ensureRunning(); err != nil {
+		return err
+	}
+	return c.call(method, params, result)
+}
+
+func (c *Client) callRawWhenRunning(method string, params any) (json.RawMessage, error) {
+	var raw json.RawMessage
+	if err := c.callWhenRunning(method, params, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 // DidOpen 通知服务器打开了文件。
@@ -237,11 +268,8 @@ func (c *Client) DidChange(uri string, version int, newText string) error {
 
 // Hover 请求 hover 信息。
 func (c *Client) Hover(ctx context.Context, uri string, line, character int) (*HoverResult, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
 	var result HoverResult
-	err := c.call("textDocument/hover", TextDocumentPositionParams{
+	err := c.callWhenRunning("textDocument/hover", TextDocumentPositionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     Position{Line: line, Character: character},
 	}, &result)
@@ -259,14 +287,10 @@ func (c *Client) Hover(ctx context.Context, uri string, line, character int) (*H
 // LSP 规范: 返回值可能是 Location | Location[] | null。
 // 此方法统一返回 []Location。
 func (c *Client) Definition(ctx context.Context, uri string, line, character int) ([]Location, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
-	var raw json.RawMessage
-	err := c.call("textDocument/definition", DefinitionParams{
+	raw, err := c.callRawWhenRunning("textDocument/definition", DefinitionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     Position{Line: line, Character: character},
-	}, &raw)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -292,11 +316,8 @@ func (c *Client) Definition(ctx context.Context, uri string, line, character int
 
 // References 查找引用 — 返回符号的所有引用位置。
 func (c *Client) References(ctx context.Context, uri string, line, character int, includeDecl bool) ([]Location, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
 	var result []Location
-	err := c.call("textDocument/references", ReferenceParams{
+	err := c.callWhenRunning("textDocument/references", ReferenceParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     Position{Line: line, Character: character},
 		Context:      ReferenceContext{IncludeDeclaration: includeDecl},
@@ -309,13 +330,9 @@ func (c *Client) References(ctx context.Context, uri string, line, character int
 
 // DocumentSymbol 文件大纲 — 返回文件中所有符号的层次结构。
 func (c *Client) DocumentSymbol(ctx context.Context, uri string) ([]DocumentSymbol, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
-	var raw json.RawMessage
-	err := c.call("textDocument/documentSymbol", DocumentSymbolParams{
+	raw, err := c.callRawWhenRunning("textDocument/documentSymbol", DocumentSymbolParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
-	}, &raw)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -326,14 +343,10 @@ func (c *Client) DocumentSymbol(ctx context.Context, uri string) ([]DocumentSymb
 //
 // LSP 规范: 返回值可能是 CompletionItem[] | CompletionList | null。
 func (c *Client) Completion(ctx context.Context, uri string, line, character int) ([]CompletionItem, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
-	var raw json.RawMessage
-	err := c.call("textDocument/completion", CompletionParams{
+	raw, err := c.callRawWhenRunning("textDocument/completion", CompletionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     Position{Line: line, Character: character},
-	}, &raw)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -342,11 +355,8 @@ func (c *Client) Completion(ctx context.Context, uri string, line, character int
 
 // Rename 重命名 — 返回重命名所需的全部编辑。
 func (c *Client) Rename(ctx context.Context, uri string, line, character int, newName string) (*WorkspaceEdit, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
 	var result WorkspaceEdit
-	err := c.call("textDocument/rename", RenameParams{
+	err := c.callWhenRunning("textDocument/rename", RenameParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     Position{Line: line, Character: character},
 		NewName:      newName,
@@ -359,13 +369,9 @@ func (c *Client) Rename(ctx context.Context, uri string, line, character int, ne
 
 // WorkspaceSymbol 工作区符号检索。
 func (c *Client) WorkspaceSymbol(ctx context.Context, query string) ([]WorkspaceSymbolResult, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
-	var raw json.RawMessage
-	err := c.call("workspace/symbol", WorkspaceSymbolParams{
+	raw, err := c.callRawWhenRunning("workspace/symbol", WorkspaceSymbolParams{
 		Query: query,
-	}, &raw)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -399,30 +405,40 @@ func (c *Client) Stop() error {
 		_ = c.stdin.Close()
 	}
 
-	if c.cmd != nil && c.cmd.Process != nil {
-		waitDone := make(chan struct{})
-		go func() {
-			_ = c.cmd.Wait()
-			close(waitDone)
-		}()
+	c.waitProcessExit(2 * time.Second)
+	c.clearPending()
 
-		select {
-		case <-waitDone:
-		case <-time.After(2 * time.Second):
-			_ = c.cmd.Process.Kill()
-			<-waitDone
-		}
+	return nil
+}
+
+func (c *Client) waitProcessExit(timeout time.Duration) {
+	if c.cmd == nil || c.cmd.Process == nil {
+		return
 	}
+	waitDone := make(chan struct{})
+	go func() {
+		_ = c.cmd.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+	case <-time.After(timeout):
+		_ = c.cmd.Process.Kill()
+		<-waitDone
+	}
+}
 
-	// 清理 pending
+func (c *Client) clearPending() {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.clearPendingLocked()
+}
+
+func (c *Client) clearPendingLocked() {
 	for id, ch := range c.pending {
 		close(ch)
 		delete(c.pending, id)
 	}
-	c.mu.Unlock()
-
-	return nil
 }
 
 // ========================================
@@ -521,15 +537,8 @@ func (c *Client) writeMessage(v any) error {
 
 // readLoop 持续读取 server→client 消息 (响应 + 通知)。
 func (c *Client) readLoop() {
-	defer func() {
-		// readLoop 退出后不再有任何响应，关闭 pending 以立即唤醒等待中的请求。
-		c.mu.Lock()
-		for id, ch := range c.pending {
-			close(ch)
-			delete(c.pending, id)
-		}
-		c.mu.Unlock()
-	}()
+	// readLoop 退出后不再有任何响应，关闭 pending 以立即唤醒等待中的请求。
+	defer c.clearPending()
 
 	for !c.stopped.Load() {
 		data, err := c.readFrame()

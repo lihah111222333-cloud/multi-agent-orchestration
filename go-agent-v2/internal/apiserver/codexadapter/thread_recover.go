@@ -34,10 +34,6 @@ func (a *Adapter) RecoverConnection(proc *codexsdk.AgentProcess, reason string) 
 
 // ThreadRecover forces manual connection recovery for current thread process.
 func (a *Adapter) ThreadRecover(_ context.Context, threadID string) (threadRecoverResult, error) {
-	return threadRecoverLogic(a, threadID)
-}
-
-func threadRecoverLogic(a *Adapter, threadID string) (threadRecoverResult, error) {
 	id, err := requireThreadID("Server.threadRecover", threadID)
 	if err != nil {
 		return threadRecoverResult{}, err

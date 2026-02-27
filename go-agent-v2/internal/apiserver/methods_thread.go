@@ -35,27 +35,9 @@ type threadStartResponse struct {
 	ApprovalPolicy string     `json:"approvalPolicy"`
 }
 
-func normalizeThreadID(raw string) string { return strings.TrimSpace(raw) }
-
 func normalizeResumeThreadID(raw string) string {
-	id := normalizeThreadID(raw)
-	if id == "" {
-		return ""
-	}
-	if first, _, ok := strings.Cut(id, ","); ok {
-		return normalizeThreadID(first)
-	}
-	return id
-}
-
-func resolveNumTurns(numTurns, turnIndex *int) int {
-	if numTurns != nil {
-		return *numTurns
-	}
-	if turnIndex != nil {
-		return *turnIndex
-	}
-	return 0
+	id, _, _ := strings.Cut(strings.TrimSpace(raw), ",")
+	return strings.TrimSpace(id)
 }
 
 func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any, error) {
@@ -71,10 +53,7 @@ func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any
 		return nil, err
 	}
 	return threadStartResponse{
-		Thread: threadInfo{
-			ID:     result.ThreadID,
-			Status: result.Status,
-		},
+		Thread:         threadInfo{ID: result.ThreadID, Status: result.Status},
 		Model:          result.Model,
 		ModelProvider:  result.ModelProvider,
 		Cwd:            result.Cwd,
@@ -96,7 +75,7 @@ type threadForkResponse struct {
 }
 
 func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, error) {
-	result, err := s.codexAdapter.ThreadFork(normalizeThreadID(p.ThreadID))
+	result, err := s.codexAdapter.ThreadFork(strings.TrimSpace(p.ThreadID))
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +109,7 @@ type threadRecoverResponse struct {
 }
 
 func (s *Server) threadRecoverTyped(ctx context.Context, p threadIDParams) (any, error) {
-	result, err := s.codexAdapter.ThreadRecover(ctx, normalizeThreadID(p.ThreadID))
+	result, err := s.codexAdapter.ThreadRecover(ctx, strings.TrimSpace(p.ThreadID))
 	if err != nil {
 		return nil, err
 	}
@@ -153,11 +132,16 @@ type threadRollbackParams struct {
 }
 
 func (s *Server) threadRollbackTyped(_ context.Context, p threadRollbackParams) (any, error) {
-	numTurns := resolveNumTurns(p.NumTurns, p.TurnIndex)
+	numTurns := 0
+	if p.NumTurns != nil {
+		numTurns = *p.NumTurns
+	} else if p.TurnIndex != nil {
+		numTurns = *p.TurnIndex
+	}
 	if numTurns <= 0 {
 		return nil, pkgerr.New("Server.threadRollback", "numTurns must be >= 1")
 	}
-	return s.codexAdapter.ThreadRollback(normalizeThreadID(p.ThreadID), numTurns)
+	return s.codexAdapter.ThreadRollback(strings.TrimSpace(p.ThreadID), numTurns)
 }
 
 type threadMessagesParams struct {
@@ -210,21 +194,12 @@ type threadLoadedListParams struct {
 	Limit  *uint32 `json:"limit,omitempty"`
 }
 
-func decodeThreadLoadedListParams(raw json.RawMessage) (threadLoadedListParams, error) {
-	var p threadLoadedListParams
-	if raw == nil {
-		return p, nil
-	}
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return p, pkgerr.Wrap(err, "Server.threadLoadedList", "invalid params")
-	}
-	return p, nil
-}
-
 func (s *Server) threadLoadedList(ctx context.Context, params json.RawMessage) (any, error) {
-	p, err := decodeThreadLoadedListParams(params)
-	if err != nil {
-		return nil, err
+	p := threadLoadedListParams{}
+	if params != nil {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, pkgerr.Wrap(err, "Server.threadLoadedList", "invalid params")
+		}
 	}
 	data, nextCursor, err := s.codexAdapter.ThreadLoadedList(ctx, p.Cursor, p.Limit)
 	if err != nil {

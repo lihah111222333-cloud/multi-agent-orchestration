@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
@@ -20,20 +21,41 @@ type threadStartParams struct {
 	DeveloperInstructions string `json:"developerInstructions,omitempty"`
 }
 
-// threadInfo 通用线程信息。
 type threadInfo struct {
 	ID         string `json:"id"`
 	Status     string `json:"status,omitempty"`
 	ForkedFrom string `json:"forkedFrom,omitempty"`
 }
 
-// threadStartResponse thread/start 响应。
 type threadStartResponse struct {
 	Thread         threadInfo `json:"thread"`
 	Model          string     `json:"model"`
 	ModelProvider  string     `json:"modelProvider"`
 	Cwd            string     `json:"cwd"`
 	ApprovalPolicy string     `json:"approvalPolicy"`
+}
+
+func normalizeThreadID(raw string) string { return strings.TrimSpace(raw) }
+
+func normalizeResumeThreadID(raw string) string {
+	id := normalizeThreadID(raw)
+	if id == "" {
+		return ""
+	}
+	if first, _, ok := strings.Cut(id, ","); ok {
+		return normalizeThreadID(first)
+	}
+	return id
+}
+
+func resolveNumTurns(numTurns, turnIndex *int) int {
+	if numTurns != nil {
+		return *numTurns
+	}
+	if turnIndex != nil {
+		return *turnIndex
+	}
+	return 0
 }
 
 func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any, error) {
@@ -60,41 +82,26 @@ func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any
 	}, nil
 }
 
-// threadResumeParams thread/resume 请求参数。
-
-// threadResumeResponse thread/resume 响应。
-
 type threadIDParams struct {
 	ThreadID string `json:"threadId"`
 }
 
-// threadForkParams thread/fork 请求参数。
 type threadForkParams struct {
 	ThreadID  string `json:"threadId"`
 	TurnIndex *int   `json:"turnIndex,omitempty"`
 }
 
-// threadForkResponse thread/fork 响应。
 type threadForkResponse struct {
 	Thread threadInfo `json:"thread"`
 }
 
 func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, error) {
-	result, err := s.codexAdapter.ThreadFork(p.ThreadID)
+	result, err := s.codexAdapter.ThreadFork(normalizeThreadID(p.ThreadID))
 	if err != nil {
 		return nil, err
 	}
-	return threadForkResponse{
-		Thread: threadInfo{
-			ID:         result.ThreadID,
-			ForkedFrom: result.ForkedFrom,
-		},
-	}, nil
+	return threadForkResponse{Thread: threadInfo{ID: result.ThreadID, ForkedFrom: result.ForkedFrom}}, nil
 }
-
-// threadNameSetParams thread/name/set 请求参数。
-
-// threadRollbackParams thread/rollback 请求参数。
 
 type threadResumeParams struct {
 	ThreadID string `json:"threadId"`
@@ -109,14 +116,11 @@ type threadResumeResponse struct {
 }
 
 func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (any, error) {
-	result, err := s.codexAdapter.ThreadResume(ctx, p.ThreadID, p.Path, p.Cwd, p.Model)
+	result, err := s.codexAdapter.ThreadResume(ctx, normalizeResumeThreadID(p.ThreadID), p.Path, p.Cwd, p.Model)
 	if err != nil {
 		return nil, err
 	}
-	return threadResumeResponse{
-		Thread: threadInfo{ID: result.ThreadID, Status: result.Status},
-		Model:  result.Model,
-	}, nil
+	return threadResumeResponse{Thread: threadInfo{ID: result.ThreadID, Status: result.Status}, Model: result.Model}, nil
 }
 
 type threadRecoverResponse struct {
@@ -126,15 +130,12 @@ type threadRecoverResponse struct {
 }
 
 func (s *Server) threadRecoverTyped(ctx context.Context, p threadIDParams) (any, error) {
-	result, err := s.codexAdapter.ThreadRecover(ctx, p.ThreadID)
+	result, err := s.codexAdapter.ThreadRecover(ctx, normalizeThreadID(p.ThreadID))
 	if err != nil {
 		return nil, err
 	}
 	return threadRecoverResponse{
-		Thread: threadInfo{
-			ID:     result.ThreadID,
-			Status: result.Status,
-		},
+		Thread:    threadInfo{ID: result.ThreadID, Status: result.Status},
 		Recovered: result.Recovered,
 		Mode:      result.Mode,
 	}, nil
@@ -152,16 +153,11 @@ type threadRollbackParams struct {
 }
 
 func (s *Server) threadRollbackTyped(_ context.Context, p threadRollbackParams) (any, error) {
-	numTurns := 0
-	if p.NumTurns != nil {
-		numTurns = *p.NumTurns
-	} else if p.TurnIndex != nil {
-		numTurns = *p.TurnIndex
-	}
+	numTurns := resolveNumTurns(p.NumTurns, p.TurnIndex)
 	if numTurns <= 0 {
 		return nil, pkgerr.New("Server.threadRollback", "numTurns must be >= 1")
 	}
-	return s.codexAdapter.ThreadRollback(p.ThreadID, numTurns)
+	return s.codexAdapter.ThreadRollback(normalizeThreadID(p.ThreadID), numTurns)
 }
 
 type threadMessagesParams struct {
@@ -170,7 +166,6 @@ type threadMessagesParams struct {
 	Before   int64  `json:"before,omitempty"` // cursor: id < before
 }
 
-// threadListResponse thread/list 响应。
 type threadListResponse struct {
 	Data       []contracts.ThreadListItem `json:"data"`
 	NextCursor *string                    `json:"nextCursor"`
@@ -205,7 +200,6 @@ func filterThreadsByArchived(threads []contracts.ThreadListItem, params json.Raw
 	return filtered
 }
 
-// threadLoadedListResponse thread/loaded/list 响应。
 type threadLoadedListResponse struct {
 	Data       []string `json:"data"`
 	NextCursor *string  `json:"nextCursor"`

@@ -13,7 +13,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-const maxAgents = 20
+const maxAgents = 200
 
 // OrchestrationTools returns orchestration tool schemas and handlers.
 func OrchestrationTools(provider OrchestrationProvider, runtime AgentRuntimeProvider, schemaProvider SchemaProvider) []Tool {

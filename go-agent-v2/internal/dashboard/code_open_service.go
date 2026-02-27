@@ -56,11 +56,10 @@ func NewCodeOpenService(hooks CodeOpenHooks) *CodeOpenService {
 }
 
 func normalizeCodeReferencePath(raw string) string {
-	value := strings.TrimSpace(raw)
+	value := strings.Trim(strings.TrimSpace(raw), `"'`)
 	if value == "" {
 		return ""
 	}
-	value = strings.Trim(value, `"'`)
 	if parsed, err := url.Parse(value); err == nil && strings.EqualFold(parsed.Scheme, "file") {
 		value = filepath.FromSlash(parsed.Path)
 	}
@@ -68,14 +67,14 @@ func normalizeCodeReferencePath(raw string) string {
 }
 
 func normalizeProjectPath(path string) string {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
+	path = strings.TrimSpace(path)
+	if path == "" {
 		return ""
 	}
-	if abs, err := filepath.Abs(trimmed); err == nil {
+	if abs, err := filepath.Abs(path); err == nil {
 		return filepath.Clean(abs)
 	}
-	return filepath.Clean(trimmed)
+	return filepath.Clean(path)
 }
 
 func appendNormalizedProjectRoot(roots *[]string, seen map[string]struct{}, raw string) {
@@ -138,11 +137,7 @@ func resolveCodeReferenceFilePath(rawPath, project string, projects []string) (s
 	}
 
 	for _, relPath := range candidates {
-		abs, err := filepath.Abs(relPath)
-		if err != nil {
-			continue
-		}
-		if fileExists(abs) {
+		if abs, err := filepath.Abs(relPath); err == nil && fileExists(abs) {
 			return abs, nil
 		}
 	}
@@ -340,19 +335,12 @@ func mediaTypeByExtension(path string) string {
 }
 
 func isImagePreviewExtension(path string) bool {
-	switch strings.ToLower(strings.TrimPrefix(strings.TrimSpace(filepath.Ext(path)), ".")) {
-	case "png", "jpg", "jpeg", "svg":
-		return true
-	default:
-		return false
-	}
+	ext := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(filepath.Ext(path)), "."))
+	return ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "svg"
 }
 
 func imageDataURL(mediaType string, content []byte) string {
-	if strings.TrimSpace(mediaType) == "" || len(content) == 0 {
-		return ""
-	}
-	if len(content) > maxInlineImageDataURLBytes {
+	if strings.TrimSpace(mediaType) == "" || len(content) == 0 || len(content) > maxInlineImageDataURLBytes {
 		return ""
 	}
 	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(content)
@@ -559,9 +547,6 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 
 	text := strings.ReplaceAll(strings.ReplaceAll(string(content), "\r\n", "\n"), "\r", "\n")
 	lines := strings.Split(text, "\n")
-	if len(lines) == 0 {
-		lines = []string{""}
-	}
 
 	targetLine := clampLine(p.Line, len(lines))
 	targetColumn := clampColumn(p.Column)

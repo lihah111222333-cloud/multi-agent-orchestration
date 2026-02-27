@@ -29,6 +29,41 @@ func mapSlice[S any, D any](in []S, mapFn func(S) D) []D {
 	return out
 }
 
+type appendStoreFunc[T any] func(
+	context.Context,
+	[]ThreadListItem,
+	map[string]struct{},
+	string,
+	func(context.Context) ([]T, error),
+) []ThreadListItem
+
+func listStoreItems[S any, D any](
+	listFn func(context.Context) ([]S, error),
+	mapFn func(S) D,
+) func(context.Context) ([]D, error) {
+	return func(ctx context.Context) ([]D, error) {
+		if listFn == nil {
+			return nil, nil
+		}
+		items, err := listFn(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return mapSlice(items, mapFn), nil
+	}
+}
+
+func appendStoreHistory[T any](appendFn appendStoreFunc[T], listFn func(context.Context) ([]T, error)) func(
+	context.Context,
+	[]ThreadListItem,
+	map[string]struct{},
+	string,
+) []ThreadListItem {
+	return func(ctx context.Context, threads []ThreadListItem, seen map[string]struct{}, methodName string) []ThreadListItem {
+		return appendFn(ctx, threads, seen, methodName, listFn)
+	}
+}
+
 var (
 	PaginateLoadedThreadIDs   = listingsvc.PaginateLoadedThreadIDs
 	PersistThreadAlias        = listingsvc.PersistThreadAlias
@@ -54,34 +89,34 @@ func BuildThreadListFromDeps(
 	uiRuntime *uistate.RuntimeManager,
 	loadThreadArchiveMap func(context.Context) (map[string]int64, error),
 ) ([]ThreadListItem, error) {
-	appendBinding := func(ctx context.Context, threads []ThreadListItem, seen map[string]struct{}, methodName string) []ThreadListItem {
-		return listingsvc.AppendHistoryFromBindingStore(ctx, threads, seen, methodName, func(ctx context.Context) ([]AgentCodexBinding, error) {
-			if bindingStore == nil {
-				return nil, nil
-			}
-			items, err := bindingStore.ListAll(ctx)
-			if err != nil {
-				return nil, err
-			}
-			return mapSlice(items, func(item store.AgentCodexBinding) AgentCodexBinding {
+	appendBinding := appendStoreHistory(
+		listingsvc.AppendHistoryFromBindingStore,
+		listStoreItems(
+			func(ctx context.Context) ([]store.AgentCodexBinding, error) {
+				if bindingStore == nil {
+					return nil, nil
+				}
+				return bindingStore.ListAll(ctx)
+			},
+			func(item store.AgentCodexBinding) AgentCodexBinding {
 				return AgentCodexBinding{AgentID: item.AgentID}
-			}), nil
-		})
-	}
-	appendStatus := func(ctx context.Context, threads []ThreadListItem, seen map[string]struct{}, methodName string) []ThreadListItem {
-		return listingsvc.AppendHistoryFromStatusStore(ctx, threads, seen, methodName, func(ctx context.Context) ([]AgentStatus, error) {
-			if statusStore == nil {
-				return nil, nil
-			}
-			items, err := statusStore.List(ctx, "")
-			if err != nil {
-				return nil, err
-			}
-			return mapSlice(items, func(item store.AgentStatus) AgentStatus {
+			},
+		),
+	)
+	appendStatus := appendStoreHistory(
+		listingsvc.AppendHistoryFromStatusStore,
+		listStoreItems(
+			func(ctx context.Context) ([]store.AgentStatus, error) {
+				if statusStore == nil {
+					return nil, nil
+				}
+				return statusStore.List(ctx, "")
+			},
+			func(item store.AgentStatus) AgentStatus {
 				return AgentStatus{AgentID: item.AgentID, AgentName: item.AgentName}
-			}), nil
-		})
-	}
+			},
+		),
+	)
 	appendArchive := func(ctx context.Context, threads []ThreadListItem, seen map[string]struct{}, methodName string) []ThreadListItem {
 		return listingsvc.AppendHistoryFromArchiveState(ctx, threads, seen, methodName, loadThreadArchiveMap)
 	}

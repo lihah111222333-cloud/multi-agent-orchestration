@@ -2,8 +2,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"strings"
 	"testing"
 )
@@ -15,89 +13,39 @@ type prepareAdapterStub struct {
 	hasActiveTurn          bool
 }
 
-func (s prepareAdapterStub) MergePromptText(left, right string) string {
-	left = strings.TrimSpace(left)
-	right = strings.TrimSpace(right)
-	if left == "" {
-		return right
+func (s prepareAdapterStub) adapter() PrepareAdapter {
+	return PrepareAdapter{
+		MergePromptText: func(left, right string) string {
+			left = strings.TrimSpace(left)
+			right = strings.TrimSpace(right)
+			if left == "" {
+				return right
+			}
+			if right == "" {
+				return left
+			}
+			return left + "\n" + right
+		},
+		FileContentInputText: func(name, content string) string { return "" },
+		BuildAttachmentName: func(path string) string {
+			if s.attachmentNameFn != nil {
+				return s.attachmentNameFn(path)
+			}
+			return path
+		},
+		BuildAttachmentPreviewURL: func(path string) string {
+			if s.attachmentPreviewURLFn != nil {
+				return s.attachmentPreviewURLFn(path)
+			}
+			return path
+		},
+		ActiveTrackedTurnID: func(threadID string) (string, bool) {
+			return s.activeTurnID, s.hasActiveTurn
+		},
+		ShowInjectedPromptInChat: func(context.Context) bool { return false },
+		UIRuntime:                func() TimelineRuntime { return nil },
 	}
-	if right == "" {
-		return left
-	}
-	return left + "\n" + right
 }
-
-func (s prepareAdapterStub) FileContentInputText(name, content string) string { return "" }
-
-func (s prepareAdapterStub) BuildAttachmentName(path string) string {
-	if s.attachmentNameFn != nil {
-		return s.attachmentNameFn(path)
-	}
-	return path
-}
-
-func (s prepareAdapterStub) BuildAttachmentPreviewURL(path string) string {
-	if s.attachmentPreviewURLFn != nil {
-		return s.attachmentPreviewURLFn(path)
-	}
-	return path
-}
-
-func (s prepareAdapterStub) BuildSelectedSkillPrompt(selectedSkills []string) (string, int) {
-	return "", 0
-}
-
-func (s prepareAdapterStub) ListSkillMatchCandidates() ([]SkillMatchCandidate, error) {
-	return nil, nil
-}
-
-func (s prepareAdapterStub) ListAgentSkills(agentID string) []string { return nil }
-
-func (s prepareAdapterStub) CollectAutoMatchedSkillMatches(
-	prompt string,
-	inputs []AutoMatchInput,
-	configuredSkillNames []string,
-	candidates []SkillMatchCandidate,
-	options AutoSkillMatchOptions,
-) []AutoMatchedSkillMatch {
-	return nil
-}
-
-func (s prepareAdapterStub) RenderAutoMatchedSkillPrompt(agentID string, matches []AutoMatchedSkillMatch) (string, int) {
-	return "", 0
-}
-
-func (s prepareAdapterStub) ActiveTrackedTurnID(threadID string) (string, bool) {
-	return s.activeTurnID, s.hasActiveTurn
-}
-
-func (s prepareAdapterStub) RequireThreadID(caller, threadID string) (string, error) {
-	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return "", errors.New("thread id required")
-	}
-	return id, nil
-}
-
-func (s prepareAdapterStub) NewError(caller, message string) error {
-	return fmt.Errorf("%s: %s", caller, message)
-}
-
-func (s prepareAdapterStub) NewErrorf(caller, format string, args ...any) error {
-	return fmt.Errorf("%s: %s", caller, fmt.Sprintf(format, args...))
-}
-
-func (s prepareAdapterStub) ShowInjectedPromptInChat(ctx context.Context) bool { return false }
-
-func (s prepareAdapterStub) ResolveLSPUsagePromptHint(ctx context.Context, defaultHint string, maxHintLen int) string {
-	return defaultHint
-}
-
-func (s prepareAdapterStub) DefaultLSPUsagePromptHint() string { return "" }
-
-func (s prepareAdapterStub) MaxLSPUsagePromptHintLen() int { return 0 }
-
-func (s prepareAdapterStub) UIRuntime() TimelineRuntime { return nil }
 
 func TestParseTurnInputs_UsesAttachmentCallbacks(t *testing.T) {
 	nameFn := func(path string) string { return "N<" + strings.TrimSpace(path) + ">" }
@@ -138,7 +86,7 @@ func TestPrepareTurnStartSubmission_UsesAdapterAttachmentCallbacks(t *testing.T)
 		attachmentPreviewURLFn: func(path string) string { return "preview:" + strings.TrimSpace(path) },
 	}
 
-	prepared, err := PrepareTurnStartSubmission(adapter, "thread-1", []TurnInput{
+	prepared, err := PrepareTurnStartSubmission(adapter.adapter(), "thread-1", []TurnInput{
 		{Type: "image", URL: "https://example.com/img.png"},
 		{Type: "mention", Path: "/tmp/doc.md"},
 	}, nil, false)

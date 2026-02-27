@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"strings"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
@@ -13,12 +12,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	serviceruntime "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/runtime"
 	appErrors "github.com/multi-agent/go-agent-v2/pkg/errors"
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
-)
-
-const (
-	defaultLSPUsagePromptHint = ""
-	maxLSPUsagePromptHintLen  = 16000
 )
 
 type TurnStartEntryResult struct {
@@ -63,109 +56,6 @@ type Deps struct {
 	TurnSteer                      func(threadID string, submitPrompt string, images, files []string) (map[string]any, error)
 }
 
-func normalizeDeps(deps Deps) Deps {
-	d := deps
-	if d.BuildSelectedSkillPrompt == nil {
-		d.BuildSelectedSkillPrompt = func([]string) (string, int) { return "", 0 }
-	}
-	if d.ListSkillMatchCandidates == nil {
-		d.ListSkillMatchCandidates = func() ([]contracts.SkillMatchCandidate, error) { return nil, nil }
-	}
-	if d.ListAgentSkills == nil {
-		d.ListAgentSkills = func(string) []string { return nil }
-	}
-	if d.CollectAutoMatchedSkillMatch == nil {
-		d.CollectAutoMatchedSkillMatch = func(string, []contracts.AutoMatchInput, []string, []contracts.SkillMatchCandidate, contracts.AutoSkillMatchOptions) []contracts.AutoMatchedSkillMatch {
-			return nil
-		}
-	}
-	if d.RenderAutoMatchedSkillPrompt == nil {
-		d.RenderAutoMatchedSkillPrompt = func(string, []contracts.AutoMatchedSkillMatch) (string, int) { return "", 0 }
-	}
-	if d.ActiveTrackedTurnID == nil {
-		d.ActiveTrackedTurnID = func(string) (string, bool) { return "", false }
-	}
-	if d.ShowInjectedPromptInChat == nil {
-		d.ShowInjectedPromptInChat = func(context.Context) bool { return false }
-	}
-	if d.ResolveLSPUsagePromptHint == nil {
-		d.ResolveLSPUsagePromptHint = func(_ context.Context, defaultHint string, _ int) string { return defaultHint }
-	}
-	if d.ThreadExistsInHistory == nil {
-		d.ThreadExistsInHistory = func(context.Context, string) bool { return false }
-	}
-	if d.AllDynamicToolSchemas == nil {
-		d.AllDynamicToolSchemas = func() []agentcore.DynamicTool { return nil }
-	}
-	if d.ResolveStartInstructions == nil {
-		d.ResolveStartInstructions = func(context.Context, []agentcore.DynamicTool) string { return "" }
-	}
-	if d.SetAgentWorkDir == nil {
-		d.SetAgentWorkDir = func(string, string) {}
-	}
-	if d.GetThreadID == nil {
-		d.GetThreadID = func(*runner.AgentProcess) string { return "" }
-	}
-	if d.CancelCodeRuns == nil {
-		d.CancelCodeRuns = func(string) int { return 0 }
-	}
-	if d.ResolveCodexThreadCandidates == nil {
-		d.ResolveCodexThreadCandidates = func(context.Context, string) []string { return nil }
-	}
-	if d.ResumeThread == nil {
-		d.ResumeThread = func(*runner.AgentProcess, agentcore.ResumeThreadRequest) error {
-			return appErrors.New("Server.ensureThreadReady", "thread process is not available")
-		}
-	}
-	if d.IsCodexProcessCrashError == nil {
-		d.IsCodexProcessCrashError = func(error) bool { return false }
-	}
-	if d.IsHistoricalResumeCandidateErr == nil {
-		d.IsHistoricalResumeCandidateErr = func(error) bool { return false }
-	}
-	if d.PreviewResumeCandidates == nil {
-		d.PreviewResumeCandidates = func(candidates []string, _ int) []string {
-			return append([]string(nil), candidates...)
-		}
-	}
-	if d.Notify == nil {
-		d.Notify = func(string, any) {}
-	}
-	if d.Submit == nil {
-		d.Submit = func(*runner.AgentProcess, string, []string, []string, json.RawMessage) error {
-			return appErrors.New("Server.turnStart", "thread process is not available")
-		}
-	}
-	if d.ResolveClientActiveTurnID == nil {
-		d.ResolveClientActiveTurnID = func(*runner.AgentProcess) string { return "" }
-	}
-	if d.BeginTrackedTurn == nil {
-		d.BeginTrackedTurn = func(_ string, resolvedTurnID string) string { return strings.TrimSpace(resolvedTurnID) }
-	}
-	if d.TurnSteer == nil {
-		d.TurnSteer = func(string, string, []string, []string) (map[string]any, error) {
-			return nil, appErrors.New("Server.turnSteer", "turn steer is not configured")
-		}
-	}
-	return d
-}
-
-func requireThreadID(caller, threadID string) (string, error) {
-	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return "", appErrors.New(caller, "threadId is required")
-	}
-	return id, nil
-}
-
-func threadLogFields(threadID string) []any {
-	id := strings.TrimSpace(threadID)
-	return []any{
-		logger.FieldAgentID, id,
-		logger.FieldThreadID, id,
-	}
-}
-
 type serviceRuntimeProcess struct {
 	proc *runner.AgentProcess
 }
@@ -192,9 +82,6 @@ func wrapServiceRuntimeProcess(proc *runner.AgentProcess) serviceruntime.Process
 }
 
 func unwrapServiceRuntimeProcess(proc serviceruntime.Process) *runner.AgentProcess {
-	if proc == nil {
-		return nil
-	}
 	typed, ok := proc.(*serviceRuntimeProcess)
 	if !ok {
 		return nil
@@ -271,221 +158,135 @@ func (u *serviceRuntimeUIRuntime) ThreadTimeline(threadID string) []servicerunti
 	if u == nil || u.uiRuntime == nil {
 		return nil
 	}
-	timeline := u.uiRuntime.ThreadTimeline(threadID)
-	if len(timeline) == 0 {
-		return nil
+	return mapSlice(u.uiRuntime.ThreadTimeline(threadID), func(item uistate.TimelineItem) serviceruntime.TimelineItem {
+		return serviceruntime.TimelineItem{Kind: item.Kind, Text: item.Text}
+	})
+}
+
+func toServiceRuntimeAdapter(deps Deps) serviceruntime.RuntimeAdapter {
+	d := deps
+
+	var getThreadID func(serviceruntime.Process) string
+	if d.GetThreadID != nil {
+		getThreadID = func(proc serviceruntime.Process) string {
+			return d.GetThreadID(unwrapServiceRuntimeProcess(proc))
+		}
 	}
-	items := make([]serviceruntime.TimelineItem, 0, len(timeline))
-	for _, item := range timeline {
-		items = append(items, serviceruntime.TimelineItem{Kind: item.Kind, Text: item.Text})
+
+	var resumeThread func(serviceruntime.Process, serviceruntime.ResumeThreadRequest) error
+	if d.ResumeThread != nil {
+		resumeThread = func(proc serviceruntime.Process, req serviceruntime.ResumeThreadRequest) error {
+			return d.ResumeThread(unwrapServiceRuntimeProcess(proc), agentcore.ResumeThreadRequest{ThreadID: req.ThreadID, Cwd: req.Cwd})
+		}
 	}
-	return items
-}
 
-type serviceRuntimeBridge struct {
-	deps Deps
-}
-
-func newServiceRuntimeBridge(deps Deps) *serviceRuntimeBridge {
-	return &serviceRuntimeBridge{deps: normalizeDeps(deps)}
-}
-
-func (b *serviceRuntimeBridge) MergePromptText(left, right string) string {
-	return commonadapter.MergePromptText(left, right)
-}
-
-func (b *serviceRuntimeBridge) FileContentInputText(name, content string) string {
-	return commonadapter.FileContentInputText(name, content)
-}
-
-func (b *serviceRuntimeBridge) BuildAttachmentName(path string) string {
-	return BuildAttachmentName(path)
-}
-
-func (b *serviceRuntimeBridge) BuildAttachmentPreviewURL(path string) string {
-	return BuildAttachmentPreviewURL(path)
-}
-
-func (b *serviceRuntimeBridge) BuildSelectedSkillPrompt(selectedSkills []string) (string, int) {
-	return b.deps.BuildSelectedSkillPrompt(selectedSkills)
-}
-
-func (b *serviceRuntimeBridge) ListSkillMatchCandidates() ([]serviceruntime.SkillMatchCandidate, error) {
-	candidates, err := b.deps.ListSkillMatchCandidates()
-	if err != nil {
-		return nil, err
+	var submit func(serviceruntime.Process, string, []string, []string, json.RawMessage) error
+	if d.Submit != nil {
+		submit = func(proc serviceruntime.Process, prompt string, images, files []string, outputSchema json.RawMessage) error {
+			return d.Submit(unwrapServiceRuntimeProcess(proc), prompt, images, files, outputSchema)
+		}
 	}
-	return toRuntimeSkillMatchCandidates(candidates), nil
-}
 
-func (b *serviceRuntimeBridge) ListAgentSkills(agentID string) []string {
-	return b.deps.ListAgentSkills(agentID)
-}
-
-func (b *serviceRuntimeBridge) CollectAutoMatchedSkillMatches(
-	prompt string,
-	inputs []serviceruntime.AutoMatchInput,
-	configuredSkillNames []string,
-	candidates []serviceruntime.SkillMatchCandidate,
-	options serviceruntime.AutoSkillMatchOptions,
-) []serviceruntime.AutoMatchedSkillMatch {
-	results := b.deps.CollectAutoMatchedSkillMatch(
-		prompt,
-		fromRuntimeAutoMatchInputs(inputs),
-		configuredSkillNames,
-		fromRuntimeSkillMatchCandidates(candidates),
-		fromRuntimeAutoSkillMatchOptions(options),
-	)
-	return toRuntimeAutoMatchedSkillMatches(results)
-}
-
-func (b *serviceRuntimeBridge) RenderAutoMatchedSkillPrompt(agentID string, matches []serviceruntime.AutoMatchedSkillMatch) (string, int) {
-	return b.deps.RenderAutoMatchedSkillPrompt(agentID, fromRuntimeAutoMatchedSkillMatches(matches))
-}
-
-func (b *serviceRuntimeBridge) ActiveTrackedTurnID(threadID string) (string, bool) {
-	return b.deps.ActiveTrackedTurnID(threadID)
-}
-
-func (b *serviceRuntimeBridge) RequireThreadID(caller, threadID string) (string, error) {
-	return requireThreadID(caller, threadID)
-}
-
-func (b *serviceRuntimeBridge) NewError(caller, message string) error {
-	return appErrors.New(caller, message)
-}
-
-func (b *serviceRuntimeBridge) NewErrorf(caller, format string, args ...any) error {
-	return appErrors.Newf(caller, format, args...)
-}
-
-func (b *serviceRuntimeBridge) ShowInjectedPromptInChat(ctx context.Context) bool {
-	return b.deps.ShowInjectedPromptInChat(ctx)
-}
-
-func (b *serviceRuntimeBridge) ResolveLSPUsagePromptHint(ctx context.Context, defaultHint string, maxHintLen int) string {
-	return b.deps.ResolveLSPUsagePromptHint(ctx, defaultHint, maxHintLen)
-}
-
-func (b *serviceRuntimeBridge) DefaultLSPUsagePromptHint() string {
-	return defaultLSPUsagePromptHint
-}
-
-func (b *serviceRuntimeBridge) MaxLSPUsagePromptHintLen() int {
-	return maxLSPUsagePromptHintLen
-}
-
-func (b *serviceRuntimeBridge) UIRuntime() serviceruntime.TimelineRuntime {
-	if b.deps.UIRuntime == nil {
-		return nil
+	var resolveClientActiveTurnID func(serviceruntime.Process) string
+	if d.ResolveClientActiveTurnID != nil {
+		resolveClientActiveTurnID = func(proc serviceruntime.Process) string {
+			return d.ResolveClientActiveTurnID(unwrapServiceRuntimeProcess(proc))
+		}
 	}
-	return &serviceRuntimeUIRuntime{uiRuntime: b.deps.UIRuntime}
-}
 
-func (b *serviceRuntimeBridge) Manager() serviceruntime.Manager {
-	if b.deps.Manager == nil {
-		return nil
+	listSkillMatchCandidates := func() ([]serviceruntime.SkillMatchCandidate, error) {
+		if d.ListSkillMatchCandidates == nil {
+			return nil, nil
+		}
+		candidates, err := d.ListSkillMatchCandidates()
+		if err != nil {
+			return nil, err
+		}
+		return toRuntimeSkillMatchCandidates(candidates), nil
 	}
-	return &serviceRuntimeManager{manager: b.deps.Manager}
-}
 
-func (b *serviceRuntimeBridge) ThreadExistsInHistory(ctx context.Context, threadID string) bool {
-	return b.deps.ThreadExistsInHistory(ctx, threadID)
-}
-
-func (b *serviceRuntimeBridge) AllDynamicToolSchemas() []agentcore.DynamicTool {
-	return b.deps.AllDynamicToolSchemas()
-}
-
-func (b *serviceRuntimeBridge) ResolveStartInstructionsForLaunch(ctx context.Context, dynamicTools []agentcore.DynamicTool) string {
-	return b.deps.ResolveStartInstructions(ctx, dynamicTools)
-}
-
-func (b *serviceRuntimeBridge) SetAgentWorkDir(agentID, cwd string) {
-	b.deps.SetAgentWorkDir(agentID, cwd)
-}
-
-func (b *serviceRuntimeBridge) ThreadLogFields(threadID string) []any {
-	return threadLogFields(threadID)
-}
-
-func (b *serviceRuntimeBridge) GetThreadID(proc serviceruntime.Process) string {
-	return b.deps.GetThreadID(unwrapServiceRuntimeProcess(proc))
-}
-
-func (b *serviceRuntimeBridge) CancelCodeRuns(agentID string) int {
-	return b.deps.CancelCodeRuns(agentID)
-}
-
-func (b *serviceRuntimeBridge) BindingStore() serviceruntime.BindingStore {
-	if b.deps.BindingStore == nil {
-		return nil
+	collectAutoMatchedSkillMatches := func(
+		prompt string,
+		inputs []serviceruntime.AutoMatchInput,
+		configuredSkillNames []string,
+		candidates []serviceruntime.SkillMatchCandidate,
+		options serviceruntime.AutoSkillMatchOptions,
+	) []serviceruntime.AutoMatchedSkillMatch {
+		if d.CollectAutoMatchedSkillMatch == nil {
+			return nil
+		}
+		matches := d.CollectAutoMatchedSkillMatch(
+			prompt,
+			fromRuntimeAutoMatchInputs(inputs),
+			configuredSkillNames,
+			fromRuntimeSkillMatchCandidates(candidates),
+			fromRuntimeAutoSkillMatchOptions(options),
+		)
+		return toRuntimeAutoMatchedSkillMatches(matches)
 	}
-	return &serviceRuntimeBindingStore{store: b.deps.BindingStore}
-}
 
-func (b *serviceRuntimeBridge) ResolveCodexThreadCandidates(ctx context.Context, agentID string) []string {
-	return b.deps.ResolveCodexThreadCandidates(ctx, agentID)
-}
-
-func (b *serviceRuntimeBridge) ResumeThread(proc serviceruntime.Process, req serviceruntime.ResumeThreadRequest) error {
-	resolved := unwrapServiceRuntimeProcess(proc)
-	if resolved == nil {
-		return appErrors.New("Server.ensureThreadReady", "thread process is not available")
+	renderAutoMatchedSkillPrompt := func(agentID string, matches []serviceruntime.AutoMatchedSkillMatch) (string, int) {
+		if d.RenderAutoMatchedSkillPrompt == nil {
+			return "", 0
+		}
+		return d.RenderAutoMatchedSkillPrompt(agentID, fromRuntimeAutoMatchedSkillMatches(matches))
 	}
-	return b.deps.ResumeThread(resolved, agentcore.ResumeThreadRequest{ThreadID: req.ThreadID, Cwd: req.Cwd})
-}
 
-func (b *serviceRuntimeBridge) IsCodexProcessCrashError(err error) bool {
-	return b.deps.IsCodexProcessCrashError(err)
-}
-
-func (b *serviceRuntimeBridge) IsHistoricalResumeCandidateError(err error) bool {
-	return b.deps.IsHistoricalResumeCandidateErr(err)
-}
-
-func (b *serviceRuntimeBridge) PreviewResumeCandidates(candidates []string, limit int) []string {
-	return b.deps.PreviewResumeCandidates(candidates, limit)
-}
-
-func (b *serviceRuntimeBridge) Notify(method string, payload any) {
-	b.deps.Notify(method, payload)
-}
-
-func (b *serviceRuntimeBridge) NormalizeSkillNames(input []string) ([]string, error) {
-	return commonadapter.NormalizeSkillNames(input)
-}
-
-func (b *serviceRuntimeBridge) WrapError(err error, caller, message string) error {
-	return appErrors.Wrap(err, caller, message)
-}
-
-func (b *serviceRuntimeBridge) WrapErrorf(err error, caller, format string, args ...any) error {
-	return appErrors.Wrapf(err, caller, format, args...)
-}
-
-func (b *serviceRuntimeBridge) Submit(proc serviceruntime.Process, prompt string, images, files []string, outputSchema json.RawMessage) error {
-	resolved := unwrapServiceRuntimeProcess(proc)
-	if resolved == nil {
-		return appErrors.New("Server.turnStart", "thread process is not available")
+	return serviceruntime.RuntimeAdapter{
+		PrepareAdapter: serviceruntime.PrepareAdapter{
+			MergePromptText:                commonadapter.MergePromptText,
+			FileContentInputText:           commonadapter.FileContentInputText,
+			BuildAttachmentName:            BuildAttachmentName,
+			BuildAttachmentPreviewURL:      BuildAttachmentPreviewURL,
+			BuildSelectedSkillPrompt:       d.BuildSelectedSkillPrompt,
+			ListSkillMatchCandidates:       listSkillMatchCandidates,
+			ListAgentSkills:                d.ListAgentSkills,
+			CollectAutoMatchedSkillMatches: collectAutoMatchedSkillMatches,
+			RenderAutoMatchedSkillPrompt:   renderAutoMatchedSkillPrompt,
+			ActiveTrackedTurnID:            d.ActiveTrackedTurnID,
+			ShowInjectedPromptInChat:       d.ShowInjectedPromptInChat,
+			ResolveLSPUsagePromptHint:      d.ResolveLSPUsagePromptHint,
+			UIRuntime: func() serviceruntime.TimelineRuntime {
+				if d.UIRuntime == nil {
+					return nil
+				}
+				return &serviceRuntimeUIRuntime{uiRuntime: d.UIRuntime}
+			},
+		},
+		Manager: func() serviceruntime.Manager {
+			if d.Manager == nil {
+				return nil
+			}
+			return &serviceRuntimeManager{manager: d.Manager}
+		},
+		ThreadExistsInHistory:             d.ThreadExistsInHistory,
+		AllDynamicToolSchemas:             d.AllDynamicToolSchemas,
+		ResolveStartInstructionsForLaunch: d.ResolveStartInstructions,
+		SetAgentWorkDir:                   d.SetAgentWorkDir,
+		GetThreadID:                       getThreadID,
+		CancelCodeRuns:                    d.CancelCodeRuns,
+		BindingStore: func() serviceruntime.BindingStore {
+			if d.BindingStore == nil {
+				return nil
+			}
+			return &serviceRuntimeBindingStore{store: d.BindingStore}
+		},
+		ResolveCodexThreadCandidates:     d.ResolveCodexThreadCandidates,
+		ResumeThread:                     resumeThread,
+		IsCodexProcessCrashError:         d.IsCodexProcessCrashError,
+		IsHistoricalResumeCandidateError: d.IsHistoricalResumeCandidateErr,
+		PreviewResumeCandidates:          d.PreviewResumeCandidates,
+		Notify:                           d.Notify,
+		NormalizeSkillNames:              commonadapter.NormalizeSkillNames,
+		Submit:                           submit,
+		ResolveClientActiveTurnID:        resolveClientActiveTurnID,
+		BeginTrackedTurn:                 d.BeginTrackedTurn,
+		TurnSteer:                        d.TurnSteer,
 	}
-	return b.deps.Submit(resolved, prompt, images, files, outputSchema)
-}
-
-func (b *serviceRuntimeBridge) ResolveClientActiveTurnID(proc serviceruntime.Process) string {
-	return b.deps.ResolveClientActiveTurnID(unwrapServiceRuntimeProcess(proc))
-}
-
-func (b *serviceRuntimeBridge) BeginTrackedTurn(threadID, resolvedTurnID string) string {
-	return b.deps.BeginTrackedTurn(threadID, resolvedTurnID)
-}
-
-func (b *serviceRuntimeBridge) TurnSteer(threadID, submitPrompt string, images, files []string) (map[string]any, error) {
-	return b.deps.TurnSteer(threadID, submitPrompt, images, files)
 }
 
 func RegisterBinding(ctx context.Context, deps Deps, agentID string, proc *runner.AgentProcess) {
-	serviceruntime.RegisterBinding(newServiceRuntimeBridge(deps), ctx, agentID, wrapServiceRuntimeProcess(proc))
+	serviceruntime.RegisterBinding(toServiceRuntimeAdapter(deps), ctx, agentID, wrapServiceRuntimeProcess(proc))
 }
 
 func BuildSessionLostNotification(agentID string, lastErr error) (string, map[string]any) {
@@ -493,7 +294,7 @@ func BuildSessionLostNotification(agentID string, lastErr error) (string, map[st
 }
 
 func TurnStart(ctx context.Context, deps Deps, req contracts.TurnStartRequest) (TurnStartEntryResult, error) {
-	result, err := serviceruntime.TurnStart(newServiceRuntimeBridge(deps), ctx, toRuntimeTurnStartRequest(req))
+	result, err := serviceruntime.TurnStart(toServiceRuntimeAdapter(deps), ctx, toRuntimeTurnStartRequest(req))
 	if err != nil {
 		return TurnStartEntryResult{}, err
 	}
@@ -501,12 +302,12 @@ func TurnStart(ctx context.Context, deps Deps, req contracts.TurnStartRequest) (
 }
 
 func TurnSteerFromInput(deps Deps, req contracts.TurnSteerRequest) (map[string]any, error) {
-	return serviceruntime.TurnSteerFromInput(newServiceRuntimeBridge(deps), toRuntimeTurnSteerRequest(req))
+	return serviceruntime.TurnSteerFromInput(toServiceRuntimeAdapter(deps), toRuntimeTurnSteerRequest(req))
 }
 
 func TurnSteerFromInputAligned(deps Deps, req contracts.TurnSteerRequest) (map[string]any, error) {
 	return serviceruntime.TurnSteerFromInputAlignedByAdapter(
-		newServiceRuntimeBridge(deps),
+		toServiceRuntimeAdapter(deps).PrepareAdapter,
 		toRuntimeTurnSteerRequest(req),
 		func(runtimeReq serviceruntime.TurnSteerRequest) (map[string]any, error) {
 			return TurnSteerFromInput(deps, fromRuntimeTurnSteerRequest(runtimeReq))
@@ -515,7 +316,7 @@ func TurnSteerFromInputAligned(deps Deps, req contracts.TurnSteerRequest) (map[s
 }
 
 func ResolveProcess(deps Deps, caller, threadID string) (*runner.AgentProcess, error) {
-	proc, err := serviceruntime.ResolveProcess(newServiceRuntimeBridge(deps), caller, threadID)
+	proc, err := serviceruntime.ResolveProcess(toServiceRuntimeAdapter(deps), caller, threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -528,7 +329,7 @@ func WithProcess[T any](
 	threadID string,
 	fn func(*runner.AgentProcess) (T, error),
 ) (T, error) {
-	return serviceruntime.WithProcess(newServiceRuntimeBridge(deps), caller, threadID, func(proc serviceruntime.Process) (T, error) {
+	return serviceruntime.WithProcess(toServiceRuntimeAdapter(deps), caller, threadID, func(proc serviceruntime.Process) (T, error) {
 		return fn(unwrapServiceRuntimeProcess(proc))
 	})
 }
@@ -541,7 +342,7 @@ func CollectAutoMatchedSkillMatchesForThread(
 	options contracts.AutoSkillMatchOptions,
 ) []contracts.AutoMatchedSkillMatch {
 	matches := serviceruntime.CollectAutoMatchedSkillMatchesForThread(
-		newServiceRuntimeBridge(deps),
+		toServiceRuntimeAdapter(deps).PrepareAdapter,
 		threadID,
 		prompt,
 		toRuntimeTurnInputs(input),
@@ -550,22 +351,32 @@ func CollectAutoMatchedSkillMatchesForThread(
 	return fromRuntimeAutoMatchedSkillMatches(matches)
 }
 
-func toRuntimeTurnInputs(inputs []contracts.TurnInput) []serviceruntime.TurnInput {
-	if len(inputs) == 0 {
+func mapSlice[S any, D any](in []S, mapFn func(S) D) []D {
+	if len(in) == 0 {
 		return nil
 	}
-	out := make([]serviceruntime.TurnInput, 0, len(inputs))
-	for _, input := range inputs {
-		out = append(out, serviceruntime.TurnInput{
+	out := make([]D, 0, len(in))
+	for _, item := range in {
+		out = append(out, mapFn(item))
+	}
+	return out
+}
+
+func cloneStrings(in []string) []string {
+	return append([]string(nil), in...)
+}
+
+func toRuntimeTurnInputs(inputs []contracts.TurnInput) []serviceruntime.TurnInput {
+	return mapSlice(inputs, func(input contracts.TurnInput) serviceruntime.TurnInput {
+		return serviceruntime.TurnInput{
 			Type:    input.Type,
 			Text:    input.Text,
 			URL:     input.URL,
 			Path:    input.Path,
 			Name:    input.Name,
 			Content: input.Content,
-		})
-	}
-	return out
+		}
+	})
 }
 
 func toRuntimeTurnStartRequest(req contracts.TurnStartRequest) serviceruntime.TurnStartRequest {
@@ -573,7 +384,7 @@ func toRuntimeTurnStartRequest(req contracts.TurnStartRequest) serviceruntime.Tu
 		ThreadID:             req.ThreadID,
 		Cwd:                  req.Cwd,
 		Input:                toRuntimeTurnInputs(req.Input),
-		SelectedSkills:       append([]string(nil), req.SelectedSkills...),
+		SelectedSkills:       cloneStrings(req.SelectedSkills),
 		ManualSkillSelection: req.ManualSkillSelection,
 		OutputSchema:         req.OutputSchema,
 	}
@@ -584,7 +395,7 @@ func toRuntimeTurnSteerRequest(req contracts.TurnSteerRequest) serviceruntime.Tu
 		ThreadID:             req.ThreadID,
 		ExpectedTurnID:       req.ExpectedTurnID,
 		Input:                toRuntimeTurnInputs(req.Input),
-		SelectedSkills:       append([]string(nil), req.SelectedSkills...),
+		SelectedSkills:       cloneStrings(req.SelectedSkills),
 		ManualSkillSelection: req.ManualSkillSelection,
 	}
 }
@@ -594,84 +405,59 @@ func fromRuntimeTurnSteerRequest(req serviceruntime.TurnSteerRequest) contracts.
 		ThreadID:             req.ThreadID,
 		ExpectedTurnID:       req.ExpectedTurnID,
 		Input:                fromRuntimeTurnInputs(req.Input),
-		SelectedSkills:       append([]string(nil), req.SelectedSkills...),
+		SelectedSkills:       cloneStrings(req.SelectedSkills),
 		ManualSkillSelection: req.ManualSkillSelection,
 	}
 }
 
 func fromRuntimeTurnInputs(inputs []serviceruntime.TurnInput) []contracts.TurnInput {
-	if len(inputs) == 0 {
-		return nil
-	}
-	out := make([]contracts.TurnInput, 0, len(inputs))
-	for _, input := range inputs {
-		out = append(out, contracts.TurnInput{
+	return mapSlice(inputs, func(input serviceruntime.TurnInput) contracts.TurnInput {
+		return contracts.TurnInput{
 			Type:    input.Type,
 			Text:    input.Text,
 			URL:     input.URL,
 			Path:    input.Path,
 			Name:    input.Name,
 			Content: input.Content,
-		})
-	}
-	return out
+		}
+	})
 }
 
 func fromRuntimeTimelineAttachments(in []serviceruntime.TimelineAttachment) []uistate.TimelineAttachment {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]uistate.TimelineAttachment, 0, len(in))
-	for _, item := range in {
-		out = append(out, uistate.TimelineAttachment{
+	return mapSlice(in, func(item serviceruntime.TimelineAttachment) uistate.TimelineAttachment {
+		return uistate.TimelineAttachment{
 			Kind:       item.Kind,
 			Name:       item.Name,
 			Path:       item.Path,
 			PreviewURL: item.PreviewURL,
-		})
-	}
-	return out
+		}
+	})
 }
 
 func fromRuntimeAutoMatchInputs(inputs []serviceruntime.AutoMatchInput) []contracts.AutoMatchInput {
-	if len(inputs) == 0 {
-		return nil
-	}
-	out := make([]contracts.AutoMatchInput, 0, len(inputs))
-	for _, input := range inputs {
-		out = append(out, contracts.AutoMatchInput{Type: input.Type, Name: input.Name})
-	}
-	return out
+	return mapSlice(inputs, func(input serviceruntime.AutoMatchInput) contracts.AutoMatchInput {
+		return contracts.AutoMatchInput{Type: input.Type, Name: input.Name}
+	})
 }
 
 func toRuntimeSkillMatchCandidates(candidates []contracts.SkillMatchCandidate) []serviceruntime.SkillMatchCandidate {
-	if len(candidates) == 0 {
-		return nil
-	}
-	out := make([]serviceruntime.SkillMatchCandidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		out = append(out, serviceruntime.SkillMatchCandidate{
+	return mapSlice(candidates, func(candidate contracts.SkillMatchCandidate) serviceruntime.SkillMatchCandidate {
+		return serviceruntime.SkillMatchCandidate{
 			Name:         candidate.Name,
-			ForceWords:   append([]string(nil), candidate.ForceWords...),
-			TriggerWords: append([]string(nil), candidate.TriggerWords...),
-		})
-	}
-	return out
+			ForceWords:   cloneStrings(candidate.ForceWords),
+			TriggerWords: cloneStrings(candidate.TriggerWords),
+		}
+	})
 }
 
 func fromRuntimeSkillMatchCandidates(candidates []serviceruntime.SkillMatchCandidate) []contracts.SkillMatchCandidate {
-	if len(candidates) == 0 {
-		return nil
-	}
-	out := make([]contracts.SkillMatchCandidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		out = append(out, contracts.SkillMatchCandidate{
+	return mapSlice(candidates, func(candidate serviceruntime.SkillMatchCandidate) contracts.SkillMatchCandidate {
+		return contracts.SkillMatchCandidate{
 			Name:         candidate.Name,
-			ForceWords:   append([]string(nil), candidate.ForceWords...),
-			TriggerWords: append([]string(nil), candidate.TriggerWords...),
-		})
-	}
-	return out
+			ForceWords:   cloneStrings(candidate.ForceWords),
+			TriggerWords: cloneStrings(candidate.TriggerWords),
+		}
+	})
 }
 
 func toRuntimeAutoSkillMatchOptions(options contracts.AutoSkillMatchOptions) serviceruntime.AutoSkillMatchOptions {
@@ -689,31 +475,21 @@ func fromRuntimeAutoSkillMatchOptions(options serviceruntime.AutoSkillMatchOptio
 }
 
 func toRuntimeAutoMatchedSkillMatches(matches []contracts.AutoMatchedSkillMatch) []serviceruntime.AutoMatchedSkillMatch {
-	if len(matches) == 0 {
-		return nil
-	}
-	out := make([]serviceruntime.AutoMatchedSkillMatch, 0, len(matches))
-	for _, match := range matches {
-		out = append(out, serviceruntime.AutoMatchedSkillMatch{
+	return mapSlice(matches, func(match contracts.AutoMatchedSkillMatch) serviceruntime.AutoMatchedSkillMatch {
+		return serviceruntime.AutoMatchedSkillMatch{
 			Name:         match.Name,
 			MatchedBy:    match.MatchedBy,
-			MatchedTerms: append([]string(nil), match.MatchedTerms...),
-		})
-	}
-	return out
+			MatchedTerms: cloneStrings(match.MatchedTerms),
+		}
+	})
 }
 
 func fromRuntimeAutoMatchedSkillMatches(matches []serviceruntime.AutoMatchedSkillMatch) []contracts.AutoMatchedSkillMatch {
-	if len(matches) == 0 {
-		return nil
-	}
-	out := make([]contracts.AutoMatchedSkillMatch, 0, len(matches))
-	for _, match := range matches {
-		out = append(out, contracts.AutoMatchedSkillMatch{
+	return mapSlice(matches, func(match serviceruntime.AutoMatchedSkillMatch) contracts.AutoMatchedSkillMatch {
+		return contracts.AutoMatchedSkillMatch{
 			Name:         match.Name,
 			MatchedBy:    match.MatchedBy,
-			MatchedTerms: append([]string(nil), match.MatchedTerms...),
-		})
-	}
-	return out
+			MatchedTerms: cloneStrings(match.MatchedTerms),
+		}
+	})
 }

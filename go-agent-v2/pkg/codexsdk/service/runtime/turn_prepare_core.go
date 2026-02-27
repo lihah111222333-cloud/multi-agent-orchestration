@@ -25,6 +25,7 @@ func PrepareTurnSubmissionCommon(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) PreparedSubmissionCommon {
+	a = normalizePrepareAdapter(a)
 	parsed := ParseTurnInputs(input, a.FileContentInputText, a.BuildAttachmentName, a.BuildAttachmentPreviewURL)
 	skillPrompt, selectedSkillCount, autoMatchedSkillCount := BuildTurnSkillPrompt(
 		a,
@@ -49,6 +50,7 @@ func PrepareTurnStartSubmission(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) (TurnStartPreparedSubmission, error) {
+	a = normalizePrepareAdapter(a)
 	prepared := PrepareTurnSubmissionCommon(a, threadID, input, selectedSkills, manualSkillSelection)
 	return TurnStartPreparedSubmission{
 		Prompt:                prepared.Parsed.Prompt,
@@ -68,6 +70,7 @@ func PrepareTurnSteerSubmission(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) (TurnSteerEntryPrepareResult, error) {
+	a = normalizePrepareAdapter(a)
 	prepared := PrepareTurnSubmissionCommon(a, threadID, input, selectedSkills, manualSkillSelection)
 	return TurnSteerEntryPrepareResult{
 		SubmitPrompt: prepared.SubmitPrompt,
@@ -77,6 +80,7 @@ func PrepareTurnSteerSubmission(
 }
 
 func ResolveTurnSteerAlignment(a PrepareAdapter, req TurnSteerRequest) (string, string, error) {
+	a = normalizePrepareAdapter(a)
 	threadID, err := a.RequireThreadID("Server.turnSteer", req.ThreadID)
 	if err != nil {
 		return "", "", err
@@ -128,6 +132,7 @@ func AppendTurnStartUserTimeline(
 	attachments []TimelineAttachment,
 	opt TurnAppendUserTimelineOptions,
 ) {
+	a = normalizePrepareAdapter(a)
 	uiRuntime := a.UIRuntime()
 	if uiRuntime == nil {
 		return
@@ -146,6 +151,7 @@ func AppendTurnStartUserTimeline(
 }
 
 func ThreadTimelineAlreadyShowsInjectedPrompt(a PrepareAdapter, threadID string) bool {
+	a = normalizePrepareAdapter(a)
 	uiRuntime := a.UIRuntime()
 	if uiRuntime == nil {
 		return false
@@ -170,6 +176,7 @@ func BuildTurnSkillPrompt(
 	selectedSkills []string,
 	manualSkillSelection bool,
 ) (string, int, int) {
+	a = normalizePrepareAdapter(a)
 	selectedSkillPrompt, selectedSkillCount := a.BuildSelectedSkillPrompt(selectedSkills)
 	if manualSkillSelection || selectedSkillCount > 0 {
 		return selectedSkillPrompt, selectedSkillCount, 0
@@ -184,6 +191,7 @@ func BuildForcedOrExplicitMatchedSkillPrompt(
 	prompt string,
 	input []TurnInput,
 ) (string, int) {
+	a = normalizePrepareAdapter(a)
 	matches := CollectAutoMatchedSkillMatches(a, agentID, prompt, input, AutoSkillMatchOptions{
 		IncludeConfiguredExplicit: true,
 		IncludeConfiguredForce:    true,
@@ -208,6 +216,7 @@ func CollectAutoMatchedSkillMatches(
 	input []TurnInput,
 	options AutoSkillMatchOptions,
 ) []AutoMatchedSkillMatch {
+	a = normalizePrepareAdapter(a)
 	if strings.TrimSpace(prompt) == "" {
 		return nil
 	}
@@ -235,6 +244,7 @@ func CollectAutoMatchedSkillMatchesForThread(
 	input []TurnInput,
 	options AutoSkillMatchOptions,
 ) []AutoMatchedSkillMatch {
+	a = normalizePrepareAdapter(a)
 	return CollectAutoMatchedSkillMatches(a, threadID, prompt, input, options)
 }
 
@@ -243,6 +253,7 @@ func RenderAutoMatchedSkillPrompt(
 	agentID string,
 	matches []AutoMatchedSkillMatch,
 ) (string, int) {
+	a = normalizePrepareAdapter(a)
 	if len(matches) == 0 {
 		return "", 0
 	}

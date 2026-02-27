@@ -101,7 +101,6 @@ type AgentEvent struct {
 	Event   agentcore.Event `json:"event"`
 }
 
-// AgentMessage 兼容旧 WebSocket 消息格式。
 type AgentMessage struct {
 	Type    string `json:"type"` // "output" | "input" | "status"
 	AgentID string `json:"agent_id"`
@@ -289,20 +288,20 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 				m.handleEvent(proc, event)
 			})
 			if fallbackErr := fallback.SpawnAndConnect(ctx, prompt, cwd, "", instructions, dynamicTools); fallbackErr == nil {
-				payload, err := json.Marshal(map[string]any{
-					"message": "App-server unavailable; using HTTP fallback",
-					"status":  "degraded",
-					"active":  false,
-					"done":    true,
-					"phase":   "transport_fallback",
-				})
-				if err != nil {
-					logger.Warn("runner: fallback event marshal failed", logger.FieldAgentID, id, logger.FieldError, err)
+				event, marshalErr := buildJSONEvent(
+					agentcore.EventBackgroundEvent,
+					map[string]any{
+						"message": "App-server unavailable; using HTTP fallback",
+						"status":  "degraded",
+						"active":  false,
+						"done":    true,
+						"phase":   "transport_fallback",
+					},
+				)
+				if marshalErr != nil {
+					logger.Warn("runner: fallback event marshal failed", logger.FieldAgentID, id, logger.FieldError, marshalErr)
 				}
-				m.handleEvent(proc, agentcore.Event{
-					Type: agentcore.EventBackgroundEvent,
-					Data: payload,
-				})
+				m.handleEvent(proc, event)
 				logger.Warn("runner: launched with REST fallback",
 					logger.FieldAgentID, id,
 					logger.FieldPort, port,
@@ -457,12 +456,10 @@ func (m *AgentManager) Submit(id, prompt string, images, files []string) error {
 	if err != nil {
 		return err
 	}
-	// 发射 user_message 事件 → UI 可见主 agent 对子 agent 的消息
 	m.emitUserMessageEvent(proc, prompt, images, files)
 	return proc.Client.Submit(prompt, images, files, nil)
 }
 
-// emitUserMessageEvent 构造并发射 user_message 事件，使 UI 能看到发给 agent 的消息。
 func (m *AgentManager) emitUserMessageEvent(proc *AgentProcess, prompt string, images, files []string) {
 	if proc == nil {
 		return
@@ -484,15 +481,17 @@ func (m *AgentManager) emitUserMessageEvent(proc *AgentProcess, prompt string, i
 	if len(files) > 0 {
 		payloadMap["files"] = files
 	}
-	data, err := json.Marshal(payloadMap)
+	event, err := buildJSONEvent("user_message", payloadMap)
 	if err != nil {
 		logger.Warn("runner: emitUserMessageEvent marshal failed", logger.FieldAgentID, proc.ID, logger.FieldError, err)
 		return
 	}
-	handler(proc.ID, agentcore.Event{
-		Type: "user_message",
-		Data: data,
-	})
+	handler(proc.ID, event)
+}
+
+func buildJSONEvent(eventType string, payload map[string]any) (agentcore.Event, error) {
+	data, err := json.Marshal(payload)
+	return agentcore.Event{Type: eventType, Data: data}, err
 }
 
 // SendCommand 向 Agent 发送斜杠命令。

@@ -3,312 +3,66 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"reflect"
+	"time"
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/codex"
 	serviceruntime "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/runtime"
 	appErrors "github.com/multi-agent/go-agent-v2/pkg/errors"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 type TurnStartEntryResult = agentcore.TurnStartEntryResult
 
-type Deps struct {
-	Manager      *runner.AgentManager
-	BindingStore *store.AgentCodexBindingStore
-	UIRuntime    *uistate.RuntimeManager
+type Deps struct { Manager *runner.AgentManager; BindingStore *store.AgentCodexBindingStore; UIRuntime *uistate.RuntimeManager; BuildSelectedSkillPrompt func([]string) (string, int); ListSkillMatchCandidates func() ([]agentcore.SkillMatchCandidate, error); ListAgentSkills func(string) []string; CollectAutoMatchedSkillMatch func(string, []agentcore.AutoMatchInput, []string, []agentcore.SkillMatchCandidate, agentcore.AutoSkillMatchOptions) []agentcore.AutoMatchedSkillMatch; RenderAutoMatchedSkillPrompt func(string, []agentcore.AutoMatchedSkillMatch) (string, int); ActiveTrackedTurnID func(string) (string, bool); ShowInjectedPromptInChat func(context.Context) bool; ResolveLSPUsagePromptHint func(context.Context, string, int) string; ThreadExistsInHistory func(context.Context, string) bool; AllDynamicToolSchemas func() []agentcore.DynamicTool; ResolveStartInstructions func(context.Context, []agentcore.DynamicTool) string; SetAgentWorkDir func(string, string); GetThreadID func(*runner.AgentProcess) string; CancelCodeRuns func(string) int; ResolveCodexThreadCandidates func(context.Context, string) []string; ResumeThread func(*runner.AgentProcess, agentcore.ResumeThreadRequest) error; IsCodexProcessCrashError func(error) bool; IsHistoricalResumeCandidateErr func(error) bool; PreviewResumeCandidates func([]string, int) []string; Notify func(string, any); Submit func(*runner.AgentProcess, string, []string, []string, json.RawMessage) error; ResolveClientActiveTurnID func(*runner.AgentProcess) string; BeginTrackedTurn func(string, string) string; TurnSteer func(string, string, []string, []string) (map[string]any, error) }
 
-	BuildSelectedSkillPrompt     func(selectedSkills []string) (string, int)
-	ListSkillMatchCandidates     func() ([]agentcore.SkillMatchCandidate, error)
-	ListAgentSkills              func(agentID string) []string
-	CollectAutoMatchedSkillMatch func(
-		prompt string,
-		inputs []agentcore.AutoMatchInput,
-		configuredSkillNames []string,
-		candidates []agentcore.SkillMatchCandidate,
-		options agentcore.AutoSkillMatchOptions,
-	) []agentcore.AutoMatchedSkillMatch
-	RenderAutoMatchedSkillPrompt func(agentID string, matches []agentcore.AutoMatchedSkillMatch) (string, int)
-	ActiveTrackedTurnID          func(threadID string) (string, bool)
-	ShowInjectedPromptInChat     func(ctx context.Context) bool
-	ResolveLSPUsagePromptHint    func(ctx context.Context, defaultHint string, maxHintLen int) string
+type runtimeAdapter struct{ manager *runner.AgentManager; store *store.AgentCodexBindingStore; ui *uistate.RuntimeManager }
 
-	ThreadExistsInHistory          func(ctx context.Context, threadID string) bool
-	AllDynamicToolSchemas          func() []agentcore.DynamicTool
-	ResolveStartInstructions       func(ctx context.Context, dynamicTools []agentcore.DynamicTool) string
-	SetAgentWorkDir                func(agentID string, cwd string)
-	GetThreadID                    func(proc *runner.AgentProcess) string
-	CancelCodeRuns                 func(agentID string) int
-	ResolveCodexThreadCandidates   func(ctx context.Context, agentID string) []string
-	ResumeThread                   func(proc *runner.AgentProcess, req agentcore.ResumeThreadRequest) error
-	IsCodexProcessCrashError       func(err error) bool
-	IsHistoricalResumeCandidateErr func(err error) bool
-	PreviewResumeCandidates        func(candidates []string, limit int) []string
-	Notify                         func(method string, payload any)
-	Submit                         func(proc *runner.AgentProcess, prompt string, images, files []string, outputSchema json.RawMessage) error
-	ResolveClientActiveTurnID      func(proc *runner.AgentProcess) string
-	BeginTrackedTurn               func(threadID string, resolvedTurnID string) string
-	TurnSteer                      func(threadID string, submitPrompt string, images, files []string) (map[string]any, error)
-}
+func (a runtimeAdapter) Get(agentID string) agentcore.Process { if a.manager == nil { return nil }; return wrapProcess(a.manager.Get(agentID)) }
+func (a runtimeAdapter) Launch(ctx context.Context, agentID, alias, profile, cwd, startInstructions string, dynamicTools []agentcore.DynamicTool) error { if a.manager == nil { return appErrors.New("Server.ensureThreadReady", "thread manager is not initialized") }; return a.manager.Launch(ctx, agentID, alias, profile, cwd, startInstructions, dynamicTools) }
+func (a runtimeAdapter) Stop(agentID string) error { if a.manager == nil { return nil }; return a.manager.Stop(agentID) }
+func (a runtimeAdapter) Bind(ctx context.Context, agentID, codexThreadID, sessionID string) error { if a.store == nil { return nil }; return a.store.Bind(ctx, agentID, codexThreadID, sessionID) }
+func (a runtimeAdapter) FindByAgentID(ctx context.Context, agentID string) (*agentcore.Binding, error) { if a.store == nil { return nil, nil }; b, err := a.store.FindByAgentID(ctx, agentID); if err != nil || b == nil { return nil, err }; return &agentcore.Binding{CodexThreadID: b.CodexThreadID}, nil }
+func (a runtimeAdapter) AppendUserMessage(threadID, text string, attachments []agentcore.TimelineAttachment) { if a.ui == nil { return }; x := make([]uistate.TimelineAttachment, len(attachments)); for i := range attachments { it := attachments[i]; x[i] = uistate.TimelineAttachment{Kind: it.Kind, Name: it.Name, Path: it.Path, PreviewURL: it.PreviewURL} }; a.ui.AppendUserMessage(threadID, text, x) }
+func (a runtimeAdapter) ThreadTimeline(threadID string) []agentcore.TimelineItem { if a.ui == nil { return nil }; items := a.ui.ThreadTimeline(threadID); out := make([]agentcore.TimelineItem, len(items)); for i := range items { out[i] = agentcore.TimelineItem{Kind: items[i].Kind, Text: items[i].Text} }; return out }
 
-// toServiceRuntimeAdapter builds a RuntimeAdapter from consumer Deps.
-// Since all DTO types are now shared via agentcore aliases, no field-by-field
-// conversion is needed — types pass through transparently.
-func toServiceRuntimeAdapter(deps Deps) serviceruntime.RuntimeAdapter {
-	d := deps
+type runnerProcess struct{ *runner.AgentProcess }
 
-	var getThreadID func(agentcore.Process) string
-	if d.GetThreadID != nil {
-		getThreadID = func(proc agentcore.Process) string {
-			return d.GetThreadID(unwrapProcess(proc))
-		}
-	}
+func (p runnerProcess) Port() int { if p.AgentProcess == nil || p.Client == nil { return 0 }; return p.Client.GetPort() }
+func (p runnerProcess) IsAlive() bool { return p.AgentProcess != nil && p.AgentProcess.IsAlive() }
+func wrapProcess(proc *runner.AgentProcess) agentcore.Process { if proc == nil { return nil }; return runnerProcess{proc} }
+func unwrapProcess(proc agentcore.Process) *runner.AgentProcess { switch p := proc.(type) { case runnerProcess: return p.AgentProcess; case *runnerProcess: if p == nil { return nil }; return p.AgentProcess; default: return nil } }
 
-	var resumeThread func(agentcore.Process, serviceruntime.ResumeThreadRequest) error
-	if d.ResumeThread != nil {
-		resumeThread = func(proc agentcore.Process, req serviceruntime.ResumeThreadRequest) error {
-			return d.ResumeThread(unwrapProcess(proc), agentcore.ResumeThreadRequest{ThreadID: req.ThreadID, Cwd: req.Cwd})
-		}
-	}
+func optionalProvider[T any](enabled bool, value T) func() T { return func() T { if enabled { return value }; var zero T; return zero } }
+func adaptProcessString(fn func(*runner.AgentProcess) string) func(agentcore.Process) string { if fn == nil { return nil }; return func(proc agentcore.Process) string { return fn(unwrapProcess(proc)) } }
+func adaptResumeThread(fn func(*runner.AgentProcess, agentcore.ResumeThreadRequest) error) func(agentcore.Process, serviceruntime.ResumeThreadRequest) error { if fn == nil { return nil }; return func(proc agentcore.Process, req serviceruntime.ResumeThreadRequest) error { return fn(unwrapProcess(proc), agentcore.ResumeThreadRequest{ThreadID: req.ThreadID, Cwd: req.Cwd}) } }
+func adaptSubmit(fn func(*runner.AgentProcess, string, []string, []string, json.RawMessage) error) func(agentcore.Process, string, []string, []string, json.RawMessage) error { if fn == nil { return nil }; return func(proc agentcore.Process, prompt string, images, files []string, outputSchema json.RawMessage) error { return fn(unwrapProcess(proc), prompt, images, files, outputSchema) } }
 
-	var submit func(agentcore.Process, string, []string, []string, json.RawMessage) error
-	if d.Submit != nil {
-		submit = func(proc agentcore.Process, prompt string, images, files []string, outputSchema json.RawMessage) error {
-			return d.Submit(unwrapProcess(proc), prompt, images, files, outputSchema)
-		}
-	}
-
-	var resolveClientActiveTurnID func(agentcore.Process) string
-	if d.ResolveClientActiveTurnID != nil {
-		resolveClientActiveTurnID = func(proc agentcore.Process) string {
-			return d.ResolveClientActiveTurnID(unwrapProcess(proc))
-		}
-	}
-
+func toServiceRuntimeAdapter(d Deps) serviceruntime.RuntimeAdapter {
+	a := runtimeAdapter{manager: d.Manager, store: d.BindingStore, ui: d.UIRuntime}
 	return serviceruntime.RuntimeAdapter{
-		PrepareAdapter: serviceruntime.PrepareAdapter{
-			MergePromptText:                commonadapter.MergePromptText,
-			FileContentInputText:           commonadapter.FileContentInputText,
-			BuildAttachmentName:            BuildAttachmentName,
-			BuildAttachmentPreviewURL:      BuildAttachmentPreviewURL,
-			BuildSelectedSkillPrompt:       d.BuildSelectedSkillPrompt,
-			ListSkillMatchCandidates:       d.ListSkillMatchCandidates,
-			ListAgentSkills:                d.ListAgentSkills,
-			CollectAutoMatchedSkillMatches: d.CollectAutoMatchedSkillMatch,
-			RenderAutoMatchedSkillPrompt:   d.RenderAutoMatchedSkillPrompt,
-			ActiveTrackedTurnID:            d.ActiveTrackedTurnID,
-			ShowInjectedPromptInChat:       d.ShowInjectedPromptInChat,
-			ResolveLSPUsagePromptHint:      d.ResolveLSPUsagePromptHint,
-			UIRuntime:                      wrapUIRuntime(d.UIRuntime),
-		},
-		Manager:                           wrapManager(d.Manager),
-		ThreadExistsInHistory:             d.ThreadExistsInHistory,
-		AllDynamicToolSchemas:             d.AllDynamicToolSchemas,
-		ResolveStartInstructionsForLaunch: d.ResolveStartInstructions,
-		SetAgentWorkDir:                   d.SetAgentWorkDir,
-		GetThreadID:                       getThreadID,
-		CancelCodeRuns:                    d.CancelCodeRuns,
-		BindingStore:                      wrapBindingStore(d.BindingStore),
-		ResolveCodexThreadCandidates:      d.ResolveCodexThreadCandidates,
-		ResumeThread:                      resumeThread,
-		IsCodexProcessCrashError:          d.IsCodexProcessCrashError,
-		IsHistoricalResumeCandidateError:  d.IsHistoricalResumeCandidateErr,
-		PreviewResumeCandidates:           d.PreviewResumeCandidates,
-		Notify:                            d.Notify,
-		NormalizeSkillNames:               commonadapter.NormalizeSkillNames,
-		Submit:                            submit,
-		ResolveClientActiveTurnID:         resolveClientActiveTurnID,
-		BeginTrackedTurn:                  d.BeginTrackedTurn,
-		TurnSteer:                         d.TurnSteer,
+		PrepareAdapter: serviceruntime.PrepareAdapter{MergePromptText: commonadapter.MergePromptText, FileContentInputText: commonadapter.FileContentInputText, BuildAttachmentName: BuildAttachmentName, BuildAttachmentPreviewURL: BuildAttachmentPreviewURL, BuildSelectedSkillPrompt: d.BuildSelectedSkillPrompt, ListSkillMatchCandidates: d.ListSkillMatchCandidates, ListAgentSkills: d.ListAgentSkills, CollectAutoMatchedSkillMatches: d.CollectAutoMatchedSkillMatch, RenderAutoMatchedSkillPrompt: d.RenderAutoMatchedSkillPrompt, ActiveTrackedTurnID: d.ActiveTrackedTurnID, ShowInjectedPromptInChat: d.ShowInjectedPromptInChat, ResolveLSPUsagePromptHint: d.ResolveLSPUsagePromptHint, UIRuntime: optionalProvider(d.UIRuntime != nil, agentcore.TimelineRuntime(a))},
+		Manager: optionalProvider(d.Manager != nil, agentcore.Manager(a)), ThreadExistsInHistory: d.ThreadExistsInHistory, AllDynamicToolSchemas: d.AllDynamicToolSchemas, ResolveStartInstructionsForLaunch: d.ResolveStartInstructions, SetAgentWorkDir: d.SetAgentWorkDir,
+		GetThreadID: adaptProcessString(d.GetThreadID), CancelCodeRuns: d.CancelCodeRuns, BindingStore: optionalProvider(d.BindingStore != nil, agentcore.BindingStore(a)), ResolveCodexThreadCandidates: d.ResolveCodexThreadCandidates,
+		ResumeThread: adaptResumeThread(d.ResumeThread), IsCodexProcessCrashError: d.IsCodexProcessCrashError, IsHistoricalResumeCandidateError: d.IsHistoricalResumeCandidateErr, PreviewResumeCandidates: d.PreviewResumeCandidates, Notify: d.Notify,
+		NormalizeSkillNames: commonadapter.NormalizeSkillNames, Submit: adaptSubmit(d.Submit), ResolveClientActiveTurnID: adaptProcessString(d.ResolveClientActiveTurnID), BeginTrackedTurn: d.BeginTrackedTurn, TurnSteer: d.TurnSteer,
 	}
 }
 
-// ── Thin wrappers for internal types that need to implement agentcore interfaces ──
+func RegisterBinding(ctx context.Context, deps Deps, agentID string, proc *runner.AgentProcess) { serviceruntime.RegisterBinding(toServiceRuntimeAdapter(deps), ctx, agentID, wrapProcess(proc)) }
+func TurnStart(ctx context.Context, deps Deps, req agentcore.TurnStartRequest) (TurnStartEntryResult, error) { return serviceruntime.TurnStart(toServiceRuntimeAdapter(deps), ctx, req) }
+func TurnSteerFromInput(deps Deps, req agentcore.TurnSteerRequest) (map[string]any, error) { return serviceruntime.TurnSteerFromInput(toServiceRuntimeAdapter(deps), req) }
+func TurnSteerFromInputAligned(deps Deps, req agentcore.TurnSteerRequest) (map[string]any, error) { return serviceruntime.TurnSteerFromInputAlignedByAdapter(toServiceRuntimeAdapter(deps).PrepareAdapter, req, func(runtimeReq serviceruntime.TurnSteerRequest) (map[string]any, error) { return TurnSteerFromInput(deps, runtimeReq) }) }
+func ResolveProcess(deps Deps, caller, threadID string) (*runner.AgentProcess, error) { proc, err := serviceruntime.ResolveProcess(toServiceRuntimeAdapter(deps), caller, threadID); if err != nil { return nil, err }; return unwrapProcess(proc), nil }
+func WithProcess[T any](deps Deps, caller, threadID string, fn func(*runner.AgentProcess) (T, error)) (T, error) { return serviceruntime.WithProcess(toServiceRuntimeAdapter(deps), caller, threadID, func(proc agentcore.Process) (T, error) { return fn(unwrapProcess(proc)) }) }
+func CollectAutoMatchedSkillMatchesForThread(deps Deps, threadID, prompt string, input []agentcore.TurnInput, options agentcore.AutoSkillMatchOptions) []agentcore.AutoMatchedSkillMatch { return serviceruntime.CollectAutoMatchedSkillMatchesForThread(toServiceRuntimeAdapter(deps).PrepareAdapter, threadID, prompt, input, options) }
 
-// unwrapProcess extracts the concrete *runner.AgentProcess from an agentcore.Process.
-func unwrapProcess(proc agentcore.Process) *runner.AgentProcess {
-	typed, ok := proc.(*runnerProcess)
-	if !ok {
-		return nil
-	}
-	return typed.proc
-}
-
-// runnerProcess adapts *runner.AgentProcess to agentcore.Process.
-type runnerProcess struct{ proc *runner.AgentProcess }
-
-func (p *runnerProcess) Port() int {
-	if p == nil || p.proc == nil || p.proc.Client == nil {
-		return 0
-	}
-	return p.proc.Client.GetPort()
-}
-func (p *runnerProcess) IsAlive() bool {
-	if p == nil || p.proc == nil {
-		return false
-	}
-	return p.proc.IsAlive()
-}
-
-func wrapProcess(proc *runner.AgentProcess) agentcore.Process {
-	if proc == nil {
-		return nil
-	}
-	return &runnerProcess{proc: proc}
-}
-
-// runnerManager adapts *runner.AgentManager to agentcore.Manager.
-type runnerManager struct{ manager *runner.AgentManager }
-
-func (m *runnerManager) Get(agentID string) agentcore.Process {
-	if m == nil || m.manager == nil {
-		return nil
-	}
-	return wrapProcess(m.manager.Get(agentID))
-}
-func (m *runnerManager) Launch(ctx context.Context, agentID, alias, profile, cwd, startInstructions string, dynamicTools []agentcore.DynamicTool) error {
-	if m == nil || m.manager == nil {
-		return appErrors.New("Server.ensureThreadReady", "thread manager is not initialized")
-	}
-	return m.manager.Launch(ctx, agentID, alias, profile, cwd, startInstructions, dynamicTools)
-}
-func (m *runnerManager) Stop(agentID string) error {
-	if m == nil || m.manager == nil {
-		return nil
-	}
-	return m.manager.Stop(agentID)
-}
-
-func wrapManager(mgr *runner.AgentManager) func() agentcore.Manager {
-	return func() agentcore.Manager {
-		if mgr == nil {
-			return nil
-		}
-		return &runnerManager{manager: mgr}
-	}
-}
-
-// bindingStoreAdapter adapts *store.AgentCodexBindingStore to agentcore.BindingStore.
-type bindingStoreAdapter struct{ store *store.AgentCodexBindingStore }
-
-func (b *bindingStoreAdapter) Bind(ctx context.Context, agentID, codexThreadID, sessionID string) error {
-	if b == nil || b.store == nil {
-		return nil
-	}
-	return b.store.Bind(ctx, agentID, codexThreadID, sessionID)
-}
-func (b *bindingStoreAdapter) FindByAgentID(ctx context.Context, agentID string) (*agentcore.Binding, error) {
-	if b == nil || b.store == nil {
-		return nil, nil
-	}
-	binding, err := b.store.FindByAgentID(ctx, agentID)
-	if err != nil {
-		return nil, err
-	}
-	if binding == nil {
-		return nil, nil
-	}
-	return &agentcore.Binding{CodexThreadID: binding.CodexThreadID}, nil
-}
-
-func wrapBindingStore(s *store.AgentCodexBindingStore) func() agentcore.BindingStore {
-	return func() agentcore.BindingStore {
-		if s == nil {
-			return nil
-		}
-		return &bindingStoreAdapter{store: s}
-	}
-}
-
-// uiRuntimeAdapter adapts *uistate.RuntimeManager to agentcore.TimelineRuntime.
-type uiRuntimeAdapter struct{ rt *uistate.RuntimeManager }
-
-func (u *uiRuntimeAdapter) AppendUserMessage(threadID, text string, attachments []agentcore.TimelineAttachment) {
-	if u == nil || u.rt == nil {
-		return
-	}
-	uiAttachments := make([]uistate.TimelineAttachment, len(attachments))
-	for i, a := range attachments {
-		uiAttachments[i] = uistate.TimelineAttachment{Kind: a.Kind, Name: a.Name, Path: a.Path, PreviewURL: a.PreviewURL}
-	}
-	u.rt.AppendUserMessage(threadID, text, uiAttachments)
-}
-func (u *uiRuntimeAdapter) ThreadTimeline(threadID string) []agentcore.TimelineItem {
-	if u == nil || u.rt == nil {
-		return nil
-	}
-	items := u.rt.ThreadTimeline(threadID)
-	result := make([]agentcore.TimelineItem, len(items))
-	for i, it := range items {
-		result[i] = agentcore.TimelineItem{Kind: it.Kind, Text: it.Text}
-	}
-	return result
-}
-
-func wrapUIRuntime(rt *uistate.RuntimeManager) func() agentcore.TimelineRuntime {
-	return func() agentcore.TimelineRuntime {
-		if rt == nil {
-			return nil
-		}
-		return &uiRuntimeAdapter{rt: rt}
-	}
-}
-
-func RegisterBinding(ctx context.Context, deps Deps, agentID string, proc *runner.AgentProcess) {
-	serviceruntime.RegisterBinding(toServiceRuntimeAdapter(deps), ctx, agentID, wrapProcess(proc))
-}
-
-func TurnStart(ctx context.Context, deps Deps, req agentcore.TurnStartRequest) (TurnStartEntryResult, error) {
-	return serviceruntime.TurnStart(toServiceRuntimeAdapter(deps), ctx, req)
-}
-
-func TurnSteerFromInput(deps Deps, req agentcore.TurnSteerRequest) (map[string]any, error) {
-	return serviceruntime.TurnSteerFromInput(toServiceRuntimeAdapter(deps), req)
-}
-
-func TurnSteerFromInputAligned(deps Deps, req agentcore.TurnSteerRequest) (map[string]any, error) {
-	return serviceruntime.TurnSteerFromInputAlignedByAdapter(
-		toServiceRuntimeAdapter(deps).PrepareAdapter,
-		req,
-		func(runtimeReq serviceruntime.TurnSteerRequest) (map[string]any, error) {
-			return TurnSteerFromInput(deps, runtimeReq)
-		},
-	)
-}
-
-func ResolveProcess(deps Deps, caller, threadID string) (*runner.AgentProcess, error) {
-	proc, err := serviceruntime.ResolveProcess(toServiceRuntimeAdapter(deps), caller, threadID)
-	if err != nil {
-		return nil, err
-	}
-	return unwrapProcess(proc), nil
-}
-
-func WithProcess[T any](
-	deps Deps,
-	caller string,
-	threadID string,
-	fn func(*runner.AgentProcess) (T, error),
-) (T, error) {
-	return serviceruntime.WithProcess(toServiceRuntimeAdapter(deps), caller, threadID, func(proc agentcore.Process) (T, error) {
-		return fn(unwrapProcess(proc))
-	})
-}
-
-func CollectAutoMatchedSkillMatchesForThread(
-	deps Deps,
-	threadID string,
-	prompt string,
-	input []agentcore.TurnInput,
-	options agentcore.AutoSkillMatchOptions,
-) []agentcore.AutoMatchedSkillMatch {
-	return serviceruntime.CollectAutoMatchedSkillMatchesForThread(
-		toServiceRuntimeAdapter(deps).PrepareAdapter,
-		threadID,
-		prompt,
-		input,
-		options,
-	)
-}
+func SetDefaultFunc[T any](slot *T, fallback T) { if slot == nil { return }; v := reflect.ValueOf(*slot); if v.IsValid() && v.Kind() == reflect.Func && !v.IsNil() { return }; *slot = fallback }
+func BuildAttachmentName(path string) string { return util.BuildAttachmentName(path) }
+func BuildAttachmentPreviewURL(path string) string { return util.BuildAttachmentPreviewURL(path) }
+func SetStreamReadIdleTimeout(timeout time.Duration) { codex.SetAppServerReadIdleTimeout(timeout) }

@@ -346,12 +346,7 @@ func resourceTaskCreateDAG(provider ResourceProvider, args json.RawMessage) stri
 		nodesCreated++
 	}
 	logger.Info("resource: DAG created", logger.FieldDAG, p.DagKey, "nodes", nodesCreated)
-	return resourceJSON(map[string]any{
-		"dag_key":       dag.DagKey,
-		"title":         dag.Title,
-		"nodes_created": nodesCreated,
-		"status":        dag.Status,
-	})
+	return resourceJSON(map[string]any{"dag_key": dag.DagKey, "title": dag.Title, "nodes_created": nodesCreated, "status": dag.Status})
 }
 
 func resourceTaskGetDAG(provider ResourceProvider, args json.RawMessage) string {
@@ -364,10 +359,7 @@ func resourceTaskGetDAG(provider ResourceProvider, args json.RawMessage) string 
 	dag, nodes, err := provider.DAGManager().GetDAGDetail(ctx, p.DagKey)
 	if err != nil { return resourceWrapError(err, "ResourceTool.GetDAG", "get dag") }
 	if dag == nil { return ToolError(pkgerr.Newf("ResourceTool.GetDAG", "dag %s not found", p.DagKey)) }
-	return resourceJSON(map[string]any{
-		"dag":   dag,
-		"nodes": nodes,
-	})
+	return resourceJSON(map[string]any{"dag": dag, "nodes": nodes})
 }
 
 func resourceTaskUpdateNode(provider ResourceProvider, args json.RawMessage) string {
@@ -491,10 +483,7 @@ func resourceWorkspaceCreateRun(provider ResourceProvider, args json.RawMessage)
 	if err != nil { return ToolError(err) }
 	runKey := resourceWorkspaceRunKey(run)
 	if runKey == "" { runKey = p.RunKey }
-	provider.NotifyEvent("workspace/run/created", map[string]any{
-		"runKey": runKey,
-		"run":    run,
-	})
+	provider.NotifyEvent("workspace/run/created", map[string]any{"runKey": runKey, "run": run})
 	return resourceJSON(run)
 }
 
@@ -547,10 +536,7 @@ func resourceWorkspaceMergeRun(provider ResourceProvider, args json.RawMessage) 
 		DeleteRemoved: p.DeleteRemoved,
 	})
 	if err != nil { return ToolError(err) }
-	provider.NotifyEvent("workspace/run/merged", map[string]any{
-		"runKey": p.RunKey,
-		"result": result,
-	})
+	provider.NotifyEvent("workspace/run/merged", map[string]any{"runKey": p.RunKey, "result": result})
 	return resourceJSON(result)
 }
 
@@ -566,11 +552,7 @@ func resourceWorkspaceAbortRun(provider ResourceProvider, args json.RawMessage) 
 	defer cancel()
 	run, err := ops.AbortRun(ctx, p.RunKey, p.UpdatedBy, p.Reason)
 	if err != nil { return ToolError(err) }
-	provider.NotifyEvent("workspace/run/aborted", map[string]any{
-		"runKey": p.RunKey,
-		"run":    run,
-		"reason": p.Reason,
-	})
+	provider.NotifyEvent("workspace/run/aborted", map[string]any{"runKey": p.RunKey, "run": run, "reason": p.Reason})
 	return resourceJSON(run)
 }
 

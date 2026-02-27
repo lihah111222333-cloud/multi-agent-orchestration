@@ -289,20 +289,21 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 				m.handleEvent(proc, event)
 			})
 			if fallbackErr := fallback.SpawnAndConnect(ctx, prompt, cwd, "", instructions, dynamicTools); fallbackErr == nil {
-				payload, err := json.Marshal(map[string]any{
-					"message": "App-server unavailable; using HTTP fallback",
-					"status":  "degraded",
-					"active":  false,
-					"done":    true,
-					"phase":   "transport_fallback",
-				})
-				if err != nil {
-					logger.Warn("runner: fallback event marshal failed", logger.FieldAgentID, id, logger.FieldError, err)
+				event, marshalErr := buildJSONEvent(
+					agentcore.EventBackgroundEvent,
+					map[string]any{
+						"message": "App-server unavailable; using HTTP fallback",
+						"status":  "degraded",
+						"active":  false,
+						"done":    true,
+						"phase":   "transport_fallback",
+					},
+					true,
+				)
+				if marshalErr != nil {
+					logger.Warn("runner: fallback event marshal failed", logger.FieldAgentID, id, logger.FieldError, marshalErr)
 				}
-				m.handleEvent(proc, agentcore.Event{
-					Type: agentcore.EventBackgroundEvent,
-					Data: payload,
-				})
+				m.handleEvent(proc, event)
 				logger.Warn("runner: launched with REST fallback",
 					logger.FieldAgentID, id,
 					logger.FieldPort, port,
@@ -484,15 +485,25 @@ func (m *AgentManager) emitUserMessageEvent(proc *AgentProcess, prompt string, i
 	if len(files) > 0 {
 		payloadMap["files"] = files
 	}
-	data, err := json.Marshal(payloadMap)
+	event, err := buildJSONEvent("user_message", payloadMap, false)
 	if err != nil {
 		logger.Warn("runner: emitUserMessageEvent marshal failed", logger.FieldAgentID, proc.ID, logger.FieldError, err)
 		return
 	}
-	handler(proc.ID, agentcore.Event{
-		Type: "user_message",
+	handler(proc.ID, event)
+}
+
+// buildJSONEvent marshals payload into an event.
+// keepOnMarshalError=true preserves historical behavior for callers that still emit events with empty Data.
+func buildJSONEvent(eventType string, payload map[string]any, keepOnMarshalError bool) (agentcore.Event, error) {
+	data, err := json.Marshal(payload)
+	if err != nil && !keepOnMarshalError {
+		return agentcore.Event{}, err
+	}
+	return agentcore.Event{
+		Type: eventType,
 		Data: data,
-	})
+	}, err
 }
 
 // SendCommand 向 Agent 发送斜杠命令。

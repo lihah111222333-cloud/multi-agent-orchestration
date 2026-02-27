@@ -326,9 +326,7 @@ func resourceWorkspaceOps(provider ResourceProvider, op string) (WorkspaceOps, s
 func resourceWorkspaceDecodeArgs(provider ResourceProvider, args json.RawMessage, dst any, op string) (WorkspaceOps, string) {
 	ops, errMsg := resourceWorkspaceOps(provider, op)
 	if errMsg != "" { return nil, errMsg }
-	if errMsg := resourceDecodeArgs(args, dst, op); errMsg != "" {
-		return nil, errMsg
-	}
+	if errMsg := resourceDecodeArgs(args, dst, op); errMsg != "" { return nil, errMsg }
 	return ops, ""
 }
 
@@ -345,9 +343,7 @@ func resourceTaskCreateDAG(provider ResourceProvider, args json.RawMessage) stri
 			CommandRef string   `json:"command_ref"`
 		} `json:"nodes"`
 	}
-	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.CreateDAG"); errMsg != "" {
-		return errMsg
-	}
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.CreateDAG"); errMsg != "" { return errMsg }
 
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
@@ -358,9 +354,7 @@ func resourceTaskCreateDAG(provider ResourceProvider, args json.RawMessage) stri
 		Description: p.Description,
 		Status:      "draft",
 	})
-	if err != nil {
-		return resourceWrapError(err, "ResourceTool.CreateDAG", "create dag")
-	}
+	if err != nil { return resourceWrapError(err, "ResourceTool.CreateDAG", "create dag") }
 
 	nodesCreated := 0
 	for _, n := range p.Nodes {
@@ -392,19 +386,13 @@ func resourceTaskGetDAG(provider ResourceProvider, args json.RawMessage) string 
 	var p struct {
 		DagKey string `json:"dag_key"`
 	}
-	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.GetDAG"); errMsg != "" {
-		return errMsg
-	}
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.GetDAG"); errMsg != "" { return errMsg }
 
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	dag, nodes, err := provider.DAGManager().GetDAGDetail(ctx, p.DagKey)
-	if err != nil {
-		return resourceWrapError(err, "ResourceTool.GetDAG", "get dag")
-	}
-	if dag == nil {
-		return ToolError(pkgerr.Newf("ResourceTool.GetDAG", "dag %s not found", p.DagKey))
-	}
+	if err != nil { return resourceWrapError(err, "ResourceTool.GetDAG", "get dag") }
+	if dag == nil { return ToolError(pkgerr.Newf("ResourceTool.GetDAG", "dag %s not found", p.DagKey)) }
 
 	return resourceJSON(map[string]any{
 		"dag":   dag,
@@ -419,24 +407,16 @@ func resourceTaskUpdateNode(provider ResourceProvider, args json.RawMessage) str
 		Status  string `json:"status"`
 		Result  string `json:"result"`
 	}
-	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.UpdateNode"); errMsg != "" {
-		return errMsg
-	}
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.UpdateNode"); errMsg != "" { return errMsg }
 
 	var result any
-	if p.Result != "" {
-		result = p.Result
-	}
+	if p.Result != "" { result = p.Result }
 
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	node, err := provider.DAGManager().UpdateNodeStatus(ctx, p.DagKey, p.NodeKey, p.Status, result)
-	if err != nil {
-		return resourceWrapError(err, "ResourceTool.UpdateNode", "update node")
-	}
-	if node == nil {
-		return `{"error":"node not found"}`
-	}
+	if err != nil { return resourceWrapError(err, "ResourceTool.UpdateNode", "update node") }
+	if node == nil { return `{"error":"node not found"}` }
 
 	logger.Info("resource: node updated", logger.FieldDAG, p.DagKey, logger.FieldNode, p.NodeKey, logger.FieldStatus, p.Status)
 	return resourceJSON(node)
@@ -451,9 +431,7 @@ func resourceCommandList(provider ResourceProvider, args json.RawMessage) string
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	cards, err := provider.CommandCardStore().List(ctx, p.Keyword, 50)
-	if err != nil {
-		return resourceWrapError(err, "ResourceTool.CommandList", "list commands")
-	}
+	if err != nil { return resourceWrapError(err, "ResourceTool.CommandList", "list commands") }
 	return resourceJSON(cards)
 }
 
@@ -461,19 +439,13 @@ func resourceCommandGet(provider ResourceProvider, args json.RawMessage) string 
 	var p struct {
 		CardKey string `json:"card_key"`
 	}
-	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.CommandGet"); errMsg != "" {
-		return errMsg
-	}
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.CommandGet"); errMsg != "" { return errMsg }
 
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	card, err := provider.CommandCardStore().Get(ctx, p.CardKey)
-	if err != nil {
-		return resourceWrapError(err, "ResourceTool.CommandGet", "get command")
-	}
-	if isNilAny(card) {
-		return ToolError(pkgerr.Newf("ResourceTool.CommandGet", "command %s not found", p.CardKey))
-	}
+	if err != nil { return resourceWrapError(err, "ResourceTool.CommandGet", "get command") }
+	if isNilAny(card) { return ToolError(pkgerr.Newf("ResourceTool.CommandGet", "command %s not found", p.CardKey)) }
 	return resourceJSON(card)
 }
 
@@ -486,9 +458,7 @@ func resourcePromptList(provider ResourceProvider, args json.RawMessage) string 
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	prompts, err := provider.PromptTemplateStore().List(ctx, "", p.Keyword, 50)
-	if err != nil {
-		return resourceWrapError(err, "ResourceTool.PromptList", "list prompts")
-	}
+	if err != nil { return resourceWrapError(err, "ResourceTool.PromptList", "list prompts") }
 	return resourceJSON(prompts)
 }
 
@@ -496,19 +466,13 @@ func resourcePromptGet(provider ResourceProvider, args json.RawMessage) string {
 	var p struct {
 		PromptKey string `json:"prompt_key"`
 	}
-	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.PromptGet"); errMsg != "" {
-		return errMsg
-	}
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.PromptGet"); errMsg != "" { return errMsg }
 
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	prompt, err := provider.PromptTemplateStore().Get(ctx, p.PromptKey)
-	if err != nil {
-		return resourceWrapError(err, "ResourceTool.PromptGet", "get prompt")
-	}
-	if isNilAny(prompt) {
-		return ToolError(pkgerr.Newf("ResourceTool.PromptGet", "prompt %s not found", p.PromptKey))
-	}
+	if err != nil { return resourceWrapError(err, "ResourceTool.PromptGet", "get prompt") }
+	if isNilAny(prompt) { return ToolError(pkgerr.Newf("ResourceTool.PromptGet", "prompt %s not found", p.PromptKey)) }
 	return resourceJSON(prompt)
 }
 
@@ -516,19 +480,13 @@ func resourceSharedFileRead(provider ResourceProvider, args json.RawMessage) str
 	var p struct {
 		Path string `json:"path"`
 	}
-	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.FileRead"); errMsg != "" {
-		return errMsg
-	}
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.FileRead"); errMsg != "" { return errMsg }
 
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	file, err := provider.SharedFileStore().Read(ctx, p.Path)
-	if err != nil {
-		return resourceWrapError(err, "ResourceTool.FileRead", "read file")
-	}
-	if isNilAny(file) {
-		return ToolError(pkgerr.Newf("ResourceTool.FileRead", "file %s not found", p.Path))
-	}
+	if err != nil { return resourceWrapError(err, "ResourceTool.FileRead", "read file") }
+	if isNilAny(file) { return ToolError(pkgerr.Newf("ResourceTool.FileRead", "file %s not found", p.Path)) }
 	return resourceJSON(file)
 }
 
@@ -537,19 +495,13 @@ func resourceSharedFileWrite(provider ResourceProvider, args json.RawMessage) st
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	}
-	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.FileWrite"); errMsg != "" {
-		return errMsg
-	}
-	if strings.TrimSpace(p.Path) == "" {
-		return `{"error":"path is required"}`
-	}
+	if errMsg := resourceDecodeArgs(args, &p, "ResourceTool.FileWrite"); errMsg != "" { return errMsg }
+	if strings.TrimSpace(p.Path) == "" { return `{"error":"path is required"}` }
 
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	file, err := provider.SharedFileStore().Write(ctx, p.Path, p.Content, "agent")
-	if err != nil {
-		return resourceWrapError(err, "ResourceTool.FileWrite", "write file")
-	}
+	if err != nil { return resourceWrapError(err, "ResourceTool.FileWrite", "write file") }
 
 	logger.Info("resource: file written", logger.FieldPath, p.Path, logger.FieldLen, len(p.Content))
 	return resourceJSON(file)
@@ -576,13 +528,9 @@ func resourceWorkspaceCreateRun(provider ResourceProvider, args json.RawMessage)
 		Files:      p.Files,
 		Metadata:   p.Metadata,
 	})
-	if err != nil {
-		return ToolError(err)
-	}
+	if err != nil { return ToolError(err) }
 	runKey := resourceWorkspaceRunKey(run)
-	if runKey == "" {
-		runKey = p.RunKey
-	}
+	if runKey == "" { runKey = p.RunKey }
 	provider.NotifyEvent("workspace/run/created", map[string]any{
 		"runKey": runKey,
 		"run":    run,
@@ -599,12 +547,8 @@ func resourceWorkspaceGetRun(provider ResourceProvider, args json.RawMessage) st
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	run, err := ops.GetRun(ctx, p.RunKey)
-	if err != nil {
-		return ToolError(err)
-	}
-	if isNilAny(run) {
-		return ToolError(pkgerr.Newf("ResourceTool.WorkspaceGet", "workspace run %s not found", p.RunKey))
-	}
+	if err != nil { return ToolError(err) }
+	if isNilAny(run) { return ToolError(pkgerr.Newf("ResourceTool.WorkspaceGet", "workspace run %s not found", p.RunKey)) }
 	return resourceJSON(run)
 }
 
@@ -617,15 +561,11 @@ func resourceWorkspaceListRuns(provider ResourceProvider, args json.RawMessage) 
 		Limit  int    `json:"limit"`
 	}
 	resourceDecodeArgsOptional(args, &p, "resource: unmarshal workspace list args")
-	if p.Limit <= 0 || p.Limit > 5000 {
-		p.Limit = 200
-	}
+	if p.Limit <= 0 || p.Limit > 5000 { p.Limit = 200 }
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	runs, err := ops.ListRuns(ctx, p.Status, p.DagKey, p.Limit)
-	if err != nil {
-		return ToolError(err)
-	}
+	if err != nil { return ToolError(err) }
 	return resourceJSON(runs)
 }
 
@@ -646,9 +586,7 @@ func resourceWorkspaceMergeRun(provider ResourceProvider, args json.RawMessage) 
 		DryRun:        p.DryRun,
 		DeleteRemoved: p.DeleteRemoved,
 	})
-	if err != nil {
-		return ToolError(err)
-	}
+	if err != nil { return ToolError(err) }
 	provider.NotifyEvent("workspace/run/merged", map[string]any{
 		"runKey": p.RunKey,
 		"result": result,
@@ -667,9 +605,7 @@ func resourceWorkspaceAbortRun(provider ResourceProvider, args json.RawMessage) 
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	run, err := ops.AbortRun(ctx, p.RunKey, p.UpdatedBy, p.Reason)
-	if err != nil {
-		return ToolError(err)
-	}
+	if err != nil { return ToolError(err) }
 	provider.NotifyEvent("workspace/run/aborted", map[string]any{
 		"runKey": p.RunKey,
 		"run":    run,

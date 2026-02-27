@@ -637,12 +637,11 @@ func shouldLogLegacyMirrorDrop(seq int64) bool {
 }
 
 func logLegacyMirrorDrop(agentID, method, conversationID, preview string, seq int64) {
-	args := []any{logger.FieldAgentID, agentID, logger.FieldMethod, method, "conversation_id", conversationID, "preview", preview}
 	if shouldLogLegacyMirrorDrop(seq) {
-		logger.Info("codex: dropped legacy mirror stream notification", append(args, "drop_count", seq)...)
+		logger.Info("codex: dropped legacy mirror stream notification", logger.FieldAgentID, agentID, logger.FieldMethod, method, "conversation_id", conversationID, "preview", preview, "drop_count", seq)
 		return
 	}
-	logger.Debug("codex: dropped legacy mirror stream notification", args...)
+	logger.Debug("codex: dropped legacy mirror stream notification", logger.FieldAgentID, agentID, logger.FieldMethod, method, "conversation_id", conversationID, "preview", preview)
 }
 
 func shouldDropLegacyMirrorNotification(msg jsonRPCMessage) (bool, string, string) {
@@ -686,15 +685,12 @@ func extractConversationIDFromEventParams(raw json.RawMessage) string {
 }
 
 func isLegacyMirrorEnvelope(method string, payload map[string]any) bool {
-	suffix := strings.TrimPrefix(strings.TrimPrefix(method, "agent/event/"), "codex/event/")
-	switch suffix {
-	case "agent_message_delta", "agent_message_content_delta", "agent_reasoning_delta", "agent_reasoning_raw_delta", "exec_command_output_delta":
-		if suffix != method {
+	if strings.HasPrefix(method, "agent/event/") || strings.HasPrefix(method, "codex/event/") {
+		switch strings.TrimPrefix(strings.TrimPrefix(method, "agent/event/"), "codex/event/") {
+		case "agent_message_delta", "agent_message_content_delta", "agent_reasoning_delta", "agent_reasoning_raw_delta", "exec_command_output_delta":
 			return true
-		}
-	case "reasoning_content_delta", "plan_delta":
-		if strings.HasPrefix(method, "codex/event/") {
-			return true
+		case "reasoning_content_delta", "plan_delta":
+			return strings.HasPrefix(method, "codex/event/")
 		}
 	}
 	for _, key := range [...]string{"threadId", "turnId", "itemId", "outputIndex", "contentIndex"} {

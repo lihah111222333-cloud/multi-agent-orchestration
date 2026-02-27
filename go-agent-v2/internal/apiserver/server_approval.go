@@ -1,4 +1,3 @@
-// server_approval.go — 审批事件处理: Server→Client 请求 → 等回复 → 回传 codex。
 package apiserver
 
 import (
@@ -178,11 +177,10 @@ func mergeApprovalDecisionPayload(method string, current map[string]any, result 
 }
 
 func approvalDecisionPayload(method string, approved bool) map[string]any {
-	if !approved {
-		return map[string]any{"decision": "decline"}
-	}
 	decision := "accept"
-	if strings.TrimSpace(method) == approvalMethodSkillRequest {
+	if !approved {
+		decision = "decline"
+	} else if strings.TrimSpace(method) == approvalMethodSkillRequest {
 		decision = "approve"
 	}
 	return map[string]any{"decision": decision}

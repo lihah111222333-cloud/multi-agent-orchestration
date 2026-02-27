@@ -84,11 +84,8 @@ func (h *ToolHandlers) AvailabilitySummary() map[string]any {
 }
 
 func (h *ToolHandlers) DiagnosticsQuery(filePath string) map[string]any {
-	if h.managerUnavailable() {
-		return map[string]any{}
-	}
 	accessor := h.diagnosticsAccessor()
-	if accessor == nil {
+	if h.managerUnavailable() || accessor == nil {
 		return map[string]any{}
 	}
 
@@ -114,8 +111,7 @@ func (h *ToolHandlers) DiagnosticsQuery(filePath string) map[string]any {
 				uri = "file://" + abs
 			}
 		}
-		diags := accessor.GetDiagnostics(uri)
-		if len(diags) > 0 {
+		if diags := accessor.GetDiagnostics(uri); len(diags) > 0 {
 			result[uri] = formatDiagnostics(diags)
 		}
 		return result

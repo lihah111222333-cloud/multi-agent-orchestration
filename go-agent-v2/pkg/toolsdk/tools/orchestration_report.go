@@ -12,7 +12,6 @@ const (
 	MaxOrchestrationReportSummaryRunes = 1200
 )
 
-// BuildOrchestrationCompletionReport builds the auto-report text sent to requesters.
 func BuildOrchestrationCompletionReport(workerID, status, reason, summary string) string {
 	worker := strings.TrimSpace(workerID)
 	if worker == "" {
@@ -43,7 +42,6 @@ func BuildOrchestrationCompletionReport(workerID, status, reason, summary string
 	return strings.Join(lines, "\n")
 }
 
-// TruncateOrchestrationSummary truncates summary by rune count and appends ellipsis.
 func TruncateOrchestrationSummary(value string, limit int) string {
 	text := strings.TrimSpace(value)
 	if text == "" || limit <= 0 {

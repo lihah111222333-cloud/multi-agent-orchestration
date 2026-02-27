@@ -10,11 +10,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-func withThreadIDParam(threadID string, params map[string]any) map[string]any {
-	params["threadId"] = threadID
-	return params
-}
-
 func (c *AppServerClient) Initialize() error {
 	_, err := c.call("initialize", map[string]any{
 		"clientInfo": map[string]any{
@@ -125,7 +120,7 @@ func (c *AppServerClient) ensureListenerIfNeededAsync(
 
 func (c *AppServerClient) Submit(prompt string, images, files []string, outputSchema json.RawMessage) error {
 	c.ensureListenerIfNeeded(c.call)
-	params := withThreadIDParam(strings.TrimSpace(c.ThreadID), map[string]any{"input": buildTurnStartInputs(prompt, images, files)})
+	params := map[string]any{"threadId": strings.TrimSpace(c.ThreadID), "input": buildTurnStartInputs(prompt, images, files)}
 	if len(outputSchema) > 0 {
 		params["outputSchema"] = json.RawMessage(outputSchema)
 	}
@@ -147,7 +142,7 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 			return nil
 		}
 	}
-	return c.notify("command", withThreadIDParam(c.ThreadID, map[string]any{"command": cmd, "args": args}))
+	return c.notify("command", map[string]any{"threadId": c.ThreadID, "command": cmd, "args": args})
 }
 
 func (c *AppServerClient) tryInterruptCommand() (bool, error) {
@@ -186,7 +181,8 @@ func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID
 	}
 	logger.Warn("codex: SendDynamicToolResult without requestID, falling back to notification",
 		logger.FieldAgentID, c.AgentID, logger.FieldCallID, callID)
-	params := withThreadIDParam(c.ThreadID, map[string]any{
+	params := map[string]any{
+		"threadId":     c.ThreadID,
 		"callId":       callID,
 		"toolCallId":   callID,
 		"tool_call_id": callID,
@@ -194,7 +190,7 @@ func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID
 		"result":       result,
 		"contentItems": result.ContentItems,
 		"success":      true,
-	})
+	}
 	return c.notify("dynamic_tool_result", params)
 }
 

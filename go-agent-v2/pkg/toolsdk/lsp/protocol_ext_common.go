@@ -754,45 +754,55 @@ func decodeSemanticTokenData(data []int, legend *SemanticTokensLegend, limit int
 	}
 
 	out := make([]DecodedSemanticToken, 0, minInt(len(data)/5, limit))
-	currentLine := 0
-	currentStart := 0
-
+	state := semanticTokenDecodeState{}
 	for i := 0; i+4 < len(data); i += 5 {
-		deltaLine := data[i]
-		deltaStart := data[i+1]
-		length := data[i+2]
-		tokenTypeIndex := data[i+3]
-		modifierBits := data[i+4]
-
-		if deltaLine < 0 || deltaStart < 0 || length < 0 || tokenTypeIndex < 0 || modifierBits < 0 {
-			return nil, fmt.Errorf("semantic token data contains negative value")
+		token, err := decodeSemanticTokenChunk(data[i:i+5], &state, legend)
+		if err != nil {
+			return nil, err
 		}
-
-		if deltaLine == 0 {
-			currentStart += deltaStart
-		} else {
-			currentLine += deltaLine
-			currentStart = deltaStart
-		}
-
-		tokenType := fmt.Sprintf("unknown(%d)", tokenTypeIndex)
-		if tokenTypeIndex < len(legend.TokenTypes) {
-			tokenType = legend.TokenTypes[tokenTypeIndex]
-		}
-
-		out = append(out, DecodedSemanticToken{
-			Line:           currentLine,
-			StartCharacter: currentStart,
-			Length:         length,
-			TokenType:      tokenType,
-			TokenModifiers: decodeTokenModifiers(modifierBits, legend.TokenModifiers),
-		})
+		out = append(out, token)
 		if len(out) >= limit {
 			break
 		}
 	}
-
 	return out, nil
+}
+
+type semanticTokenDecodeState struct {
+	line  int
+	start int
+}
+
+func decodeSemanticTokenChunk(
+	chunk []int,
+	state *semanticTokenDecodeState,
+	legend *SemanticTokensLegend,
+) (DecodedSemanticToken, error) {
+	deltaLine, deltaStart := chunk[0], chunk[1]
+	length, tokenTypeIndex, modifierBits := chunk[2], chunk[3], chunk[4]
+	if deltaLine < 0 || deltaStart < 0 || length < 0 || tokenTypeIndex < 0 || modifierBits < 0 {
+		return DecodedSemanticToken{}, fmt.Errorf("semantic token data contains negative value")
+	}
+	if deltaLine == 0 {
+		state.start += deltaStart
+	} else {
+		state.line += deltaLine
+		state.start = deltaStart
+	}
+	return DecodedSemanticToken{
+		Line:           state.line,
+		StartCharacter: state.start,
+		Length:         length,
+		TokenType:      semanticTokenTypeName(tokenTypeIndex, legend.TokenTypes),
+		TokenModifiers: decodeTokenModifiers(modifierBits, legend.TokenModifiers),
+	}, nil
+}
+
+func semanticTokenTypeName(index int, tokenTypes []string) string {
+	if index >= 0 && index < len(tokenTypes) {
+		return tokenTypes[index]
+	}
+	return fmt.Sprintf("unknown(%d)", index)
 }
 
 func decodeTokenModifiers(bits int, modifierNames []string) []string {

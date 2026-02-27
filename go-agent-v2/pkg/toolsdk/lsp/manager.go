@@ -215,11 +215,14 @@ func (m *Manager) ChangeFile(filePath string, version int, newContent string) er
 	return m.changeDocument(filePath, version, newContent)
 }
 
-// Hover 获取 hover 信息。
-func (m *Manager) Hover(filePath string, line, character int) (*HoverResult, error) {
-	var out *HoverResult
+func withBootstrappedResult[T any](
+	m *Manager,
+	filePath string,
+	call func(client *Client, uri string) (T, error),
+) (T, error) {
+	var out T
 	err := m.withBootstrappedDocument(filePath, func(client *Client, uri string) error {
-		result, err := client.Hover(m.ctx, uri, line, character)
+		result, err := call(client, uri)
 		if err != nil {
 			return err
 		}
@@ -227,34 +230,27 @@ func (m *Manager) Hover(filePath string, line, character int) (*HoverResult, err
 		return nil
 	})
 	return out, err
+}
+
+// Hover 获取 hover 信息。
+func (m *Manager) Hover(filePath string, line, character int) (*HoverResult, error) {
+	return withBootstrappedResult(m, filePath, func(client *Client, uri string) (*HoverResult, error) {
+		return client.Hover(m.ctx, uri, line, character)
+	})
 }
 
 // Definition 跳转定义。
 func (m *Manager) Definition(filePath string, line, character int) ([]Location, error) {
-	var out []Location
-	err := m.withBootstrappedDocument(filePath, func(client *Client, uri string) error {
-		result, err := client.Definition(m.ctx, uri, line, character)
-		if err != nil {
-			return err
-		}
-		out = result
-		return nil
+	return withBootstrappedResult(m, filePath, func(client *Client, uri string) ([]Location, error) {
+		return client.Definition(m.ctx, uri, line, character)
 	})
-	return out, err
 }
 
 // References 查找引用。
 func (m *Manager) References(filePath string, line, character int, includeDecl bool) ([]Location, error) {
-	var out []Location
-	err := m.withBootstrappedDocument(filePath, func(client *Client, uri string) error {
-		result, err := client.References(m.ctx, uri, line, character, includeDecl)
-		if err != nil {
-			return err
-		}
-		out = result
-		return nil
+	return withBootstrappedResult(m, filePath, func(client *Client, uri string) ([]Location, error) {
+		return client.References(m.ctx, uri, line, character, includeDecl)
 	})
-	return out, err
 }
 
 // DocumentSymbol 获取文件大纲。
@@ -268,44 +264,23 @@ func (m *Manager) DocumentSymbol(filePath string) ([]DocumentSymbol, error) {
 		return m.markdownDocumentSymbols(path)
 	}
 
-	var out []DocumentSymbol
-	err := m.withBootstrappedDocument(path, func(client *Client, uri string) error {
-		result, err := client.DocumentSymbol(m.ctx, uri)
-		if err != nil {
-			return err
-		}
-		out = result
-		return nil
+	return withBootstrappedResult(m, path, func(client *Client, uri string) ([]DocumentSymbol, error) {
+		return client.DocumentSymbol(m.ctx, uri)
 	})
-	return out, err
 }
 
 // Completion 获取补全候选。
 func (m *Manager) Completion(filePath string, line, character int) ([]CompletionItem, error) {
-	var out []CompletionItem
-	err := m.withBootstrappedDocument(filePath, func(client *Client, uri string) error {
-		result, err := client.Completion(m.ctx, uri, line, character)
-		if err != nil {
-			return err
-		}
-		out = result
-		return nil
+	return withBootstrappedResult(m, filePath, func(client *Client, uri string) ([]CompletionItem, error) {
+		return client.Completion(m.ctx, uri, line, character)
 	})
-	return out, err
 }
 
 // Rename 重命名符号。
 func (m *Manager) Rename(filePath string, line, character int, newName string) (*WorkspaceEdit, error) {
-	var out *WorkspaceEdit
-	err := m.withBootstrappedDocument(filePath, func(client *Client, uri string) error {
-		result, err := client.Rename(m.ctx, uri, line, character, newName)
-		if err != nil {
-			return err
-		}
-		out = result
-		return nil
+	return withBootstrappedResult(m, filePath, func(client *Client, uri string) (*WorkspaceEdit, error) {
+		return client.Rename(m.ctx, uri, line, character, newName)
 	})
-	return out, err
 }
 
 // WorkspaceSymbol 在工作区范围内按 query 查符号。

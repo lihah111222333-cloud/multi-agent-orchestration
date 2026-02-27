@@ -10,16 +10,11 @@ const defaultFormattingTabSize = 4
 
 // CodeAction 查询指定范围可用的 code action/command。
 func (c *Client) CodeAction(
-	ctx context.Context,
+	_ context.Context,
 	uri string,
 	line, character, endLine, endCharacter int,
 	only []string,
 ) ([]CodeActionResult, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
-	_ = ctx
-
 	params := CodeActionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Range: Range{
@@ -34,70 +29,59 @@ func (c *Client) CodeAction(
 		params.Context.Only = append([]string(nil), only...)
 	}
 
-	var raw json.RawMessage
-	if err := c.call("textDocument/codeAction", params, &raw); err != nil {
+	raw, err := c.callRawWhenRunning("textDocument/codeAction", params)
+	if err != nil {
 		return nil, err
 	}
 	return decodeCodeActions(raw)
 }
 
 // SignatureHelp 查询指定位置的函数签名提示。
-func (c *Client) SignatureHelp(ctx context.Context, uri string, line, character int) (*SignatureHelpResult, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
-	_ = ctx
-
-	var raw json.RawMessage
-	if err := c.call("textDocument/signatureHelp", SignatureHelpParams{
+func (c *Client) SignatureHelp(_ context.Context, uri string, line, character int) (*SignatureHelpResult, error) {
+	raw, err := c.callRawWhenRunning("textDocument/signatureHelp", SignatureHelpParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     Position{Line: line, Character: character},
-	}, &raw); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 	return decodeSignatureHelp(raw)
 }
 
 // Format 获取文档格式化建议，不自动应用编辑。
-func (c *Client) Format(ctx context.Context, uri string, tabSize int, insertSpaces bool) ([]TextEdit, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
-	_ = ctx
-
+func (c *Client) Format(_ context.Context, uri string, tabSize int, insertSpaces bool) ([]TextEdit, error) {
 	if tabSize <= 0 {
 		tabSize = defaultFormattingTabSize
 	}
 
-	var raw json.RawMessage
-	if err := c.call("textDocument/formatting", DocumentFormattingParams{
+	raw, err := c.callRawWhenRunning("textDocument/formatting", DocumentFormattingParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Options: FormattingOptions{
 			TabSize:      tabSize,
 			InsertSpaces: insertSpaces,
 		},
-	}, &raw); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 	return decodeTextEdits(raw)
 }
 
 // SemanticTokens 获取语义高亮 token，并按 legend 解码。
-func (c *Client) SemanticTokens(ctx context.Context, uri string) (*SemanticTokensResult, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
+func (c *Client) SemanticTokens(_ context.Context, uri string) (*SemanticTokensResult, error) {
+	if err := c.ensureRunning(); err != nil {
+		return nil, err
 	}
-	_ = ctx
 
 	legend := c.SemanticTokensLegend()
 	if legend == nil {
 		return nil, fmt.Errorf("semantic tokens legend unavailable")
 	}
 
-	var raw json.RawMessage
-	if err := c.call("textDocument/semanticTokens/full", SemanticTokensParams{
+	raw, err := c.callRawWhenRunning("textDocument/semanticTokens/full", SemanticTokensParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
-	}, &raw); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -138,16 +122,11 @@ func limitSemanticTokenData(data []int, tokenLimit int) []int {
 }
 
 // FoldingRange 获取可折叠区间，并执行边界过滤。
-func (c *Client) FoldingRange(ctx context.Context, uri string) ([]FoldingRange, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
-	_ = ctx
-
-	var raw json.RawMessage
-	if err := c.call("textDocument/foldingRange", FoldingRangeParams{
+func (c *Client) FoldingRange(_ context.Context, uri string) ([]FoldingRange, error) {
+	raw, err := c.callRawWhenRunning("textDocument/foldingRange", FoldingRangeParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
-	}, &raw); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -155,16 +134,11 @@ func (c *Client) FoldingRange(ctx context.Context, uri string) ([]FoldingRange, 
 }
 
 // Implementation 返回实现位置，兼容 Location/Location[]/LocationLink[]。
-func (c *Client) Implementation(ctx context.Context, uri string, line, character int) ([]LocationResult, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
-
-	var raw json.RawMessage
-	err := c.call("textDocument/implementation", DefinitionParams{
+func (c *Client) Implementation(_ context.Context, uri string, line, character int) ([]LocationResult, error) {
+	raw, err := c.callRawWhenRunning("textDocument/implementation", DefinitionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     Position{Line: line, Character: character},
-	}, &raw)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -172,16 +146,11 @@ func (c *Client) Implementation(ctx context.Context, uri string, line, character
 }
 
 // TypeDefinition 返回类型定义位置，兼容 Location/Location[]/LocationLink[]。
-func (c *Client) TypeDefinition(ctx context.Context, uri string, line, character int) ([]LocationResult, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
-	}
-
-	var raw json.RawMessage
-	err := c.call("textDocument/typeDefinition", DefinitionParams{
+func (c *Client) TypeDefinition(_ context.Context, uri string, line, character int) ([]LocationResult, error) {
+	raw, err := c.callRawWhenRunning("textDocument/typeDefinition", DefinitionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     Position{Line: line, Character: character},
-	}, &raw)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -190,8 +159,8 @@ func (c *Client) TypeDefinition(ctx context.Context, uri string, line, character
 
 // CallHierarchy 查询调用层级。
 func (c *Client) CallHierarchy(ctx context.Context, uri string, line, character int, direction string) ([]CallHierarchyResult, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
+	if err := c.ensureRunning(); err != nil {
+		return nil, err
 	}
 
 	items, err := c.prepareCallHierarchy(ctx, uri, line, character)
@@ -226,12 +195,10 @@ func (c *Client) CallHierarchy(ctx context.Context, uri string, line, character 
 }
 
 func (c *Client) prepareCallHierarchy(ctx context.Context, uri string, line, character int) ([]CallHierarchyItem, error) {
-	_ = ctx
-	var raw json.RawMessage
-	err := c.call("textDocument/prepareCallHierarchy", PrepareCallHierarchyParams{
+	raw, err := c.callRawWhenRunning("textDocument/prepareCallHierarchy", PrepareCallHierarchyParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     Position{Line: line, Character: character},
-	}, &raw)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -239,9 +206,7 @@ func (c *Client) prepareCallHierarchy(ctx context.Context, uri string, line, cha
 }
 
 func (c *Client) callHierarchyIncoming(ctx context.Context, item CallHierarchyItem) ([]CallHierarchyIncomingCall, error) {
-	_ = ctx
-	var raw json.RawMessage
-	err := c.call("callHierarchy/incomingCalls", CallHierarchyIncomingCallsParams{Item: item}, &raw)
+	raw, err := c.callRawWhenRunning("callHierarchy/incomingCalls", CallHierarchyIncomingCallsParams{Item: item})
 	if err != nil {
 		return nil, err
 	}
@@ -256,9 +221,7 @@ func (c *Client) callHierarchyIncoming(ctx context.Context, item CallHierarchyIt
 }
 
 func (c *Client) callHierarchyOutgoing(ctx context.Context, item CallHierarchyItem) ([]CallHierarchyOutgoingCall, error) {
-	_ = ctx
-	var raw json.RawMessage
-	err := c.call("callHierarchy/outgoingCalls", CallHierarchyOutgoingCallsParams{Item: item}, &raw)
+	raw, err := c.callRawWhenRunning("callHierarchy/outgoingCalls", CallHierarchyOutgoingCallsParams{Item: item})
 	if err != nil {
 		return nil, err
 	}
@@ -274,8 +237,8 @@ func (c *Client) callHierarchyOutgoing(ctx context.Context, item CallHierarchyIt
 
 // TypeHierarchy 查询类型层级。
 func (c *Client) TypeHierarchy(ctx context.Context, uri string, line, character int, direction string) ([]TypeHierarchyResult, error) {
-	if !c.Running() {
-		return nil, fmt.Errorf("lsp client not running")
+	if err := c.ensureRunning(); err != nil {
+		return nil, err
 	}
 
 	items, err := c.prepareTypeHierarchy(ctx, uri, line, character)
@@ -310,12 +273,10 @@ func (c *Client) TypeHierarchy(ctx context.Context, uri string, line, character 
 }
 
 func (c *Client) prepareTypeHierarchy(ctx context.Context, uri string, line, character int) ([]TypeHierarchyItem, error) {
-	_ = ctx
-	var raw json.RawMessage
-	err := c.call("textDocument/prepareTypeHierarchy", PrepareTypeHierarchyParams{
+	raw, err := c.callRawWhenRunning("textDocument/prepareTypeHierarchy", PrepareTypeHierarchyParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 		Position:     Position{Line: line, Character: character},
-	}, &raw)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -323,9 +284,7 @@ func (c *Client) prepareTypeHierarchy(ctx context.Context, uri string, line, cha
 }
 
 func (c *Client) typeHierarchySupertypes(ctx context.Context, item TypeHierarchyItem) ([]TypeHierarchyItem, error) {
-	_ = ctx
-	var raw json.RawMessage
-	err := c.call("typeHierarchy/supertypes", TypeHierarchySupertypesParams{Item: item}, &raw)
+	raw, err := c.callRawWhenRunning("typeHierarchy/supertypes", TypeHierarchySupertypesParams{Item: item})
 	if err != nil {
 		return nil, err
 	}
@@ -340,9 +299,7 @@ func (c *Client) typeHierarchySupertypes(ctx context.Context, item TypeHierarchy
 }
 
 func (c *Client) typeHierarchySubtypes(ctx context.Context, item TypeHierarchyItem) ([]TypeHierarchyItem, error) {
-	_ = ctx
-	var raw json.RawMessage
-	err := c.call("typeHierarchy/subtypes", TypeHierarchySubtypesParams{Item: item}, &raw)
+	raw, err := c.callRawWhenRunning("typeHierarchy/subtypes", TypeHierarchySubtypesParams{Item: item})
 	if err != nil {
 		return nil, err
 	}

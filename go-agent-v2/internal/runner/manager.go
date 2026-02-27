@@ -33,14 +33,14 @@ const (
 )
 
 type AgentProcess struct {
-	ID          string           // 唯一标识
-	Name        string           // 显示名称
-	Client      agentcore.Client // Codex API 客户端 (支持 http-api 或 app-server)
-	State       AgentState       // 当前状态
-	LastReport  string           // 最近一次 turn 完成时的 agent 报告 (对应 Rust TurnCompleteEvent.last_agent_message)
-	LastMessage string           // 最后一轮 turn 的完整回复内容 (agent_message_delta 拼接)
-	messageBuf  strings.Builder  // 当前 turn 的消息累积缓冲区 (每轮重置)
-	mu          sync.Mutex       // 保护 State / LastReport / LastMessage / messageBuf 字段读写
+	ID          string
+	Name        string
+	Client      agentcore.Client
+	State       AgentState
+	LastReport  string
+	LastMessage string
+	messageBuf  strings.Builder
+	mu          sync.Mutex
 }
 
 func (p *AgentProcess) IsAlive() bool {
@@ -48,12 +48,10 @@ func (p *AgentProcess) IsAlive() bool {
 		return false
 	}
 	p.mu.Lock()
-	state := p.State
-	p.mu.Unlock()
-	return state != StateError && state != StateStopped
+	defer p.mu.Unlock()
+	return p.State != StateError && p.State != StateStopped
 }
 
-// Port returns the current agent client port.
 func (p *AgentProcess) Port() int {
 	if p == nil {
 		return 0
@@ -169,11 +167,6 @@ func (m *AgentManager) findFreePort() (int, error) {
 		maxPortRetries, int(m.nextPort.Load())-maxPortRetries)
 }
 
-// Launch 启动一个 Codex Agent。
-//
-// 流程: 探测空闲端口 → spawn codex app-server → JSON-RPC initialize → thread/start。
-// ctx 控制 spawn 超时和子进程生命周期。
-// dynamicTools 为 nil 时不注入自定义工具。
 func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string, instructions string, dynamicTools []agentcore.DynamicTool) error {
 	logger.Info("runner: launching agent",
 		logger.FieldAgentID, id,
@@ -194,15 +187,12 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 		return err
 	}
 
-	// 优先使用 AppServerClient (JSON-RPC, 支持实时事件 + dynamicTools)。
 	client := m.appServerFactory(port, id)
 	if client == nil {
 		m.mu.Unlock()
 		return apperrors.New("AgentManager.Launch", "app-server client factory returned nil")
 	}
 
-	// 子 agent 自动设置 approvalPolicy = "never" — 防止 codex 沙箱拦截文件操作。
-	// 仅首个 agent (主 agent) 保留默认审批策略。
 	if len(m.agents) > 0 {
 		type approvalPolicySetter interface{ SetApprovalPolicy(string) }
 		if setter, ok := client.(approvalPolicySetter); ok {
@@ -223,12 +213,10 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 	m.agents[id] = proc
 	m.mu.Unlock()
 
-	// 注册事件回调 — 更新 Agent 状态 + 转发给 UI
 	client.SetEventHandler(func(event agentcore.Event) {
 		m.handleEvent(proc, event)
 	})
 
-	// SpawnAndConnect: 启动 app-server → WS 连接 → initialize → thread/start (with dynamicTools)
 	if err := client.SpawnAndConnect(ctx, prompt, cwd, "", instructions, dynamicTools); err != nil {
 		logger.Warn("runner: app-server launch failed, attempting REST fallback",
 			logger.FieldAgentID, id,
@@ -281,7 +269,6 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 		proc.State = StateError
 		proc.mu.Unlock()
 
-		// 启动失败时移除残留 agent，避免 list_agents 返回 error 态幽灵实例。
 		m.mu.Lock()
 		if existing, ok := m.agents[id]; ok && existing == proc {
 			delete(m.agents, id)
@@ -295,15 +282,7 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 	return nil
 }
 
-// handleEvent 处理 Codex 事件 — 更新 Agent 状态、提取任务报告并转发给 UI。
-//
-// 任务报告提取:
-//
-//	Rust codex 的 TurnCompleteEvent 携带 last_agent_message (agent 完成任务时的总结消息)。
-//	该字段通过 codex/event/task_complete 或 turn/completed 事件的 JSON payload 传递。
-//	此处从 event.Data 中提取并存储到 proc.LastReport, 供 orchestrator 层读取。
 func (m *AgentManager) handleEvent(proc *AgentProcess, event agentcore.Event) {
-	// 归一化事件以确定状态
 	normalized := uistate.NormalizeEvent(event.Type, "", event.Data)
 
 	var newState AgentState
@@ -380,9 +359,6 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event agentcore.Event) {
 		proc.mu.Unlock()
 	}
 
-	// DO NOT DELETE — 此提取逻辑与 apiserver/turn_tracker.go 的 captureAndInjectTurnSummary 不是重复代码。
-	// turn_tracker 服务于 apiserver->前端通知路径; 此处服务于 runner->orchestrator 路径。
-	// 两者消费方不同，不可合并。
 	if normalized.UIType == uistate.UITypeTurnComplete {
 		if report := extractLastAgentMessage(event.Data); report != "" {
 			proc.mu.Lock()
@@ -403,7 +379,6 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event agentcore.Event) {
 	}
 }
 
-// Submit 向 Agent 发送对话消息 (支持图片 + 文件)。
 func (m *AgentManager) Submit(id, prompt string, images, files []string) error {
 	proc, err := m.get(id)
 	if err != nil {
@@ -444,7 +419,6 @@ func buildJSONEvent(eventType string, payload map[string]any) (agentcore.Event, 
 	return agentcore.Event{Type: eventType, Data: data}, err
 }
 
-// SendCommand 向 Agent 发送斜杠命令。
 func (m *AgentManager) SendCommand(id, cmd, args string) error {
 	proc, err := m.get(id)
 	if err != nil {
@@ -453,12 +427,10 @@ func (m *AgentManager) SendCommand(id, cmd, args string) error {
 	return proc.Client.SendCommand(cmd, args)
 }
 
-// SendInput 向 Agent 发送输入 (兼容旧接口, 转为 Submit)。
 func (m *AgentManager) SendInput(id string, data []byte) error {
 	return m.Submit(id, string(data), nil, nil)
 }
 
-// Stop 停止指定 Agent。
 func (m *AgentManager) Stop(id string) error {
 	logger.Info("runner: stopping agent", logger.FieldAgentID, id)
 
@@ -483,7 +455,6 @@ func (m *AgentManager) Stop(id string) error {
 	return nil
 }
 
-// StopAll 并行停止所有 Agent (优雅关停)。
 func (m *AgentManager) StopAll() {
 	m.mu.RLock()
 	ids := make([]string, 0, len(m.agents))
@@ -509,16 +480,12 @@ func (m *AgentManager) StopAll() {
 	wg.Wait()
 }
 
-// KillAll 强制终止所有 Agent (不走优雅关停, 直接 Kill)。
-//
-// 用于 StopAll 超时后的兜底, 确保子进程不泄漏。
 func (m *AgentManager) KillAll() {
 	m.mu.Lock()
 	procs := make([]*AgentProcess, 0, len(m.agents))
 	for _, proc := range m.agents {
 		procs = append(procs, proc)
 	}
-	// 清空 map, 避免重复操作
 	clear(m.agents)
 	m.mu.Unlock()
 
@@ -533,14 +500,9 @@ func (m *AgentManager) KillAll() {
 	}
 }
 
-// CleanOrphanedProcesses 清理上次异常退出残留的 codex app-server 子进程。
-//
-// 通过 pgrep 查找 "codex.*app-server.*--listen" 进程, 逐个 SIGKILL。
-// 仅在应用启动时调用一次。
 func CleanOrphanedProcesses() {
 	out, err := exec.Command("pgrep", "-f", "codex app-server --listen").Output()
 	if err != nil {
-		// pgrep exit 1 = 没找到匹配进程 (正常)
 		return
 	}
 	lines := bytes.Split(bytes.TrimSpace(out), []byte("\n"))
@@ -563,13 +525,6 @@ func CleanOrphanedProcesses() {
 	}
 }
 
-// List 返回所有 Agent 信息快照。
-//
-// 使用 snapshot-then-lock 模式:
-//   - 先持 mu.RLock 快照 agents slice, 立即释放
-//   - 再逐个持 proc.mu 读取状态
-//
-// 这样避免在持有 mu 的同时获取 proc.mu, 缩小持锁范围。
 func (m *AgentManager) List() []AgentInfo {
 	m.mu.RLock()
 	snapshot := make([]*AgentProcess, 0, len(m.agents))
@@ -608,7 +563,6 @@ func (m *AgentManager) List() []AgentInfo {
 	return infos
 }
 
-// Get 获取 Agent 进程 (公开接口)。nil 表示不存在。
 func (m *AgentManager) Get(id string) *AgentProcess {
 	m.mu.RLock()
 	proc := m.agents[id]
@@ -616,20 +570,16 @@ func (m *AgentManager) Get(id string) *AgentProcess {
 	return proc
 }
 
-// GetProcess returns an agent process as the runtime Process abstraction.
 func (m *AgentManager) GetProcess(id string) agentcore.Process {
 	return m.Get(id)
 }
 
-// Count 返回当前管理的 agent 数量 (线程安全)。
 func (m *AgentManager) Count() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.agents)
 }
 
-// FirstAgentID 返回按 ID 字典序最小的 agent ID (视为主 agent)。
-// 空字符串表示无 agent。
 func (m *AgentManager) FirstAgentID() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -645,7 +595,6 @@ func (m *AgentManager) FirstAgentID() string {
 	return first
 }
 
-// get 获取 Agent 进程 (线程安全, 返回 error)。
 func (m *AgentManager) get(id string) (*AgentProcess, error) {
 	m.mu.RLock()
 	proc, ok := m.agents[id]
@@ -656,10 +605,6 @@ func (m *AgentManager) get(id string) (*AgentProcess, error) {
 	return proc, nil
 }
 
-// GetReport 获取指定 Agent 最后一轮的完整回复内容。
-//
-// 优先返回 LastMessage (最后一轮 agent_message_delta 拼接的完整回复),
-// 回退到 LastReport (TurnCompleteEvent.last_agent_message 总结)。
 func (m *AgentManager) GetReport(id string) string {
 	proc := m.Get(id)
 	if proc == nil {
@@ -673,7 +618,6 @@ func (m *AgentManager) GetReport(id string) string {
 	return proc.LastReport
 }
 
-// GetState 获取指定 Agent 当前状态。
 func (m *AgentManager) GetState(id string) AgentState {
 	proc := m.Get(id)
 	if proc == nil {
@@ -684,10 +628,6 @@ func (m *AgentManager) GetState(id string) AgentState {
 	return proc.State
 }
 
-// RecoverAgent 尝试恢复卡死的 Agent 进程 (触发 Codex 进程重启)。
-//
-// 当 stall 检测发现 Codex CLI 无响应时调用。
-// 通过 Client.RecoverConnection 触发进程 respawn + WS 重连。
 func (m *AgentManager) RecoverAgent(id, reason string) error {
 	proc := m.Get(id)
 	if proc == nil {
@@ -734,21 +674,6 @@ func (m *AgentManager) RecoverAgent(id, reason string) error {
 	return nil
 }
 
-// ⚠️ DO NOT DELETE — 非重复代码。
-// 此函数与 apiserver/turn_tracker.go 的 trackedTurnSummaryFromPayload 职责不同:
-//   - 本函数: runner 层提取报告, 供 orchestrator 直接消费
-//   - turn_tracker: apiserver 层提取摘要, 用于 JSON-RPC 通知广播
-//
-// 两者消费方不同, 删除任一都会导致对应路径丢失任务报告。
-//
-// extractLastAgentMessage 从事件 payload 中提取任务报告。
-//
-// 对应 Rust codex-rs/protocol TurnCompleteEvent.last_agent_message:
-//   - 优先查找顶层 last_agent_message / lastAgentMessage
-//   - 再查找 turn.last_agent_message
-//   - 最后查找 msg/data/payload 嵌套层
-//
-// 返回空字符串表示 payload 中不含报告 (非 turn complete 事件或 agent 无输出)。
 func extractLastAgentMessage(data json.RawMessage) string {
 	if len(data) == 0 {
 		return ""
@@ -764,13 +689,11 @@ func extractLastAgentMessageFromMap(payload map[string]any) string {
 	if payload == nil {
 		return ""
 	}
-	// 顶层: last_agent_message / lastAgentMessage + 与 trackedTurnSummaryKeys 对齐的扩展 key
 	for _, key := range []string{"last_agent_message", "lastAgentMessage", "summary", "result", "message", "output", "content", "response", "text"} {
 		if v, ok := payload[key].(string); ok && strings.TrimSpace(v) != "" {
 			return strings.TrimSpace(v)
 		}
 	}
-	// turn 子对象
 	if turn, ok := payload["turn"].(map[string]any); ok {
 		for _, key := range []string{"last_agent_message", "lastAgentMessage"} {
 			if v, ok := turn[key].(string); ok && strings.TrimSpace(v) != "" {
@@ -778,7 +701,6 @@ func extractLastAgentMessageFromMap(payload map[string]any) string {
 			}
 		}
 	}
-	// 嵌套 msg/data/payload
 	for _, key := range []string{"msg", "data", "payload"} {
 		nested, ok := payload[key].(map[string]any)
 		if !ok {

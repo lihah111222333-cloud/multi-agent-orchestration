@@ -26,6 +26,7 @@ func TestTrackedTurnContractShape(t *testing.T) {
 		{name: "Done", typ: reflect.TypeOf((chan string)(nil))},
 		{name: "Timer", typ: reflect.TypeOf((*time.Timer)(nil))},
 		{name: "StallTimer", typ: reflect.TypeOf((*time.Timer)(nil))},
+		{name: "EarlySilenceTimer", typ: reflect.TypeOf((*time.Timer)(nil))},
 	}
 
 	if got.NumField() != len(want) {

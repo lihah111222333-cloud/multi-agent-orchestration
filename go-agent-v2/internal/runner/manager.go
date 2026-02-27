@@ -603,6 +603,56 @@ func (m *AgentManager) GetReport(id string) string {
 	return proc.LastReport
 }
 
+// RecoverAgent 尝试恢复卡死的 Agent 进程 (触发 Codex 进程重启)。
+//
+// 当 stall 检测发现 Codex CLI 无响应时调用。
+// 通过 Client.RecoverConnection 触发进程 respawn + WS 重连。
+func (m *AgentManager) RecoverAgent(id, reason string) error {
+	proc := m.Get(id)
+	if proc == nil {
+		return apperrors.Newf("AgentManager.RecoverAgent", "agent %s not found", id)
+	}
+
+	type recoverer interface {
+		RecoverConnection(reason string) error
+	}
+
+	proc.mu.Lock()
+	client := proc.Client
+	proc.mu.Unlock()
+
+	if client == nil {
+		return apperrors.Newf("AgentManager.RecoverAgent", "agent %s has nil client", id)
+	}
+
+	rc, ok := client.(recoverer)
+	if !ok {
+		logger.Warn("runner: RecoverAgent — client does not support RecoverConnection",
+			logger.FieldAgentID, id, "reason", reason)
+		return apperrors.Newf("AgentManager.RecoverAgent", "agent %s client does not support recovery", id)
+	}
+
+	logger.Info("runner: RecoverAgent — triggering process recovery",
+		logger.FieldAgentID, id, "reason", reason)
+
+	if err := rc.RecoverConnection(reason); err != nil {
+		logger.Error("runner: RecoverAgent — recovery failed",
+			logger.FieldAgentID, id, "reason", reason, logger.FieldError, err)
+		proc.mu.Lock()
+		proc.State = StateError
+		proc.mu.Unlock()
+		return apperrors.Wrapf(err, "AgentManager.RecoverAgent", "recover %s", id)
+	}
+
+	proc.mu.Lock()
+	proc.State = StateIdle
+	proc.mu.Unlock()
+
+	logger.Info("runner: RecoverAgent — recovery succeeded",
+		logger.FieldAgentID, id, "reason", reason)
+	return nil
+}
+
 // ⚠️ DO NOT DELETE — 非重复代码。
 // 此函数与 apiserver/turn_tracker.go 的 trackedTurnSummaryFromPayload 职责不同:
 //   - 本函数: runner 层提取报告, 供 orchestrator 直接消费

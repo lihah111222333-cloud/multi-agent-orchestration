@@ -37,40 +37,24 @@ func normalizeArchiveDeps(deps ThreadArchiveDeps) ThreadArchiveDeps {
 	return deps
 }
 
-func requireThreadID(caller, threadID string) (string, error) {
+func resolveArchiveState(ctx context.Context, deps ThreadArchiveDeps, caller, threadID string) (string, map[string]int64, error) {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
-		return "", appErrors.New(caller, "threadId is required")
+		return "", nil, appErrors.New(caller, "threadId is required")
 	}
-	return id, nil
-}
-
-func loadArchiveStateMap(ctx context.Context, deps ThreadArchiveDeps, caller string) (map[string]int64, error) {
 	archivedMap, err := deps.LoadArchiveMap(ctx)
 	if err != nil {
-		return nil, appErrors.Wrap(err, caller, "load archive state")
+		return "", nil, appErrors.Wrap(err, caller, "load archive state")
 	}
 	if archivedMap == nil {
 		archivedMap = map[string]int64{}
 	}
-	return archivedMap, nil
-}
-
-func buildThreadArchiveResult(threadID string, archivedAt int64, manifest ThreadArchiveManifest) map[string]any {
-	return map[string]any{
-		"ok":            true,
-		"threadId":      threadID,
-		"archivedAt":    archivedAt,
-		"codexThreadId": manifest.CodexThreadID,
-		"archiveDir":    manifest.ArchiveDir,
-		"rolloutPath":   manifest.RolloutPath,
-		"files":         manifest.Files,
-	}
+	return id, archivedMap, nil
 }
 
 func ThreadArchive(ctx context.Context, threadID string, deps ThreadArchiveDeps, nowUnixMilli func() int64) (map[string]any, error) {
 	deps = normalizeArchiveDeps(deps)
-	id, err := requireThreadID("Server.threadArchive", threadID)
+	id, archivedMap, err := resolveArchiveState(ctx, deps, "Server.threadArchive", threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -85,44 +69,43 @@ func ThreadArchive(ctx context.Context, threadID string, deps ThreadArchiveDeps,
 		nowUnixMilli = func() int64 { return time.Now().UnixMilli() }
 	}
 	archivedAt := nowUnixMilli()
-	archivedMap, err := loadArchiveStateMap(ctx, deps, "Server.threadArchive")
-	if err != nil {
-		return nil, err
-	}
 	archivedMap[id] = archivedAt
 	if err := deps.SaveArchiveMap(ctx, archivedMap); err != nil {
 		return nil, appErrors.Wrap(err, "Server.threadArchive", "persist archive state")
 	}
-	return buildThreadArchiveResult(id, archivedAt, manifest), nil
+	return map[string]any{
+		"ok":            true,
+		"threadId":      id,
+		"archivedAt":    archivedAt,
+		"codexThreadId": manifest.CodexThreadID,
+		"archiveDir":    manifest.ArchiveDir,
+		"rolloutPath":   manifest.RolloutPath,
+		"files":         manifest.Files,
+	}, nil
 }
 
 func ThreadUnarchive(ctx context.Context, threadID string, deps ThreadArchiveDeps) (map[string]any, error) {
 	deps = normalizeArchiveDeps(deps)
-	id, err := requireThreadID("Server.threadUnarchive", threadID)
-	if err != nil {
-		return nil, err
-	}
-	archivedMap, err := loadArchiveStateMap(ctx, deps, "Server.threadUnarchive")
+	id, archivedMap, err := resolveArchiveState(ctx, deps, "Server.threadUnarchive", threadID)
 	if err != nil {
 		return nil, err
 	}
 	_, wasArchived := archivedMap[id]
 
-	restoreNotice := ThreadArchiveRestoreNotice{}
+	notice := archivesvc.ThreadArchiveRestoreNotice{}
 	var restoredFiles, skippedRestoreFiles []string
 	if wasArchived {
-		notice, inspectErr := archivesvc.InspectThreadArchiveForRestore(id, archivesvc.BuildThreadArchiveRestoreDeps(ResolveThreadArchiveRootDir, SanitizeArchiveNameStrict, nil, PathWithinRoot, nil, FileSHA256, FindLatestThreadArchiveManifestPath, ReadThreadArchiveManifest, FileState, nil))
+		inspectNotice, inspectErr := archivesvc.InspectThreadArchiveForRestore(id, archivesvc.BuildThreadArchiveRestoreDeps(ResolveThreadArchiveRootDir, SanitizeArchiveNameStrict, nil, PathWithinRoot, nil, FileSHA256, FindLatestThreadArchiveManifestPath, ReadThreadArchiveManifest, FileState, nil))
 		if inspectErr != nil {
 			logger.Error("thread/unarchive: inspect archive integrity failed", logger.FieldThreadID, id, logger.FieldError, inspectErr)
 		} else {
-			restoreNotice = notice
+			notice = inspectNotice
 		}
 		restored, skipped, restoreErr := archivesvc.RestoreThreadArchiveSources(id, ResolveThreadArchiveRootDir, SanitizeArchiveNameStrict, ResolveCodexRootDir, PathWithinRoot, CopyFileOverwrite, FileSHA256, FindLatestThreadArchiveManifestPath, ReadThreadArchiveManifest, FileState, RemoveFile)
 		if restoreErr != nil {
 			logger.Error("thread/unarchive: restore archived codex artifacts failed", logger.FieldThreadID, id, logger.FieldError, restoreErr)
 		} else {
-			restoredFiles = restored
-			skippedRestoreFiles = skipped
+			restoredFiles, skippedRestoreFiles = restored, skipped
 		}
 	}
 	delete(archivedMap, id)
@@ -148,17 +131,17 @@ func ThreadUnarchive(ctx context.Context, threadID string, deps ThreadArchiveDep
 	if len(skippedRestoreFiles) > 0 {
 		result["restoreSkippedFiles"] = skippedRestoreFiles
 	}
-	if restoreNotice.Modified {
+	if notice.Modified {
 		result["archiveModified"] = true
-		result["manifestPath"] = restoreNotice.ManifestPath
-		result["modifiedFiles"] = restoreNotice.ModifiedFiles
+		result["manifestPath"] = notice.ManifestPath
+		result["modifiedFiles"] = notice.ModifiedFiles
 	}
 	return result, nil
 }
 
-func ArchiveThreadArtifacts(ctx context.Context, threadID string, resolveRolloutHistorySource func(context.Context, string) (string, string), bindRolloutPath func(context.Context, string, string, string)) (ThreadArchiveManifest, error) {
+func ArchiveThreadArtifacts(ctx context.Context, threadID string, resolveRolloutHistorySource func(context.Context, string) (string, string), bindRolloutPath func(context.Context, string, string, string)) (archivesvc.ThreadArchiveManifest, error) {
 	id := strings.TrimSpace(threadID)
-	manifest := ThreadArchiveManifest{ThreadID: id, ArchivedAt: time.Now().UTC().Format(time.RFC3339Nano), Files: []ThreadArchiveFile{}}
+	manifest := archivesvc.ThreadArchiveManifest{ThreadID: id, ArchivedAt: time.Now().UTC().Format(time.RFC3339Nano), Files: []archivesvc.ThreadArchiveFile{}}
 	rootDir, err := ResolveThreadArchiveRootDir()
 	if err != nil {
 		return manifest, appErrors.Wrap(err, "Server.archiveThreadArtifacts", "resolve archive root")
@@ -168,14 +151,13 @@ func ArchiveThreadArtifacts(ctx context.Context, threadID string, resolveRollout
 		return manifest, appErrors.Wrap(err, "Server.archiveThreadArtifacts", "resolve archive dir")
 	}
 	manifest.ArchiveDir = archiveDir
-	if err := EnsureDir(archiveDir); err != nil {
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
 		return manifest, appErrors.Wrap(err, "Server.archiveThreadArtifacts", "ensure archive dir")
 	}
 	if resolveRolloutHistorySource != nil {
 		codexThreadID, rolloutPath := resolveRolloutHistorySource(ctx, id)
 		manifest.CodexThreadID = codexThreadID
-		candidates := CollectThreadArtifactCandidates(manifest.CodexThreadID, rolloutPath)
-		for _, candidate := range candidates {
+		for _, candidate := range CollectThreadArtifactCandidates(manifest.CodexThreadID, rolloutPath) {
 			srcPath := strings.TrimSpace(candidate.Path)
 			if srcPath == "" {
 				continue
@@ -192,13 +174,11 @@ func ArchiveThreadArtifacts(ctx context.Context, threadID string, resolveRollout
 				logger.Error("thread/archive: copy artifact failed", logger.FieldThreadID, id, "source_path", srcPath, "target_path", targetPath, logger.FieldError, err)
 				continue
 			}
-			fileMeta := ThreadArchiveFile{Kind: candidate.Kind, SourcePath: srcPath, ArchivedPath: targetPath, SizeBytes: sourceState.SizeBytes}
 			checksum, err := FileSHA256(targetPath)
 			if err != nil {
 				return manifest, appErrors.Wrap(err, "Server.archiveThreadArtifacts", "compute archived file checksum")
 			}
-			fileMeta.SHA256 = checksum
-			manifest.Files = append(manifest.Files, fileMeta)
+			manifest.Files = append(manifest.Files, archivesvc.ThreadArchiveFile{Kind: candidate.Kind, SourcePath: srcPath, ArchivedPath: targetPath, SizeBytes: sourceState.SizeBytes, SHA256: checksum})
 			if manifest.RolloutPath == "" && candidate.Kind == "rollout" {
 				manifest.RolloutPath = targetPath
 			}

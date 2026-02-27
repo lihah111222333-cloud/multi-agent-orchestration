@@ -4,6 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
 	"github.com/multi-agent/go-agent-v2/internal/store"
@@ -21,12 +28,6 @@ import (
 	promptsvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/prompt"
 	appErrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
 )
 
 const (
@@ -693,7 +694,7 @@ func (a *Adapter) completeTrackedTurnByID(threadID, turnID, status, reason strin
 }
 func (a *Adapter) beginTrackedTurn(threadID, turnID string) string {
 	state, notify := a.trackerStateAndNotify()
-	return trackerconsumer.BeginTrackedTurnCore(state, threadID, turnID, a.completeTrackedTurnByID, notify, a.checkTurnStall)
+	return trackerconsumer.BeginTrackedTurnCore(state, threadID, turnID, a.completeTrackedTurnByID, notify, a.checkTurnStall, a.recoverProcess)
 }
 func (a *Adapter) trackerDuration(getter func(turnTrackerState) *time.Duration, fallback time.Duration) time.Duration {
 	state, _ := a.trackerStateAndNotify()
@@ -748,7 +749,19 @@ func (a *Adapter) executeStallAutoInterrupt(threadID string, turnID string, sile
 		trackerconsumer.TrackerInterruptSender(a.managerProcess, a.sendCommandFromAny),
 		a.completeTrackedTurnByID,
 		notify,
+		a.recoverProcess,
 	)
+}
+func (a *Adapter) recoverProcess(threadID, reason string) {
+	if manager := a.manager(); manager != nil {
+		if err := manager.RecoverAgent(threadID, reason); err != nil {
+			logger.Warn("codexadapter: process recovery failed",
+				logger.FieldAgentID, threadID,
+				"reason", reason,
+				logger.FieldError, err,
+			)
+		}
+	}
 }
 func (a *Adapter) ExtractTrackedString(payload map[string]any, keys ...string) string {
 	return trackerconsumer.ExtractTrackedString(payload, keys...)

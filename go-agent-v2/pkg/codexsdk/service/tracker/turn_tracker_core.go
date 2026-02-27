@@ -18,6 +18,10 @@ const (
 	DefaultStallThreshold             = 480 * time.Second
 	DefaultStallHeartbeat             = 300 * time.Second
 	trackedTurnGracePeriod            = 30 * time.Second
+	// earlySilenceFirstTurn 首轮 turn 早期静默检测超时（含 MCP 启动开销）。
+	earlySilenceFirstTurn = 120 * time.Second
+	// earlySilenceSubsequent 后续 turn 早期静默检测超时。
+	earlySilenceSubsequent = 60 * time.Second
 )
 
 type TrackedTurn struct {
@@ -33,6 +37,7 @@ type TrackedTurn struct {
 	Done                 chan string
 	Timer                *time.Timer
 	StallTimer           *time.Timer
+	EarlySilenceTimer    *time.Timer
 }
 type trackedTurn = TrackedTurn
 type TrackedTurnFinalizeRequest struct {
@@ -684,6 +689,9 @@ func ApplyTrackedTurnTransitionCore(state TurnTrackerState, threadID string, req
 		if turn.StallTimer != nil {
 			turn.StallTimer.Stop()
 		}
+		if turn.EarlySilenceTimer != nil {
+			turn.EarlySilenceTimer.Stop()
+		}
 		finalStatus := NormalizeTrackedTurnStatus(req.Finalize.Status)
 		if turn.InterruptRequested && finalStatus == "completed" {
 			finalStatus = "interrupted"
@@ -746,6 +754,9 @@ func SupersedeActiveTurn(activeTurns map[string]*trackedTurn, threadID, nextTurn
 	if prev.StallTimer != nil {
 		prev.StallTimer.Stop()
 	}
+	if prev.EarlySilenceTimer != nil {
+		prev.EarlySilenceTimer.Stop()
+	}
 	doneSent := false
 	if prev.Done != nil {
 		select {
@@ -782,6 +793,7 @@ func BeginTrackedTurnCore(
 	completeTrackedTurnByID func(threadID, turnID, status, reason string) (map[string]any, bool),
 	notify func(string, any),
 	checkTurnStall func(string, string),
+	recoverProcess func(threadID, reason string),
 ) string {
 	activeTurns, turnMu, watchdogTimeout, stallThreshold := TrackerStateCore(state)
 	id := strings.TrimSpace(threadID)
@@ -828,6 +840,41 @@ func BeginTrackedTurnCore(
 		}
 		if completion, ok := completeTrackedTurnByID(watchdogThreadID, watchdogTurnID, "failed", "watchdog_timeout"); ok {
 			notify("turn/completed", completion)
+		}
+	})
+	// 早期静默检测: submit 后如果一段时间内没有收到任何事件,
+	// 说明 Codex 进程可能已死, 触发恢复。
+	earlySilenceTimeout := earlySilenceSubsequent
+	if !hadPrevTurn {
+		earlySilenceTimeout = earlySilenceFirstTurn
+	}
+	earlySilenceThreadID := id
+	earlySilenceTurnID := tid
+	turn.EarlySilenceTimer = time.AfterFunc(earlySilenceTimeout, func() {
+		if turnMu == nil {
+			return
+		}
+		turnMu.Lock()
+		current, ok := activeTurns[earlySilenceThreadID]
+		if !ok || current == nil || current.ID != earlySilenceTurnID {
+			turnMu.Unlock()
+			return
+		}
+		silent := time.Since(current.LastEventAt)
+		// 只有当真的没收到任何事件时才触发 (给 5s 容差)
+		if silent < earlySilenceTimeout-5*time.Second {
+			turnMu.Unlock()
+			return
+		}
+		turnMu.Unlock()
+
+		logger.Warn("turn tracker: early silence detected — no events after submit", append(threadLogFields(earlySilenceThreadID),
+			logger.FieldTurnID, earlySilenceTurnID,
+			"silent_ms", silent.Milliseconds(),
+			"timeout_ms", earlySilenceTimeout.Milliseconds(),
+		)...)
+		if recoverProcess != nil {
+			recoverProcess(earlySilenceThreadID, "early_silence_after_submit")
 		}
 	})
 	activeTurns[id] = turn
@@ -1028,6 +1075,7 @@ func ExecuteStallAutoInterruptCore(
 	sendInterrupt func(string) (bool, error),
 	completeTrackedTurnByID func(threadID, turnID, status, reason string) (map[string]any, bool),
 	notify func(string, any),
+	recoverProcess func(threadID, reason string),
 ) {
 	logger.Warn("turn tracker: thinking stall detected - auto interrupting", append(threadLogFields(threadID),
 		logger.FieldTurnID, turnID,
@@ -1064,6 +1112,13 @@ func ExecuteStallAutoInterruptCore(
 			if completion, ok := completeTrackedTurnByID(threadID, turnID, "failed", "thinking_stall_timeout"); ok {
 				notify("turn/completed", completion)
 			}
+		}
+		// interrupt 失败/进程无响应时，触发进程恢复
+		if !interrupted && recoverProcess != nil {
+			logger.Warn("turn tracker: triggering process recovery after failed stall interrupt", append(threadLogFields(threadID),
+				logger.FieldTurnID, turnID,
+			)...)
+			recoverProcess(threadID, "stall_interrupt_failed")
 		}
 	})
 }

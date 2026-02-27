@@ -155,6 +155,27 @@ func decodeNullableSlice[T any](raw json.RawMessage, errPrefix string) ([]T, err
 	return items, nil
 }
 
+func decodeMappedRawArray[T any](
+	raw json.RawMessage,
+	errPrefix string,
+	decodeOne func(json.RawMessage) (T, error),
+) ([]T, error) {
+	arr, err := decodeRawArray(raw, errPrefix)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]T, 0, len(arr))
+	for _, item := range arr {
+		decoded, err := decodeOne(item)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, decoded)
+	}
+	return out, nil
+}
+
 func decodeArrayLike[T any](
 	raw json.RawMessage,
 	errPrefix string,
@@ -164,17 +185,9 @@ func decodeArrayLike[T any](
 	if isNullRaw(raw) {
 		return nil, nil
 	}
-	arr, err := decodeRawArray(raw, errPrefix)
+	items, err := decodeMappedRawArray(raw, errPrefix, decodeOne)
 	if err == nil {
-		out := make([]T, 0, len(arr))
-		for _, item := range arr {
-			decoded, err := decodeOne(item)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, decoded)
-		}
-		return out, nil
+		return items, nil
 	}
 	if !allowSingle {
 		return nil, err
@@ -500,17 +513,9 @@ func decodeSignatureHelp(raw json.RawMessage) (*SignatureHelpResult, error) {
 
 	result := &SignatureHelpResult{}
 	if signaturesRaw, ok := root["signatures"]; ok {
-		signaturesItems, err := decodeRawArray(signaturesRaw, "decode signatureHelp signatures")
+		signatures, err := decodeMappedRawArray(signaturesRaw, "decode signatureHelp signatures", decodeSignatureInformation)
 		if err != nil {
 			return nil, err
-		}
-		signatures := make([]SignatureInformationResult, 0, len(signaturesItems))
-		for _, item := range signaturesItems {
-			signature, err := decodeSignatureInformation(item)
-			if err != nil {
-				return nil, err
-			}
-			signatures = append(signatures, signature)
 		}
 		result.Signatures = signatures
 	}
@@ -531,9 +536,9 @@ func decodeSignatureHelp(raw json.RawMessage) (*SignatureHelpResult, error) {
 }
 
 func decodeSignatureInformation(raw json.RawMessage) (SignatureInformationResult, error) {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return SignatureInformationResult{}, fmt.Errorf("decode signature info: %w", err)
+	obj, err := decodeRawObject(raw, "decode signature info")
+	if err != nil {
+		return SignatureInformationResult{}, err
 	}
 
 	var result SignatureInformationResult
@@ -546,17 +551,9 @@ func decodeSignatureInformation(raw json.RawMessage) (SignatureInformationResult
 		result.Documentation, result.DocumentationKind = decodeStringOrMarkup(documentationRaw)
 	}
 	if parametersRaw, ok := obj["parameters"]; ok {
-		parameterItems, err := decodeRawArray(parametersRaw, "decode signature parameters")
+		parameters, err := decodeMappedRawArray(parametersRaw, "decode signature parameters", decodeParameterInformation)
 		if err != nil {
 			return SignatureInformationResult{}, err
-		}
-		parameters := make([]ParameterInformationResult, 0, len(parameterItems))
-		for _, item := range parameterItems {
-			parameter, err := decodeParameterInformation(item)
-			if err != nil {
-				return SignatureInformationResult{}, err
-			}
-			parameters = append(parameters, parameter)
 		}
 		result.Parameters = parameters
 	}
@@ -564,9 +561,9 @@ func decodeSignatureInformation(raw json.RawMessage) (SignatureInformationResult
 }
 
 func decodeParameterInformation(raw json.RawMessage) (ParameterInformationResult, error) {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return ParameterInformationResult{}, fmt.Errorf("decode signature parameter: %w", err)
+	obj, err := decodeRawObject(raw, "decode signature parameter")
+	if err != nil {
+		return ParameterInformationResult{}, err
 	}
 
 	var result ParameterInformationResult

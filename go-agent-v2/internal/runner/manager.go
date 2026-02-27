@@ -1,10 +1,3 @@
-// Package runner 管理 Codex Agent 子进程生命周期。
-//
-// 每个 Agent = 一个 `codex app-server --listen ws://IP:PORT` 进程
-//   - 一个线程 (thread/start JSON-RPC)
-//   - 一条 WebSocket 连接 (JSON-RPC 2.0)
-//
-// 生命周期: Launch → (Submit/Command) → Stop。
 package runner
 
 import (
@@ -27,26 +20,18 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-// basePort 自动分配端口的起始值。
 const basePort = 19836
 
-// AgentState Agent 运行状态。
 type AgentState string
 
 const (
-	// StateIdle Agent 空闲，等待输入。
-	StateIdle AgentState = "idle"
-	// StateThinking Agent 正在思考。
+	StateIdle     AgentState = "idle"
 	StateThinking AgentState = "thinking"
-	// StateRunning Agent 正在执行命令。
-	StateRunning AgentState = "running"
-	// StateStopped Agent 已停止。
-	StateStopped AgentState = "stopped"
-	// StateError Agent 遇到错误。
-	StateError AgentState = "error"
+	StateRunning  AgentState = "running"
+	StateStopped  AgentState = "stopped"
+	StateError    AgentState = "error"
 )
 
-// AgentProcess 单个 Codex Agent 实例。
 type AgentProcess struct {
 	ID          string           // 唯一标识
 	Name        string           // 显示名称
@@ -58,9 +43,6 @@ type AgentProcess struct {
 	mu          sync.Mutex       // 保护 State / LastReport / LastMessage / messageBuf 字段读写
 }
 
-// IsAlive 报告进程连接是否存活 (线程安全)。
-//
-// State == error / stopped 时返回 false, 用于 Lazy Recovery 检测。
 func (p *AgentProcess) IsAlive() bool {
 	if p == nil {
 		return false
@@ -85,7 +67,6 @@ func (p *AgentProcess) Port() int {
 	return client.GetPort()
 }
 
-// AgentInfo Agent 信息快照 (线程安全复制)。
 type AgentInfo struct {
 	ID         string     `json:"id"`
 	Name       string     `json:"name"`
@@ -107,30 +88,18 @@ type AgentMessage struct {
 	Ts      string `json:"ts"`
 }
 
-// EventHandler Agent 事件回调。
 type EventHandler func(agentID string, event agentcore.Event)
 
-// AgentManager 管理多个 Codex Agent 子进程。
 type AgentManager struct {
-	// ========================================
-	// 锁层次 (Lock Hierarchy)
-	// ========================================
-	// 获取顺序: mu < AgentProcess.mu
-	// mu 保护 agents map + onEvent, AgentProcess.mu 保护单个进程状态。
-	// NEVER 在持有 AgentProcess.mu 时获取 mu 的写锁。
-	// ========================================
-
 	mu       sync.RWMutex
 	agents   map[string]*AgentProcess
 	nextPort atomic.Int32
 	onEvent  EventHandler
 
-	// 传输构造器 (便于测试注入 + fallback)
 	appServerFactory agentcore.ClientFactory
 	restFactory      agentcore.ClientFactory
 }
 
-// NewAgentManager 创建管理器。
 func NewAgentManager(appFactory, restFactory agentcore.ClientFactory) (*AgentManager, error) {
 	if appFactory == nil {
 		return nil, apperrors.New("AgentManager.NewAgentManager", "appFactory must not be nil")
@@ -148,7 +117,6 @@ func NewAgentManager(appFactory, restFactory agentcore.ClientFactory) (*AgentMan
 	return m, nil
 }
 
-// SetClientFactories 设置 app-server / REST 客户端工厂（线程安全）。
 func (m *AgentManager) SetClientFactories(appFactory, restFactory agentcore.ClientFactory) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -160,14 +128,12 @@ func (m *AgentManager) SetClientFactories(appFactory, restFactory agentcore.Clie
 	}
 }
 
-// SetOnEvent 设置事件回调 (线程安全)。
 func (m *AgentManager) SetOnEvent(fn EventHandler) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onEvent = fn
 }
 
-// SetOnOutput 设置输出回调 (兼容旧 API, 将 agent_message_delta 转为 []byte)。
 func (m *AgentManager) SetOnOutput(fn func(agentID string, data []byte)) {
 	m.SetOnEvent(func(agentID string, event agentcore.Event) {
 		if event.Type == agentcore.EventAgentMessageDelta || event.Type == agentcore.EventExecCommandOutputDelta {
@@ -176,13 +142,8 @@ func (m *AgentManager) SetOnOutput(fn func(agentID string, data []byte)) {
 	})
 }
 
-// maxPortRetries 最多尝试的连续端口数 (防止耗尽)。
-// 设置为 200 以支持大量子 agent, 超出后自动回退到内核随机端口分配。
 const maxPortRetries = 200
 
-// findFreePort 从 nextPort 开始探测, 跳过被占用端口, 返回可用端口。
-//
-// 每次探测: net.Listen → Close。最多尝试 maxPortRetries 个端口。
 func (m *AgentManager) findFreePort() (int, error) {
 	for range maxPortRetries {
 		port := int(m.nextPort.Add(1) - 1)
@@ -194,7 +155,6 @@ func (m *AgentManager) findFreePort() (int, error) {
 		return port, nil
 	}
 
-	// 回退策略: 使用内核分配的随机可用端口 (127.0.0.1:0)。
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err == nil {
 		port := ln.Addr().(*net.TCPAddr).Port

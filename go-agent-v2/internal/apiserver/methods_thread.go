@@ -1,4 +1,3 @@
-// methods_thread.go — thread/* JSON-RPC 方法实现。
 package apiserver
 
 import (
@@ -119,7 +118,7 @@ type threadNameSetParams struct {
 type threadRollbackParams struct {
 	ThreadID  string `json:"threadId"`
 	NumTurns  *int   `json:"numTurns,omitempty"`
-	TurnIndex *int   `json:"turnIndex,omitempty"` // legacy alias
+	TurnIndex *int   `json:"turnIndex,omitempty"`
 }
 
 func (s *Server) threadRollbackTyped(_ context.Context, p threadRollbackParams) (any, error) {
@@ -138,7 +137,7 @@ func (s *Server) threadRollbackTyped(_ context.Context, p threadRollbackParams) 
 type threadMessagesParams struct {
 	ThreadID string `json:"threadId"`
 	Limit    int    `json:"limit,omitempty"`
-	Before   int64  `json:"before,omitempty"` // cursor: id < before
+	Before   int64  `json:"before,omitempty"`
 }
 
 type threadListResponse struct {
@@ -151,8 +150,7 @@ func (s *Server) threadList(ctx context.Context, params json.RawMessage) (any, e
 	if err != nil {
 		return nil, err
 	}
-	threads = filterThreadsByArchived(threads, params)
-	return threadListResponse{Data: threads, NextCursor: nil}, nil
+	return threadListResponse{Data: filterThreadsByArchived(threads, params), NextCursor: nil}, nil
 }
 
 func filterThreadsByArchived(threads []contracts.ThreadListItem, params json.RawMessage) []contracts.ThreadListItem {
@@ -184,11 +182,9 @@ type threadLoadedListParams struct {
 }
 
 func (s *Server) threadLoadedList(ctx context.Context, params json.RawMessage) (any, error) {
-	p := threadLoadedListParams{}
-	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, pkgerr.Wrap(err, "Server.threadLoadedList", "invalid params")
-		}
+	var p threadLoadedListParams
+	if err := json.Unmarshal(params, &p); err != nil && params != nil {
+		return nil, pkgerr.Wrap(err, "Server.threadLoadedList", "invalid params")
 	}
 	data, nextCursor, err := s.codexAdapter.ThreadLoadedList(ctx, p.Cursor, p.Limit)
 	if err != nil {

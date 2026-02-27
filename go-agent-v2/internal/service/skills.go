@@ -31,6 +31,8 @@ const (
 	maxSkillImportTotalFileSize  = 20 << 20 // 20MB
 )
 
+var frontmatterWordDelimiterReplacer = strings.NewReplacer("，", ",", "、", ",", ";", ",", "；", ",", "\n", ",")
+
 // SkillInfo Skill 目录元数据。
 type SkillInfo struct {
 	Name         string   `json:"name"`
@@ -558,16 +560,10 @@ func parseSkillMetadata(content string) skillMetadata {
 	if frontmatter, ok := extractFrontmatter(content); ok {
 		lines := strings.Split(frontmatter, "\n")
 		for idx := 0; idx < len(lines); idx++ {
-			line := strings.TrimSpace(lines[idx])
-			if line == "" || strings.HasPrefix(line, "#") {
+			key, value, ok := parseFrontmatterKeyValue(lines[idx])
+			if !ok {
 				continue
 			}
-			colon := strings.Index(line, ":")
-			if colon <= 0 {
-				continue
-			}
-			key := strings.ToLower(strings.TrimSpace(line[:colon]))
-			value := strings.TrimSpace(line[colon+1:])
 			switch key {
 			case "name":
 				meta.Name = parseFrontmatterScalar(value)
@@ -631,7 +627,7 @@ func SummarizeSkillContent(content string) (summary, source string) {
 
 // UpsertSkillSummaryFrontmatter 将摘要写入（或清空）SKILL.md frontmatter 的 summary 字段。
 func UpsertSkillSummaryFrontmatter(content, summary string) string {
-	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	normalized := normalizeSkillContent(content)
 	summary = strings.TrimSpace(summary)
 
 	frontmatter, body, ok := splitFrontmatterContent(normalized)
@@ -655,17 +651,11 @@ func UpsertSkillSummaryFrontmatter(content, summary string) string {
 	next := make([]string, 0, len(lines)+1)
 	insertAt := -1
 	for _, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") {
+		key, _, ok := parseFrontmatterKeyValue(raw)
+		if !ok {
 			next = append(next, raw)
 			continue
 		}
-		colon := strings.Index(line, ":")
-		if colon <= 0 {
-			next = append(next, raw)
-			continue
-		}
-		key := strings.ToLower(strings.TrimSpace(line[:colon]))
 		switch key {
 		case "summary", "digest":
 			continue
@@ -713,6 +703,10 @@ func splitFrontmatterContent(content string) (frontmatter, body string, ok bool)
 	return frontmatter, strings.TrimPrefix(tail, "\n"), true
 }
 
+func normalizeSkillContent(content string) string {
+	return strings.ReplaceAll(content, "\r\n", "\n")
+}
+
 func quoteYAMLScalar(value string) string {
 	escaped := strings.ReplaceAll(value, "\\", "\\\\")
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
@@ -720,12 +714,8 @@ func quoteYAMLScalar(value string) string {
 }
 
 func extractFrontmatter(content string) (string, bool) {
-	normalized := strings.ReplaceAll(content, "\r\n", "\n")
-	if !strings.HasPrefix(normalized, "---\n") {
-		return "", false
-	}
-	rest := normalized[len("---\n"):]
-	frontmatter, _, ok := strings.Cut(rest, "\n---")
+	normalized := normalizeSkillContent(content)
+	frontmatter, _, ok := splitFrontmatterContent(normalized)
 	if !ok {
 		return "", false
 	}
@@ -733,16 +723,12 @@ func extractFrontmatter(content string) (string, bool) {
 }
 
 func stripFrontmatter(content string) string {
-	normalized := strings.ReplaceAll(content, "\r\n", "\n")
-	if !strings.HasPrefix(normalized, "---\n") {
-		return normalized
-	}
-	rest := normalized[len("---\n"):]
-	_, tail, ok := strings.Cut(rest, "\n---")
+	normalized := normalizeSkillContent(content)
+	_, body, ok := splitFrontmatterContent(normalized)
 	if !ok {
 		return normalized
 	}
-	return strings.TrimPrefix(tail, "\n")
+	return body
 }
 
 func deriveSummaryFromBody(content string) string {
@@ -781,7 +767,7 @@ func extractSkillSections(content string, limit int) []SkillDigestEntry {
 		return nil
 	}
 
-	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	normalized := normalizeSkillContent(content)
 	lines := strings.Split(normalized, "\n")
 	sections := make([]SkillDigestEntry, 0, limit)
 	seen := make(map[string]struct{}, limit)
@@ -846,9 +832,7 @@ func parseFrontmatterWords(value string, tail []string) ([]string, int) {
 			break
 		}
 		item := strings.TrimSpace(strings.TrimPrefix(line, "-"))
-		if item != "" {
-			words = append(words, parseFrontmatterScalar(item))
-		}
+		words = appendFrontmatterWord(words, item)
 		consumed++
 	}
 	return words, consumed
@@ -864,32 +848,44 @@ func parseWordsFromValue(value string) []string {
 		if inside == "" {
 			return nil
 		}
-		parts := strings.Split(inside, ",")
-		words := make([]string, 0, len(parts))
-		for _, part := range parts {
-			item := parseFrontmatterScalar(part)
-			if item != "" {
-				words = append(words, item)
-			}
-		}
-		return words
+		return parseWordParts(strings.Split(inside, ","))
 	}
-	normalizedComma := strings.NewReplacer("，", ",", "、", ",", ";", ",", "；", ",", "\n", ",").Replace(trimmed)
-	parts := strings.Split(normalizedComma, ",")
-	words := make([]string, 0, len(parts))
-	for _, part := range parts {
-		item := parseFrontmatterScalar(part)
-		if item != "" {
-			words = append(words, item)
-		}
-	}
-	return words
+	normalizedComma := frontmatterWordDelimiterReplacer.Replace(trimmed)
+	return parseWordParts(strings.Split(normalizedComma, ","))
 }
 
 func parseFrontmatterScalar(value string) string {
 	trimmed := strings.TrimSpace(value)
 	trimmed = strings.Trim(trimmed, "\"'")
 	return strings.TrimSpace(trimmed)
+}
+
+func parseFrontmatterKeyValue(raw string) (key, value string, ok bool) {
+	line := strings.TrimSpace(raw)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", "", false
+	}
+	colon := strings.Index(line, ":")
+	if colon <= 0 {
+		return "", "", false
+	}
+	return strings.ToLower(strings.TrimSpace(line[:colon])), strings.TrimSpace(line[colon+1:]), true
+}
+
+func parseWordParts(parts []string) []string {
+	words := make([]string, 0, len(parts))
+	for _, part := range parts {
+		words = appendFrontmatterWord(words, part)
+	}
+	return words
+}
+
+func appendFrontmatterWord(words []string, raw string) []string {
+	item := parseFrontmatterScalar(raw)
+	if item == "" {
+		return words
+	}
+	return append(words, item)
 }
 
 func uniqueWords(raw []string) []string {

@@ -15,15 +15,15 @@ import (
 func toolAdapterProviders(s *Server) tooladapter.Providers {
 	return tooladapter.Providers{
 		LSP:            s.lspTools,
-		CodeRun:        codeRunProvider{s: s},
+		CodeRun:        s,
 		Approvals:      approvalProvider{s: s},
-		Resource:       resourceProvider{s: s},
-		Orchestration:  orchestrationProvider{s: s},
-		AgentRuntime:   agentRuntimeProvider{s: s},
-		Schema:         schemaProvider{s: s},
-		Lookup:         runtimeLookupProvider{s: s},
-		Counter:        toolCallCounterProvider{s: s},
-		CodeRunTracker: codeRunTrackerProvider{s: s},
+		Resource:       s,
+		Orchestration:  s,
+		AgentRuntime:   s,
+		Schema:         s,
+		Lookup:         s,
+		Counter:        s,
+		CodeRunTracker: s,
 	}
 }
 
@@ -39,7 +39,7 @@ func registerDynamicTools(s *Server) {
 			delete(s.dynTools, name)
 		}
 	}
-	tooladapter.Register(runtimeRegistryProvider{s: s}, toolAdapterProviders(s))
+	tooladapter.Register(s, toolAdapterProviders(s))
 }
 
 // SetupLSP 初始化 LSP 事件转发: 诊断缓存 + 广播。

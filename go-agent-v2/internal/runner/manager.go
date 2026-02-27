@@ -66,6 +66,20 @@ func (p *AgentProcess) IsAlive() bool {
 	return state != StateError && state != StateStopped
 }
 
+// Port returns the current agent client port.
+func (p *AgentProcess) Port() int {
+	if p == nil {
+		return 0
+	}
+	p.mu.Lock()
+	client := p.Client
+	p.mu.Unlock()
+	if client == nil {
+		return 0
+	}
+	return client.GetPort()
+}
+
 // AgentInfo Agent 信息快照 (线程安全复制)。
 type AgentInfo struct {
 	ID         string     `json:"id"`
@@ -590,6 +604,11 @@ func (m *AgentManager) Get(id string) *AgentProcess {
 	proc := m.agents[id]
 	m.mu.RUnlock()
 	return proc
+}
+
+// GetProcess returns an agent process as the runtime Process abstraction.
+func (m *AgentManager) GetProcess(id string) agentcore.Process {
+	return m.Get(id)
 }
 
 // Count 返回当前管理的 agent 数量 (线程安全)。

@@ -7,7 +7,6 @@ import (
 
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/commonadapter"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/contracts"
-	"github.com/multi-agent/go-agent-v2/internal/store"
 	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
@@ -20,38 +19,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
-
-type managerAdapter struct {
-	manager *codexsdk.AgentManager
-}
-
-func (a managerAdapter) Get(agentID string) agentcore.Process {
-	return wrapProcess(a.manager.Get(agentID))
-}
-
-func (a managerAdapter) Launch(ctx context.Context, agentID, alias, profile, cwd, startInstructions string, dynamicTools []agentcore.DynamicTool) error {
-	return a.manager.Launch(ctx, agentID, alias, profile, cwd, startInstructions, dynamicTools)
-}
-
-func (a managerAdapter) Stop(agentID string) error {
-	return a.manager.Stop(agentID)
-}
-
-type bindingStoreAdapter struct {
-	store *store.AgentCodexBindingStore
-}
-
-func (a bindingStoreAdapter) Bind(ctx context.Context, agentID, codexThreadID, sessionID string) error {
-	return a.store.Bind(ctx, agentID, codexThreadID, sessionID)
-}
-
-func (a bindingStoreAdapter) FindByAgentID(ctx context.Context, agentID string) (*agentcore.Binding, error) {
-	binding, err := a.store.FindByAgentID(ctx, agentID)
-	if err != nil || binding == nil {
-		return nil, err
-	}
-	return &agentcore.Binding{CodexThreadID: binding.CodexThreadID}, nil
-}
 
 type uiRuntimeAdapter struct {
 	runtime *uistate.RuntimeManager
@@ -69,34 +36,9 @@ func (a uiRuntimeAdapter) ThreadTimeline(threadID string) []agentcore.TimelineIt
 	})
 }
 
-type processAdapter struct {
-	proc *codexsdk.AgentProcess
-}
-
-func (p processAdapter) Port() int {
-	if p.proc != nil && p.proc.Client != nil {
-		return p.proc.Client.GetPort()
-	}
-	return 0
-}
-
-func (p processAdapter) IsAlive() bool {
-	return p.proc != nil && p.proc.IsAlive()
-}
-
-func wrapProcess(proc *codexsdk.AgentProcess) agentcore.Process {
-	if proc == nil {
-		return nil
-	}
-	return &processAdapter{proc: proc}
-}
-
-func unwrapProcess(proc agentcore.Process) *codexsdk.AgentProcess {
-	p, _ := proc.(*processAdapter)
-	if p == nil {
-		return nil
-	}
-	return p.proc
+func coreProcess(proc agentcore.Process) *codexsdk.AgentProcess {
+	typed, _ := proc.(*codexsdk.AgentProcess)
+	return typed
 }
 
 func (a *Adapter) resolveThreadFromSlashCommand(ctx context.Context, threadID string, requireThreadID bool) (string, error) {
@@ -203,23 +145,23 @@ func (a *Adapter) runtimeServiceAdapter() runtimesvc.RuntimeAdapter {
 		BeginTrackedTurn:                 a.beginTrackedTurn,
 		TurnSteer:                        a.TurnSteer,
 		GetThreadID: func(proc agentcore.Process) string {
-			return a.GetThreadID(unwrapProcess(proc))
+			return a.GetThreadID(coreProcess(proc))
 		},
 		BindingStore: func() agentcore.BindingStore {
 			bindingStore := a.bindingStore()
 			if bindingStore == nil {
 				return nil
 			}
-			return bindingStoreAdapter{store: bindingStore}
+			return bindingStore
 		},
 		ResumeThread: func(proc agentcore.Process, req runtimesvc.ResumeThreadRequest) error {
-			return a.ResumeThread(unwrapProcess(proc), codexsdk.ResumeThreadRequest{ThreadID: req.ThreadID, Cwd: req.Cwd})
+			return a.ResumeThread(coreProcess(proc), codexsdk.ResumeThreadRequest{ThreadID: req.ThreadID, Cwd: req.Cwd})
 		},
 		Submit: func(proc agentcore.Process, prompt string, images, files []string, outputSchema json.RawMessage) error {
-			return a.Submit(unwrapProcess(proc), prompt, images, files, outputSchema)
+			return a.Submit(coreProcess(proc), prompt, images, files, outputSchema)
 		},
 		ResolveClientActiveTurnID: func(proc agentcore.Process) string {
-			typed := unwrapProcess(proc)
+			typed := coreProcess(proc)
 			if typed == nil || typed.Client == nil {
 				return ""
 			}
@@ -231,14 +173,14 @@ func (a *Adapter) runtimeServiceAdapter() runtimesvc.RuntimeAdapter {
 		},
 	}
 	if manager := a.manager(); manager != nil {
-		adapter.Manager = func() agentcore.Manager { return managerAdapter{manager: manager} }
+		adapter.Manager = func() agentcore.Manager { return manager }
 	}
 	return adapter
 }
 
 func withProcess[T any](a *Adapter, caller string, threadID string, fn func(*codexsdk.AgentProcess) (T, error)) (T, error) {
 	return runtimesvc.WithProcess(a.runtimeServiceAdapter(), caller, threadID, func(proc agentcore.Process) (T, error) {
-		return fn(unwrapProcess(proc))
+		return fn(coreProcess(proc))
 	})
 }
 

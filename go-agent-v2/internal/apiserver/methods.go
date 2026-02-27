@@ -42,22 +42,38 @@ func (s *Server) registerMethods() {
 	s.methods["thread/resume"] = typedHandler(s.threadResumeTyped)
 	s.methods["thread/recover"] = typedHandler(s.threadRecoverTyped)
 	s.methods["thread/fork"] = typedHandler(s.threadForkTyped)
-	s.methods["thread/archive"] = typedHandler(s.threadArchiveTyped)
-	s.methods["thread/unarchive"] = typedHandler(s.threadUnarchiveTyped)
-	s.methods["thread/name/set"] = typedHandler(s.threadNameSetTyped)
-	s.methods["thread/compact/start"] = s.threadCompact
+	s.methods["thread/archive"] = typedHandler(func(ctx context.Context, p threadIDParams) (any, error) {
+		return s.codexAdapter.ThreadArchive(ctx, p.ThreadID)
+	})
+	s.methods["thread/unarchive"] = typedHandler(func(ctx context.Context, p threadIDParams) (any, error) {
+		return s.codexAdapter.ThreadUnarchive(ctx, p.ThreadID)
+	})
+	s.methods["thread/name/set"] = typedHandler(func(ctx context.Context, p threadNameSetParams) (any, error) {
+		return s.codexAdapter.ThreadNameSet(ctx, p.ThreadID, p.Name)
+	})
+	s.methods["thread/compact/start"] = func(ctx context.Context, params json.RawMessage) (any, error) {
+		return s.codexAdapter.SendSlashCommandFromRawParamsRequireThreadID(ctx, params, "/compact")
+	}
 	s.methods["thread/rollback"] = typedHandler(s.threadRollbackTyped)
 	s.methods["thread/list"] = s.threadList
 	s.methods["thread/loaded/list"] = s.threadLoadedList
-	s.methods["thread/read"] = typedHandler(s.threadReadTyped)
-	s.methods["thread/resolve"] = typedHandler(s.threadResolveTyped)
+	s.methods["thread/read"] = typedHandler(func(ctx context.Context, p threadIDParams) (any, error) {
+		return s.codexAdapter.ThreadRead(ctx, p.ThreadID)
+	})
+	s.methods["thread/resolve"] = typedHandler(func(ctx context.Context, p threadIDParams) (any, error) {
+		return s.codexAdapter.ThreadResolve(ctx, p.ThreadID)
+	})
 	s.methods["thread/messages"] = typedHandler(s.threadMessagesTyped)
 	s.methods["thread/backgroundTerminals/clean"] = s.threadBgTerminalsClean
 
 	s.methods["turn/start"] = typedHandler(s.turnStartTyped)
 	s.methods["turn/steer"] = typedHandler(s.turnSteerTyped)
-	s.methods["turn/interrupt"] = typedHandler(s.turnInterrupt)
-	s.methods["turn/forceComplete"] = typedHandler(s.turnForceComplete)
+	s.methods["turn/interrupt"] = typedHandler(func(_ context.Context, p turnInterruptParams) (any, error) {
+		return s.codexAdapter.TurnInterrupt(p.ThreadID)
+	})
+	s.methods["turn/forceComplete"] = typedHandler(func(_ context.Context, p turnForceCompleteParams) (any, error) {
+		return s.codexAdapter.TurnForceComplete(p.ThreadID)
+	})
 	s.methods["thread/realtime/start"] = typedHandler(s.threadRealtimeStartTyped)
 	s.methods["thread/realtime/appendAudio"] = typedHandler(s.threadRealtimeAppendAudioTyped)
 	s.methods["thread/realtime/appendText"] = typedHandler(s.threadRealtimeAppendTextTyped)

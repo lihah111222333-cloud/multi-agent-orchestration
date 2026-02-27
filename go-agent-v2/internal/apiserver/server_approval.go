@@ -72,47 +72,65 @@ func extractMapValue(payload map[string]any, keys ...string) (any, bool) {
 	return nil, false
 }
 
+// ── 审批决策别名表 (表驱动) ──
+
+// approvalStringAliases 将各种用户输入别名归一化为标准决策字符串。
+var approvalStringAliases = map[string]string{
+	// accept 家族
+	"accept": "accept", "approved": "accept", "approve": "accept",
+	"yes": "accept", "y": "accept", "true": "accept", "1": "accept",
+	// acceptForSession 家族
+	"acceptforsession": "acceptForSession", "accept_for_session": "acceptForSession", "accept-for-session": "acceptForSession",
+	// decline 家族
+	"decline": "decline", "denied": "decline", "reject": "decline", "rejected": "decline",
+	"no": "decline", "n": "decline", "false": "decline", "0": "decline",
+	// cancel 家族
+	"cancel": "cancel", "abort": "cancel", "aborted": "cancel",
+}
+
+// approvalMethodAcceptWord 每种审批方法的 "approve" 决策词。
+var approvalMethodAcceptWord = map[string]string{
+	approvalMethodCommandExecution: "accept",
+	approvalMethodFileChange:       "accept",
+	approvalMethodSkillRequest:     "approve",
+}
+
+// approvalMethodValidDecisions 每种审批方法允许的字符串决策集合。
+var approvalMethodValidDecisions = map[string]map[string]bool{
+	approvalMethodCommandExecution: {"accept": true, "acceptForSession": true, "decline": true, "cancel": true},
+	approvalMethodFileChange:       {"accept": true, "acceptForSession": true, "decline": true, "cancel": true},
+	approvalMethodSkillRequest:     {"approve": true, "decline": true},
+}
+
+// approvalMethodAllowsSubmit 每种审批方法视为 "通过" 的字符串决策集合。
+var approvalMethodAllowsSubmit = map[string]map[string]bool{
+	approvalMethodCommandExecution: {"accept": true, "acceptForSession": true},
+	approvalMethodFileChange:       {"accept": true, "acceptForSession": true},
+	approvalMethodSkillRequest:     {"approve": true},
+}
+
 func normalizeApprovalDecisionString(raw string) (string, bool) {
-	normalized := strings.ToLower(strings.TrimSpace(raw))
-	switch normalized {
-	case "accept", "approved", "yes", "y", "true", "1":
-		return "accept", true
-	case "acceptforsession", "accept_for_session", "accept-for-session":
-		return "acceptForSession", true
-	case "decline", "denied", "no", "n", "false", "0":
-		return "decline", true
-	case "cancel", "abort", "aborted":
-		return "cancel", true
-	default:
-		return "", false
-	}
+	normalized, ok := approvalStringAliases[strings.ToLower(strings.TrimSpace(raw))]
+	return normalized, ok
 }
 
-func normalizeFileChangeApprovalDecision(raw any) (any, bool) {
-	decision, ok := normalizeApprovalDecisionString(approvalStringValue(raw))
-	if !ok {
-		return nil, false
+// normalizeStringDecisionForMethod 对字符串决策做方法级归一化:
+// skill 方法将 "accept" 重映射为 "approve"，其他方法保持不变。
+func normalizeStringDecisionForMethod(method, decision string) (string, bool) {
+	// skill 方法: accept → approve
+	if method == approvalMethodSkillRequest && decision == "accept" {
+		decision = "approve"
 	}
-	switch decision {
-	case "accept", "acceptForSession", "decline", "cancel":
-		return decision, true
-	default:
-		return nil, false
+	valid := approvalMethodValidDecisions[method]
+	if valid == nil {
+		// 未知方法: 宽松接受所有标准决策
+		return decision, decision != ""
 	}
+	return decision, valid[decision]
 }
 
-func normalizeCommandApprovalDecision(raw any) (any, bool) {
-	if decision, ok := normalizeApprovalDecisionString(approvalStringValue(raw)); ok {
-		switch decision {
-		case "accept", "acceptForSession", "decline", "cancel":
-			return decision, true
-		}
-	}
-	decisionObj, ok := raw.(map[string]any)
-	if !ok || decisionObj == nil {
-		return nil, false
-	}
-
+// normalizeCommandAmendmentDecision 处理 command 审批特有的嵌套 amendment 对象。
+func normalizeCommandAmendmentDecision(decisionObj map[string]any) (any, bool) {
 	if amendmentRaw, ok := extractMapValue(decisionObj, "acceptWithExecpolicyAmendment"); ok {
 		amendmentObj, ok := amendmentRaw.(map[string]any)
 		if !ok || amendmentObj == nil {
@@ -128,7 +146,6 @@ func normalizeCommandApprovalDecision(raw any) (any, bool) {
 			},
 		}, true
 	}
-
 	if amendmentRaw, ok := extractMapValue(decisionObj, "applyNetworkPolicyAmendment"); ok {
 		amendmentObj, ok := amendmentRaw.(map[string]any)
 		if !ok || amendmentObj == nil {
@@ -147,35 +164,34 @@ func normalizeCommandApprovalDecision(raw any) (any, bool) {
 	return nil, false
 }
 
-func normalizeSkillApprovalDecision(raw any) (any, bool) {
-	normalized := strings.ToLower(strings.TrimSpace(approvalStringValue(raw)))
-	switch normalized {
-	case "approve", "approved", "accept", "yes", "y", "true", "1":
-		return "approve", true
-	case "decline", "denied", "reject", "rejected", "cancel", "abort", "aborted", "no", "n", "false", "0":
-		return "decline", true
-	default:
-		return nil, false
-	}
-}
-
 func normalizeApprovalDecision(method string, raw any) (any, bool) {
-	switch strings.TrimSpace(method) {
-	case approvalMethodCommandExecution:
-		return normalizeCommandApprovalDecision(raw)
-	case approvalMethodFileChange:
-		return normalizeFileChangeApprovalDecision(raw)
-	case approvalMethodSkillRequest:
-		return normalizeSkillApprovalDecision(raw)
-	default:
-		if decision, ok := normalizeCommandApprovalDecision(raw); ok {
+	method = strings.TrimSpace(method)
+
+	// 字符串路径: 查表归一化
+	if decision, ok := normalizeApprovalDecisionString(approvalStringValue(raw)); ok {
+		decision, ok = normalizeStringDecisionForMethod(method, decision)
+		if ok {
 			return decision, true
 		}
-		if decision, ok := normalizeFileChangeApprovalDecision(raw); ok {
-			return decision, true
-		}
-		return normalizeSkillApprovalDecision(raw)
 	}
+
+	// 嵌套对象路径: 仅 command 审批支持 amendment 对象
+	if decisionObj, ok := raw.(map[string]any); ok && decisionObj != nil {
+		if method == approvalMethodCommandExecution || method == "" {
+			return normalizeCommandAmendmentDecision(decisionObj)
+		}
+	}
+
+	// 未知方法 fallback: 依次尝试 command → fileChange → skill
+	if method != approvalMethodCommandExecution && method != approvalMethodFileChange && method != approvalMethodSkillRequest {
+		for _, fallbackMethod := range []string{approvalMethodCommandExecution, approvalMethodFileChange, approvalMethodSkillRequest} {
+			if decision, ok := normalizeApprovalDecision(fallbackMethod, raw); ok {
+				return decision, true
+			}
+		}
+	}
+
+	return nil, false
 }
 
 func normalizeApprovalResultPayload(method string, result any) (map[string]any, bool) {
@@ -190,8 +206,7 @@ func normalizeApprovalResultPayload(method string, result any) (map[string]any, 
 		return map[string]any{"decision": decision}, true
 	case map[string]any:
 		if decisionRaw, ok := extractMapValue(typed, "decision"); ok {
-			decision, ok := normalizeApprovalDecision(method, decisionRaw)
-			if ok {
+			if decision, ok := normalizeApprovalDecision(method, decisionRaw); ok {
 				return map[string]any{"decision": decision}, true
 			}
 		}
@@ -205,44 +220,13 @@ func normalizeApprovalResultPayload(method string, result any) (map[string]any, 
 func approvalDecisionPayload(method string, approved bool) map[string]any {
 	decision := "decline"
 	if approved {
-		decision = "accept"
-		if strings.TrimSpace(method) == approvalMethodSkillRequest {
-			decision = "approve"
+		if word, ok := approvalMethodAcceptWord[strings.TrimSpace(method)]; ok {
+			decision = word
+		} else {
+			decision = "accept"
 		}
 	}
 	return map[string]any{"decision": decision}
-}
-
-func commandDecisionAllowsSubmit(raw any) bool {
-	decision, ok := normalizeCommandApprovalDecision(raw)
-	if !ok {
-		return false
-	}
-	switch typed := decision.(type) {
-	case string:
-		return typed == "accept" || typed == "acceptForSession"
-	case map[string]any:
-		if _, ok := extractMapValue(typed, "acceptWithExecpolicyAmendment"); ok {
-			return true
-		}
-		if networkRaw, ok := extractMapValue(typed, "applyNetworkPolicyAmendment"); ok {
-			networkObj, ok := networkRaw.(map[string]any)
-			if !ok || networkObj == nil {
-				return false
-			}
-			amendmentRaw, ok := extractMapValue(networkObj, "network_policy_amendment", "networkPolicyAmendment")
-			if !ok {
-				return false
-			}
-			amendmentObj, ok := amendmentRaw.(map[string]any)
-			if !ok || amendmentObj == nil {
-				return false
-			}
-			action := strings.ToLower(strings.TrimSpace(approvalStringValue(amendmentObj["action"])))
-			return action == "allow"
-		}
-	}
-	return false
 }
 
 func approvalDecisionAllowsSubmit(method string, payload map[string]any) bool {
@@ -253,24 +237,46 @@ func approvalDecisionAllowsSubmit(method string, payload map[string]any) bool {
 	if !ok {
 		return false
 	}
-	switch strings.TrimSpace(method) {
-	case approvalMethodFileChange:
-		decision, ok := normalizeFileChangeApprovalDecision(decisionRaw)
-		if !ok {
+	method = strings.TrimSpace(method)
+
+	// 嵌套对象路径: command 审批的 amendment 判断
+	if method == approvalMethodCommandExecution || method == "" {
+		if decisionObj, ok := decisionRaw.(map[string]any); ok && decisionObj != nil {
+			if _, ok := extractMapValue(decisionObj, "acceptWithExecpolicyAmendment"); ok {
+				return true
+			}
+			if networkRaw, ok := extractMapValue(decisionObj, "applyNetworkPolicyAmendment"); ok {
+				networkObj, ok := networkRaw.(map[string]any)
+				if !ok || networkObj == nil {
+					return false
+				}
+				amendmentRaw, ok := extractMapValue(networkObj, "network_policy_amendment", "networkPolicyAmendment")
+				if !ok {
+					return false
+				}
+				amendmentObj, ok := amendmentRaw.(map[string]any)
+				if !ok || amendmentObj == nil {
+					return false
+				}
+				action := strings.ToLower(strings.TrimSpace(approvalStringValue(amendmentObj["action"])))
+				return action == "allow"
+			}
 			return false
 		}
-		decisionStr, _ := decision.(string)
-		return decisionStr == "accept" || decisionStr == "acceptForSession"
-	case approvalMethodSkillRequest:
-		decision, ok := normalizeSkillApprovalDecision(decisionRaw)
-		if !ok {
-			return false
-		}
-		decisionStr, _ := decision.(string)
-		return decisionStr == "approve"
-	default:
-		return commandDecisionAllowsSubmit(decisionRaw)
 	}
+
+	// 字符串路径: 查 allowsSubmit 表
+	decision, ok := normalizeApprovalDecision(method, decisionRaw)
+	if !ok {
+		return false
+	}
+	decisionStr, _ := decision.(string)
+	allowSet := approvalMethodAllowsSubmit[method]
+	if allowSet == nil {
+		// 未知方法: 默认用 command 规则
+		allowSet = approvalMethodAllowsSubmit[approvalMethodCommandExecution]
+	}
+	return allowSet[decisionStr]
 }
 
 func denyApprovalSafely(event agentcore.Event, agentID string) {

@@ -141,7 +141,7 @@ type Process interface {
 
 // Manager is the process manager abstraction used by service logic.
 type Manager interface {
-	Get(agentID string) Process
+	GetProcess(agentID string) Process
 	Launch(ctx context.Context, agentID, alias, profile, cwd, startInstructions string, dynamicTools []DynamicTool) error
 	Stop(agentID string) error
 }
@@ -149,7 +149,7 @@ type Manager interface {
 // BindingStore abstracts binding persistence operations.
 type BindingStore interface {
 	Bind(ctx context.Context, agentID, codexThreadID, sessionID string) error
-	FindByAgentID(ctx context.Context, agentID string) (*Binding, error)
+	FindBindingByAgentID(ctx context.Context, agentID string) (*Binding, error)
 }
 
 // Event is the CLI-agnostic event envelope.

@@ -94,10 +94,6 @@ func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, er
 
 // threadNameSetParams thread/name/set 请求参数。
 
-func (s *Server) threadCompact(ctx context.Context, params json.RawMessage) (any, error) {
-	return s.codexAdapter.SendSlashCommandFromRawParamsRequireThreadID(ctx, params, "/compact")
-}
-
 // threadRollbackParams thread/rollback 请求参数。
 
 type threadResumeParams struct {
@@ -144,21 +140,9 @@ func (s *Server) threadRecoverTyped(ctx context.Context, p threadIDParams) (any,
 	}, nil
 }
 
-func (s *Server) threadArchiveTyped(ctx context.Context, p threadIDParams) (any, error) {
-	return s.codexAdapter.ThreadArchive(ctx, p.ThreadID)
-}
-
-func (s *Server) threadUnarchiveTyped(ctx context.Context, p threadIDParams) (any, error) {
-	return s.codexAdapter.ThreadUnarchive(ctx, p.ThreadID)
-}
-
 type threadNameSetParams struct {
 	ThreadID string `json:"threadId"`
 	Name     string `json:"name"`
-}
-
-func (s *Server) threadNameSetTyped(ctx context.Context, p threadNameSetParams) (any, error) {
-	return s.codexAdapter.ThreadNameSet(ctx, p.ThreadID, p.Name)
 }
 
 type threadRollbackParams struct {
@@ -257,12 +241,4 @@ func (s *Server) threadLoadedList(ctx context.Context, params json.RawMessage) (
 		return nil, err
 	}
 	return threadLoadedListResponse{Data: data, NextCursor: nextCursor}, nil
-}
-
-func (s *Server) threadReadTyped(ctx context.Context, p threadIDParams) (any, error) {
-	return s.codexAdapter.ThreadRead(ctx, p.ThreadID)
-}
-
-func (s *Server) threadResolveTyped(ctx context.Context, p threadIDParams) (any, error) {
-	return s.codexAdapter.ThreadResolve(ctx, p.ThreadID)
 }

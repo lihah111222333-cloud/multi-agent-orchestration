@@ -58,16 +58,11 @@ func TestP3CodexEntryMethodsDelegateToCodexAdapter(t *testing.T) {
 	checks := []string{
 		"turnStartTyped",
 		"turnSteerTyped",
-		"turnInterrupt",
-		"turnForceComplete",
 		"reviewStartTyped",
 		"threadResumeTyped",
 		"threadRecoverTyped",
-		"threadNameSetTyped",
 		"threadRollbackTyped",
 		"threadMessagesTyped",
-		"threadArchiveTyped",
-		"threadUnarchiveTyped",
 	}
 
 	files := parseAPIServerNonTestFiles(t)
@@ -86,6 +81,14 @@ func TestP3CodexEntryMethodsDelegateToCodexAdapter(t *testing.T) {
 		"completeTrackedTurnByID",
 		"checkTurnStall",
 		"executeStallAutoInterrupt",
+		"turnInterrupt",
+		"turnForceComplete",
+		"threadArchiveTyped",
+		"threadUnarchiveTyped",
+		"threadNameSetTyped",
+		"threadReadTyped",
+		"threadResolveTyped",
+		"threadCompact",
 	}
 	for _, fn := range removed {
 		if _, _, ok := findFuncDecl(files, fn); ok {
@@ -180,19 +183,21 @@ func TestP3PayloadAndApprovalRemainThinBoundary(t *testing.T) {
 func TestP3ResidualMethodsMustDelegateViaCodexAdapter(t *testing.T) {
 	t.Helper()
 
-	checks := []string{
+	removed := []string{
 		"threadArchiveTyped",
 		"threadUnarchiveTyped",
+		"threadNameSetTyped",
+		"threadReadTyped",
+		"threadResolveTyped",
+		"threadCompact",
+		"turnInterrupt",
+		"turnForceComplete",
 	}
 
 	files := parseAPIServerNonTestFiles(t)
-	for _, fn := range checks {
-		fd, fileName, ok := findFuncDecl(files, fn)
-		if !ok {
-			t.Fatalf("function %s not found", fn)
-		}
-		if !funcDeclContainsCodexAdapterCall(fd) {
-			t.Fatalf("%s in %s must delegate via s.codexAdapter", fn, fileName)
+	for _, fn := range removed {
+		if _, _, ok := findFuncDecl(files, fn); ok {
+			t.Fatalf("function %s should be inlined in registerMethods", fn)
 		}
 	}
 }
@@ -205,7 +210,7 @@ func TestP4BoundaryMethodsAvoidDirectClientCalls(t *testing.T) {
 		method string
 	}{
 		{fn: "threadForkTyped", method: "ForkThread"},
-		{fn: "threadReadTyped", method: "ListThreads"},
+		{fn: "threadMessagesTyped", method: "ListThreads"},
 		{fn: "handleApprovalRequest", method: "Submit"},
 		{fn: "AgentEventHandler", method: "GetThreadID"},
 		{fn: "handleDynamicToolCall", method: "RespondError"},

@@ -236,7 +236,7 @@ func EnsureThreadReadyForTurn(a RuntimeAdapter, ctx context.Context, threadID, c
 	if launchCwd == "" {
 		launchCwd = "."
 	}
-	if proc := manager.Get(id); proc != nil {
+	if proc := manager.GetProcess(id); proc != nil {
 		if !proc.IsAlive() {
 			logger.Warn("turn/start: dead process detected, stopping for auto-recovery", withThreadLogFields(a, id, logger.FieldPort, proc.Port())...)
 			a.CancelCodeRuns(id)
@@ -253,7 +253,7 @@ func EnsureThreadReadyForTurn(a RuntimeAdapter, ctx context.Context, threadID, c
 	}
 	resumeCandidates := make([]string, 0, 4)
 	if bindingStore := a.BindingStore(); bindingStore != nil {
-		if binding, bindErr := bindingStore.FindByAgentID(ctx, id); bindErr == nil && binding != nil {
+		if binding, bindErr := bindingStore.FindBindingByAgentID(ctx, id); bindErr == nil && binding != nil {
 			resumeCandidates = append(resumeCandidates, binding.CodexThreadID)
 			logger.Info("turn/start: found DB binding", withThreadLogFields(a, id, "bound_codex_thread_id", binding.CodexThreadID)...)
 		}
@@ -265,13 +265,13 @@ func EnsureThreadReadyForTurn(a RuntimeAdapter, ctx context.Context, threadID, c
 	dynamicTools := a.AllDynamicToolSchemas()
 	startInstructions := a.ResolveStartInstructionsForLaunch(ctx, dynamicTools)
 	if err = manager.Launch(ctx, id, id, "", launchCwd, startInstructions, dynamicTools); err != nil {
-		if proc := manager.Get(id); proc != nil {
+		if proc := manager.GetProcess(id); proc != nil {
 			a.SetAgentWorkDir(id, launchCwd)
 			return proc, nil
 		}
 		return nil, a.WrapErrorf(err, "Server.ensureThreadReady", "auto-load thread %s", id)
 	}
-	proc := manager.Get(id)
+	proc := manager.GetProcess(id)
 	if proc == nil {
 		return nil, a.NewErrorf("Server.ensureThreadReady", "thread %s loaded but not found", id)
 	}
@@ -302,13 +302,13 @@ func EnsureThreadReadyForTurn(a RuntimeAdapter, ctx context.Context, threadID, c
 func ensureReadyFinalizeAfterResume(a RuntimeAdapter, ctx context.Context, manager agentcore.Manager, agentID string, launchCwd string, proc Process, lastResumeErr error, startInstructions string, dynamicTools []agentcore.DynamicTool, candidateCount int) (Process, error) {
 	if lastResumeErr != nil {
 		logger.Warn("turn/start: all resume candidates exhausted, fallback to fresh session", withThreadLogFields(a, agentID, "candidate_count", candidateCount, "last_error", lastResumeErr, logger.FieldCwd, launchCwd)...)
-		if manager != nil && manager.Get(agentID) == nil {
+		if manager != nil && manager.GetProcess(agentID) == nil {
 			a.CancelCodeRuns(agentID)
 			_ = manager.Stop(agentID)
 			if launchErr := manager.Launch(ctx, agentID, agentID, "", launchCwd, startInstructions, dynamicTools); launchErr != nil {
 				return nil, a.WrapErrorf(launchErr, "Server.ensureThreadReady", "final re-spawn thread %s", agentID)
 			}
-			proc = manager.Get(agentID)
+			proc = manager.GetProcess(agentID)
 			if proc == nil {
 				return nil, a.NewErrorf("Server.ensureThreadReady", "thread %s final re-spawn failed", agentID)
 			}
@@ -442,7 +442,7 @@ func ResolveProcess(a RuntimeAdapter, caller, threadID string) (Process, error) 
 	if manager == nil {
 		return nil, a.NewError(caller, "thread resolver is not configured")
 	}
-	proc := manager.Get(id)
+	proc := manager.GetProcess(id)
 	if proc == nil {
 		return nil, a.NewErrorf(caller, "thread %s not found", id)
 	}

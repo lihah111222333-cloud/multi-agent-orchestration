@@ -568,53 +568,45 @@ func (s *toolCallState) clearAll() {
 	s.toolCallMu.Unlock()
 }
 
-// sseState 聚合 SSE 推送客户端集合。
-type sseState struct {
-	sseMu      sync.RWMutex
-	sseClients map[chan []byte]struct{}
+type safeSet[T comparable] struct {
+	mu    sync.RWMutex
+	items map[T]struct{}
 }
 
-func (s *sseState) addClient(ch chan []byte) {
-	if s == nil || ch == nil {
-		return
+func (s *safeSet[T]) add(item T) {
+	s.mu.Lock()
+	if s.items == nil {
+		s.items = make(map[T]struct{})
 	}
-	s.sseMu.Lock()
-	if s.sseClients == nil {
-		s.sseClients = make(map[chan []byte]struct{})
-	}
-	s.sseClients[ch] = struct{}{}
-	s.sseMu.Unlock()
+	s.items[item] = struct{}{}
+	s.mu.Unlock()
 }
 
-func (s *sseState) removeClient(ch chan []byte) {
-	if s == nil || ch == nil {
-		return
-	}
-	s.sseMu.Lock()
-	delete(s.sseClients, ch)
-	s.sseMu.Unlock()
+func (s *safeSet[T]) remove(item T) {
+	s.mu.Lock()
+	delete(s.items, item)
+	s.mu.Unlock()
 }
 
-func (s *sseState) clientCount() int {
-	if s == nil {
-		return 0
-	}
-	s.sseMu.RLock()
-	defer s.sseMu.RUnlock()
-	return len(s.sseClients)
+func (s *safeSet[T]) count() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.items)
 }
 
-func (s *sseState) snapshotClients() []chan []byte {
-	if s == nil {
-		return nil
-	}
-	s.sseMu.RLock()
-	defer s.sseMu.RUnlock()
-	out := make([]chan []byte, 0, len(s.sseClients))
-	for ch := range s.sseClients {
-		out = append(out, ch)
+func (s *safeSet[T]) snapshot() []T {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]T, 0, len(s.items))
+	for item := range s.items {
+		out = append(out, item)
 	}
 	return out
+}
+
+// sseState 聚合 SSE 推送客户端集合。
+type sseState struct {
+	clients safeSet[chan []byte]
 }
 
 // notifyHookState 聚合桌面端通知钩子状态。

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 )
 
 // AgentCodexBinding agent_id ↔ codex_thread_id 1:1 绑定记录。
@@ -100,6 +101,15 @@ func (s *AgentCodexBindingStore) FindByAgentID(ctx context.Context, agentID stri
 		return nil, err
 	}
 	return collectOne[AgentCodexBinding](rows)
+}
+
+// FindBindingByAgentID returns the lightweight binding contract used by runtime services.
+func (s *AgentCodexBindingStore) FindBindingByAgentID(ctx context.Context, agentID string) (*agentcore.Binding, error) {
+	binding, err := s.FindByAgentID(ctx, agentID)
+	if err != nil || binding == nil {
+		return nil, err
+	}
+	return &agentcore.Binding{CodexThreadID: strings.TrimSpace(binding.CodexThreadID)}, nil
 }
 
 // ListAll 返回所有绑定 (调试/运维用)。

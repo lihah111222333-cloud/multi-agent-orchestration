@@ -16,7 +16,6 @@ func passthroughSkillInputText(_ string, content string) string {
 	return content
 }
 
-// buildSelectedSkillPrompt reads skill contents and joins them into a prompt string.
 func buildSelectedSkillPrompt(
 	selectedSkills []string,
 	readSkillContent func(skillName string) (string, error),
@@ -54,7 +53,6 @@ func buildSelectedSkillPrompt(
 	return strings.Join(texts, "\n"), len(texts)
 }
 
-// resolveLSPUsagePromptHint resolves the user-configured LSP usage prompt hint.
 func resolveLSPUsagePromptHint(
 	ctx context.Context,
 	defaultHint string,
@@ -84,7 +82,6 @@ func resolveLSPUsagePromptHint(
 	return hint
 }
 
-// prependLSPAvailabilityWarning adds a warning when referenced LSP tools are unavailable.
 func prependLSPAvailabilityWarning(
 	hint string,
 	dynamicToolNames map[string]struct{},
@@ -150,8 +147,21 @@ func collectAutoMatchedSkillMatches(
 	if normalizedPrompt == "" || len(candidates) == 0 {
 		return nil
 	}
-	inputSkillSet := collectInputSkillNames(inputs)
-	configuredSet := collectSkillNameSet(configuredSkillNames)
+	inputSkillSet := map[string]struct{}{}
+	for _, input := range inputs {
+		if !strings.EqualFold(strings.TrimSpace(input.Type), "skill") {
+			continue
+		}
+		if name := strings.ToLower(strings.TrimSpace(input.Name)); name != "" {
+			inputSkillSet[name] = struct{}{}
+		}
+	}
+	configuredSet := map[string]struct{}{}
+	for _, item := range configuredSkillNames {
+		if name := strings.ToLower(strings.TrimSpace(item)); name != "" {
+			configuredSet[name] = struct{}{}
+		}
+	}
 
 	matches := make([]AutoMatchedSkillMatch, 0, len(candidates))
 	for _, skill := range candidates {
@@ -207,7 +217,13 @@ func renderAutoMatchedSkillPrompt(
 		}
 		content, err := readSkillContent(skillName)
 		if err != nil {
-			logAutoMatchedSkillReadError(agentID, skillName, match.MatchedBy, err)
+			logger.Warn("turn/start: auto-matched skill unavailable, skip",
+				append(common.ThreadLogFields(agentID),
+					logger.FieldSkill, skillName,
+					"matched_by", match.MatchedBy,
+					logger.FieldError, err,
+				)...,
+			)
 			continue
 		}
 		if match.MatchedBy == "force" {
@@ -226,49 +242,6 @@ func renderAutoMatchedSkillPrompt(
 		return "", 0
 	}
 	return strings.Join(texts, "\n"), len(texts)
-}
-
-func logAutoMatchedSkillReadError(agentID, skillName, matchedBy string, readErr error) {
-	logger.Warn("turn/start: auto-matched skill unavailable, skip",
-		append(common.ThreadLogFields(agentID),
-			logger.FieldSkill, skillName,
-			"matched_by", matchedBy,
-			logger.FieldError, readErr,
-		)...,
-	)
-}
-
-func collectInputSkillNames(inputs []AutoMatchInput) map[string]struct{} {
-	if len(inputs) == 0 {
-		return nil
-	}
-	set := make(map[string]struct{}, len(inputs))
-	for _, input := range inputs {
-		if !strings.EqualFold(strings.TrimSpace(input.Type), "skill") {
-			continue
-		}
-		name := strings.ToLower(strings.TrimSpace(input.Name))
-		if name == "" {
-			continue
-		}
-		set[name] = struct{}{}
-	}
-	return set
-}
-
-func collectSkillNameSet(raw []string) map[string]struct{} {
-	if len(raw) == 0 {
-		return nil
-	}
-	set := make(map[string]struct{}, len(raw))
-	for _, item := range raw {
-		name := strings.ToLower(strings.TrimSpace(item))
-		if name == "" {
-			continue
-		}
-		set[name] = struct{}{}
-	}
-	return set
 }
 
 func lowerMatchedTerms(text string, candidates []string) []string {
@@ -299,11 +272,9 @@ func lowerMatchedTerms(text string, candidates []string) []string {
 }
 
 func explicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords []string) []string {
-	trimmedName := strings.TrimSpace(skillName)
-	candidates := make([]string, 0, 1+len(triggerWords))
-	if trimmedName != "" {
-		candidates = append(candidates, "@"+trimmedName)
-		candidates = append(candidates, "[skill:"+trimmedName+"]")
+	candidates := make([]string, 0, 2+len(triggerWords))
+	if trimmedName := strings.TrimSpace(skillName); trimmedName != "" {
+		candidates = append(candidates, "@"+trimmedName, "[skill:"+trimmedName+"]")
 	}
 	for _, raw := range triggerWords {
 		word := strings.TrimSpace(raw)
@@ -315,26 +286,7 @@ func explicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords 
 			candidates = append(candidates, word)
 		}
 	}
-	terms := make([]string, 0, len(candidates))
-	seen := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		lowerCandidate := strings.ToLower(strings.TrimSpace(candidate))
-		if lowerCandidate == "" {
-			continue
-		}
-		if _, exists := seen[lowerCandidate]; exists {
-			continue
-		}
-		if !strings.Contains(normalizedPrompt, lowerCandidate) {
-			continue
-		}
-		seen[lowerCandidate] = struct{}{}
-		terms = append(terms, candidate)
-	}
-	if len(terms) == 0 {
-		return nil
-	}
-	return terms
+	return lowerMatchedTerms(normalizedPrompt, candidates)
 }
 
 func classifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
@@ -354,14 +306,9 @@ func classifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, trig
 }
 
 func forceMatchedSkillInstruction(matchedTerms []string) string {
-	terms := make([]string, 0, len(matchedTerms))
-	for _, raw := range matchedTerms {
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
-			continue
-		}
-		terms = append(terms, trimmed)
-	}
+	terms := common.CollectTrimmedUniqueValues(matchedTerms, func(value string) string {
+		return strings.ToLower(value)
+	})
 	if len(terms) == 0 {
 		return "执行要求: 本轮必须遵循该技能。"
 	}
@@ -402,52 +349,11 @@ func CollectReferencedLSPToolNames(hint string) []string {
 	return names
 }
 
-func BuildSelectedSkillPrompt(
-	selectedSkills []string,
-	readSkillContent func(skillName string) (string, error),
-	skillInputText func(name, content string) string,
-) (string, int) {
-	return buildSelectedSkillPrompt(selectedSkills, readSkillContent, skillInputText)
-}
-
-func ResolveLSPUsagePromptHint(
-	ctx context.Context,
-	defaultHint string,
-	maxHintLen int,
-	getPref func(context.Context, string) (any, error),
-) string {
-	return resolveLSPUsagePromptHint(ctx, defaultHint, maxHintLen, getPref)
-}
-
-func CollectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]struct{} {
-	return collectDynamicToolNames(dynamicTools)
-}
-
-func PrependLSPAvailabilityWarning(
-	hint string,
-	dynamicToolNames map[string]struct{},
-	collectReferencedToolNames func(string) []string,
-	mergePromptText func(string, string) string,
-) (string, []string) {
-	return prependLSPAvailabilityWarning(hint, dynamicToolNames, collectReferencedToolNames, mergePromptText)
-}
-
-func CollectAutoMatchedSkillMatches(
-	prompt string,
-	inputs []AutoMatchInput,
-	configuredSkillNames []string,
-	candidates []SkillMatchCandidate,
-	options AutoSkillMatchOptions,
-) []AutoMatchedSkillMatch {
-	return collectAutoMatchedSkillMatches(prompt, inputs, configuredSkillNames, candidates, options)
-}
-
-func RenderAutoMatchedSkillPrompt(
-	agentID string,
-	matches []AutoMatchedSkillMatch,
-	readSkillContent func(skillName string) (string, error),
-	mergePromptText func(prompt, extra string) string,
-	skillInputText func(name, content string) string,
-) (string, int) {
-	return renderAutoMatchedSkillPrompt(agentID, matches, readSkillContent, mergePromptText, skillInputText)
-}
+var (
+	BuildSelectedSkillPrompt       = buildSelectedSkillPrompt
+	ResolveLSPUsagePromptHint      = resolveLSPUsagePromptHint
+	CollectDynamicToolNames        = collectDynamicToolNames
+	PrependLSPAvailabilityWarning  = prependLSPAvailabilityWarning
+	CollectAutoMatchedSkillMatches = collectAutoMatchedSkillMatches
+	RenderAutoMatchedSkillPrompt   = renderAutoMatchedSkillPrompt
+)

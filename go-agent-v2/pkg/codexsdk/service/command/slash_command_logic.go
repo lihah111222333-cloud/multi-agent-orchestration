@@ -11,7 +11,7 @@ import (
 
 type ThreadListItem = agentcore.ThreadListItem
 
-func runSendSlashCommand(
+func RunSendSlashCommand(
 	ctx context.Context,
 	methodName string,
 	threadID string,
@@ -54,7 +54,7 @@ func runSendSlashCommand(
 	})
 }
 
-func resolveThreadForSlashCommandLogic(
+func ResolveThreadForSlashCommandLogic(
 	ctx context.Context,
 	threadID string,
 	requireThreadID bool,
@@ -89,7 +89,7 @@ func resolveThreadForSlashCommandLogic(
 	return "", apperrors.New("Server.sendSlashCommand", "threadId is required")
 }
 
-func threadSkillsListResult(result map[string]any, err error) (any, error) {
+func ThreadSkillsListResult(result map[string]any, err error) (any, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -97,31 +97,4 @@ func threadSkillsListResult(result map[string]any, err error) (any, error) {
 		return map[string]any{}, nil
 	}
 	return result, nil
-}
-
-func RunSendSlashCommand(
-	ctx context.Context,
-	methodName string,
-	threadID string,
-	command string,
-	args string,
-	requireThreadID bool,
-	resolveThread func(context.Context, string, bool) (string, error),
-	withProcess func(string, string, func(any) (map[string]any, error)) (map[string]any, error),
-	sendCommand func(any, string, string) error,
-) (map[string]any, error) {
-	return runSendSlashCommand(ctx, methodName, threadID, command, args, requireThreadID, resolveThread, withProcess, sendCommand)
-}
-
-func ResolveThreadForSlashCommandLogic(
-	ctx context.Context,
-	threadID string,
-	requireThreadID bool,
-	threadList func(context.Context) ([]ThreadListItem, error),
-) (string, error) {
-	return resolveThreadForSlashCommandLogic(ctx, threadID, requireThreadID, threadList)
-}
-
-func ThreadSkillsListResult(result map[string]any, err error) (any, error) {
-	return threadSkillsListResult(result, err)
 }

@@ -114,11 +114,7 @@ func RunThreadResume(
 	}
 	candidates := BuildResumeCandidates(threadID, resolved, normalizeThreadID)
 	logger.Info("thread/resume: resolved candidates",
-		append(common.ThreadLogFields(threadID),
-			"candidate_count", len(candidates),
-			"candidates", PreviewResumeCandidates(candidates, 4),
-			"cwd", strings.TrimSpace(cwd),
-		)...,
+		append(common.ThreadLogFields(threadID), "candidate_count", len(candidates), "candidates", PreviewResumeCandidates(candidates, 4), "cwd", strings.TrimSpace(cwd))...,
 	)
 	if resumeThread == nil {
 		return ThreadResumeResult{}, apperrors.New("Server.threadResume", "resume handler is not initialized")
@@ -280,10 +276,7 @@ func RunThreadNameSet(
 	}
 	if persistThreadAlias != nil {
 		if err := persistThreadAlias(ctx, id, persistedAlias); err != nil {
-			logger.Warn("thread/name/set: persist alias failed",
-				logger.FieldThreadID, id,
-				logger.FieldError, err,
-			)
+			logger.Warn("thread/name/set: persist alias failed", logger.FieldThreadID, id, logger.FieldError, err)
 			return nil, apperrors.Wrap(err, "Server.threadNameSet", "persist thread alias")
 		}
 	}
@@ -342,13 +335,7 @@ func RunThreadResolve(
 	hasHistory := threadExistsInHistory != nil && threadExistsInHistory(ctx, id)
 	result["hasHistory"] = hasHistory
 	logger.Info("thread/resolve: identity resolved",
-		append(common.ThreadLogFields(id),
-			"source", resolveSource,
-			"state", result["state"],
-			logger.FieldPort, result["port"],
-			"codex_thread_id", codexThreadID,
-			"has_history", hasHistory,
-		)...,
+		append(common.ThreadLogFields(id), "source", resolveSource, "state", result["state"], logger.FieldPort, result["port"], "codex_thread_id", codexThreadID, "has_history", hasHistory)...,
 	)
 	return result, nil
 }

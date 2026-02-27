@@ -196,33 +196,33 @@ type threadListResponse struct {
 	NextCursor *string                    `json:"nextCursor"`
 }
 
-type threadListParams struct {
-	Archived *bool `json:"archived,omitempty"`
-}
-
 func (s *Server) threadList(ctx context.Context, params json.RawMessage) (any, error) {
 	threads, err := s.codexAdapter.ThreadList(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	var p threadListParams
-	if len(params) > 0 && string(params) != "null" {
-		_ = json.Unmarshal(params, &p) // best-effort
-	}
-
-	if p.Archived != nil {
-		wantArchived := *p.Archived
-		filtered := make([]contracts.ThreadListItem, 0, len(threads))
-		for _, t := range threads {
-			if t.Archived == wantArchived {
-				filtered = append(filtered, t)
-			}
-		}
-		threads = filtered
-	}
-
+	threads = filterThreadsByArchived(threads, params)
 	return threadListResponse{Data: threads, NextCursor: nil}, nil
+}
+
+func filterThreadsByArchived(threads []contracts.ThreadListItem, params json.RawMessage) []contracts.ThreadListItem {
+	var p struct {
+		Archived *bool `json:"archived,omitempty"`
+	}
+	if len(params) > 0 && string(params) != "null" {
+		_ = json.Unmarshal(params, &p)
+	}
+	if p.Archived == nil {
+		return threads
+	}
+	wantArchived := *p.Archived
+	filtered := make([]contracts.ThreadListItem, 0, len(threads))
+	for _, t := range threads {
+		if t.Archived == wantArchived {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
 }
 
 // threadLoadedListResponse thread/loaded/list 响应。

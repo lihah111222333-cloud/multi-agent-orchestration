@@ -2,6 +2,8 @@ package archive
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -126,6 +128,17 @@ func ThreadUnarchive(ctx context.Context, threadID string, deps ThreadArchiveDep
 	delete(archivedMap, id)
 	if err := deps.SaveArchiveMap(ctx, archivedMap); err != nil {
 		return nil, appErrors.Wrap(err, "Server.threadUnarchive", "persist archive state")
+	}
+
+	// Remove the archive directory from disk so LoadThreadArchiveMapFromDisk
+	// won't re-discover this thread as archived on the next thread/list call.
+	if rootDir, rootErr := ResolveThreadArchiveRootDir(); rootErr == nil {
+		if safeName, sanitizeErr := SanitizeArchiveNameStrict(id); sanitizeErr == nil {
+			threadArchiveDir := filepath.Join(rootDir, safeName)
+			if removeErr := os.RemoveAll(threadArchiveDir); removeErr != nil {
+				logger.Warn("thread/unarchive: remove archive dir failed", logger.FieldThreadID, id, logger.FieldError, removeErr)
+			}
+		}
 	}
 
 	result := map[string]any{"ok": true, "threadId": id}

@@ -170,7 +170,7 @@ func AppendArchivedThreads(threads []ThreadListItem, seen map[string]struct{}, a
 		return entries[i].ID < entries[j].ID
 	})
 	for _, item := range entries {
-		threads = append(threads, ThreadListItem{ID: item.ID, Name: item.ID, State: "idle"})
+		threads = append(threads, ThreadListItem{ID: item.ID, Name: item.ID, State: "idle", Archived: true})
 		seen[item.ID] = struct{}{}
 	}
 	return threads

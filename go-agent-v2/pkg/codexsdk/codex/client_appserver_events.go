@@ -234,6 +234,7 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 			return false
 		}
 	}
+	c.cancelStreamErrorRecoveryTimer()
 	c.trackTurnLifecycle(event, msg.Method)
 
 	c.handlerMu.RLock()
@@ -257,6 +258,9 @@ func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 		}
 	case EventStreamError:
 		if streamErrorWillRetry(event.Data) || activeTurnID == "" {
+			if streamErrorWillRetry(event.Data) && activeTurnID != "" {
+				c.startStreamErrorRecoveryTimer(activeTurnID)
+			}
 			return
 		}
 		c.clearActiveTurnID()
@@ -824,6 +828,70 @@ func streamErrorWillRetry(raw json.RawMessage) bool {
 		return value
 	}
 	return false
+}
+
+// startStreamErrorRecoveryTimer 启动恢复超时计时器。
+//
+// 当 stream_error(willRetry=true) 发生时, 启动 60s 计时器。
+// 如果超时内没有收到新事件, 自动清除 activeTurnID
+// 并发射 stream_error(willRetry=false) 通知上层 turn tracker 清理。
+func (c *AppServerClient) startStreamErrorRecoveryTimer(turnID string) {
+	c.streamErrorRecoveryMu.Lock()
+	defer c.streamErrorRecoveryMu.Unlock()
+
+	// 取消已有计时器 (如果连续多次 stream_error, 重置计时)
+	if c.streamErrorRecoveryTimer != nil {
+		c.streamErrorRecoveryTimer.Stop()
+	}
+
+	logger.Info("codex: stream_error recovery timer started",
+		logger.FieldAgentID, c.AgentID,
+		"turn_id", turnID,
+		"timeout_s", streamErrorRecoveryTimeout.Seconds(),
+	)
+
+	c.streamErrorRecoveryTimer = time.AfterFunc(streamErrorRecoveryTimeout, func() {
+		// 超时触发: 检查 turn 是否仍然是同一个
+		currentTurnID := c.getActiveTurnID()
+		if currentTurnID == "" || currentTurnID != turnID {
+			// turn 已经被其他事件清除或更新, 无需处理
+			return
+		}
+
+		logger.Warn("codex: stream_error recovery timeout — no events received, aborting turn",
+			logger.FieldAgentID, c.AgentID,
+			"turn_id", turnID,
+			"timeout_s", streamErrorRecoveryTimeout.Seconds(),
+		)
+
+		c.clearActiveTurnID()
+
+		// 发射 stream_error(willRetry=false) 通知上层 turn tracker 清理
+		c.emitStreamError(
+			errors.New("stream_error recovery timeout: no events received within "+streamErrorRecoveryTimeout.String()),
+			"recovery_timeout",
+			false, // idleTimeout
+			false, // willRetry = false → 上层会清理 turn
+			map[string]any{
+				"message":        "Stream recovery failed — no events received after reconnection",
+				"originalTurnId": turnID,
+				"trigger":        "recovery_timeout",
+			},
+		)
+	})
+}
+
+// cancelStreamErrorRecoveryTimer 取消恢复超时计时器。
+//
+// 当收到任何新的有效事件时调用, 表示事件流已恢复。
+func (c *AppServerClient) cancelStreamErrorRecoveryTimer() {
+	c.streamErrorRecoveryMu.Lock()
+	defer c.streamErrorRecoveryMu.Unlock()
+
+	if c.streamErrorRecoveryTimer != nil {
+		c.streamErrorRecoveryTimer.Stop()
+		c.streamErrorRecoveryTimer = nil
+	}
 }
 
 func extractBoolValue(payload map[string]any, keys ...string) (bool, bool) {

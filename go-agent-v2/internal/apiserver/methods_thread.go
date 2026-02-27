@@ -196,11 +196,32 @@ type threadListResponse struct {
 	NextCursor *string                    `json:"nextCursor"`
 }
 
-func (s *Server) threadList(ctx context.Context, _ json.RawMessage) (any, error) {
+type threadListParams struct {
+	Archived *bool `json:"archived,omitempty"`
+}
+
+func (s *Server) threadList(ctx context.Context, params json.RawMessage) (any, error) {
 	threads, err := s.codexAdapter.ThreadList(ctx)
 	if err != nil {
 		return nil, err
 	}
+
+	var p threadListParams
+	if len(params) > 0 && string(params) != "null" {
+		_ = json.Unmarshal(params, &p) // best-effort
+	}
+
+	if p.Archived != nil {
+		wantArchived := *p.Archived
+		filtered := make([]contracts.ThreadListItem, 0, len(threads))
+		for _, t := range threads {
+			if t.Archived == wantArchived {
+				filtered = append(filtered, t)
+			}
+		}
+		threads = filtered
+	}
+
 	return threadListResponse{Data: threads, NextCursor: nil}, nil
 }
 

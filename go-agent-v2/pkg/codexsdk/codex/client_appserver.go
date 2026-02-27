@@ -120,6 +120,11 @@ type AppServerClient struct {
 	respawnRecoverInFlight atomic.Bool
 	// readLoop 单例保护: 确保同一时刻只有一个 readLoop 协程运行。
 	readLoopRunning atomic.Bool
+
+	// stream_error 恢复超时: willRetry=true 的 stream_error 后启动,
+	// 如果超时内无新事件到达, 自动清理 activeTurnID 并通知上层。
+	streamErrorRecoveryMu    sync.Mutex
+	streamErrorRecoveryTimer *time.Timer
 }
 
 const (
@@ -132,6 +137,7 @@ const (
 	appServerReconnectMaxDelay       = 3 * time.Second
 	defaultAppServerReadIdleTimeout  = 600 * time.Second
 	defaultAppServerStreamMaxRetries = 5
+	streamErrorRecoveryTimeout       = 60 * time.Second
 	maxAppServerStreamMaxRetries     = 100
 
 	appServerCircuitBreakerWindow    = 30 * time.Second

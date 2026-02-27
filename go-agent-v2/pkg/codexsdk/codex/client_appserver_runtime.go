@@ -108,7 +108,7 @@ func (c *AppServerClient) Shutdown() error {
 		return nil
 	}
 	c.cancel()
-
+	c.cancelStreamErrorRecoveryTimer()
 	if err := c.notify("shutdown", nil); err != nil {
 		logger.Debug("codex: shutdown notify failed (best-effort)",
 			logger.FieldAgentID, c.AgentID, logger.FieldError, err)

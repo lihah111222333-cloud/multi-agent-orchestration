@@ -117,9 +117,10 @@ type Binding struct {
 
 // ThreadListItem models one thread list payload entry.
 type ThreadListItem struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	State string `json:"state"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	State    string `json:"state"`
+	Archived bool   `json:"archived,omitempty"`
 }
 
 // ────────────────────────────────────────────────────

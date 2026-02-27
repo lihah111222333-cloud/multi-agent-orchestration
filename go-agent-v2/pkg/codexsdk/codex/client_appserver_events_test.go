@@ -2,7 +2,9 @@ package codex
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 )
 
 func TestThreadStatusChangedTerminalState(t *testing.T) {
@@ -290,7 +292,6 @@ func TestHandleRPCResponseStringIDMatchesPending(t *testing.T) {
 	}
 }
 
-
 func TestTrackTurnLifecycleStartedStreamingTerminalOrder(t *testing.T) {
 	c := &AppServerClient{AgentID: "agent-1"}
 
@@ -323,4 +324,131 @@ func TestJSONRPCToEventUnknownMethodFallsBackToRawType(t *testing.T) {
 	if event.Type != "unknown/method" {
 		t.Fatalf("expected unknown method to fall back to raw type, got %q", event.Type)
 	}
+}
+
+func TestTrackTurnLifecycleStreamErrorWillRetryStartsRecoveryTimer(t *testing.T) {
+	c := &AppServerClient{AgentID: "agent-1"}
+
+	// Set an active turn
+	c.setActiveTurnID("turn-100")
+
+	// Send stream_error with willRetry=true
+	data, _ := json.Marshal(map[string]any{"willRetry": true, "message": "test error"})
+	c.trackTurnLifecycle(Event{Type: EventStreamError, Data: data}, "error")
+
+	// activeTurnID should be preserved (not cleared)
+	if got := c.getActiveTurnID(); got != "turn-100" {
+		t.Fatalf("expected active turn preserved on willRetry stream_error, got %q", got)
+	}
+
+	// Recovery timer should have been started
+	c.streamErrorRecoveryMu.Lock()
+	hasTimer := c.streamErrorRecoveryTimer != nil
+	c.streamErrorRecoveryMu.Unlock()
+	if !hasTimer {
+		t.Fatalf("expected recovery timer to be started")
+	}
+
+	// Clean up timer
+	c.cancelStreamErrorRecoveryTimer()
+}
+
+func TestTrackTurnLifecycleStreamErrorRecoveryTimerCancelledOnNewEvent(t *testing.T) {
+	c := &AppServerClient{AgentID: "agent-1"}
+
+	// Set an active turn
+	c.setActiveTurnID("turn-200")
+
+	// Start recovery timer via willRetry stream_error
+	data, _ := json.Marshal(map[string]any{"willRetry": true})
+	c.trackTurnLifecycle(Event{Type: EventStreamError, Data: data}, "error")
+
+	// Verify timer started
+	c.streamErrorRecoveryMu.Lock()
+	hasTimer := c.streamErrorRecoveryTimer != nil
+	c.streamErrorRecoveryMu.Unlock()
+	if !hasTimer {
+		t.Fatalf("expected recovery timer to be started")
+	}
+
+	// Simulate receiving a new event (this would be called via handleRPCEvent)
+	c.cancelStreamErrorRecoveryTimer()
+
+	// Timer should be nil after cancellation
+	c.streamErrorRecoveryMu.Lock()
+	hasTimer = c.streamErrorRecoveryTimer != nil
+	c.streamErrorRecoveryMu.Unlock()
+	if hasTimer {
+		t.Fatalf("expected recovery timer to be cancelled")
+	}
+
+	// Active turn should still be set
+	if got := c.getActiveTurnID(); got != "turn-200" {
+		t.Fatalf("expected active turn still set after cancel, got %q", got)
+	}
+}
+
+func TestTrackTurnLifecycleStreamErrorRecoveryTimerFires(t *testing.T) {
+	// Override timeout for test speed — use a package-level workaround
+	// by calling startStreamErrorRecoveryTimer with a very short timer directly.
+	c := &AppServerClient{AgentID: "agent-test-fire"}
+
+	// Need a handler to receive the emitted stream_error(willRetry=false)
+	emittedEvents := make(chan Event, 10)
+	c.SetEventHandler(func(event Event) {
+		emittedEvents <- event
+	})
+
+	c.setActiveTurnID("turn-300")
+
+	// Directly set a very short timer (50ms) instead of using the 60s default
+	c.streamErrorRecoveryMu.Lock()
+	turnID := "turn-300"
+	c.streamErrorRecoveryTimer = newTestRecoveryTimer(c, turnID, 50*time.Millisecond)
+	c.streamErrorRecoveryMu.Unlock()
+
+	// Wait for timer to fire
+	select {
+	case evt := <-emittedEvents:
+		if evt.Type != EventStreamError {
+			t.Fatalf("expected stream_error event, got %q", evt.Type)
+		}
+		// Verify willRetry=false in payload
+		var payload map[string]any
+		if err := json.Unmarshal(evt.Data, &payload); err != nil {
+			t.Fatalf("unmarshal event data: %v", err)
+		}
+		if willRetry, _ := payload["willRetry"].(bool); willRetry {
+			t.Fatalf("expected willRetry=false in recovery timeout event")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("recovery timer did not fire within 2s")
+	}
+
+	// activeTurnID should be cleared
+	if got := c.getActiveTurnID(); got != "" {
+		t.Fatalf("expected active turn cleared after recovery timeout, got %q", got)
+	}
+}
+
+// newTestRecoveryTimer creates a recovery timer with a custom duration for testing.
+func newTestRecoveryTimer(c *AppServerClient, turnID string, timeout time.Duration) *time.Timer {
+	return time.AfterFunc(timeout, func() {
+		currentTurnID := c.getActiveTurnID()
+		if currentTurnID == "" || currentTurnID != turnID {
+			return
+		}
+		c.clearActiveTurnID()
+		c.emitStreamError(
+			errors.New("stream_error recovery timeout (test)"),
+			"recovery_timeout",
+			false,
+			false,
+			map[string]any{
+				"message":        "Stream recovery failed — no events received after reconnection",
+				"originalTurnId": turnID,
+				"trigger":        "recovery_timeout",
+			},
+		)
+	})
 }

@@ -308,15 +308,9 @@ func extractTrackedTurnNestedField(payload map[string]any, nestedKeys []string, 
 	}
 	return ExtractTrackedString(payload, rootKeys...)
 }
-func ExtractTrackedTurnID(payload map[string]any) string {
-	return extractTrackedTurnNestedField(payload, []string{"id", "turnId", "turn_id"}, []string{"turnId", "turn_id", "id"})
-}
-func ExtractTrackedTurnStatus(payload map[string]any) string {
-	return extractTrackedTurnNestedField(payload, []string{"status", "state"}, []string{"status", "state"})
-}
-func ExtractTrackedTurnReason(payload map[string]any) string {
-	return extractTrackedTurnNestedField(payload, []string{"reason", "message"}, []string{"reason", "message"})
-}
+func ExtractTrackedTurnID(payload map[string]any) string     { return extractTrackedTurnNestedField(payload, []string{"id", "turnId", "turn_id"}, []string{"turnId", "turn_id", "id"}) }
+func ExtractTrackedTurnStatus(payload map[string]any) string { return extractTrackedTurnNestedField(payload, []string{"status", "state"}, []string{"status", "state"}) }
+func ExtractTrackedTurnReason(payload map[string]any) string { return extractTrackedTurnNestedField(payload, []string{"reason", "message"}, []string{"reason", "message"}) }
 func trackedTurnEventAndMethodKeys(eventType, method string) (string, string) {
 	return strings.ToLower(strings.TrimSpace(eventType)), strings.ToLower(strings.TrimSpace(method))
 }
@@ -329,9 +323,7 @@ func trackedTurnTerminalKindFor(eventKey, methodKey string) trackedTurnTerminalK
 	}
 	return trackedTurnTerminalNone
 }
-func trackedTurnReasonOr(payload map[string]any, fallback string) string {
-	return util.FirstNonEmpty(ExtractTrackedTurnReason(payload), fallback)
-}
+func trackedTurnReasonOr(payload map[string]any, fallback string) string { return util.FirstNonEmpty(ExtractTrackedTurnReason(payload), fallback) }
 
 var threadStatusTerminalMap = map[string]struct {
 	status string
@@ -356,9 +348,7 @@ func extractThreadStatusType(payload map[string]any) string {
 	}
 }
 func ThreadStatusTerminalFromPayload(payload map[string]any) (status string, reason string, terminal bool) {
-	if terminal, ok := threadStatusTerminalMap[extractThreadStatusType(payload)]; ok {
-		return terminal.status, terminal.reason, true
-	}
+	if terminal, ok := threadStatusTerminalMap[extractThreadStatusType(payload)]; ok { return terminal.status, terminal.reason, true }
 	return "", "", false
 }
 func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]any) (string, string, string, bool, bool) {
@@ -399,9 +389,7 @@ func IsTerminalEventType(eventType, method string) bool {
 	eventKey, methodKey := trackedTurnEventAndMethodKeys(eventType, method)
 	return trackedTurnTerminalKindFor(eventKey, methodKey) != trackedTurnTerminalNone
 }
-func TrackedTurnSummaryCacheKey(threadID, turnID string) string {
-	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID)
-}
+func TrackedTurnSummaryCacheKey(threadID, turnID string) string { return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID) }
 func pruneTrackedTurnSummaryCacheLocked(cache map[string]TrackedTurnSummaryCacheEntry, now time.Time, ttl time.Duration, maxEntries int) {
 	if ttl > 0 {
 		for key, entry := range cache {
@@ -978,9 +966,7 @@ type TrackerAlertRuntime interface {
 }
 
 func TrackerRuntimePushAlert(runtime TrackerAlertRuntime) func(threadID, category, message string) {
-	if runtime == nil {
-		return nil
-	}
+	if runtime == nil { return nil }
 	return runtime.PushAlert
 }
 func ExecuteStallAutoInterruptCore(

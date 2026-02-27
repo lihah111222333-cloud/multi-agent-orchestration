@@ -109,10 +109,7 @@ func fileExists(path string) bool {
 		return false
 	}
 	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return !info.IsDir()
+	return err == nil && !info.IsDir()
 }
 
 func resolveCodeReferenceFilePath(rawPath, project string, projects []string) (string, error) {
@@ -207,10 +204,7 @@ func clampCodeContextLines(value int) int {
 }
 
 func clampLine(value, total int) int {
-	if total <= 0 {
-		return 1
-	}
-	if value <= 0 {
+	if total <= 0 || value <= 0 {
 		return 1
 	}
 	if value > total {
@@ -365,7 +359,6 @@ func imageDataURL(mediaType string, content []byte) string {
 }
 
 func resolveCodeOpenRelativePath(resolvedPath, project string, projects []string) string {
-	relativePath := resolvedPath
 	for _, root := range normalizeProjectRoots(project, projects) {
 		rel, relErr := filepath.Rel(root, resolvedPath)
 		if relErr != nil {
@@ -375,10 +368,9 @@ func resolveCodeOpenRelativePath(resolvedPath, project string, projects []string
 		if rel == "." || strings.HasPrefix(rel, "..") {
 			continue
 		}
-		relativePath = filepath.ToSlash(rel)
-		break
+		return filepath.ToSlash(rel)
 	}
-	return relativePath
+	return resolvedPath
 }
 
 func fileLanguageByPath(path string) string {
@@ -495,8 +487,7 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 	}
 
 	relativePath := resolveCodeOpenRelativePath(resolvedPath, p.Project, p.Projects)
-	binaryContent := looksLikeBinaryContent(content)
-	isImage := isImagePreviewExtension(resolvedPath)
+	isImage, binaryContent := isImagePreviewExtension(resolvedPath), looksLikeBinaryContent(content)
 	buildSingleLineResult := func(line int, snippetText string, binary bool, mediaType string, sizeBytes int) map[string]any {
 		return map[string]any{
 			"ok":          true,
@@ -566,8 +557,7 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 		), nil
 	}
 
-	text := strings.ReplaceAll(string(content), "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
+	text := strings.ReplaceAll(strings.ReplaceAll(string(content), "\r\n", "\n"), "\r", "\n")
 	lines := strings.Split(text, "\n")
 	if len(lines) == 0 {
 		lines = []string{""}

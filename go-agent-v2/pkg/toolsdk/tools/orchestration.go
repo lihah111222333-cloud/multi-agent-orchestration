@@ -15,7 +15,6 @@ import (
 
 const maxAgents = 200
 
-// OrchestrationTools returns orchestration tool schemas and handlers.
 func OrchestrationTools(provider OrchestrationProvider, runtime AgentRuntimeProvider, schemaProvider SchemaProvider) []Tool {
 	return []Tool{
 		{
@@ -110,7 +109,6 @@ func orchestrationListAgents(provider OrchestrationProvider, callerID string) st
 	if orchestrationListLen(infos) == 0 {
 		return "[]"
 	}
-	// 过滤掉调用者自己, 任何 agent 都不应的在列表中看到自己。
 	callerID = strings.TrimSpace(callerID)
 	if callerID == "" {
 		data, err := json.Marshal(infos)

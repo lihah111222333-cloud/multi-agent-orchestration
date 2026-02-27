@@ -1,4 +1,3 @@
-// client_appserver_transport.go — WebSocket 传输层: 连接、重连、RPC 通信。
 package codex
 
 import (
@@ -6,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -28,9 +28,6 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 	}
 
 	listenURL := fmt.Sprintf("ws://127.0.0.1:%d", c.Port)
-	// 注意: 使用 exec.Command 而非 exec.CommandContext —
-	// 子进程不应随 HTTP 请求或 WebSocket 连接断开而被终止。
-	// 生命周期由 AppServerClient.Shutdown()/Kill() 显式管理。
 	c.Cmd = exec.Command("codex", "app-server", "--listen", listenURL)
 	c.Cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	c.Cmd.Env = os.Environ()
@@ -42,7 +39,6 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 		return apperrors.Wrap(err, "AppServerClient.Spawn", "spawn app-server")
 	}
 
-	// 等待 WebSocket 可用 (默认最多 30 秒, 同时受 ctx 控制)
 	deadline := time.Now().Add(appServerStartupProbeTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
@@ -127,9 +123,9 @@ func appServerReconnectBackoff() backofflib.BackOff {
 	b := backofflib.NewExponentialBackOff()
 	b.InitialInterval = appServerReconnectBaseDelay
 	b.MaxInterval = appServerReconnectMaxDelay
-	b.MaxElapsedTime = 0 // 不自动停止，由调用方控制重试次数
+	b.MaxElapsedTime = 0
 	b.Multiplier = 2
-	b.RandomizationFactor = 0 // 保持确定性，与原实现一致
+	b.RandomizationFactor = 0
 	b.Reset()
 	return b
 }
@@ -161,9 +157,7 @@ func (c *AppServerClient) emitBackgroundEvent(message string, status string, act
 		"active":  active,
 		"done":    done,
 	}
-	for key, value := range details {
-		payload[key] = value
-	}
+	maps.Copy(payload, details)
 	data, err := json.Marshal(payload)
 	if err != nil {
 		logger.Warn("codex: emitBackgroundEvent marshal failed",
@@ -293,8 +287,6 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 			"total_reconnect_successes": health.TotalReconnectSuccess,
 		}),
 	)
-	// 显式清除残留 stream error 状态 —
-	// 防止快速重连周期中 streamErrorText 永久卡住。
 	c.emitReconnectResolved()
 	logger.Info("codex: ws reconnected",
 		logger.FieldAgentID, c.AgentID,
@@ -329,7 +321,6 @@ func (c *AppServerClient) restartProcessAndReconnect() error {
 	if err != nil {
 		return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "dial ws")
 	}
-	// 重置 wsDone 以支持新的 readLoop 生命周期信号。
 	c.replaceWSConnAndStartLoops(conn, true)
 	return nil
 }
@@ -489,10 +480,6 @@ func (c *AppServerClient) handleReconnectExhausted(trigger, activeTurnID string,
 	)
 }
 
-// ========================================
-// JSON-RPC 请求/响应
-// ========================================
-
 func (c *AppServerClient) call(method string, params any, timeout time.Duration) (json.RawMessage, error) {
 	rpcID := newJSONRPCIntID(c.nextID.Add(1))
 	pc := &pendingCall{done: make(chan struct{})}
@@ -552,13 +539,3 @@ func (c *AppServerClient) RespondError(id int64, code int, message string) error
 func (c *AppServerClient) respondErrorWithID(id jsonRPCID, code int, message string) error {
 	return c.writeRPCResponse(id, nil, &jsonRPCError{Code: code, Message: message})
 }
-
-// ========================================
-// 协议方法
-// ========================================
-
-// Initialize 发送 initialize 请求。
-//
-// capabilities.experimentalApi = true 是 dynamicTools 的前提条件:
-// codex 的 thread/start.dynamicTools 标记了 #[experimental],
-// 不声明此 capability 会导致 dynamicTools 被静默忽略。

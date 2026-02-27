@@ -261,7 +261,6 @@ func (m *WorkspaceManager) AbortRun(ctx context.Context, runKey, updatedBy, reas
 	})
 }
 
-// transitionToMerging 将 run 状态从 active 转换为 merging, 返回 run 记录或错误。
 func (m *WorkspaceManager) transitionToMerging(ctx context.Context, runKey, updatedBy string, dryRun bool) (*store.WorkspaceRun, error) {
 	run, transitioned, err := m.runs.TryTransitionRunStatus(
 		ctx, runKey,
@@ -400,16 +399,10 @@ func recordMergeResult(result *WorkspaceMergeResult, counter *int, path, action,
 	if counter != nil {
 		*counter = *counter + 1
 	}
-	row := WorkspaceMergeFileResult{Path: path, Action: action}
-	if reason != "" {
-		row.Reason = reason
-	}
-	result.Files = append(result.Files, row)
+	result.Files = append(result.Files, WorkspaceMergeFileResult{Path: path, Action: action, Reason: reason})
 }
 
-func recordMergeError(result *WorkspaceMergeResult, path, reason string) {
-	recordMergeResult(result, &result.Errors, path, "error", reason)
-}
+func recordMergeError(result *WorkspaceMergeResult, path, reason string) { recordMergeResult(result, &result.Errors, path, "error", reason) }
 
 type mergeCandidate struct {
 	rel          string
@@ -602,7 +595,6 @@ func (m *WorkspaceManager) handleDeletedFiles(
 	}
 }
 
-// validateBootstrapFile 验证单个引导文件 (类型/大小/累计大小)。
 func validateBootstrapFile(
 	run *store.WorkspaceRun,
 	rel string,

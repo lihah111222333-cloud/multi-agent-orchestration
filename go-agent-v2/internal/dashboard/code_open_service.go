@@ -495,6 +495,8 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 	}
 
 	relativePath := resolveCodeOpenRelativePath(resolvedPath, p.Project, p.Projects)
+	binaryContent := looksLikeBinaryContent(content)
+	isImage := isImagePreviewExtension(resolvedPath)
 	buildSingleLineResult := func(line int, snippetText string, binary bool, mediaType string, sizeBytes int) map[string]any {
 		return map[string]any{
 			"ok":          true,
@@ -516,44 +518,38 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 		}
 	}
 
-	if isImagePreviewExtension(resolvedPath) {
+	if isImage || binaryContent {
 		mediaType := detectMediaType(resolvedPath, content)
 		targetLine := 1
 		if p.Line > 0 {
 			targetLine = p.Line
 		}
-		fileURL := codePathToURI(resolvedPath)
-		previewURL := fileURL
-		thumbnailURL := fileURL
-		if inlineURL := imageDataURL(mediaType, content); inlineURL != "" {
-			previewURL = inlineURL
-			thumbnailURL = inlineURL
-		}
-		logger.Info("ui/code/open: image parser applied",
-			"resolved_path", resolvedPath,
-			"relative_path", relativePath,
-			"media_type", mediaType,
-			"size_bytes", len(content),
-		)
-		result := buildSingleLineResult(
-			targetLine,
-			fmt.Sprintf("[image preview: %s, %d bytes]", mediaType, len(content)),
-			looksLikeBinaryContent(content),
-			mediaType,
-			len(content),
-		)
-		result["image"] = true
-		result["plugin"] = "image-parser"
-		result["previewURL"] = previewURL
-		result["thumbnailURL"] = thumbnailURL
-		return result, nil
-	}
-
-	if looksLikeBinaryContent(content) {
-		mediaType := detectMediaType(resolvedPath, content)
-		targetLine := 1
-		if p.Line > 0 {
-			targetLine = p.Line
+		if isImage {
+			fileURL := codePathToURI(resolvedPath)
+			previewURL := fileURL
+			thumbnailURL := fileURL
+			if inlineURL := imageDataURL(mediaType, content); inlineURL != "" {
+				previewURL = inlineURL
+				thumbnailURL = inlineURL
+			}
+			logger.Info("ui/code/open: image parser applied",
+				"resolved_path", resolvedPath,
+				"relative_path", relativePath,
+				"media_type", mediaType,
+				"size_bytes", len(content),
+			)
+			result := buildSingleLineResult(
+				targetLine,
+				fmt.Sprintf("[image preview: %s, %d bytes]", mediaType, len(content)),
+				binaryContent,
+				mediaType,
+				len(content),
+			)
+			result["image"] = true
+			result["plugin"] = "image-parser"
+			result["previewURL"] = previewURL
+			result["thumbnailURL"] = thumbnailURL
+			return result, nil
 		}
 		logger.Info("ui/code/open: binary content detected",
 			"resolved_path", resolvedPath,

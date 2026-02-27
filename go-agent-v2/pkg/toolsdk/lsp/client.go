@@ -205,10 +205,10 @@ func (c *Client) Running() bool {
 }
 
 func (c *Client) ensureRunning() error {
-	if !c.Running() {
-		return fmt.Errorf("lsp client not running")
+	if c.Running() {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("lsp client not running")
 }
 
 func (c *Client) callWhenRunning(method string, params any, result any) error {
@@ -218,12 +218,9 @@ func (c *Client) callWhenRunning(method string, params any, result any) error {
 	return c.call(method, params, result)
 }
 
-func (c *Client) callRawWhenRunning(method string, params any) (json.RawMessage, error) {
-	var raw json.RawMessage
-	if err := c.callWhenRunning(method, params, &raw); err != nil {
-		return nil, err
-	}
-	return raw, nil
+func (c *Client) callRawWhenRunning(method string, params any) (raw json.RawMessage, err error) {
+	err = c.callWhenRunning(method, params, &raw)
+	return raw, err
 }
 
 // DidOpen 通知服务器打开了文件。
@@ -441,15 +438,13 @@ func (c *Client) clearPendingLocked() {
 	}
 }
 
-const defaultCallTimeout = 30 * time.Second
-
 func (c *Client) call(method string, params any, result any) error {
-	return c.callWithTimeout(method, params, result, defaultCallTimeout)
+	return c.callWithTimeout(method, params, result, 30*time.Second)
 }
 
 func (c *Client) callWithTimeout(method string, params any, result any, timeout time.Duration) error {
 	if timeout <= 0 {
-		timeout = defaultCallTimeout
+		timeout = 30 * time.Second
 	}
 
 	id := int(c.nextID.Add(1))
@@ -474,10 +469,10 @@ func (c *Client) callWithTimeout(method string, params any, result any, timeout 
 	select {
 	case resp, ok := <-ch:
 		if !ok {
-			return callErrorf("connection closed while waiting for %s", method)
+			return apperrors.Newf("LSP.call", "connection closed while waiting for %s", method)
 		}
 		if resp.Error != nil {
-			return callErrorf("%s error %d: %s", method, resp.Error.Code, resp.Error.Message)
+			return apperrors.Newf("LSP.call", "%s error %d: %s", method, resp.Error.Code, resp.Error.Message)
 		}
 		if result != nil && resp.Result != nil {
 			return json.Unmarshal(resp.Result, result)
@@ -485,12 +480,8 @@ func (c *Client) callWithTimeout(method string, params any, result any, timeout 
 		return nil
 	case <-timer.C:
 		logger.Warn("lsp: call timeout", logger.FieldMethod, method, logger.FieldLanguage, c.language)
-		return callErrorf("%s timeout (%s)", method, timeout)
+		return apperrors.Newf("LSP.call", "%s timeout (%s)", method, timeout)
 	}
-}
-
-func callErrorf(format string, args ...any) error {
-	return apperrors.Newf("LSP.call", format, args...)
 }
 
 func (c *Client) notify(method string, params any) error {

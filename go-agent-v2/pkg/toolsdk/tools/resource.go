@@ -325,9 +325,7 @@ func resourceWorkspaceOps(provider ResourceProvider, op string) (WorkspaceOps, s
 
 func resourceWorkspaceDecodeArgs(provider ResourceProvider, args json.RawMessage, dst any, op string) (WorkspaceOps, string) {
 	ops, errMsg := resourceWorkspaceOps(provider, op)
-	if errMsg != "" {
-		return nil, errMsg
-	}
+	if errMsg != "" { return nil, errMsg }
 	if errMsg := resourceDecodeArgs(args, dst, op); errMsg != "" {
 		return nil, errMsg
 	}
@@ -567,9 +565,7 @@ func resourceWorkspaceCreateRun(provider ResourceProvider, args json.RawMessage)
 		Metadata   any      `json:"metadata"`
 	}
 	ops, errMsg := resourceWorkspaceDecodeArgs(provider, args, &p, "ResourceTool.WorkspaceCreate")
-	if errMsg != "" {
-		return errMsg
-	}
+	if errMsg != "" { return errMsg }
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	run, err := ops.CreateRun(ctx, WorkspaceCreateRunRequest{
@@ -599,9 +595,7 @@ func resourceWorkspaceGetRun(provider ResourceProvider, args json.RawMessage) st
 		RunKey string `json:"run_key"`
 	}
 	ops, errMsg := resourceWorkspaceDecodeArgs(provider, args, &p, "ResourceTool.WorkspaceGet")
-	if errMsg != "" {
-		return errMsg
-	}
+	if errMsg != "" { return errMsg }
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	run, err := ops.GetRun(ctx, p.RunKey)
@@ -616,9 +610,7 @@ func resourceWorkspaceGetRun(provider ResourceProvider, args json.RawMessage) st
 
 func resourceWorkspaceListRuns(provider ResourceProvider, args json.RawMessage) string {
 	ops, errMsg := resourceWorkspaceOps(provider, "ResourceTool.WorkspaceList")
-	if errMsg != "" {
-		return errMsg
-	}
+	if errMsg != "" { return errMsg }
 	var p struct {
 		Status string `json:"status"`
 		DagKey string `json:"dag_key"`
@@ -645,9 +637,7 @@ func resourceWorkspaceMergeRun(provider ResourceProvider, args json.RawMessage) 
 		DeleteRemoved bool   `json:"delete_removed"`
 	}
 	ops, errMsg := resourceWorkspaceDecodeArgs(provider, args, &p, "ResourceTool.WorkspaceMerge")
-	if errMsg != "" {
-		return errMsg
-	}
+	if errMsg != "" { return errMsg }
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	result, err := ops.MergeRun(ctx, WorkspaceMergeRunRequest{
@@ -673,9 +663,7 @@ func resourceWorkspaceAbortRun(provider ResourceProvider, args json.RawMessage) 
 		Reason    string `json:"reason"`
 	}
 	ops, errMsg := resourceWorkspaceDecodeArgs(provider, args, &p, "ResourceTool.WorkspaceAbort")
-	if errMsg != "" {
-		return errMsg
-	}
+	if errMsg != "" { return errMsg }
 	ctx, cancel := resourceToolCtx()
 	defer cancel()
 	run, err := ops.AbortRun(ctx, p.RunKey, p.UpdatedBy, p.Reason)

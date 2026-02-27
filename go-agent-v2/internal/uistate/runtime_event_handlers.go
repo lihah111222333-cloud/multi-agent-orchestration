@@ -523,69 +523,48 @@ func (m *RuntimeManager) deriveThreadStateLocked(threadID string) string {
 	}
 }
 
-type threadStatusBranch uint8
-
-const (
-	threadStatusBranchDefault threadStatusBranch = iota
-	threadStatusBranchStreamError
-	threadStatusBranchTerminalWait
-	threadStatusBranchMCPStartup
-	threadStatusBranchBackground
-	threadStatusBranchUserInput
-	threadStatusBranchApproval
-	threadStatusBranchReasoningHeader
-)
-
-func deriveThreadStatusBranch(rt *threadRuntime) threadStatusBranch {
+func deriveThreadStatusOverlay(rt *threadRuntime) (string, string, bool) {
 	switch {
 	case strings.TrimSpace(rt.streamErrorText) != "":
-		return threadStatusBranchStreamError
+		return rt.streamErrorText, strings.TrimSpace(rt.streamErrorDetails), true
 	case rt.terminalWaitOverlay:
-		return threadStatusBranchTerminalWait
+		if strings.TrimSpace(rt.terminalWaitLabel) != "" {
+			return rt.terminalWaitLabel, "命令正在等待终端输入", true
+		}
+		return "等待后台终端", "命令正在等待终端输入", true
 	case shouldShowMCPStartupOverlay(rt):
-		return threadStatusBranchMCPStartup
+		if strings.TrimSpace(rt.mcpStartupLabel) != "" {
+			return rt.mcpStartupLabel, "正在初始化 MCP 服务", true
+		}
+		return "MCP 启动中", "正在初始化 MCP 服务", true
 	case rt.backgroundOverlay:
-		return threadStatusBranchBackground
+		header := "后台处理中"
+		if strings.TrimSpace(rt.backgroundLabel) != "" {
+			header = rt.backgroundLabel
+		}
+		details := "后台事件处理中"
+		if strings.TrimSpace(rt.backgroundDetails) != "" {
+			details = rt.backgroundDetails
+		}
+		return header, details, true
 	case rt.userInputDepth > 0:
-		return threadStatusBranchUserInput
+		return "等待输入", "等待用户输入后继续", true
 	case rt.approvalDepth > 0:
-		return threadStatusBranchApproval
+		if strings.TrimSpace(rt.approvalContext) != "" {
+			return "等待确认 · " + rt.approvalContext, "等待用户审批后继续", true
+		}
+		return "等待确认", "等待用户审批后继续", true
 	case shouldUseReasoningHeader(rt):
-		return threadStatusBranchReasoningHeader
+		return rt.statusHeader, "根据推理标题展示当前阶段", true
 	default:
-		return threadStatusBranchDefault
+		return "", "", false
 	}
 }
 
 func (m *RuntimeManager) deriveThreadStatusHeaderLocked(threadID, state string) string {
 	rt := m.runtime[threadID]
-	switch deriveThreadStatusBranch(rt) {
-	case threadStatusBranchStreamError:
-		return rt.streamErrorText
-	case threadStatusBranchTerminalWait:
-		if strings.TrimSpace(rt.terminalWaitLabel) != "" {
-			return rt.terminalWaitLabel
-		}
-		return "等待后台终端"
-	case threadStatusBranchMCPStartup:
-		if strings.TrimSpace(rt.mcpStartupLabel) != "" {
-			return rt.mcpStartupLabel
-		}
-		return "MCP 启动中"
-	case threadStatusBranchBackground:
-		if strings.TrimSpace(rt.backgroundLabel) != "" {
-			return rt.backgroundLabel
-		}
-		return "后台处理中"
-	case threadStatusBranchUserInput:
-		return "等待输入"
-	case threadStatusBranchApproval:
-		if strings.TrimSpace(rt.approvalContext) != "" {
-			return "等待确认 · " + rt.approvalContext
-		}
-		return "等待确认"
-	case threadStatusBranchReasoningHeader:
-		return rt.statusHeader
+	if header, _, ok := deriveThreadStatusOverlay(rt); ok {
+		return header
 	}
 	return defaultStatusHeaderForState(state)
 }
@@ -609,24 +588,8 @@ func defaultStatusHeaderForState(state string) string {
 
 func (m *RuntimeManager) deriveThreadStatusDetailsLocked(threadID, state string) string {
 	rt := m.runtime[threadID]
-	switch deriveThreadStatusBranch(rt) {
-	case threadStatusBranchStreamError:
-		return strings.TrimSpace(rt.streamErrorDetails)
-	case threadStatusBranchTerminalWait:
-		return "命令正在等待终端输入"
-	case threadStatusBranchMCPStartup:
-		return "正在初始化 MCP 服务"
-	case threadStatusBranchBackground:
-		if strings.TrimSpace(rt.backgroundDetails) != "" {
-			return rt.backgroundDetails
-		}
-		return "后台事件处理中"
-	case threadStatusBranchUserInput:
-		return "等待用户输入后继续"
-	case threadStatusBranchApproval:
-		return "等待用户审批后继续"
-	case threadStatusBranchReasoningHeader:
-		return "根据推理标题展示当前阶段"
+	if _, details, ok := deriveThreadStatusOverlay(rt); ok {
+		return details
 	}
 	switch state {
 	case "running":

@@ -45,13 +45,8 @@ func buildResourceTools(provider ResourceProvider, specs []resourceToolSpec) []T
 }
 
 func resourceObjectSchema(properties map[string]any, required ...string) map[string]any {
-	schema := map[string]any{
-		"type":       "object",
-		"properties": properties,
-	}
-	if len(required) > 0 {
-		schema["required"] = required
-	}
+	schema := map[string]any{"type": "object", "properties": properties}
+	if len(required) > 0 { schema["required"] = required }
 	return schema
 }
 
@@ -284,18 +279,12 @@ func resourceToolSpecs() []resourceToolSpec {
 	}
 }
 
-func resourceToolCtx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 5*time.Second)
-}
+func resourceToolCtx() (context.Context, context.CancelFunc) { return context.WithTimeout(context.Background(), 5*time.Second) }
 
-func resourceJSON(v any) string {
-	data, _ := json.Marshal(v); return string(data)
-}
+func resourceJSON(v any) string { data, _ := json.Marshal(v); return string(data) }
 
 func resourceDecodeArgs(args json.RawMessage, dst any, op string) string {
-	if err := json.Unmarshal(args, dst); err != nil {
-		return ToolError(pkgerr.Wrap(err, op, "invalid args"))
-	}
+	if err := json.Unmarshal(args, dst); err != nil { return ToolError(pkgerr.Wrap(err, op, "invalid args")) }
 	return ""
 }
 
@@ -353,12 +342,9 @@ func resourceTaskCreateDAG(provider ResourceProvider, args json.RawMessage) stri
 			DependsOn:  n.DependsOn,
 			CommandRef: n.CommandRef,
 		})
-		if err != nil {
-			logger.Warn("resource: save node failed", logger.FieldDAG, p.DagKey, logger.FieldNode, n.NodeKey, logger.FieldError, err)
-			continue
-			}
-			nodesCreated++
-		}
+		if err != nil { logger.Warn("resource: save node failed", logger.FieldDAG, p.DagKey, logger.FieldNode, n.NodeKey, logger.FieldError, err); continue }
+		nodesCreated++
+	}
 	logger.Info("resource: DAG created", logger.FieldDAG, p.DagKey, "nodes", nodesCreated)
 	return resourceJSON(map[string]any{
 		"dag_key":       dag.DagKey,
@@ -602,10 +588,7 @@ func isNilAny(v any) bool {
 func resourceWorkspaceRunKey(run any) string {
 	if run == nil { return "" }
 	v := reflect.ValueOf(run)
-	for v.Kind() == reflect.Pointer {
-		if v.IsNil() { return "" }
-		v = v.Elem()
-	}
+	for v.Kind() == reflect.Pointer { if v.IsNil() { return "" }; v = v.Elem() }
 	if v.Kind() != reflect.Struct { return "" }
 	f := v.FieldByName("RunKey")
 	if !f.IsValid() || f.Kind() != reflect.String { return "" }

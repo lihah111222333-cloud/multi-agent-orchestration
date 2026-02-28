@@ -158,10 +158,7 @@ func normalizeApprovalResultPayload(method string, result any) (map[string]any, 
 	return nil, false
 }
 
-func mergeApprovalDecisionPayload(method string, current map[string]any, result any) map[string]any {
-	if normalized, ok := normalizeApprovalResultPayload(method, result); ok { return normalized }
-	return current
-}
+func mergeApprovalDecisionPayload(method string, current map[string]any, result any) map[string]any { if normalized, ok := normalizeApprovalResultPayload(method, result); ok { return normalized }; return current }
 
 func approvalDecisionPayload(method string, approved bool) map[string]any {
 	if !approved {

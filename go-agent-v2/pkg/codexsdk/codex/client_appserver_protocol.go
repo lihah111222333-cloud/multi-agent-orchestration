@@ -127,10 +127,8 @@ func (c *AppServerClient) tryInterruptCommand() (bool, error) {
 	} else if callTurnInterrupt("", "thread_scoped") == nil {
 		return true, nil
 	}
-	if _, _, err := callWithNotInitializedRecovery(c.call, c.Initialize, "interruptConversation", map[string]any{"conversationId": threadID}, appServerInterruptTimeout); err == nil {
-		return true, nil
-	}
-	return false, nil
+	_, _, err := callWithNotInitializedRecovery(c.call, c.Initialize, "interruptConversation", map[string]any{"conversationId": threadID}, appServerInterruptTimeout)
+	return err == nil, nil
 }
 
 func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID *int64) error {

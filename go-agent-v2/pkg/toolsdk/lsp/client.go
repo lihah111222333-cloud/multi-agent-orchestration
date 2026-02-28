@@ -311,7 +311,7 @@ func (c *Client) DocumentSymbol(ctx context.Context, uri string) ([]DocumentSymb
 	if err != nil {
 		return nil, err
 	}
-	return decodeDocumentSymbols(raw)
+	return decodeArrayLike(raw, "decode document symbols", false, decodeDocumentSymbolOne)
 }
 
 // Completion 代码补全 — 返回补全列表。
@@ -350,7 +350,7 @@ func (c *Client) WorkspaceSymbol(ctx context.Context, query string) ([]Workspace
 	if err != nil {
 		return nil, err
 	}
-	return decodeWorkspaceSymbols(raw)
+	return decodeArrayLike(raw, "decode workspace symbols", false, decodeWorkspaceSymbolOne)
 }
 
 // Stop 优雅关闭: shutdown → exit → wait。

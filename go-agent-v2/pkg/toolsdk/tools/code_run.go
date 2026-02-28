@@ -81,11 +81,10 @@ func CodeRunTools(provider CodeRunProvider, runtime AgentRuntimeProvider, approv
 }
 
 func handleCodeRun(callCtx ToolCallContext, provider CodeRunProvider, runtime AgentRuntimeProvider, approvals ApprovalProvider, args json.RawMessage) string {
-	runner, cleanupRunner, runnerErr := resolveCodeRunner(provider, runtime, callCtx.AgentID)
-	if runnerErr != nil {
-		return fmt.Sprintf(`{"error":%q,"exit_code":-1}`, runnerErr.Error())
+	runner, err := resolveCodeRunner(provider, runtime, callCtx.AgentID)
+	if err != nil {
+		return fmt.Sprintf(`{"error":%q,"exit_code":-1}`, err.Error())
 	}
-	defer cleanupRunner()
 
 	var p struct {
 		Language string  `json:"language"`
@@ -149,11 +148,10 @@ func handleCodeRun(callCtx ToolCallContext, provider CodeRunProvider, runtime Ag
 }
 
 func handleCodeRunTest(callCtx ToolCallContext, provider CodeRunProvider, runtime AgentRuntimeProvider, args json.RawMessage) string {
-	runner, cleanupRunner, runnerErr := resolveCodeRunner(provider, runtime, callCtx.AgentID)
-	if runnerErr != nil {
-		return fmt.Sprintf(`{"error":%q,"exit_code":-1}`, runnerErr.Error())
+	runner, err := resolveCodeRunner(provider, runtime, callCtx.AgentID)
+	if err != nil {
+		return fmt.Sprintf(`{"error":%q,"exit_code":-1}`, err.Error())
 	}
-	defer cleanupRunner()
 
 	var p struct {
 		TestFunc string  `json:"test_func"`
@@ -230,9 +228,9 @@ func (w workDirCodeRunner) Run(ctx context.Context, req CodeRunRequest) (*CodeRu
 	return w.base.Run(ctx, req)
 }
 
-func resolveCodeRunner(provider CodeRunProvider, runtime AgentRuntimeProvider, agentID string) (CodeExecRunner, func(), error) {
+func resolveCodeRunner(provider CodeRunProvider, runtime AgentRuntimeProvider, agentID string) (CodeExecRunner, error) {
 	if provider == nil || provider.CodeRunner() == nil {
-		return nil, nil, fmt.Errorf("code runner not available")
+		return nil, fmt.Errorf("code runner not available")
 	}
 	runner := provider.CodeRunner()
 	agentCwd := ""
@@ -240,9 +238,9 @@ func resolveCodeRunner(provider CodeRunProvider, runtime AgentRuntimeProvider, a
 		agentCwd = NormalizeAgentWorkDir(runtime.GetAgentWorkDir(agentID))
 	}
 	if agentCwd == "" {
-		return runner, func() {}, nil
+		return runner, nil
 	}
-	return workDirCodeRunner{base: runner, workDir: agentCwd}, func() {}, nil
+	return workDirCodeRunner{base: runner, workDir: agentCwd}, nil
 }
 
 func writeCodeRunAudit(provider CodeRunProvider, agentID, language, mode, result string, exitCode int, durationMS int64, code, command, output string) {

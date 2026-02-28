@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
@@ -106,19 +105,19 @@ func orchestrationListAgents(provider OrchestrationProvider, callerID string) st
 		return "[]"
 	}
 	infos := provider.AgentLauncher().List()
-	if orchestrationListLen(infos) == 0 {
-		return "[]"
-	}
-	callerID = strings.TrimSpace(callerID)
 	data, err := json.Marshal(infos)
 	if err != nil {
 		return ToolError(err)
 	}
-	if callerID == "" {
+	list, err := decodeAgentList(infos)
+	if err != nil {
 		return string(data)
 	}
-	var list []map[string]any
-	if err := json.Unmarshal(data, &list); err != nil {
+	if len(list) == 0 {
+		return "[]"
+	}
+	callerID = strings.TrimSpace(callerID)
+	if callerID == "" {
 		return string(data)
 	}
 	filtered := make([]map[string]any, 0, len(list))
@@ -197,7 +196,7 @@ func orchestrationLaunchAgent(provider OrchestrationProvider, runtime AgentRunti
 	if p.Cwd == "" {
 		p.Cwd = "."
 	}
-	if orchestrationListLen(provider.AgentLauncher().List()) >= maxAgents {
+	if list, err := decodeAgentList(provider.AgentLauncher().List()); err == nil && len(list) >= maxAgents {
 		return ToolError(apperrors.Newf("orchestrationLaunchAgent", "max agents (%d) reached", maxAgents))
 	}
 	id := fmt.Sprintf("agent-%d-%d", time.Now().UnixMilli(), nextThreadSeq(provider))
@@ -278,23 +277,16 @@ func orchestrationGetAgentReport(provider OrchestrationProvider, args json.RawMe
 	return ToolJSON(map[string]any{"agent_id": p.AgentID, "state": state, "report": report})
 }
 
-func orchestrationListLen(v any) int {
-	if v == nil {
-		return 0
+func decodeAgentList(v any) ([]map[string]any, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
 	}
-	rv := reflect.ValueOf(v)
-	if rv.Kind() == reflect.Pointer {
-		if rv.IsNil() {
-			return 0
-		}
-		rv = rv.Elem()
+	var out []map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
 	}
-	switch rv.Kind() {
-	case reflect.Slice, reflect.Array, reflect.Map, reflect.String:
-		return rv.Len()
-	default:
-		return 0
-	}
+	return out, nil
 }
 
 func nextThreadSeq(provider OrchestrationProvider) int64 {

@@ -611,7 +611,6 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 	seen := make(map[string]struct{}, len(files))
 	totalBytes := int64(0)
 	copied := 0
-
 	for _, raw := range files {
 		rel, err := normalizeRelativePath(raw)
 		if err != nil {
@@ -624,12 +623,10 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 		if len(seen) > m.maxFiles {
 			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap files exceed limit (%d)", m.maxFiles)
 		}
-
 		sourcePath := filepath.Join(run.SourceRoot, rel)
 		if !isPathWithinRoot(run.SourceRoot, sourcePath) {
 			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap path escapes source root: %s", rel)
 		}
-
 		info, err := os.Lstat(sourcePath)
 		if err != nil {
 			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "bootstrap stat %s", rel)
@@ -639,7 +636,6 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 			return copied, totalBytes, err
 		}
 		totalBytes = nextTotalBytes
-
 		targetPath := filepath.Join(run.WorkspacePath, rel)
 		if !isPathWithinRoot(run.WorkspacePath, targetPath) {
 			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap target escapes workspace: %s", rel)
@@ -650,7 +646,6 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 		if err := copyFileAtomic(sourcePath, targetPath, info.Mode().Perm()); err != nil {
 			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "copy bootstrap file %s", rel)
 		}
-
 		hash, err := hashFile(sourcePath)
 		if err != nil {
 			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "hash bootstrap source %s", rel)

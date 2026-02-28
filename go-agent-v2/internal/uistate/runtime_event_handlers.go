@@ -163,7 +163,7 @@ func (m *RuntimeManager) applyLifecycleStateLocked(threadID string, normalized N
 		}
 		m.updateTokenUsageLocked(threadID, payload, eventType, method, ts)
 	}
-	if isThreadStatusChangedEvent(eventType, method) {
+	if eventType == "thread/status/changed" || strings.EqualFold(method, "thread/status/changed") {
 		m.applyThreadStatusChangedLocked(threadID, payload)
 	}
 
@@ -188,13 +188,19 @@ func (m *RuntimeManager) applyErrorOverlayLocked(rt *threadRuntime, threadID str
 	}
 }
 
-func clearTerminalWaitOverlay(rt *threadRuntime) { rt.terminalWaitOverlay, rt.terminalWaitLabel = false, "" }
+func clearTerminalWaitOverlay(rt *threadRuntime) {
+	rt.terminalWaitOverlay, rt.terminalWaitLabel = false, ""
+}
 func clearMCPStartupOverlay(rt *threadRuntime) { rt.mcpStartupOverlay, rt.mcpStartupLabel = false, "" }
-func clearBackgroundOverlay(rt *threadRuntime) { rt.backgroundOverlay, rt.backgroundLabel, rt.backgroundDetails = false, "", "" }
+func clearBackgroundOverlay(rt *threadRuntime) {
+	rt.backgroundOverlay, rt.backgroundLabel, rt.backgroundDetails = false, "", ""
+}
 func clearStreamErrorOverlay(rt *threadRuntime) { rt.streamErrorText, rt.streamErrorDetails = "", "" }
 
 func applyOverlays(rt *threadRuntime, eventType, method string, payload map[string]any) {
-	if isTerminalInteractionEvent(eventType, method) {
+	if eventType == "exec_terminal_interaction" ||
+		eventType == "item/commandexecution/terminalinteraction" ||
+		strings.EqualFold(method, "item/commandExecution/terminalInteraction") {
 		if isTerminalWaitPayload(payload) {
 			rt.terminalWaitOverlay = true
 			rt.terminalWaitLabel = deriveTerminalWaitLabel(payload)
@@ -456,8 +462,16 @@ func (m *RuntimeManager) incrActivityStatLocked(threadID, kind, toolName string)
 	m.snapshot.ActivityStatsByThread[threadID] = stats
 }
 
-func (m *RuntimeManager) IncrActivityStat(threadID, kind, toolName string) { m.mu.Lock(); defer m.mu.Unlock(); m.incrActivityStatLocked(threadID, kind, toolName) }
-func (m *RuntimeManager) PushAlert(threadID, level, message string)         { m.mu.Lock(); defer m.mu.Unlock(); m.pushAlertLocked(threadID, level, message) }
+func (m *RuntimeManager) IncrActivityStat(threadID, kind, toolName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.incrActivityStatLocked(threadID, kind, toolName)
+}
+func (m *RuntimeManager) PushAlert(threadID, level, message string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pushAlertLocked(threadID, level, message)
+}
 
 func (m *RuntimeManager) pushAlertLocked(threadID, level, message string) {
 	alerts := m.snapshot.AlertsByThread[threadID]
@@ -580,10 +594,6 @@ func shouldShowMCPStartupOverlay(rt *threadRuntime) bool {
 		rt.commandDepth == 0 && rt.fileEditDepth == 0 && rt.toolCallDepth == 0 && rt.collabDepth == 0
 }
 
-func isThreadStatusChangedEvent(eventType, method string) bool {
-	return eventType == "thread/status/changed" || strings.EqualFold(method, "thread/status/changed")
-}
-
 func (m *RuntimeManager) applyThreadStatusChangedLocked(threadID string, payload map[string]any) {
 	rt := m.runtime[threadID]
 	if rt == nil {
@@ -655,10 +665,6 @@ func extractStringList(raw any) []string {
 	default:
 		return nil
 	}
-}
-
-func isTerminalInteractionEvent(eventType, method string) bool {
-	return eventType == "exec_terminal_interaction" || eventType == "item/commandexecution/terminalinteraction" || strings.EqualFold(method, "item/commandExecution/terminalInteraction")
 }
 
 func isMCPStartupEvent(eventType, method, kind string) bool {

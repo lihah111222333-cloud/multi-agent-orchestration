@@ -218,9 +218,6 @@ func threadLogFields(threadID string) []any {
 	id := strings.TrimSpace(threadID)
 	return []any{logger.FieldAgentID, id, logger.FieldThreadID, id}
 }
-func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time) bool {
-	return !IsTerminalEventType(eventType, method) && !startedAt.IsZero() && time.Since(startedAt) >= trackedTurnGracePeriod
-}
 func scheduleTrackedTurnStallCheck(turn *trackedTurn, delay time.Duration, threadID, turnID string, check func(string, string)) {
 	if turn == nil || check == nil {
 		return
@@ -229,14 +226,6 @@ func scheduleTrackedTurnStallCheck(turn *trackedTurn, delay time.Duration, threa
 		delay = 10 * time.Second
 	}
 	turn.StallTimer = time.AfterFunc(delay, func() { check(threadID, turnID) })
-}
-func rescheduleStallCheck(turn *trackedTurn, threadID, turnID string, silent, threshold time.Duration, check func(string, string)) {
-	remaining := threshold - silent
-	if remaining <= 0 {
-		remaining = 10 * time.Second
-	}
-	next := max(remaining/2, 10*time.Second)
-	scheduleTrackedTurnStallCheck(turn, next, threadID, turnID, check)
 }
 func NormalizeTrackedTurnStatus(status string) string {
 	s := strings.ToLower(strings.TrimSpace(status))
@@ -298,9 +287,15 @@ func extractTrackedTurnNestedField(payload map[string]any, nestedKeys []string, 
 	}
 	return ExtractTrackedString(payload, rootKeys...)
 }
-func ExtractTrackedTurnID(payload map[string]any) string     { return extractTrackedTurnNestedField(payload, []string{"id", "turnId", "turn_id"}, []string{"turnId", "turn_id", "id"}) }
-func ExtractTrackedTurnStatus(payload map[string]any) string { return extractTrackedTurnNestedField(payload, []string{"status", "state"}, []string{"status", "state"}) }
-func ExtractTrackedTurnReason(payload map[string]any) string { return extractTrackedTurnNestedField(payload, []string{"reason", "message"}, []string{"reason", "message"}) }
+func ExtractTrackedTurnID(payload map[string]any) string {
+	return extractTrackedTurnNestedField(payload, []string{"id", "turnId", "turn_id"}, []string{"turnId", "turn_id", "id"})
+}
+func ExtractTrackedTurnStatus(payload map[string]any) string {
+	return extractTrackedTurnNestedField(payload, []string{"status", "state"}, []string{"status", "state"})
+}
+func ExtractTrackedTurnReason(payload map[string]any) string {
+	return extractTrackedTurnNestedField(payload, []string{"reason", "message"}, []string{"reason", "message"})
+}
 func trackedTurnEventAndMethodKeys(eventType, method string) (string, string) {
 	return strings.ToLower(strings.TrimSpace(eventType)), strings.ToLower(strings.TrimSpace(method))
 }
@@ -337,7 +332,9 @@ func extractThreadStatusType(payload map[string]any) string {
 	}
 }
 func ThreadStatusTerminalFromPayload(payload map[string]any) (status string, reason string, terminal bool) {
-	if terminal, ok := threadStatusTerminalMap[extractThreadStatusType(payload)]; ok { return terminal.status, terminal.reason, true }
+	if terminal, ok := threadStatusTerminalMap[extractThreadStatusType(payload)]; ok {
+		return terminal.status, terminal.reason, true
+	}
 	return "", "", false
 }
 func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]any) (string, string, string, bool, bool) {
@@ -378,7 +375,9 @@ func IsTerminalEventType(eventType, method string) bool {
 	eventKey, methodKey := trackedTurnEventAndMethodKeys(eventType, method)
 	return trackedTurnTerminalKindFor(eventKey, methodKey) != trackedTurnTerminalNone
 }
-func TrackedTurnSummaryCacheKey(threadID, turnID string) string { return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID) }
+func TrackedTurnSummaryCacheKey(threadID, turnID string) string {
+	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID)
+}
 func pruneTrackedTurnSummaryCacheLocked(cache map[string]TrackedTurnSummaryCacheEntry, now time.Time, ttl time.Duration, maxEntries int) {
 	if ttl > 0 {
 		for key, entry := range cache {
@@ -554,17 +553,6 @@ func TrackerStateCore(state TurnTrackerState) (map[string]*trackedTurn, *sync.Mu
 	return activeTurns, state.Mu, TrackerDurationOrDefault(state.TurnWatchdogTimeout, DefaultTurnWatchdogTimeout), TrackerDurationOrDefault(state.StallThreshold, DefaultStallThreshold)
 }
 
-func stopTrackedTurnTimers(turn *trackedTurn) {
-	if turn == nil {
-		return
-	}
-	for _, timer := range []*time.Timer{turn.Timer, turn.StallTimer, turn.EarlySilenceTimer} {
-		if timer != nil {
-			timer.Stop()
-		}
-	}
-}
-
 func sendTrackedTurnDone(turn *trackedTurn, status string) bool {
 	if turn == nil || turn.Done == nil {
 		return false
@@ -580,7 +568,11 @@ func sendTrackedTurnDone(turn *trackedTurn, status string) bool {
 func removeActiveTrackedTurn(activeTurns map[string]*trackedTurn, threadID string) (*trackedTurn, bool) {
 	if turn := activeTurns[threadID]; turn != nil {
 		delete(activeTurns, threadID)
-		stopTrackedTurnTimers(turn)
+		for _, timer := range []*time.Timer{turn.Timer, turn.StallTimer, turn.EarlySilenceTimer} {
+			if timer != nil {
+				timer.Stop()
+			}
+		}
 		return turn, true
 	}
 	return nil, false
@@ -882,7 +874,11 @@ func NextTrackedTurnStallDecisionCore(
 		decision.Silent = silent
 		decision.Threshold = stallThreshold
 		if silent < stallThreshold {
-			rescheduleStallCheck(turn, id, currentTurnID, silent, stallThreshold, checkTurnStall)
+			remaining := stallThreshold - silent
+			if remaining <= 0 {
+				remaining = 10 * time.Second
+			}
+			scheduleTrackedTurnStallCheck(turn, max(remaining/2, 10*time.Second), id, currentTurnID, checkTurnStall)
 			decision.Action = TrackedTurnStallRescheduled
 			return true
 		}
@@ -952,7 +948,9 @@ type TrackerAlertRuntime interface {
 }
 
 func TrackerRuntimePushAlert(runtime TrackerAlertRuntime) func(threadID, category, message string) {
-	if runtime == nil { return nil }
+	if runtime == nil {
+		return nil
+	}
 	return runtime.PushAlert
 }
 func ExecuteStallAutoInterruptCore(
@@ -1072,7 +1070,8 @@ func MaybeFinalizeTrackedTurnCore(
 		logger.FieldMethod, strings.TrimSpace(method),
 	)
 	if !terminal {
-		if shouldLogTrackedTurnStallHint(eventType, method, startedAt) && MarkTrackedTurnStallHintCore(state, id, turnID) {
+		if !IsTerminalEventType(eventType, method) && !startedAt.IsZero() && time.Since(startedAt) >= trackedTurnGracePeriod &&
+			MarkTrackedTurnStallHintCore(state, id, turnID) {
 			logger.Warn("turn tracker: active turn not terminal yet at tail event", append(diagFields,
 				"turn_age_ms", time.Since(startedAt).Milliseconds(),
 				"interrupt_requested", interruptRequested,

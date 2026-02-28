@@ -7,8 +7,7 @@ import (
 )
 
 func (a *Adapter) SetStreamReadIdleTimeout(timeout time.Duration) {
-	if timeout <= 0 {
-		return
+	if timeout > 0 {
+		runtimesvc.SetStreamReadIdleTimeout(timeout)
 	}
-	runtimesvc.SetStreamReadIdleTimeout(timeout)
 }

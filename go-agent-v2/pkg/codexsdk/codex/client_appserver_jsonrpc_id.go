@@ -16,14 +16,10 @@ func newJSONRPCIntID(value int64) jsonRPCID {
 	return jsonRPCID{raw: json.RawMessage(strconv.FormatInt(value, 10))}
 }
 
-func (id jsonRPCID) clone() jsonRPCID {
-	return jsonRPCID{raw: id.rawCopy()}
-}
+func (id jsonRPCID) clone() jsonRPCID { return jsonRPCID{raw: id.rawCopy()} }
 
 func (id jsonRPCID) rawCopy() json.RawMessage {
-	if len(id.raw) == 0 {
-		return nil
-	}
+	if len(id.raw) == 0 { return nil }
 	return append(json.RawMessage(nil), id.raw...)
 }
 
@@ -48,44 +44,31 @@ func (id jsonRPCID) logValue() string {
 }
 
 func (id jsonRPCID) int64Ptr() *int64 {
-	if value, ok := id.asInt64(); ok {
-		return &value
-	}
+	if value, ok := id.asInt64(); ok { return &value }
 	return nil
 }
 
 func (id jsonRPCID) asInt64() (int64, bool) {
 	var value int64
-	if len(id.raw) == 0 || json.Unmarshal(id.raw, &value) != nil {
-		return 0, false
-	}
+	if len(id.raw) == 0 || json.Unmarshal(id.raw, &value) != nil { return 0, false }
 	return value, true
 }
 
 func (id jsonRPCID) asString() (string, bool) {
 	var value string
-	if len(id.raw) == 0 || json.Unmarshal(id.raw, &value) != nil {
-		return "", false
-	}
+	if len(id.raw) == 0 || json.Unmarshal(id.raw, &value) != nil { return "", false }
 	return value, true
 }
 
 func (id jsonRPCID) MarshalJSON() ([]byte, error) {
-	if len(id.raw) == 0 {
-		return []byte("null"), nil
-	}
+	if len(id.raw) == 0 { return []byte("null"), nil }
 	return id.raw, nil
 }
 
 func (id *jsonRPCID) UnmarshalJSON(data []byte) error {
-	if id == nil {
-		return nil
-	}
+	if id == nil { return nil }
 	trimmed := strings.TrimSpace(string(data))
-	if trimmed == "" || trimmed == "null" {
-		id.raw = nil
-		return nil
-	}
+	if trimmed == "" || trimmed == "null" { id.raw = nil; return nil }
 	var intID int64
 	if err := json.Unmarshal(data, &intID); err == nil {
 		id.raw = json.RawMessage(strconv.FormatInt(intID, 10))

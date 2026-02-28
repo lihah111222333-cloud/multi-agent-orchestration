@@ -35,9 +35,6 @@ func LowerMatchedTerms(text string, candidates []string) []string {
 			terms = append(terms, candidate)
 		}
 	}
-	if len(terms) == 0 {
-		return nil
-	}
 	return terms
 }
 
@@ -51,8 +48,7 @@ func ExplicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords 
 		if word == "" {
 			continue
 		}
-		lowerWord := strings.ToLower(word)
-		if strings.HasPrefix(lowerWord, "@") || strings.HasPrefix(lowerWord, "[skill:") {
+		if lowerWord := strings.ToLower(word); strings.HasPrefix(lowerWord, "@") || strings.HasPrefix(lowerWord, "[skill:") {
 			candidates = append(candidates, word)
 		}
 	}
@@ -74,9 +70,7 @@ func ClassifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, trig
 
 func ForceMatchedSkillInstruction(matchedTerms []string) string {
 	terms := common.CollectTrimmedUniqueValues(matchedTerms, strings.ToLower)
-	if len(terms) == 0 {
-		return "执行要求: 本轮必须遵循该技能。"
-	}
+	if len(terms) == 0 { return "执行要求: 本轮必须遵循该技能。" }
 	return fmt.Sprintf("强制触发词: %s\n执行要求: 本轮必须遵循该技能。", strings.Join(terms, ", "))
 }
 
@@ -98,8 +92,6 @@ func CollectReferencedLSPToolNames(hint string) []string {
 		}
 	}
 	names = common.CollectTrimmedUniqueValues(names, nil)
-	if len(names) > 1 {
-		sort.Strings(names)
-	}
+	if len(names) > 1 { sort.Strings(names) }
 	return names
 }

@@ -60,9 +60,7 @@ func newLSPCacheStore(config lspCacheConfig, nowFn func() time.Time) *lspCacheSt
 	}
 }
 
-func (s *lspCacheStore) Enabled() bool {
-	return s != nil && s.config.enabled
-}
+func (s *lspCacheStore) Enabled() bool { return s != nil && s.config.enabled }
 
 func makeLSPCacheKey(workspaceID, language, uri string) (lspCacheKey, bool) {
 	lang := normalizeLanguage(language)
@@ -83,9 +81,7 @@ func makeLSPCacheKey(workspaceID, language, uri string) (lspCacheKey, bool) {
 	}, true
 }
 
-func (k lspCacheKey) memoryKey() string {
-	return k.workspaceHash + "|" + k.language + "|" + k.uriHash
-}
+func (k lspCacheKey) memoryKey() string { return k.workspaceHash + "|" + k.language + "|" + k.uriHash }
 
 func (s *lspCacheStore) cachePath(key lspCacheKey) string {
 	return filepath.Join(s.config.dir, key.workspaceHash, key.language, key.uriHash+".json")
@@ -103,8 +99,7 @@ func (s *lspCacheStore) Load(workspaceID, language, uri string) (documentCacheRe
 	}
 	s.maybeCleanup()
 
-	memoryKey := key.memoryKey()
-	now := s.now()
+	memoryKey, now := key.memoryKey(), s.now()
 
 	s.mu.Lock()
 	if record, found := s.memory[memoryKey]; found {
@@ -277,13 +272,11 @@ func (s *lspCacheStore) ensurePersistentReady() bool {
 	}
 
 	s.mu.Lock()
-	if !s.persistent || s.persistentReady {
-		ready := s.persistentReady
-		s.mu.Unlock()
+	persistent, ready, dir := s.persistent, s.persistentReady, s.config.dir
+	s.mu.Unlock()
+	if !persistent || ready {
 		return ready
 	}
-	dir := s.config.dir
-	s.mu.Unlock()
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		s.fallbackToMemory("mkdir", err)

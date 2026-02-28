@@ -13,28 +13,27 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-type RolloutMessage struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	Timestamp string `json:"timestamp"`
-}
-
-type rolloutLine struct {
-	Timestamp string          `json:"timestamp"`
-	Type      string          `json:"type"`
-	Payload   json.RawMessage `json:"payload"`
-}
-
-type rolloutPayload struct {
-	Type    string               `json:"type"`
-	Role    string               `json:"role"`
-	Content []rolloutContentItem `json:"content"`
-}
-
-type rolloutContentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
+type (
+	RolloutMessage struct {
+		Role      string `json:"role"`
+		Content   string `json:"content"`
+		Timestamp string `json:"timestamp"`
+	}
+	rolloutLine struct {
+		Timestamp string          `json:"timestamp"`
+		Type      string          `json:"type"`
+		Payload   json.RawMessage `json:"payload"`
+	}
+	rolloutPayload struct {
+		Type    string               `json:"type"`
+		Role    string               `json:"role"`
+		Content []rolloutContentItem `json:"content"`
+	}
+	rolloutContentItem struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+)
 
 func ReadRolloutMessages(rolloutPath string) ([]RolloutMessage, error) {
 	return ReadRolloutMessagesWithTrim(rolloutPath, true)
@@ -102,10 +101,9 @@ func normalizeRolloutUserText(text string, trimInjectedUserContent bool) (string
 	if strings.TrimSpace(text) == "" || util.IsSystemNoiseText(text) {
 		return "", false
 	}
-	if !trimInjectedUserContent {
-		return text, true
+	if trimInjectedUserContent {
+		text = util.TrimInjectedLSPHint(util.TrimInjectedSkillBlock(text))
 	}
-	text = util.TrimInjectedLSPHint(util.TrimInjectedSkillBlock(text))
 	return text, strings.TrimSpace(text) != ""
 }
 

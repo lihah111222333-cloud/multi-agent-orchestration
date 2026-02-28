@@ -139,24 +139,25 @@ func appendLifecycleTypeCandidates(candidates *[]string, payload map[string]any)
 }
 
 func parseNestedMapAny(raw any) map[string]any {
-	parseBytes := func(data []byte) map[string]any {
-		var decoded map[string]any
-		if json.Unmarshal(data, &decoded) != nil {
-			return nil
-		}
-		return decoded
-	}
-	switch nested := raw.(type) {
-	case map[string]any:
+	if nested, ok := raw.(map[string]any); ok {
 		return nested
-	case string:
-		return parseBytes([]byte(nested))
-	case json.RawMessage:
-		return parseBytes(nested)
-	case []byte:
-		return parseBytes(nested)
 	}
-	return nil
+	var data []byte
+	switch nested := raw.(type) {
+	case string:
+		data = []byte(nested)
+	case json.RawMessage:
+		data = nested
+	case []byte:
+		data = nested
+	default:
+		return nil
+	}
+	var decoded map[string]any
+	if json.Unmarshal(data, &decoded) != nil {
+		return nil
+	}
+	return decoded
 }
 
 func classifyItemLifecycleEvent(codexType, method string, payload map[string]any) (UIType, bool) {
@@ -205,12 +206,7 @@ func classifyEventWithMethodAndPayload(codexType, method string, payload map[str
 }
 
 func extractText(payload map[string]any) string {
-	for _, key := range []string{"delta", "text", "content", "output", "message"} {
-		if v, ok := payload[key].(string); ok {
-			return v
-		}
-	}
-	return ""
+	return util.ExtractFirstString(payload, "delta", "text", "content", "output", "message")
 }
 
 func extractNormalizedCommand(payload map[string]any) string {
@@ -265,19 +261,11 @@ func extractNormalizedCommand(payload map[string]any) string {
 }
 
 func extractNormalizedFiles(_ string, payload map[string]any) (file string, files []string) {
-	if v, ok := payload["file"].(string); ok {
-		return v, []string{v}
+	if file := util.AsString(payload["file"]); file != "" {
+		return file, []string{file}
 	}
-	if arr, ok := payload["files"].([]any); ok {
-		strs := make([]string, 0, len(arr))
-		for _, f := range arr {
-			if s, ok := f.(string); ok {
-				strs = append(strs, s)
-			}
-		}
-		if len(strs) > 0 {
-			return strs[0], strs
-		}
+	if files := util.AsStringSlice(payload["files"]); len(files) > 0 {
+		return files[0], files
 	}
 	return "", nil
 }

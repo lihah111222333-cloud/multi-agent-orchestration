@@ -86,20 +86,8 @@ func baseLSPToolSpecs() []lspBaseToolSpec {
 				"additionalProperties": false,
 				"oneOf": []any{
 					lspActionCase("references", "file_path", "line", "column"),
-					map[string]any{
-						"properties": map[string]any{
-							"action":    map[string]any{"const": "call_hierarchy"},
-							"direction": map[string]any{"enum": []string{"incoming", "outgoing", "both"}},
-						},
-						"required": []string{"action", "file_path", "line", "column"},
-					},
-					map[string]any{
-						"properties": map[string]any{
-							"action":    map[string]any{"const": "type_hierarchy"},
-							"direction": map[string]any{"enum": []string{"supertypes", "subtypes", "both"}},
-						},
-						"required": []string{"action", "file_path", "line", "column"},
-					},
+					lspActionDirectionCase("call_hierarchy", []string{"incoming", "outgoing", "both"}),
+					lspActionDirectionCase("type_hierarchy", []string{"supertypes", "subtypes", "both"}),
 				},
 			}),
 			func(provider LSPHandlerProvider) LSPDynamicToolHandler { return provider.LSPXRef },
@@ -206,6 +194,16 @@ func lspActionCase(action string, required ...string) map[string]any {
 			"action": map[string]any{"const": action},
 		},
 		"required": req,
+	}
+}
+
+func lspActionDirectionCase(action string, directions []string) map[string]any {
+	return map[string]any{
+		"properties": map[string]any{
+			"action":    map[string]any{"const": action},
+			"direction": map[string]any{"enum": directions},
+		},
+		"required": []string{"action", "file_path", "line", "column"},
 	}
 }
 

@@ -16,7 +16,6 @@ type codeExecRunnerAdapter struct {
 	runner *executor.CodeRunner
 }
 
-// adaptCodeExecRunner adapts executor.CodeRunner into tools.CodeExecRunner.
 func adaptCodeExecRunner(runner *executor.CodeRunner) tools.CodeExecRunner {
 	if runner == nil {
 		return nil
@@ -60,7 +59,6 @@ type auditLoggerAdapter struct {
 	store *store.AuditLogStore
 }
 
-// adaptAuditLogger adapts store.AuditLogStore into tools.AuditLogger.
 func adaptAuditLogger(s *store.AuditLogStore) tools.AuditLogger {
 	if s == nil {
 		return nil
@@ -89,7 +87,6 @@ type dagManagerAdapter struct {
 	store *store.TaskDAGStore
 }
 
-// adaptDAGManager adapts store.TaskDAGStore into tools.DAGManager.
 func adaptDAGManager(s *store.TaskDAGStore) tools.DAGManager {
 	if s == nil {
 		return nil
@@ -155,7 +152,6 @@ type cardStoreAdapter struct {
 	store *store.CommandCardStore
 }
 
-// adaptCardStore adapts store.CommandCardStore into tools.CardStore.
 func adaptCardStore(s *store.CommandCardStore) tools.CardStore {
 	if s == nil {
 		return nil
@@ -184,7 +180,6 @@ type templateStoreAdapter struct {
 	store *store.PromptTemplateStore
 }
 
-// adaptTemplateStore adapts store.PromptTemplateStore into tools.TemplateStore.
 func adaptTemplateStore(s *store.PromptTemplateStore) tools.TemplateStore {
 	if s == nil {
 		return nil
@@ -213,7 +208,6 @@ type fileStoreAdapter struct {
 	store *store.SharedFileStore
 }
 
-// adaptFileStore adapts store.SharedFileStore into tools.FileStore.
 func adaptFileStore(s *store.SharedFileStore) tools.FileStore {
 	if s == nil {
 		return nil
@@ -238,7 +232,6 @@ type workspaceOpsAdapter struct {
 	manager *service.WorkspaceManager
 }
 
-// adaptWorkspaceOps adapts service.WorkspaceManager into tools.WorkspaceOps.
 func adaptWorkspaceOps(mgr *service.WorkspaceManager) tools.WorkspaceOps {
 	if mgr == nil {
 		return nil
@@ -283,7 +276,6 @@ type agentLauncherAdapter struct {
 	manager *runner.AgentManager
 }
 
-// adaptAgentLauncher adapts runner.AgentManager into tools.AgentLauncher.
 func adaptAgentLauncher(mgr *runner.AgentManager) tools.AgentLauncher {
 	if mgr == nil {
 		return nil
@@ -323,9 +315,9 @@ func mapSlice[S any, D any](src []S, mapFn func(S) D) []D {
 	if len(src) == 0 {
 		return nil
 	}
-	out := make([]D, 0, len(src))
-	for _, item := range src {
-		out = append(out, mapFn(item))
+	out := make([]D, len(src))
+	for i, item := range src {
+		out[i] = mapFn(item)
 	}
 	return out
 }

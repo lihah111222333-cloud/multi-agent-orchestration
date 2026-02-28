@@ -165,7 +165,6 @@ func ParseArchiveTimestamp(raw string) int64 {
 	if value == "" {
 		return 0
 	}
-	// Snapshot directories may include a numeric suffix, e.g. "1700000000000-2".
 	if idx := strings.Index(value, "-"); idx > 0 {
 		value = value[:idx]
 	}

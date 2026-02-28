@@ -21,11 +21,8 @@ import (
 )
 
 const (
-	defaultLSPUsagePromptHint = ""
-	maxLSPUsagePromptHintLen  = 16000
-)
-
-const (
+	defaultLSPUsagePromptHint         = ""
+	maxLSPUsagePromptHintLen          = 16000
 	DefaultTurnWatchdogTimeout        = trackersvc.DefaultTurnWatchdogTimeout
 	DefaultTrackedTurnSummaryTTL      = trackersvc.DefaultTrackedTurnSummaryTTL
 	TrackedTurnSummaryCacheMaxEntries = trackersvc.TrackedTurnSummaryCacheMaxEntries
@@ -123,10 +120,10 @@ func New(deps Deps) *Adapter {
 }
 
 func (a *Adapter) depsOrDefault() *Deps {
-	if a != nil && a.ctx != nil {
-		return a.ctx
+	if a == nil || a.ctx == nil {
+		return normalizeDeps(Deps{})
 	}
-	return normalizeDeps(Deps{})
+	return a.ctx
 }
 
 func (a *Adapter) store() *uistate.PreferenceManager           { return a.depsOrDefault().Store }

@@ -31,15 +31,11 @@ func newDashboardPayload() map[string]any {
 }
 
 func copyListField(dst map[string]any, dstKey string, src any, srcKey string) {
-	srcMap, ok := src.(map[string]any)
-	if !ok {
-		return
+	if srcMap, ok := src.(map[string]any); ok {
+		if value, ok := srcMap[srcKey]; ok {
+			dst[dstKey] = value
+		}
 	}
-	value, ok := srcMap[srcKey]
-	if !ok {
-		return
-	}
-	dst[dstKey] = value
 }
 
 func callMethod(ctx context.Context, caller MethodCaller, method string, params json.RawMessage) (any, error) {

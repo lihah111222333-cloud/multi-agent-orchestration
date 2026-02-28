@@ -6,14 +6,14 @@ import (
 	"time"
 )
 
-// MethodHandler handles one JSON-RPC method call.
-type MethodHandler func(ctx context.Context, params json.RawMessage) (any, error)
-
-// RegisterFn receives callback-based method registration.
-type RegisterFn func(name string, h MethodHandler)
-
-// MethodCaller calls an already-registered JSON-RPC method.
-type MethodCaller func(ctx context.Context, method string, params json.RawMessage) (any, error)
+type (
+	// MethodHandler handles one JSON-RPC method call.
+	MethodHandler func(ctx context.Context, params json.RawMessage) (any, error)
+	// RegisterFn receives callback-based method registration.
+	RegisterFn func(name string, h MethodHandler)
+	// MethodCaller calls an already-registered JSON-RPC method.
+	MethodCaller func(ctx context.Context, method string, params json.RawMessage) (any, error)
+)
 
 // DashboardProvider exposes dashboard data via callback injection.
 type DashboardProvider interface {

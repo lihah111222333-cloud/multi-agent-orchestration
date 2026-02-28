@@ -110,16 +110,12 @@ func orchestrationListAgents(provider OrchestrationProvider, callerID string) st
 		return "[]"
 	}
 	callerID = strings.TrimSpace(callerID)
-	if callerID == "" {
-		data, err := json.Marshal(infos)
-		if err != nil {
-			return ToolError(err)
-		}
-		return string(data)
-	}
 	data, err := json.Marshal(infos)
 	if err != nil {
 		return ToolError(err)
+	}
+	if callerID == "" {
+		return string(data)
 	}
 	var list []map[string]any
 	if err := json.Unmarshal(data, &list); err != nil {
@@ -211,9 +207,9 @@ func orchestrationLaunchAgent(provider OrchestrationProvider, runtime AgentRunti
 
 	id := fmt.Sprintf("agent-%d-%d", time.Now().UnixMilli(), nextThreadSeq(provider))
 
-	baseCtx := context.Background()
-	if callCtx.Ctx != nil {
-		baseCtx = callCtx.Ctx
+	baseCtx := callCtx.Ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(baseCtx, 30*time.Second)
 	defer cancel()
@@ -313,12 +309,10 @@ func orchestrationListLen(v any) int {
 }
 
 func nextThreadSeq(provider OrchestrationProvider) int64 {
-	if provider == nil {
-		return time.Now().UnixNano()
-	}
-	seq := provider.NextThreadSeq()
-	if seq > 0 {
-		return seq
+	if provider != nil {
+		if seq := provider.NextThreadSeq(); seq > 0 {
+			return seq
+		}
 	}
 	return time.Now().UnixNano()
 }

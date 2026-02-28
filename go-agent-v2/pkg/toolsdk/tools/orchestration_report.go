@@ -54,9 +54,6 @@ func TruncateOrchestrationSummary(value string, limit int) string {
 		return "..."
 	}
 	target := limit - 3
-	if target <= 0 {
-		return "..."
-	}
 
 	var builder strings.Builder
 	builder.Grow(len(text))

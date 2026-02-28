@@ -10,10 +10,8 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-const (
-	ThreadMessageHydrationMaxRecords = rolloutsvc.ThreadMessageHydrationMaxRecords
-	ThreadMessageHydrationPageSize   = rolloutsvc.ThreadMessageHydrationPageSize
-)
+const ThreadMessageHydrationMaxRecords = rolloutsvc.ThreadMessageHydrationMaxRecords
+const ThreadMessageHydrationPageSize = rolloutsvc.ThreadMessageHydrationPageSize
 
 type ThreadHistoryMessage = rolloutsvc.ThreadHistoryMessage
 
@@ -25,11 +23,9 @@ func BuildThreadMessagesPagePayload(threadID string, totalLoaded int, pages int)
 	return map[string]any{"threadId": strings.TrimSpace(threadID), "totalCount": totalLoaded, "pages": pages}
 }
 
-var (
-	ParsePreferenceBool         = rolloutsvc.ParsePreferenceBool
-	CalculateHydrationLoadLimit = rolloutsvc.CalculateHydrationLoadLimit
-	PaginateRolloutMessages     = rolloutsvc.PaginateRolloutMessages
-)
+var ParsePreferenceBool = rolloutsvc.ParsePreferenceBool
+var CalculateHydrationLoadLimit = rolloutsvc.CalculateHydrationLoadLimit
+var PaginateRolloutMessages = rolloutsvc.PaginateRolloutMessages
 
 func LoadAllThreadMessagesFromCodexRollout(
 	ctx context.Context,

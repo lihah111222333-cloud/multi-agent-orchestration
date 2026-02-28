@@ -2,14 +2,16 @@ package contracts
 
 import "github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 
-type AutoMatchInput = agentcore.AutoMatchInput
-type SkillMatchCandidate = agentcore.SkillMatchCandidate
-type AutoMatchedSkillMatch = agentcore.AutoMatchedSkillMatch
-type AutoSkillMatchOptions = agentcore.AutoSkillMatchOptions
-type TurnInput = agentcore.TurnInput
-type TurnStartRequest = agentcore.TurnStartRequest
-type TurnSteerRequest = agentcore.TurnSteerRequest
-type TurnAppendUserTimelineOptions = agentcore.TurnAppendUserTimelineOptions
-type TurnStartEntryPrepareResult = agentcore.TurnStartEntryPrepareResult
-type TurnSteerEntryPrepareResult = agentcore.TurnSteerEntryPrepareResult
-type ThreadListItem = agentcore.ThreadListItem
+type (
+	AutoMatchInput                = agentcore.AutoMatchInput
+	SkillMatchCandidate           = agentcore.SkillMatchCandidate
+	AutoMatchedSkillMatch         = agentcore.AutoMatchedSkillMatch
+	AutoSkillMatchOptions         = agentcore.AutoSkillMatchOptions
+	TurnInput                     = agentcore.TurnInput
+	TurnStartRequest              = agentcore.TurnStartRequest
+	TurnSteerRequest              = agentcore.TurnSteerRequest
+	TurnAppendUserTimelineOptions = agentcore.TurnAppendUserTimelineOptions
+	TurnStartEntryPrepareResult   = agentcore.TurnStartEntryPrepareResult
+	TurnSteerEntryPrepareResult   = agentcore.TurnSteerEntryPrepareResult
+	ThreadListItem                = agentcore.ThreadListItem
+)

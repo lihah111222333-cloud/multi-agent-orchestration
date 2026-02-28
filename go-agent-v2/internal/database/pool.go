@@ -22,8 +22,7 @@ func NewPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 	poolCfg.MinConns = safeInt32(cfg.PostgresPoolMinSize, "PostgresPoolMinSize")
 	poolCfg.MaxConns = safeInt32(cfg.PostgresPoolMaxSize, "PostgresPoolMaxSize")
 
-	schema := cfg.PostgresSchema
-	if schema != "" && schema != "public" {
+	if schema := cfg.PostgresSchema; schema != "" && schema != "public" {
 		poolCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 			_, err := conn.Exec(ctx, fmt.Sprintf("SET search_path TO %s", pgx.Identifier{schema}.Sanitize()))
 			return err
@@ -41,7 +40,7 @@ func NewPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 	logger.Info("database: postgres pool created",
 		"min_conns", cfg.PostgresPoolMinSize,
 		"max_conns", cfg.PostgresPoolMaxSize,
-		"schema", schema,
+		"schema", cfg.PostgresSchema,
 	)
 	return pool, nil
 }

@@ -483,21 +483,13 @@ var codexOnlyLegacySuffixToEventMap = map[string]string{
 	"raw_response_item":       "rawResponseItem/completed",
 }
 
-var sharedLegacyPrefixes = [...]string{"agent/event/", "codex/event/"}
-
-func addPrefixedEventAliases(target map[string]string, prefixes []string, aliases map[string]string) {
-	for _, prefix := range prefixes {
-		for suffix, eventType := range aliases {
-			target[prefix+suffix] = eventType
-		}
-	}
-}
-
 func buildMethodToEventMap() map[string]string {
 	methodMap := make(map[string]string, 96)
 	maps.Copy(methodMap, baseMethodToEventMap)
-	addPrefixedEventAliases(methodMap, sharedLegacyPrefixes[:], sharedLegacySuffixToEventMap)
-	addPrefixedEventAliases(methodMap, []string{"codex/event/"}, codexOnlyLegacySuffixToEventMap)
+	for _, prefix := range [...]string{"agent/event/", "codex/event/"} {
+		for suffix, eventType := range sharedLegacySuffixToEventMap { methodMap[prefix+suffix] = eventType }
+	}
+	for suffix, eventType := range codexOnlyLegacySuffixToEventMap { methodMap["codex/event/"+suffix] = eventType }
 	return methodMap
 }
 
@@ -571,22 +563,18 @@ func normalizeErrorNotificationPayload(raw json.RawMessage) json.RawMessage {
 		}
 	}
 
-	syncKeys(payload, "willRetry", "will_retry")
+	if _, exists := payload["willRetry"]; !exists {
+		if v, ok := payload["will_retry"]; ok { payload["willRetry"] = v }
+	}
+	if _, exists := payload["will_retry"]; !exists {
+		if v, ok := payload["willRetry"]; ok { payload["will_retry"] = v }
+	}
 
 	normalized, err := json.Marshal(payload)
 	if err != nil {
 		return raw
 	}
 	return normalized
-}
-
-func syncKeys(m map[string]any, k1, k2 string) {
-	if _, exists := m[k1]; !exists {
-		if v, ok := m[k2]; ok { m[k1] = v }
-	}
-	if _, exists := m[k2]; !exists {
-		if v, ok := m[k1]; ok { m[k2] = v }
-	}
 }
 
 func decodeJSONObject(raw json.RawMessage) (map[string]any, bool) {
@@ -692,16 +680,13 @@ func truncateString(s string, max int) string {
 	return string(runes[:max]) + "...(truncated)"
 }
 
-var mcpStartupMethods = map[string]struct{}{
-	"agent/event/mcp_startup_update":   {},
-	"agent/event/mcp_startup_complete": {},
-	"codex/event/mcp_startup_update":   {},
-	"codex/event/mcp_startup_complete": {},
-}
-
 func isMCPStartupMethod(method string) bool {
-	_, ok := mcpStartupMethods[strings.ToLower(strings.TrimSpace(method))]
-	return ok
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "agent/event/mcp_startup_update", "agent/event/mcp_startup_complete", "codex/event/mcp_startup_update", "codex/event/mcp_startup_complete":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *AppServerClient) emitStreamError(err error, phase string, idleTimeout bool, willRetry bool, details map[string]any) {

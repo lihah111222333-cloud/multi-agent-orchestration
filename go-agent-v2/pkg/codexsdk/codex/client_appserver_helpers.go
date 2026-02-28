@@ -81,21 +81,6 @@ func buildTurnStartInputs(prompt string, images, files []string) []asTurnStartIn
 	return inputs
 }
 
-func ensureListenerViaThreadResume(
-	threadID string,
-	rpcCall func(method string, params any, timeout time.Duration) (json.RawMessage, error),
-) (string, error) {
-	id := strings.TrimSpace(threadID)
-	if id == "" { return "", apperrors.New("ensureListenerViaThreadResume", "thread id is required") }
-	if rpcCall == nil { return "", apperrors.New("ensureListenerViaThreadResume", "rpc call func is nil") }
-	return callThreadResume(
-		"ensureListenerViaThreadResume",
-		rpcCall,
-		asThreadResumeParams{ThreadID: id},
-		appServerListenerEnsureTimeout,
-	)
-}
-
 func isNotInitializedRPCError(err error) bool {
 	if err == nil { return false }
 	text := strings.ToLower(err.Error())
@@ -128,12 +113,15 @@ func ensureListenerWithAutoInitialize(
 	rpcCall func(method string, params any, timeout time.Duration) (json.RawMessage, error),
 	initializeFn func() error,
 ) (resolvedID string, retriedAfterInit bool, err error) {
+	id := strings.TrimSpace(threadID)
+	if id == "" { return "", false, apperrors.New("ensureListenerViaThreadResume", "thread id is required") }
+	if rpcCall == nil { return "", false, apperrors.New("ensureListenerViaThreadResume", "rpc call func is nil") }
 	return retryAfterNotInitialized(
 		"ensureListenerWithAutoInitialize",
 		true,
 		true,
 		func() (string, error) {
-			return ensureListenerViaThreadResume(threadID, rpcCall)
+			return callThreadResume("ensureListenerViaThreadResume", rpcCall, asThreadResumeParams{ThreadID: id}, appServerListenerEnsureTimeout)
 		},
 		initializeFn,
 	)

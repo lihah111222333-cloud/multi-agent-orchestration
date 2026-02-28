@@ -1,13 +1,4 @@
-// agent_codex_binding.go — Agent ↔ Codex Thread 1:1 共生绑定 CRUD。
-//
-// ╔══════════════════════════════════════════════════════════════════════╗
-// ║  ⚠️  根基约束 — 不允许修改绑定逻辑  ⚠️                           ║
-// ║                                                                    ║
-// ║  agent_id 与 codex_thread_id 是 1:1 共生关系:                      ║
-// ║    - Bind:   创建绑定 (INSERT, 主键+唯一约束保证 1:1)              ║
-// ║    - Unbind: 删除绑定 (DELETE, 共生共灭)                           ║
-// ║    - 不提供 UPDATE codex_thread_id 的方法 — 要换就先删再建         ║
-// ╚══════════════════════════════════════════════════════════════════════╝
+// agent_codex_binding.go stores 1:1 agent_id <-> codex_thread_id bindings.
 package store
 
 import (
@@ -20,9 +11,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 )
 
-// AgentCodexBinding agent_id ↔ codex_thread_id 1:1 绑定记录。
-//
-// 约束由 DB 保证 (PK + UNIQUE), Go 侧只做 CRUD, 不做额外校验。
+// AgentCodexBinding is a 1:1 binding record.
 type AgentCodexBinding struct {
 	AgentID       string `json:"agent_id"`
 	CodexThreadID string `json:"codex_thread_id"`
@@ -31,22 +20,16 @@ type AgentCodexBinding struct {
 	UpdatedAt     int64  `json:"updated_at"`
 }
 
-// AgentCodexBindingStore agent_codex_binding 表操作。
+// AgentCodexBindingStore reads/writes agent_codex_binding.
 type AgentCodexBindingStore struct{ BaseStore }
 
-// NewAgentCodexBindingStore 创建。
 func NewAgentCodexBindingStore(pool *pgxpool.Pool) *AgentCodexBindingStore {
 	return &AgentCodexBindingStore{NewBaseStore(pool)}
 }
 
 const acbCols = "agent_id, codex_thread_id, rollout_path, created_at, updated_at"
 
-// Bind 创建 1:1 绑定。
-//
-// 约束:
-//   - agent_id 与 codex_thread_id 的关系一旦建立不可改写；
-//   - 若同一 agent_id 再次绑定到不同 codex_thread_id，直接返回错误；
-//   - 仅允许在关系不变时补充 rollout_path 元数据。
+// Bind creates a 1:1 binding and treats codex_thread_id as immutable.
 func (s *AgentCodexBindingStore) Bind(ctx context.Context, agentID, codexThreadID, rolloutPath string) error {
 	agentID = strings.TrimSpace(agentID)
 	codexThreadID = strings.TrimSpace(codexThreadID)
@@ -59,24 +42,24 @@ func (s *AgentCodexBindingStore) Bind(ctx context.Context, agentID, codexThreadI
 	if err != nil {
 		return err
 	}
-	now := time.Now().Unix()
 	if existing != nil {
-		if strings.TrimSpace(existing.CodexThreadID) != codexThreadID {
+		existingThreadID := strings.TrimSpace(existing.CodexThreadID)
+		if existingThreadID != codexThreadID {
 			return fmt.Errorf("immutable binding violation: agent %q already bound to %q, cannot bind to %q",
-				agentID, strings.TrimSpace(existing.CodexThreadID), codexThreadID)
+				agentID, existingThreadID, codexThreadID)
 		}
-		// 关系未变化时允许补写/刷新 rollout_path，避免归档后历史入口丢失。
-		if rolloutPath != "" && rolloutPath != strings.TrimSpace(existing.RolloutPath) {
-			_, err = s.pool.Exec(ctx,
-				`UPDATE agent_codex_binding
-				 SET rollout_path = $1, updated_at = $2
-				 WHERE agent_id = $3 AND codex_thread_id = $4`,
-				rolloutPath, now, agentID, codexThreadID)
-			return err
+		if rolloutPath == "" || rolloutPath == strings.TrimSpace(existing.RolloutPath) {
+			return nil
 		}
-		return nil
+		_, err = s.pool.Exec(ctx,
+			`UPDATE agent_codex_binding
+			 SET rollout_path = $1, updated_at = $2
+			 WHERE agent_id = $3 AND codex_thread_id = $4`,
+			rolloutPath, time.Now().Unix(), agentID, codexThreadID)
+		return err
 	}
 
+	now := time.Now().Unix()
 	_, err = s.pool.Exec(ctx,
 		`INSERT INTO agent_codex_binding (agent_id, codex_thread_id, rollout_path, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5)`,
@@ -84,17 +67,16 @@ func (s *AgentCodexBindingStore) Bind(ctx context.Context, agentID, codexThreadI
 	return err
 }
 
-// Unbind 删除绑定 (共生共灭: agent 删除时调用)。
 func (s *AgentCodexBindingStore) Unbind(ctx context.Context, agentID string) error {
+	agentID = strings.TrimSpace(agentID)
 	_, err := s.pool.Exec(ctx,
 		"DELETE FROM agent_codex_binding WHERE agent_id = $1", agentID)
 	return err
 }
 
-// FindByAgentID 按 agent_id 查找绑定的 codex_thread_id。
-//
-// 返回 nil 表示该 agent 尚未绑定 (首次启动)。
+// FindByAgentID loads the binding for an agent_id.
 func (s *AgentCodexBindingStore) FindByAgentID(ctx context.Context, agentID string) (*AgentCodexBinding, error) {
+	agentID = strings.TrimSpace(agentID)
 	rows, err := s.pool.Query(ctx,
 		"SELECT "+acbCols+" FROM agent_codex_binding WHERE agent_id = $1", agentID)
 	if err != nil {
@@ -112,7 +94,7 @@ func (s *AgentCodexBindingStore) FindBindingByAgentID(ctx context.Context, agent
 	return &agentcore.Binding{CodexThreadID: strings.TrimSpace(binding.CodexThreadID)}, nil
 }
 
-// ListAll 返回所有绑定 (调试/运维用)。
+// ListAll returns all bindings.
 func (s *AgentCodexBindingStore) ListAll(ctx context.Context) ([]AgentCodexBinding, error) {
 	rows, err := s.pool.Query(ctx,
 		"SELECT "+acbCols+" FROM agent_codex_binding ORDER BY created_at DESC")

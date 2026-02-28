@@ -42,7 +42,6 @@ type NormalizedEvent struct {
 	Method   string   `json:"-"`
 }
 
-// PreferenceManager handles UI preferences and uses memory fallback when store is nil.
 type PreferenceManager struct {
 	store    *store.UIPreferenceStore
 	fallback sync.Map
@@ -72,9 +71,9 @@ func (m *PreferenceManager) GetAll(ctx context.Context) (map[string]any, error) 
 	if store := m.store; store != nil {
 		return store.GetAll(ctx)
 	}
-	result := make(map[string]any)
-	m.fallback.Range(func(k, v any) bool {
-		result[k.(string)] = v
+	result := map[string]any{}
+	m.fallback.Range(func(key, value any) bool {
+		result[key.(string)] = value
 		return true
 	})
 	return result, nil

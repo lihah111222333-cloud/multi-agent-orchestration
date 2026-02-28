@@ -42,26 +42,22 @@ func (m *Master) Run(ctx context.Context) error {
 	logger.Info("orchestrator started", "gateways", len(m.gateways))
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("orchestrator shutting down")
 			logger.Info("orchestrator shutdown completed", "gateways", len(m.gateways))
 			return nil
 		case <-ticker.C:
-			if err := m.tick(); err != nil {
-				logger.Error("orchestrator tick error", logger.FieldStatus, m.state, logger.FieldError, err, logger.FieldDecision, "transition_to_error")
-				m.state = StateError
-			}
+			m.tick()
 		}
 	}
 }
 
-func (m *Master) tick() error {
+func (m *Master) tick() {
 	if m.state == StateCompleted || m.state == StateError {
 		m.state = StateIdle
 	}
-	return nil
 }
 
 type Gateway struct {

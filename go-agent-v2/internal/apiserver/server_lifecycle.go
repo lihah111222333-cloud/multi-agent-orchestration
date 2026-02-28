@@ -45,9 +45,9 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 		defer shutdownCancel()
 		if shutdownErr := srv.Shutdown(shutdownCtx); shutdownErr != nil && shutdownErr != http.ErrServerClosed {
 			logger.Warn("app-server: shutdown error", logger.FieldError, shutdownErr)
-			return
+		} else {
+			logger.Info("app-server: shutdown completed")
 		}
-		logger.Info("app-server: shutdown completed")
 	})
 
 	logger.Info("app-server: listening", logger.FieldAddr, host)
@@ -58,9 +58,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 }
 
 func (s *Server) cleanupRuntimeResources() {
-	if s == nil {
-		return
-	}
+	if s == nil { return }
 	doRuntimeCleanupState(s, func() {
 		cancelAllCodeRuns(s)
 		if runner := s.codeRunner; runner != nil {

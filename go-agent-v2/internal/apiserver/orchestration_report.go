@@ -14,27 +14,17 @@ import (
 const defaultOrchestrationReportTTL = tools.DefaultOrchestrationReportTTL
 
 func submitPrompt(s *Server, agentID, prompt string, images, files []string) error {
-	if s == nil {
-		return apperrors.New("Server.submitAgentPrompt", "server is nil")
-	}
-	if s.submitAgentMessage != nil {
-		return s.submitAgentMessage(agentID, prompt, images, files)
-	}
-	if s.mgr == nil {
-		return apperrors.New("Server.submitAgentPrompt", "agent manager not initialized")
-	}
+	if s == nil { return apperrors.New("Server.submitAgentPrompt", "server is nil") }
+	if s.submitAgentMessage != nil { return s.submitAgentMessage(agentID, prompt, images, files) }
+	if s.mgr == nil { return apperrors.New("Server.submitAgentPrompt", "agent manager not initialized") }
 	return s.mgr.Submit(agentID, prompt, images, files)
 }
 
 func rememberReportRequest(s *Server, senderID, workerID string) {
-	if s == nil {
-		return
-	}
+	if s == nil { return }
 	requester := strings.TrimSpace(senderID)
 	target := strings.TrimSpace(workerID)
-	if requester == "" || target == "" || strings.EqualFold(requester, target) {
-		return
-	}
+	if requester == "" || target == "" || strings.EqualFold(requester, target) { return }
 	if waiterCount := rememberReportRequesterState(s, target, requester, time.Now()); waiterCount > 0 {
 		logger.Info("orchestration: report waiter registered", "worker", target, "requester", requester, "waiter_count", waiterCount)
 	}
@@ -58,9 +48,7 @@ func maybeAutoReportOrchestrationCompletion(s *Server, agentID, eventType, metho
 	logger.Info("orchestration: report waiters drained", "worker", workerID, "requester_count", len(requesters))
 
 	summary := strings.TrimSpace(trackersvc.TrackedTurnSummaryFromPayload(payload))
-	if summary == "" {
-		summary = trackersvc.ExtractTrackedString(payload, "uiText", "summary", "text", "message", "output")
-	}
+	if summary == "" { summary = trackersvc.ExtractTrackedString(payload, "uiText", "summary", "text", "message", "output") }
 
 	report := tools.BuildOrchestrationCompletionReport(workerID, status, reason, summary)
 	for _, requesterID := range requesters {

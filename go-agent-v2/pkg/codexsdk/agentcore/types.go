@@ -5,87 +5,75 @@ import (
 	"encoding/json"
 )
 
-type AutoMatchInput struct {
-	Type, Name string
-}
-
-type SkillMatchCandidate struct {
-	Name         string
-	ForceWords   []string
-	TriggerWords []string
-}
-
-type AutoMatchedSkillMatch struct {
-	Name, MatchedBy string
-	MatchedTerms    []string
-}
-
-type AutoSkillMatchOptions struct {
-	IncludeConfiguredExplicit bool
-	IncludeConfiguredForce    bool
-}
-
-type TurnInput struct {
-	Type, Text, URL, Path, Name, Content string
-}
-
-type TurnStartRequest struct {
-	ThreadID, Cwd        string
-	Input                []TurnInput
-	SelectedSkills       []string
-	ManualSkillSelection bool
-	OutputSchema         json.RawMessage
-}
-
-type TurnSteerRequest struct {
-	ThreadID, ExpectedTurnID string
-	Input                    []TurnInput
-	SelectedSkills           []string
-	ManualSkillSelection     bool
-}
-
-type TurnAppendUserTimelineOptions struct {
-	ThreadID, Prompt, SubmitPrompt string
-	Images, Files                  []string
-}
-
-type TurnStartEntryPrepareResult struct {
-	Prompt, SubmitPrompt  string
-	Images                []string
-	Files                 []string
-	SelectedSkillCount    int
-	AutoMatchedSkillCount int
-}
-
-type TurnSteerEntryPrepareResult struct {
-	SubmitPrompt string
-	Images       []string
-	Files        []string
-}
-
-type TurnStartEntryResult struct {
-	TurnID string
-}
-
-type TimelineAttachment struct {
-	Kind, Name, Path, PreviewURL string
-}
-
-type TimelineItem struct {
-	Kind string
-	Text string
-}
-
-type Binding struct {
-	CodexThreadID string
-}
-
-type ThreadListItem struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	State    string `json:"state"`
-	Archived bool   `json:"archived,omitempty"`
-}
+type (
+	AutoMatchInput struct {
+		Type, Name string
+	}
+	SkillMatchCandidate struct {
+		Name         string
+		ForceWords   []string
+		TriggerWords []string
+	}
+	AutoMatchedSkillMatch struct {
+		Name, MatchedBy string
+		MatchedTerms    []string
+	}
+	AutoSkillMatchOptions struct {
+		IncludeConfiguredExplicit bool
+		IncludeConfiguredForce    bool
+	}
+	TurnInput struct {
+		Type, Text, URL, Path, Name, Content string
+	}
+	TurnStartRequest struct {
+		ThreadID, Cwd        string
+		Input                []TurnInput
+		SelectedSkills       []string
+		ManualSkillSelection bool
+		OutputSchema         json.RawMessage
+	}
+	TurnSteerRequest struct {
+		ThreadID, ExpectedTurnID string
+		Input                    []TurnInput
+		SelectedSkills           []string
+		ManualSkillSelection     bool
+	}
+	TurnAppendUserTimelineOptions struct {
+		ThreadID, Prompt, SubmitPrompt string
+		Images, Files                  []string
+	}
+	TurnStartEntryPrepareResult struct {
+		Prompt, SubmitPrompt  string
+		Images                []string
+		Files                 []string
+		SelectedSkillCount    int
+		AutoMatchedSkillCount int
+	}
+	TurnSteerEntryPrepareResult struct {
+		SubmitPrompt string
+		Images       []string
+		Files        []string
+	}
+	TurnStartEntryResult struct {
+		TurnID string
+	}
+	TimelineAttachment struct {
+		Kind, Name, Path, PreviewURL string
+	}
+	TimelineItem struct {
+		Kind string
+		Text string
+	}
+	Binding struct {
+		CodexThreadID string
+	}
+	ThreadListItem struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		State    string `json:"state"`
+		Archived bool   `json:"archived,omitempty"`
+	}
+)
 
 type TimelineRuntime interface {
 	AppendUserMessage(threadID, text string, attachments []TimelineAttachment)
@@ -118,13 +106,12 @@ type Event struct {
 	DenyFunc          func() error                         `json:"-"`
 }
 
-type TextData struct {
-	Delta   string `json:"delta,omitempty"`
-	Content string `json:"content,omitempty"`
-	Role    string `json:"role,omitempty"`
-}
-
 type (
+	TextData struct {
+		Delta   string `json:"delta,omitempty"`
+		Content string `json:"content,omitempty"`
+		Role    string `json:"role,omitempty"`
+	}
 	ErrorData struct {
 		Message string `json:"message"`
 		Code    string `json:"code,omitempty"`
@@ -164,21 +151,19 @@ type (
 	}
 )
 
-type DynamicTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
-}
-
-type DynamicToolCallData struct {
-	ThreadID  string          `json:"threadId"`
-	TurnID    string          `json:"turnId"`
-	CallID    string          `json:"callId"`
-	Tool      string          `json:"tool"`
-	Arguments json.RawMessage `json:"arguments"`
-}
-
 type (
+	DynamicTool struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		InputSchema map[string]any `json:"inputSchema"`
+	}
+	DynamicToolCallData struct {
+		ThreadID  string          `json:"threadId"`
+		TurnID    string          `json:"turnId"`
+		CallID    string          `json:"callId"`
+		Tool      string          `json:"tool"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
 	ThreadInfo struct {
 		ThreadID string `json:"thread_id"`
 	}

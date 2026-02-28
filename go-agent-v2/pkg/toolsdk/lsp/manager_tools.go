@@ -90,7 +90,7 @@ func (m *Manager) TypeDefinition(filePath string, line, character int) ([]Locati
 }
 
 func (m *Manager) CallHierarchy(filePath string, line, character int, direction string) ([]CallHierarchyResult, error) {
-	dir, err := normalizeCallHierarchyDirection(direction)
+	dir, err := normalizeHierarchyDirection(direction, "incoming", "outgoing", "LSP.CallHierarchy")
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +100,7 @@ func (m *Manager) CallHierarchy(filePath string, line, character int, direction 
 }
 
 func (m *Manager) TypeHierarchy(filePath string, line, character int, direction string) ([]TypeHierarchyResult, error) {
-	dir, err := normalizeTypeHierarchyDirection(direction)
+	dir, err := normalizeHierarchyDirection(direction, "supertypes", "subtypes", "LSP.TypeHierarchy")
 	if err != nil {
 		return nil, err
 	}
@@ -109,24 +109,13 @@ func (m *Manager) TypeHierarchy(filePath string, line, character int, direction 
 	})
 }
 
-func normalizeCallHierarchyDirection(direction string) (string, error) {
+func normalizeHierarchyDirection(direction, dirA, dirB, errScope string) (string, error) {
 	switch dir := strings.ToLower(strings.TrimSpace(direction)); dir {
 	case "", "both":
 		return "both", nil
-	case "incoming", "outgoing":
+	case dirA, dirB:
 		return dir, nil
 	default:
-		return "", apperrors.New("LSP.CallHierarchy", "direction must be incoming|outgoing|both")
-	}
-}
-
-func normalizeTypeHierarchyDirection(direction string) (string, error) {
-	switch dir := strings.ToLower(strings.TrimSpace(direction)); dir {
-	case "", "both":
-		return "both", nil
-	case "supertypes", "subtypes":
-		return dir, nil
-	default:
-		return "", apperrors.New("LSP.TypeHierarchy", "direction must be supertypes|subtypes|both")
+		return "", apperrors.New(errScope, "direction must be "+dirA+"|"+dirB+"|both")
 	}
 }

@@ -58,9 +58,7 @@ func (c *AppServerClient) asWriteJSON(v any) error {
 }
 
 func (c *AppServerClient) failPendingCalls(err error) {
-	if err == nil {
-		err = apperrors.New("AppServerClient.failPendingCalls", "connection unavailable")
-	}
+	if err == nil { err = apperrors.New("AppServerClient.failPendingCalls", "connection unavailable") }
 	c.pending.Range(func(_, value any) bool {
 		if call, ok := value.(*pendingCall); ok { call.resolve(nil, err) }
 		return true
@@ -115,9 +113,9 @@ func (c *AppServerClient) Shutdown() error {
 func (c *AppServerClient) Kill() error {
 	if c.Cmd == nil || c.Cmd.Process == nil { return nil }
 	pid := c.Cmd.Process.Pid
-	killErr := syscall.Kill(-pid, syscall.SIGKILL)
-	if killErr != nil { killErr = c.Cmd.Process.Kill() }
-	if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) { return killErr }
+	if killErr := syscall.Kill(-pid, syscall.SIGKILL); killErr != nil {
+		if killErr = c.Cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) { return killErr }
+	}
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- c.Cmd.Wait() }()
 	select {

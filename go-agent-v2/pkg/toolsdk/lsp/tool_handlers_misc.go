@@ -28,10 +28,7 @@ type ToolHandlers struct {
 }
 
 func NewToolHandlers(manager *Manager, diagnostics DiagnosticsAccessor) *ToolHandlers {
-	return &ToolHandlers{
-		manager:     manager,
-		diagnostics: diagnostics,
-	}
+	return &ToolHandlers{manager: manager, diagnostics: diagnostics}
 }
 
 func (h *ToolHandlers) managerUnavailable() bool {
@@ -283,10 +280,7 @@ func hierarchyResultMeta[T any](result T) (int, bool) {
 
 func isHierarchyResultEmpty[T any](result T) bool {
 	count, ok := hierarchyResultMeta(result)
-	if !ok {
-		return false
-	}
-	return count == 0
+	return ok && count == 0
 }
 
 func hierarchyResultCount[T any](result T) int {

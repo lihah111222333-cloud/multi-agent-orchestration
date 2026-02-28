@@ -55,11 +55,9 @@ func normalizeCodeActionOnlyKinds(only []string) []string {
 	}
 	out := make([]string, 0, len(only))
 	for _, item := range only {
-		kind := strings.TrimSpace(item)
-		if kind == "" {
-			continue
+		if kind := strings.TrimSpace(item); kind != "" {
+			out = append(out, kind)
 		}
-		out = append(out, kind)
 	}
 	if len(out) == 0 {
 		return nil

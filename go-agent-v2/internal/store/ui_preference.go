@@ -57,7 +57,7 @@ func (s *UIPreferenceStore) GetAll(ctx context.Context) (map[string]any, error) 
 	}
 	defer rows.Close()
 
-	result := make(map[string]any)
+	result := map[string]any{}
 	for rows.Next() {
 		var key string
 		var raw json.RawMessage
@@ -65,10 +65,9 @@ func (s *UIPreferenceStore) GetAll(ctx context.Context) (map[string]any, error) 
 			return nil, apperrors.Wrap(err, "UIPreferenceStore.GetAll", "scan preference")
 		}
 		var val any
-		if err := json.Unmarshal(raw, &val); err != nil {
-			continue
+		if err := json.Unmarshal(raw, &val); err == nil {
+			result[key] = val
 		}
-		result[key] = val
 	}
 
 	if err := rows.Err(); err != nil {

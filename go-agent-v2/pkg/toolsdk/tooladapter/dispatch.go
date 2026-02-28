@@ -10,7 +10,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-// DynamicToolCall carries dispatch input and runtime context.
 type DynamicToolCall struct {
 	AgentID    string
 	Tool       string
@@ -21,7 +20,6 @@ type DynamicToolCall struct {
 	TotalCalls *int64
 }
 
-// Dispatch resolves runtime handler and executes it with assembled ToolCallContext.
 func Dispatch(call DynamicToolCall, deps Providers) (string, error) {
 	toolName := strings.TrimSpace(call.Tool)
 	if toolName == "" {
@@ -53,27 +51,20 @@ func Dispatch(call DynamicToolCall, deps Providers) (string, error) {
 
 	callCtx := BuildToolCallContext(call)
 	if isCodeRunTool(toolName) && deps.CodeRunTracker != nil {
-		resolvedCallID := util.ResolveCodeRunCallID(callCtx.CallID, callCtx.RequestID)
+		callCtx.CallID = util.ResolveCodeRunCallID(callCtx.CallID, callCtx.RequestID)
 		execCtx, execCancel := context.WithCancel(callCtx.Ctx)
-		runKey := deps.CodeRunTracker.RegisterCodeRunCancel(callCtx.AgentID, resolvedCallID, execCancel)
+		callCtx.Ctx = execCtx
+		runKey := deps.CodeRunTracker.RegisterCodeRunCancel(callCtx.AgentID, callCtx.CallID, execCancel)
 		defer func() {
 			deps.CodeRunTracker.UnregisterCodeRunCancel(callCtx.AgentID, runKey)
 			execCancel()
 		}()
-
-		call.CallID = resolvedCallID
-		call.Ctx = execCtx
-		callCtx = BuildToolCallContext(call)
 	}
 
 	return handler(callCtx, call.Arguments), nil
 }
 
 func isCodeRunTool(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "code_run", "code_run_test":
-		return true
-	default:
-		return false
-	}
+	name = strings.TrimSpace(name)
+	return name == "code_run" || name == "code_run_test"
 }

@@ -31,6 +31,13 @@ func storeLogger(l *slog.Logger) {
 	slog.SetDefault(l)
 }
 
+func closeLogFileLocked() {
+	if logFile != nil {
+		_ = logFile.Sync()
+		_ = logFile.Close()
+	}
+}
+
 func replaceTimeAttr(_ []string, a slog.Attr) slog.Attr {
 	if a.Key == slog.TimeKey {
 		if t, ok := a.Value.Any().(time.Time); ok {
@@ -70,10 +77,7 @@ func InitWithFile(logDir string) error {
 		return pkgerr.Wrap(err, "Logger.Init", "open log file")
 	}
 	logFileMu.Lock()
-	if logFile != nil {
-		_ = logFile.Sync()
-		_ = logFile.Close()
-	}
+	closeLogFileLocked()
 	logFile = f
 	logFileMu.Unlock()
 	multi := io.MultiWriter(os.Stdout, f)
@@ -89,8 +93,7 @@ func ShutdownFileHandler() {
 	logFileMu.Lock()
 	defer logFileMu.Unlock()
 	if logFile != nil {
-		_ = logFile.Sync()
-		_ = logFile.Close()
+		closeLogFileLocked()
 		logFile = nil
 	}
 }

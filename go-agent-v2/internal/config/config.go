@@ -1,4 +1,3 @@
-// Package config loads process-wide settings from environment variables.
 package config
 
 import (
@@ -6,7 +5,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-// Config holds process-wide environment configuration.
 type Config struct {
 	LLMModel                            string  `envconfig:"LLM_MODEL" default:"gpt-4o"`
 	LLMTemperature                      float64 `envconfig:"LLM_TEMPERATURE" default:"0.7"`
@@ -53,7 +51,6 @@ type Config struct {
 	MigrationsDir                       string  `envconfig:"MIGRATIONS_DIR"`
 }
 
-// Load reads settings from environment variables.
 func Load() *Config {
 	var cfg Config
 	if err := envconfig.Process("", &cfg); err != nil {
@@ -63,7 +60,6 @@ func Load() *Config {
 	return &cfg
 }
 
-// clampMinimums applies runtime safety bounds for numeric settings.
 func clampMinimums(c *Config) {
 	c.LLMTimeout = max(c.LLMTimeout, 1)
 	c.LLMMaxRetries = max(c.LLMMaxRetries, 0)
@@ -76,9 +72,7 @@ func clampMinimums(c *Config) {
 	c.GatewayMinQualityScore = max(c.GatewayMinQualityScore, 0)
 	c.PostgresPoolMinSize = max(c.PostgresPoolMinSize, 1)
 	c.PostgresPoolMaxSize = max(c.PostgresPoolMaxSize, 1)
-	if c.PostgresPoolMaxSize < c.PostgresPoolMinSize {
-		c.PostgresPoolMaxSize = c.PostgresPoolMinSize
-	}
+	if c.PostgresPoolMaxSize < c.PostgresPoolMinSize { c.PostgresPoolMaxSize = c.PostgresPoolMinSize }
 	c.PostgresPoolTimeoutSec = max(c.PostgresPoolTimeoutSec, 1)
 	c.DashboardSSESyncSec = max(c.DashboardSSESyncSec, 1)
 	c.AuditLogLimit = max(c.AuditLogLimit, 1)
@@ -89,7 +83,5 @@ func clampMinimums(c *Config) {
 	c.OrchestrationWorkspaceMaxFiles = max(c.OrchestrationWorkspaceMaxFiles, 1)
 	c.OrchestrationWorkspaceMaxFileBytes = max(c.OrchestrationWorkspaceMaxFileBytes, 1024)
 	c.OrchestrationWorkspaceMaxTotalBytes = max(c.OrchestrationWorkspaceMaxTotalBytes, 10240)
-	if c.OrchestrationWorkspaceMaxTotalBytes < c.OrchestrationWorkspaceMaxFileBytes {
-		c.OrchestrationWorkspaceMaxTotalBytes = c.OrchestrationWorkspaceMaxFileBytes
-	}
+	if c.OrchestrationWorkspaceMaxTotalBytes < c.OrchestrationWorkspaceMaxFileBytes { c.OrchestrationWorkspaceMaxTotalBytes = c.OrchestrationWorkspaceMaxFileBytes }
 }

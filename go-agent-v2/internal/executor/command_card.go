@@ -1,7 +1,3 @@
-// Package executor 提供命令卡执行引擎 (对应 Python command_card_executor.py 681 行)。
-//
-// 流程: 模板渲染 → 危险检测 → 审批 → exec.CommandContext → 审计
-// Go 优势: regexp.MustCompile 编译时、context.WithTimeout、struct tag 校验
 package executor
 
 import (
@@ -29,7 +25,6 @@ const (
 	maxOutputLim      = 200000
 )
 
-// dangerousPatterns 危险命令正则 (编译时检查，对应 Python _DANGEROUS_COMMAND_PATTERNS)。
 var dangerousPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(?:^|[;&|()\s])rm\s+-rf(?:\s|$)`),
 	regexp.MustCompile(`(?i)(?:^|[;&|()\s])shutdown(?:\s|$)`),
@@ -38,27 +33,22 @@ var dangerousPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)wget[^\n|]*\|\s*(?:bash|sh)(?:\s|$)`),
 }
 
-// placeholderRe 匹配占位符 {name} 格式 — 仅字母/数字/下划线，排除 JSON 等内容。
 var placeholderRe = regexp.MustCompile(`\{([a-zA-Z_]\w*)\}`)
 
-// run 表列名常量。
 const runCols = `id, card_key, requested_by, params, rendered_command, risk_level,
 	status, requires_review, interaction_id, output, error, exit_code,
 	created_at, updated_at, executed_at`
 
-// CommandCardExecutor 命令卡执行器。
 type CommandCardExecutor struct {
 	pool     *pgxpool.Pool
 	cards    *store.CommandCardStore
 	auditLog *store.AuditLogStore
 }
 
-// NewCommandCardExecutor 创建命令卡执行器。
 func NewCommandCardExecutor(pool *pgxpool.Pool, cards *store.CommandCardStore, audit *store.AuditLogStore) *CommandCardExecutor {
 	return &CommandCardExecutor{pool: pool, cards: cards, auditLog: audit}
 }
 
-// PrepareResult 准备结果。
 type PrepareResult struct {
 	OK               bool                  `json:"ok"`
 	NeedsReview      bool                  `json:"needs_review"`
@@ -68,7 +58,6 @@ type PrepareResult struct {
 	Message          string                `json:"message,omitempty"`
 }
 
-// Prepare 创建命令卡运行实例，渲染模板并写入 DB (对应 Python prepare_command_card_run)。
 func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, params map[string]string, requestedBy string) (*PrepareResult, error) {
 	logger.Info("executor: prepare",
 		logger.FieldCardKey, cardKey,
@@ -104,13 +93,9 @@ func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, param
 	}
 	dp := detectDangerous(rendered)
 	needsReview := riskLevel == "high" || riskLevel == "critical" || dp != ""
-
 	status := RunStatusReady
-	if needsReview {
-		status = RunStatusPendingReview
-	}
+	if needsReview { status = RunStatusPendingReview }
 
-	// 写入 DB
 	paramsJSON := "{}"
 	if b, err := json.Marshal(params); err == nil {
 		paramsJSON = string(b)
@@ -131,7 +116,6 @@ func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, param
 		return nil, err
 	}
 
-	// 审计
 	if err := e.auditLog.Append(ctx, &store.AuditEvent{
 		EventType: "command_card_run",
 		Action:    "prepare",
@@ -153,14 +137,12 @@ func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, param
 	}, nil
 }
 
-// ReviewResult 审批结果。
 type ReviewResult struct {
 	OK      bool                  `json:"ok"`
 	Run     *store.CommandCardRun `json:"run,omitempty"`
 	Message string                `json:"message,omitempty"`
 }
 
-// Review 对 pending_review 状态的运行实例进行审批 (对应 Python review_command_card_run)。
 func (e *CommandCardExecutor) Review(ctx context.Context, runID int, decision, reviewer, note string) (*ReviewResult, error) {
 	logger.Info("executor: review",
 		logger.FieldRunID, runID,
@@ -186,9 +168,7 @@ func (e *CommandCardExecutor) Review(ctx context.Context, runID int, decision, r
 	}
 
 	nextStatus := RunStatusRejected
-	if decision == DecisionApproved {
-		nextStatus = RunStatusReady
-	}
+	if decision == DecisionApproved { nextStatus = RunStatusReady }
 
 	rows, err := e.pool.Query(ctx,
 		`UPDATE command_card_runs SET status=$1, updated_at=NOW()
@@ -202,7 +182,6 @@ func (e *CommandCardExecutor) Review(ctx context.Context, runID int, decision, r
 		return nil, err
 	}
 
-	// 审计
 	if err := e.auditLog.Append(ctx, &store.AuditEvent{
 		EventType: "command_card_run",
 		Action:    "review",
@@ -218,7 +197,6 @@ func (e *CommandCardExecutor) Review(ctx context.Context, runID int, decision, r
 	return &ReviewResult{OK: true, Run: updated}, nil
 }
 
-// ExecResult 执行结果。
 type ExecResult struct {
 	OK       bool                  `json:"ok"`
 	Output   string                `json:"output"`
@@ -227,7 +205,6 @@ type ExecResult struct {
 	Message  string                `json:"message,omitempty"`
 }
 
-// Execute 执行已就绪的运行实例 (对应 Python execute_command_card_run)。
 func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor string, timeoutSec int) (*ExecResult, error) {
 	if actor == "" {
 		actor = "agent"
@@ -250,7 +227,6 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 		return &ExecResult{OK: false, Message: "空命令不可执行", ExitCode: -1}, nil
 	}
 
-	// 标记 running
 	if _, err := e.pool.Exec(ctx, "UPDATE command_card_runs SET status=$2, updated_at=NOW() WHERE id=$1", runID, RunStatusRunning); err != nil {
 		logger.Warn("executor: mark running failed", logger.FieldRunID, runID, logger.FieldError, err)
 	}
@@ -273,7 +249,6 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 		}
 	}
 
-	// 更新 DB
 	rows, err := e.pool.Query(ctx,
 		`UPDATE command_card_runs
 		 SET status=$1, output=$2, error=$3, exit_code=$4, executed_at=NOW(), updated_at=NOW()
@@ -287,7 +262,6 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 		return nil, err
 	}
 
-	// 审计
 	if err := e.auditLog.Append(ctx, &store.AuditEvent{
 		EventType: "command_card_run",
 		Action:    "execute",
@@ -345,7 +319,6 @@ func runShellCommand(ctx context.Context, command string, timeoutSec int) (outpu
 	return output, exitCode, execErr
 }
 
-// RunOneOpts 一站式执行参数。
 type RunOneOpts struct {
 	AutoApprove bool
 	Reviewer    string
@@ -353,7 +326,6 @@ type RunOneOpts struct {
 	TimeoutSec  int
 }
 
-// RunOne 一站式: Prepare → (Review) → Execute (对应 Python execute_command_card)。
 func (e *CommandCardExecutor) RunOne(ctx context.Context, cardKey string, params map[string]string, requestedBy string, opts RunOneOpts) (*ExecResult, error) {
 	logger.Info("executor: run_one",
 		logger.FieldCardKey, cardKey,
@@ -370,27 +342,17 @@ func (e *CommandCardExecutor) RunOne(ctx context.Context, cardKey string, params
 
 	run := prepared.Run
 
-	// 需要审批的情况
 	if prepared.NeedsReview {
-		if !opts.AutoApprove {
-			return &ExecResult{OK: true, Run: run, ExitCode: -1,
-				Message: "命令已生成，等待人工审批"}, nil
+		switch {
+		case !opts.AutoApprove:
+			return &ExecResult{OK: true, Run: run, ExitCode: -1, Message: "命令已生成，等待人工审批"}, nil
+		case prepared.DangerousCommand:
+			return &ExecResult{OK: true, Run: run, ExitCode: -1, Message: "检测到危险命令模式，禁止自动审批，需人工审批"}, nil
+		case run.RiskLevel != "low" && run.RiskLevel != "normal":
+			return &ExecResult{OK: true, Run: run, ExitCode: -1, Message: "高风险命令禁止自动审批，需人工审批"}, nil
 		}
-		// 危险命令禁止自动审批
-		if prepared.DangerousCommand {
-			return &ExecResult{OK: true, Run: run, ExitCode: -1,
-				Message: "检测到危险命令模式，禁止自动审批，需人工审批"}, nil
-		}
-		// 高/严重风险禁止自动审批
-		if run.RiskLevel != "low" && run.RiskLevel != "normal" {
-			return &ExecResult{OK: true, Run: run, ExitCode: -1,
-				Message: "高风险命令禁止自动审批，需人工审批"}, nil
-		}
-		// 自动审批
 		reviewer := opts.Reviewer
-		if reviewer == "" {
-			reviewer = requestedBy
-		}
+		if reviewer == "" { reviewer = requestedBy }
 		reviewed, reviewErr := e.Review(ctx, run.ID, DecisionApproved, reviewer, opts.ReviewNote)
 		if reviewErr != nil {
 			return nil, reviewErr
@@ -403,7 +365,6 @@ func (e *CommandCardExecutor) RunOne(ctx context.Context, cardKey string, params
 	return e.Execute(ctx, run.ID, requestedBy, opts.TimeoutSec)
 }
 
-// GetRun 获取单条运行记录 (对应 Python get_command_card_run)。
 func (e *CommandCardExecutor) GetRun(ctx context.Context, runID int) (*store.CommandCardRun, error) {
 	rows, err := e.pool.Query(ctx,
 		"SELECT "+runCols+" FROM command_card_runs WHERE id = $1", runID)
@@ -413,7 +374,6 @@ func (e *CommandCardExecutor) GetRun(ctx context.Context, runID int) (*store.Com
 	return store.CollectOneExported[store.CommandCardRun](rows)
 }
 
-// ListRuns 查询运行记录 (对应 Python list_command_card_runs)。
 func (e *CommandCardExecutor) ListRuns(ctx context.Context, cardKey, status, requestedBy string, limit int) ([]store.CommandCardRun, error) {
 	q := store.NewQueryBuilder().
 		Eq("card_key", cardKey).
@@ -427,7 +387,6 @@ func (e *CommandCardExecutor) ListRuns(ctx context.Context, cardKey, status, req
 	return store.CollectRowsExported[store.CommandCardRun](rows)
 }
 
-// RecoverStaleRuns 恢复因崩溃卡在 running 状态的任务 (对应 Python _recover_stale_runs)。
 func (e *CommandCardExecutor) RecoverStaleRuns(ctx context.Context, timeoutSec int) (int64, error) {
 	threshold := util.ClampInt(timeoutSec*2, 300, 7200)
 	tag, err := e.pool.Exec(ctx,
@@ -454,7 +413,6 @@ func (e *CommandCardExecutor) RecoverStaleRuns(ctx context.Context, timeoutSec i
 	return count, nil
 }
 
-// renderTemplate 渲染命令模板 (对应 Python _render_template)。
 func renderTemplate(tmpl string, params map[string]string) (string, error) {
 	result := tmpl
 	for k, v := range params {
@@ -462,14 +420,12 @@ func renderTemplate(tmpl string, params map[string]string) (string, error) {
 		escaped := shellQuote(v)
 		result = strings.ReplaceAll(result, placeholder, escaped)
 	}
-	// 检查未替换的占位符 — 只匹配 {identifier} 格式，避免 JSON 等内容误报
 	if match := placeholderRe.FindString(result); match != "" {
 		return "", pkgerr.Newf("CommandCard.renderTemplate", "命令模板缺少参数: %s", match)
 	}
 	return result, nil
 }
 
-// shellQuote 简单 shell 转义。
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"
@@ -477,7 +433,6 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
-// detectDangerous 检测危险命令模式 (对应 Python _detect_dangerous_pattern)。
 func detectDangerous(command string) string {
 	for _, p := range dangerousPatterns {
 		if p.MatchString(command) {

@@ -405,10 +405,10 @@ func (c *Client) waitProcessExit(timeout time.Duration) {
 func (c *Client) clearPending() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for id, ch := range c.pending {
+	for _, ch := range c.pending {
 		close(ch)
-		delete(c.pending, id)
 	}
+	c.pending = map[int]chan *Response{}
 }
 
 func (c *Client) call(method string, params any, result any) error {

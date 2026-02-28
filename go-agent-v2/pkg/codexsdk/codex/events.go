@@ -159,6 +159,7 @@ const (
 	CmdApprovals, CmdPermissions   = "/approvals", "/permissions"
 	CmdPersonality                 = "/personality"
 	CmdDebugMDrop, CmdDebugMUpdate = "/debug-m-drop", "/debug-m-update"
+	approvalPolicyHint             = "never|on-failure|on-request|untrusted"
 )
 
 type CommandDef struct {
@@ -179,8 +180,8 @@ var AllCommands = []CommandDef{
 	{CmdReview, "代码审查", true, "自定义指令 (可选)", false},
 	{CmdMCP, "列出 MCP 工具", false, "", false},
 	{CmdSkills, "列出 Skills", false, "", false},
-	{CmdApprovals, "审批策略", true, "never|on-failure|on-request|untrusted", false},
-	{CmdPermissions, "审批策略 (别名)", true, "never|on-failure|on-request|untrusted", false},
+	{CmdApprovals, "审批策略", true, approvalPolicyHint, false},
+	{CmdPermissions, "审批策略 (别名)", true, approvalPolicyHint, false},
 	{CmdPersonality, "设置人格", true, "none|friendly|pragmatic", false},
 	{CmdDebugMDrop, "清除记忆 (调试)", false, "", true},
 	{CmdDebugMUpdate, "更新记忆 (调试)", false, "", false},

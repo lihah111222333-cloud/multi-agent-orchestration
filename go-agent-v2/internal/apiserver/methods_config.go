@@ -259,14 +259,13 @@ func experimentalFeatureList(_ *Server, _ context.Context, _ json.RawMessage) (a
 func configRequirementsRead(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	routerModel := strings.TrimSpace(os.Getenv("DYN_TOOL_ROUTER_MODEL"))
 	routerBaseURL := strings.TrimSpace(os.Getenv("DYN_TOOL_ROUTER_BASE_URL"))
-	routerConfigured := routerModel == "" || routerBaseURL != ""
 	return map[string]any{"requirements": map[string]any{
 		"apiKey": map[string]string{
 			"status":  boolToStatus(os.Getenv("OPENAI_API_KEY") != ""),
 			"message": "OPENAI_API_KEY environment variable",
 		},
 		"toolRouterEndpoint": map[string]string{
-			"status":  boolToStatus(routerConfigured),
+			"status":  boolToStatus(routerModel == "" || routerBaseURL != ""),
 			"message": "When DYN_TOOL_ROUTER_MODEL is set, DYN_TOOL_ROUTER_BASE_URL is required",
 		},
 	}}, nil
@@ -279,10 +278,6 @@ func boolToStatus(ok bool) string {
 	}
 	return "unmet"
 }
-
-// ========================================
-// § 11. 系统日志
-// ========================================
 
 // logListParams log/list 请求参数。
 type logListParams struct {

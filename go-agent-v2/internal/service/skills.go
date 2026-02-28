@@ -33,31 +33,27 @@ const (
 
 var frontmatterWordDelimiterReplacer = strings.NewReplacer("，", ",", "、", ",", ";", ",", "；", ",", "\n", ",")
 
-// SkillInfo Skill 目录元数据。
 type SkillInfo struct {
 	Name         string   `json:"name"`
 	Dir          string   `json:"dir"`
-	Description  string   `json:"description"` // 从 SKILL.md frontmatter 提取
-	Summary      string   `json:"summary"`     // 运行时注入与列表展示的摘要
+	Description  string   `json:"description"`
+	Summary      string   `json:"summary"`
 	TriggerWords []string `json:"trigger_words,omitempty"`
 	ForceWords   []string `json:"force_words,omitempty"`
 }
 
-// SkillDigest 运行时注入使用的轻量摘要。
 type SkillDigest struct {
 	Summary     string             `json:"summary"`
 	Sections    []string           `json:"sections,omitempty"`
 	SectionRefs []SkillDigestEntry `json:"section_refs,omitempty"`
 }
 
-// SkillDigestEntry 轻量段落索引（用于定位到源文件行号）。
 type SkillDigestEntry struct {
 	Title string `json:"title"`
 	File  string `json:"file"`
 	Line  int    `json:"line"`
 }
 
-// SkillImportResult 目录导入结果。
 type SkillImportResult struct {
 	Name      string
 	Dir       string
@@ -66,7 +62,6 @@ type SkillImportResult struct {
 	Bytes     int64
 }
 
-// SkillService 统一管理技能存储。
 type SkillService struct {
 	dir string
 }
@@ -88,7 +83,6 @@ type skillIndex struct {
 	Name string `json:"name"`
 }
 
-// NewSkillService 创建 SkillService。
 func NewSkillService(dir string) *SkillService {
 	return &SkillService{dir: dir}
 }
@@ -225,7 +219,6 @@ func (s *SkillService) resolveSkillRecord(name string) (skillRecord, error) {
 	return skillRecord{}, os.ErrNotExist
 }
 
-// ListSkills 扫描目录并返回所有 Skill 信息。
 func (s *SkillService) ListSkills() ([]SkillInfo, error) {
 	records, err := s.scanSkillRecords()
 	if err != nil {
@@ -247,7 +240,6 @@ func (s *SkillService) ListSkills() ([]SkillInfo, error) {
 	return skills, nil
 }
 
-// ReadSkillContent 读取 SKILL.md 完整内容。
 func (s *SkillService) ReadSkillContent(name string) (string, error) {
 	record, err := s.resolveSkillRecord(name)
 	if err != nil {
@@ -260,7 +252,6 @@ func (s *SkillService) ReadSkillContent(name string) (string, error) {
 	return string(data), nil
 }
 
-// ReadSkillDigest 读取技能摘要与段落目录（用于运行时注入）。
 func (s *SkillService) ReadSkillDigest(name string) (SkillDigest, error) {
 	content, err := s.ReadSkillContent(name)
 	if err != nil {
@@ -287,7 +278,6 @@ func (s *SkillService) ReadSkillDigest(name string) (SkillDigest, error) {
 	return digest, nil
 }
 
-// WriteSkillContent 覆盖写入技能内容并更新索引。
 func (s *SkillService) WriteSkillContent(name, content string) (string, error) {
 	storedName := strings.TrimSpace(name)
 	if storedName == "" {
@@ -318,7 +308,6 @@ func (s *SkillService) WriteSkillContent(name, content string) (string, error) {
 	return filepath.Join(targetDir, skillMainFile), nil
 }
 
-// UpdateSkillSummary 更新技能 frontmatter summary 字段。
 func (s *SkillService) UpdateSkillSummary(name, summary string) (skillPath string, resolvedName string, err error) {
 	record, err := s.resolveSkillRecord(name)
 	if err != nil {
@@ -337,7 +326,6 @@ func (s *SkillService) UpdateSkillSummary(name, summary string) (skillPath strin
 	return record.SkillPath, resolvedName, nil
 }
 
-// DeleteSkill 删除技能目录。
 func (s *SkillService) DeleteSkill(name string) (resolvedName string, dir string, err error) {
 	record, err := s.resolveSkillRecord(name)
 	if err != nil {
@@ -357,7 +345,6 @@ func resolvedSkillName(record skillRecord, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
-// ImportSkillDirectory 导入技能目录到 by-id 存储。
 func (s *SkillService) ImportSkillDirectory(sourceDir, name string) (SkillImportResult, error) {
 	info, err := os.Stat(sourceDir)
 	if err != nil {
@@ -547,7 +534,6 @@ type skillMetadata struct {
 	ForceWords    []string
 }
 
-// extractSkillMetadata 从 SKILL.md frontmatter 提取描述与关键字元数据。
 func extractSkillMetadata(path string) skillMetadata {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -594,8 +580,6 @@ func parseSkillMetadata(content string) skillMetadata {
 
 	name := strings.TrimSpace(meta.Name)
 	if name != "" {
-		// Frontmatter name should be reachable via explicit @mention even when
-		// directory name differs from display name.
 		meta.TriggerWords = append(meta.TriggerWords,
 			"@"+name,
 			"[skill:"+name+"]",
@@ -621,13 +605,11 @@ func parseSkillMetadata(content string) skillMetadata {
 	return meta
 }
 
-// SummarizeSkillContent 根据技能内容提取摘要及来源。
 func SummarizeSkillContent(content string) (summary, source string) {
 	meta := parseSkillMetadata(content)
 	return meta.Summary, meta.SummarySource
 }
 
-// UpsertSkillSummaryFrontmatter 将摘要写入（或清空）SKILL.md frontmatter 的 summary 字段。
 func UpsertSkillSummaryFrontmatter(content, summary string) string {
 	normalized := normalizeSkillContent(content)
 	summary = strings.TrimSpace(summary)

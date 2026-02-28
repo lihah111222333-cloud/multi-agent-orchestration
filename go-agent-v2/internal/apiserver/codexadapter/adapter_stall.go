@@ -22,12 +22,8 @@ func (a *Adapter) trackerState() turnTrackerState {
 	return state
 }
 
-func (a *Adapter) applyTrackedTurnTransition(threadID string, req trackedTurnTransitionRequest) trackedTurnTransitionResult {
-	return trackersvc.ApplyTrackedTurnTransitionCore(a.trackerState(), threadID, req)
-}
-
 func (a *Adapter) activeTrackedTurnID(threadID string) (string, bool) {
-	state := a.applyTrackedTurnTransition(threadID, trackedTurnTransitionRequest{})
+	state := trackersvc.ApplyTrackedTurnTransitionCore(a.trackerState(), threadID, trackedTurnTransitionRequest{})
 	if !state.Found || strings.TrimSpace(state.TurnID) == "" {
 		return "", false
 	}
@@ -35,11 +31,11 @@ func (a *Adapter) activeTrackedTurnID(threadID string) (string, bool) {
 }
 
 func (a *Adapter) hasActiveTrackedTurn(threadID string) bool {
-	return a.applyTrackedTurnTransition(threadID, trackedTurnTransitionRequest{}).Found
+	return trackersvc.ApplyTrackedTurnTransitionCore(a.trackerState(), threadID, trackedTurnTransitionRequest{}).Found
 }
 
 func (a *Adapter) markTrackedTurnInterruptRequested(threadID string) bool {
-	state := a.applyTrackedTurnTransition(threadID, trackedTurnTransitionRequest{MarkInterruptRequested: true})
+	state := trackersvc.ApplyTrackedTurnTransitionCore(a.trackerState(), threadID, trackedTurnTransitionRequest{MarkInterruptRequested: true})
 	return state.Found && state.InterruptRequested
 }
 

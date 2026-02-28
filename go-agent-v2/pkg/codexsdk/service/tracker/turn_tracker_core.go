@@ -207,11 +207,10 @@ func TrackerInterruptSender(getProcess func(string) any, sendCommand func(any, s
 		return nil
 	}
 	return func(threadID string) (bool, error) {
-		proc := getProcess(threadID)
-		if proc == nil {
-			return false, nil
+		if proc := getProcess(threadID); proc != nil {
+			return true, sendCommand(proc, "/interrupt", "")
 		}
-		return true, sendCommand(proc, "/interrupt", "")
+		return false, nil
 	}
 }
 
@@ -220,13 +219,7 @@ func threadLogFields(threadID string) []any {
 	return []any{logger.FieldAgentID, id, logger.FieldThreadID, id}
 }
 func shouldLogTrackedTurnStallHint(eventType, method string, startedAt time.Time) bool {
-	if IsTerminalEventType(eventType, method) {
-		return false
-	}
-	if startedAt.IsZero() {
-		return false
-	}
-	return time.Since(startedAt) >= trackedTurnGracePeriod
+	return !IsTerminalEventType(eventType, method) && !startedAt.IsZero() && time.Since(startedAt) >= trackedTurnGracePeriod
 }
 func scheduleTrackedTurnStallCheck(turn *trackedTurn, delay time.Duration, threadID, turnID string, check func(string, string)) {
 	if turn == nil || check == nil {
@@ -559,10 +552,7 @@ func TrackerStateCore(state TurnTrackerState) (map[string]*trackedTurn, *sync.Mu
 	if state.ActiveTurns != nil {
 		activeTurns = *state.ActiveTurns
 	}
-	turnMu := state.Mu
-	watchdogTimeout := TrackerDurationOrDefault(state.TurnWatchdogTimeout, DefaultTurnWatchdogTimeout)
-	stallThreshold := TrackerDurationOrDefault(state.StallThreshold, DefaultStallThreshold)
-	return activeTurns, turnMu, watchdogTimeout, stallThreshold
+	return activeTurns, state.Mu, TrackerDurationOrDefault(state.TurnWatchdogTimeout, DefaultTurnWatchdogTimeout), TrackerDurationOrDefault(state.StallThreshold, DefaultStallThreshold)
 }
 
 func stopTrackedTurnTimers(turn *trackedTurn) {
@@ -613,11 +603,10 @@ func withActiveTrackedTurnCore(
 	if ensureState {
 		EnsureTurnTrackerStateLocked(state)
 	}
-	turn := activeTurns[id]
-	if turn == nil {
-		return false
+	if turn := activeTurns[id]; turn != nil {
+		return fn(id, turn, activeTurns)
 	}
-	return fn(id, turn, activeTurns)
+	return false
 }
 
 func ApplyTrackedTurnTransitionCore(state TurnTrackerState, threadID string, req TrackedTurnTransitionRequest) TrackedTurnTransitionResult {

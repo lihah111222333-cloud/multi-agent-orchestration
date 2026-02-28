@@ -1,6 +1,4 @@
-// master_logic.go — Master 编排器纯逻辑函数 (对应 Python master.py 的 9 个纯函数)。
-//
-// 所有函数都是无状态纯函数，可独立测试，无 LLM / DB / 网络依赖。
+// master_logic.go — Master 编排器纯逻辑函数。
 package orchestrator
 
 import (
@@ -10,10 +8,6 @@ import (
 	"strings"
 	"unicode"
 )
-
-// ========================================
-// 常量 & 编译时正则
-// ========================================
 
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑 (对应 Python master.py 常量)
 const (
@@ -28,10 +22,6 @@ var summaryUnitRe = regexp.MustCompile(`[A-Za-z0-9_]+|[\x{4e00}-\x{9fff}]`)
 
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 var assignmentListPrefixRe = regexp.MustCompile(`^\s*(?:[-*+]|(?:\d+)[.\)])\s*`)
-
-// ========================================
-// trimTaskText (对应 Python _trim_task_text)
-// ========================================
 
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func trimTaskText(task string, maxChars int) string {
@@ -237,7 +227,7 @@ func sanitizeAgent(raw any, gwID string, idx int, seen map[string]bool) (map[str
 
 // extractStringSlice 安全提取 []string。
 func extractStringSlice(v any) []string {
-	out := []string{}
+	var out []string
 	switch arr := v.(type) {
 	case []string:
 		for _, item := range arr {
@@ -475,17 +465,18 @@ func fallbackAssignments(task string, gateways map[string]bool) map[string]strin
 
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func gatewayPromptBrief(gwID string, gw map[string]any) string {
-	desc := normalizeOptionalText(gw["description"])
-
-	capsRaw := extractStringSlice(gw["capabilities"])
-	capText := "未声明"
-	if len(capsRaw) > 0 {
-		limit := 8
-		if len(capsRaw) < limit {
-			limit = len(capsRaw)
+	joinLimited := func(items []string, limit int, sep, empty string) string {
+		if len(items) == 0 {
+			return empty
 		}
-		capText = strings.Join(capsRaw[:limit], ", ")
+		if len(items) > limit {
+			items = items[:limit]
+		}
+		return strings.Join(items, sep)
 	}
+
+	desc := normalizeOptionalText(gw["description"])
+	capText := joinLimited(extractStringSlice(gw["capabilities"]), 8, ", ", "未声明")
 
 	agentMeta, _ := gw["agent_meta"].(map[string]any)
 	var depRows []string
@@ -499,14 +490,7 @@ func gatewayPromptBrief(gwID string, gw map[string]any) string {
 			depRows = append(depRows, fmt.Sprintf("%s->%s", agentID, strings.Join(deps, "+")))
 		}
 	}
-	depText := "无"
-	if len(depRows) > 0 {
-		limit := 6
-		if len(depRows) < limit {
-			limit = len(depRows)
-		}
-		depText = strings.Join(depRows[:limit], "; ")
-	}
+	depText := joinLimited(depRows, 6, "; ", "无")
 
 	name := fmt.Sprint(gw["name"])
 	return fmt.Sprintf("- %s: %s (%s) | capabilities=%s | depends=%s", gwID, name, desc, capText, depText)

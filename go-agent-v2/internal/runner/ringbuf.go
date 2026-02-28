@@ -3,7 +3,7 @@ package runner
 import "sync"
 
 type RingBuffer struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	data  []byte
 	limit int
 }
@@ -22,8 +22,8 @@ func (rb *RingBuffer) Write(p []byte) {
 }
 
 func (rb *RingBuffer) Bytes() []byte {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
+	rb.mu.RLock()
+	defer rb.mu.RUnlock()
 	return append([]byte(nil), rb.data...)
 }
 

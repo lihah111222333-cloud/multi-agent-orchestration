@@ -9,29 +9,22 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-// uiStateThrottleEntry 全局节流状态。
 type uiStateThrottleEntry struct {
-	lastEmit time.Time      // 上次实际发送时间
-	timer    *time.Timer    // trailing timer (保证最终一致)
-	pending  map[string]any // 最新 payload (合并)
+	lastEmit time.Time
+	timer    *time.Timer
+	pending  map[string]any
 }
 
-// SetNotifyHook 设置 Notify 事件钩子。
-//
-// 用于桌面端桥接: apiserver 事件 -> Wails runtime event。
 func SetNotifyHook(s *Server, h func(method string, params any)) {
-	if s == nil {
-		return
+	if s != nil {
+		setNotifyHookState(s, h)
 	}
-	setNotifyHookState(s, h)
 }
 
-// Notify 向所有连接广播 JSON-RPC 通知 (WebSocket + SSE)。
 func Notify(s *Server, method string, params any) {
-	if s == nil {
-		return
+	if s != nil {
+		notify(s, method, params)
 	}
-	notify(s, method, params)
 }
 
 func notify(s *Server, method string, params any) {
@@ -66,10 +59,6 @@ func shouldEmitUIStateChanged(method string, payload map[string]any) bool {
 	return false
 }
 
-// throttledUIStateChanged 全局节流发送 ui/state/changed。
-//
-// 使用全局统一节流 (不再 per-thread): 多 agent 并行时也只发一条,
-// 前端只需要一个信号触发 syncRuntimeState 拉取最新快照。
 func throttledUIStateChanged(s *Server, payload map[string]any) {
 	if s == nil {
 		return
@@ -90,7 +79,6 @@ func throttledUIStateChanged(s *Server, payload map[string]any) {
 	broadcastNotification(s, "ui/state/changed", pending)
 }
 
-// flushUIStateChanged trailing timer 回调: 发送最后一个 pending payload。
 func flushUIStateChanged(s *Server, key string) {
 	if s == nil {
 		return
@@ -148,14 +136,12 @@ func shouldReplayThreadNotifyToUIRuntime(method string, payload map[string]any) 
 }
 
 var payloadExtractKeys = []string{
-
 	"delta", "content", "message", "command",
 	"cmd", "command_display", "commandDisplay", "displayCommand",
 	"exit_code", "reason", "name", "status",
 	"file", "files", "diff", "tool_name",
 	"item", "process",
 	"turn", "last_agent_message", "lastAgentMessage",
-
 	"text", "summary", "args", "arguments", "output",
 	"id", "type", "item_id", "callId", "call_id",
 	"file_path", "path", "chunk", "stream",
@@ -165,7 +151,6 @@ var payloadExtractKeys = []string{
 	"threadId", "thread_id", "turnId", "turn_id",
 	"activeTurnId", "active_turn_id", "attempt", "max_retries",
 	"error",
-
 	"tokenUsage", "token_usage", "usage", "info",
 	"total_tokens", "totalTokens", "used_tokens", "usedTokens",
 	"input_tokens", "inputTokens", "output_tokens", "outputTokens",
@@ -241,10 +226,6 @@ func mergePayloadFromMap(payload map[string]any, data map[string]any) {
 	}
 }
 
-// walkNestedJSON 遍历 msg/data/payload 嵌套层, 对每个解析出的 map[string]any 调用 fn。
-//
-// 统一处理四种嵌套类型: map[string]any / string / json.RawMessage / []byte。
-// mergePayloadFields 使用此逻辑。
 func walkNestedJSON(m map[string]any, fn func(map[string]any)) {
 	for _, key := range []string{"msg", "data", "payload"} {
 		if nested := parseMapAny(m[key]); nested != nil {

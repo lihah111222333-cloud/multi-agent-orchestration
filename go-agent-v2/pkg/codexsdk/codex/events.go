@@ -158,21 +158,14 @@ type HealthResponse struct {
 }
 
 const (
-	CmdCompact      = "/compact"
-	CmdInterrupt    = "/interrupt"
-	CmdClean        = "/clean"
-	CmdShutdown     = "/shutdown"
-	CmdUndo         = "/undo"
-	CmdModel        = "/model"
-	CmdRename       = "/rename"
-	CmdReview       = "/review"
-	CmdMCP          = "/mcp"
-	CmdSkills       = "/skills"
-	CmdApprovals    = "/approvals"
-	CmdPermissions  = "/permissions"
-	CmdPersonality  = "/personality"
-	CmdDebugMDrop   = "/debug-m-drop"
-	CmdDebugMUpdate = "/debug-m-update"
+	CmdCompact, CmdInterrupt = "/compact", "/interrupt"
+	CmdClean, CmdShutdown = "/clean", "/shutdown"
+	CmdUndo, CmdModel = "/undo", "/model"
+	CmdRename, CmdReview = "/rename", "/review"
+	CmdMCP, CmdSkills = "/mcp", "/skills"
+	CmdApprovals, CmdPermissions = "/approvals", "/permissions"
+	CmdPersonality = "/personality"
+	CmdDebugMDrop, CmdDebugMUpdate = "/debug-m-drop", "/debug-m-update"
 )
 
 type CommandDef struct {

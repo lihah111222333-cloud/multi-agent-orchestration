@@ -52,30 +52,18 @@ func callDash(ctx context.Context, caller MethodCaller, method string) (any, err
 	return callMethod(ctx, caller, "dashboard/"+method, json.RawMessage(`{}`))
 }
 
-func decodeThreadList(out any) (threadListResponse, bool) {
-	if out == nil {
-		return threadListResponse{}, false
-	}
-
-	raw, err := json.Marshal(out)
-	if err != nil {
-		return threadListResponse{}, false
-	}
-	var resp threadListResponse
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return threadListResponse{}, false
-	}
-	return resp, true
-}
-
 func buildAgentFallbackFromThreads(ctx context.Context, caller MethodCaller) []any {
 	out, err := callMethod(ctx, caller, "thread/list", json.RawMessage(`{}`))
 	if err != nil || out == nil {
 		return nil
 	}
 
-	resp, ok := decodeThreadList(out)
-	if !ok || len(resp.Threads) == 0 {
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return nil
+	}
+	var resp threadListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil || len(resp.Threads) == 0 {
 		return nil
 	}
 
@@ -105,7 +93,6 @@ func buildAgentFallbackFromThreads(ctx context.Context, caller MethodCaller) []a
 	return agents
 }
 
-// UIDashboardGet returns the stable payload for ui/dashboard/get.
 func UIDashboardGet(ctx context.Context, caller MethodCaller, p UIGetParams) (any, error) {
 	result := newDashboardPayload()
 

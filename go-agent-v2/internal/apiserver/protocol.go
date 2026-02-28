@@ -10,7 +10,6 @@ import (
 
 const jsonrpcVersion = "2.0"
 
-// Request JSON-RPC 2.0 请求。
 type Request struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      any             `json:"id"`
@@ -18,7 +17,6 @@ type Request struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-// Response JSON-RPC 2.0 响应。
 type Response struct {
 	JSONRPC string    `json:"jsonrpc"`
 	ID      any       `json:"id"`
@@ -26,21 +24,18 @@ type Response struct {
 	Error   *RPCError `json:"error,omitempty"`
 }
 
-// Notification JSON-RPC 2.0 通知 (无 id, 服务端主动推送)。
 type Notification struct {
 	JSONRPC string `json:"jsonrpc"`
 	Method  string `json:"method"`
 	Params  any    `json:"params,omitempty"`
 }
 
-// RPCError JSON-RPC 2.0 错误。
 type RPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Data    any    `json:"data,omitempty"`
 }
 
-// 标准 JSON-RPC 2.0 错误码。
 const (
 	CodeParseError     = -32700
 	CodeInvalidRequest = -32600
@@ -50,9 +45,6 @@ const (
 	CodeOverloaded     = -32001
 )
 
-// --- 便捷构造函数 ---
-
-// newResult 成功响应。
 func newResult(id any, result any) *Response {
 	return &Response{JSONRPC: jsonrpcVersion, ID: id, Result: result}
 }
@@ -93,33 +85,18 @@ func isLikelyInvalidParamsMessage(text string) bool {
 	return strings.Contains(text, "thread ") && strings.Contains(text, " not found")
 }
 
-// newError 错误响应。
-func newError(id any, code int, msg string) *Response {
-	return newErrorData(id, code, msg, nil)
-}
+func newError(id any, code int, msg string) *Response { return newErrorData(id, code, msg, nil) }
 
-// newErrorData 带 data 的错误响应。
 func newErrorData(id any, code int, msg string, data any) *Response {
 	normalizedMessage := strings.TrimSpace(msg)
 	normalizedCode := normalizeInternalErrorCode(code, normalizedMessage)
 	return &Response{JSONRPC: jsonrpcVersion, ID: id, Error: &RPCError{Code: normalizedCode, Message: normalizedMessage, Data: data}}
 }
 
-// newNotification 通知。
 func newNotification(method string, params any) *Notification {
 	return &Notification{JSONRPC: jsonrpcVersion, Method: method, Params: params}
 }
 
-// ========================================
-// Handler 包装器 (原 handler.go)
-// ========================================
-
-// typedHandler 将强类型函数包装为 Handler (json.RawMessage → 泛型参数自动解析)。
-//
-// 功能:
-//   - nil params → 使用零值 struct
-//   - 无效 JSON → 返回 "invalid params" 错误
-//   - handler 签名即文档, 类型安全
 func typedHandler[P any](fn func(ctx context.Context, p P) (any, error)) Handler {
 	return func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var p P
@@ -132,14 +109,12 @@ func typedHandler[P any](fn func(ctx context.Context, p P) (any, error)) Handler
 	}
 }
 
-// noopHandler 返回空 map 的 handler (协议要求注册但暂无实现)。
 func noopHandler() Handler {
 	return func(_ context.Context, _ json.RawMessage) (any, error) {
 		return map[string]any{}, nil
 	}
 }
 
-// stubHandler 返回固定值的 handler (前端兼容 — 空数据占位)。
 func stubHandler(result any) Handler {
 	return func(_ context.Context, _ json.RawMessage) (any, error) {
 		return result, nil

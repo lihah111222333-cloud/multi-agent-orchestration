@@ -1,19 +1,11 @@
-// runtime_clone.go — RuntimeSnapshot 深拷贝工具函数。
 package uistate
 
 import "strings"
 
-func cloneSnapshot(src RuntimeSnapshot) RuntimeSnapshot {
-	return cloneBaseSnapshot(src, true)
-}
+func cloneSnapshot(src RuntimeSnapshot) RuntimeSnapshot { return cloneBaseSnapshot(src, true) }
 
-// cloneSnapshotLight is like cloneSnapshot but skips timelines and diffs (the heaviest fields).
-func cloneSnapshotLight(src RuntimeSnapshot) RuntimeSnapshot {
-	return cloneBaseSnapshot(src, false)
-}
+func cloneSnapshotLight(src RuntimeSnapshot) RuntimeSnapshot { return cloneBaseSnapshot(src, false) }
 
-// cloneBaseSnapshot creates a deep copy of RuntimeSnapshot. When includeTimeline is false,
-// Timeline and DiffText maps are left empty (the caller uses separate accessors).
 func cloneBaseSnapshot(src RuntimeSnapshot, includeTimeline bool) RuntimeSnapshot {
 	out := RuntimeSnapshot{
 		Threads:               make([]ThreadSnapshot, 0, len(src.Threads)),
@@ -87,7 +79,6 @@ func cloneBaseSnapshot(src RuntimeSnapshot, includeTimeline bool) RuntimeSnapsho
 	return out
 }
 
-// cloneTimelineItems deep-copies timeline items including pointer fields.
 func cloneTimelineItems(src, dst map[string][]TimelineItem) {
 	for key, list := range src {
 		copied := make([]TimelineItem, len(list))
@@ -111,7 +102,6 @@ func cloneTimelineItems(src, dst map[string][]TimelineItem) {
 	}
 }
 
-// cloneActivityStatsMap deep-copies activity stats including ToolCalls map.
 func cloneActivityStatsMap(src map[string]ActivityStats) map[string]ActivityStats {
 	out := make(map[string]ActivityStats, len(src))
 	for key, value := range src {
@@ -129,7 +119,6 @@ func cloneActivityStatsMap(src map[string]ActivityStats) map[string]ActivityStat
 	return out
 }
 
-// cloneAlerts deep-copies alert entries per thread.
 func cloneAlerts(src map[string][]AlertEntry) map[string][]AlertEntry {
 	out := make(map[string][]AlertEntry, len(src))
 	for key, value := range src {

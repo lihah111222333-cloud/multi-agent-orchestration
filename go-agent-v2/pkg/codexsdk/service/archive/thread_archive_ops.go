@@ -91,7 +91,7 @@ func ThreadUnarchive(ctx context.Context, threadID string, deps ThreadArchiveDep
 	}
 	_, wasArchived := archivedMap[id]
 
-	notice := ThreadArchiveRestoreNotice{}
+	var notice ThreadArchiveRestoreNotice
 	var restoredFiles, skippedRestoreFiles []string
 	if wasArchived {
 		inspectNotice, inspectErr := InspectThreadArchiveForRestore(id, BuildThreadArchiveRestoreDeps(ResolveThreadArchiveRootDir, SanitizeArchiveNameStrict, nil, PathWithinRoot, nil, FileSHA256, FindLatestThreadArchiveManifestPath, ReadThreadArchiveManifest, FileState, nil))
@@ -112,8 +112,7 @@ func ThreadUnarchive(ctx context.Context, threadID string, deps ThreadArchiveDep
 		return nil, appErrors.Wrap(err, "Server.threadUnarchive", "persist archive state")
 	}
 
-	// Remove the archive directory from disk so LoadThreadArchiveMapFromDisk
-	// won't re-discover this thread as archived on the next thread/list call.
+	// Remove archive dir so LoadThreadArchiveMapFromDisk does not re-discover it.
 	if rootDir, rootErr := ResolveThreadArchiveRootDir(); rootErr == nil {
 		if safeName, sanitizeErr := SanitizeArchiveNameStrict(id); sanitizeErr == nil {
 			if removeErr := os.RemoveAll(filepath.Join(rootDir, safeName)); removeErr != nil {

@@ -107,13 +107,7 @@ func (c *AppServerClient) Submit(prompt string, images, files []string, outputSc
 
 func (c *AppServerClient) SendCommand(cmd, args string) error {
 	if strings.TrimSpace(cmd) == CmdInterrupt {
-		handled, err := c.tryInterruptCommand()
-		if err != nil {
-			return err
-		}
-		if handled {
-			return nil
-		}
+		if handled, err := c.tryInterruptCommand(); err != nil || handled { return err }
 	}
 	return c.notify("command", map[string]any{"threadId": c.ThreadID, "command": cmd, "args": args})
 }
@@ -152,7 +146,7 @@ func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID
 	}
 	logger.Warn("codex: SendDynamicToolResult without requestID, falling back to notification",
 		logger.FieldAgentID, c.AgentID, logger.FieldCallID, callID)
-	params := map[string]any{
+	return c.notify("dynamic_tool_result", map[string]any{
 		"threadId":     c.ThreadID,
 		"callId":       callID,
 		"toolCallId":   callID,
@@ -161,8 +155,7 @@ func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID
 		"result":       result,
 		"contentItems": result.ContentItems,
 		"success":      true,
-	}
-	return c.notify("dynamic_tool_result", params)
+	})
 }
 
 func (c *AppServerClient) ListThreads() ([]ThreadInfo, error) {

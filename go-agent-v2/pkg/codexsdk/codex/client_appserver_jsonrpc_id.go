@@ -17,11 +17,7 @@ func newJSONRPCIntID(value int64) jsonRPCID {
 }
 
 func (id jsonRPCID) clone() jsonRPCID {
-	if len(id.raw) == 0 {
-		return jsonRPCID{}
-	}
-	raw := append(json.RawMessage(nil), id.raw...)
-	return jsonRPCID{raw: raw}
+	return jsonRPCID{raw: id.rawCopy()}
 }
 
 func (id jsonRPCID) rawCopy() json.RawMessage {
@@ -66,18 +62,12 @@ func (id jsonRPCID) unmarshal(dst any) bool {
 
 func (id jsonRPCID) asInt64() (int64, bool) {
 	var value int64
-	if !id.unmarshal(&value) {
-		return 0, false
-	}
-	return value, true
+	return value, id.unmarshal(&value)
 }
 
 func (id jsonRPCID) asString() (string, bool) {
 	var value string
-	if !id.unmarshal(&value) {
-		return "", false
-	}
-	return value, true
+	return value, id.unmarshal(&value)
 }
 
 func (id jsonRPCID) MarshalJSON() ([]byte, error) {
@@ -96,21 +86,15 @@ func (id *jsonRPCID) UnmarshalJSON(data []byte) error {
 		id.raw = nil
 		return nil
 	}
-	raw := []byte(trimmed)
-
 	var intID int64
-	if err := json.Unmarshal(raw, &intID); err == nil {
+	if err := json.Unmarshal(data, &intID); err == nil {
 		id.raw = json.RawMessage(strconv.FormatInt(intID, 10))
 		return nil
 	}
 
 	var stringID string
-	if err := json.Unmarshal(raw, &stringID); err == nil {
-		raw, marshalErr := json.Marshal(stringID)
-		if marshalErr != nil {
-			return marshalErr
-		}
-		id.raw = raw
+	if err := json.Unmarshal(data, &stringID); err == nil {
+		id.raw = json.RawMessage(strconv.Quote(stringID))
 		return nil
 	}
 

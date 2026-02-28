@@ -262,34 +262,36 @@ func runHierarchyTool[T any](
 }
 
 func (h *ToolHandlers) hierarchyToolErrorFormatter(tool, filePath string, line, column int) func(error) string {
-	if tool != "lsp_type_hierarchy" {
-		return nil
+	if tool == "lsp_type_hierarchy" {
+		return func(err error) string {
+			return h.contextualToolError("lsp_type_hierarchy", filePath, line, column, err)
+		}
 	}
-	return func(err error) string {
-		return h.contextualToolError("lsp_type_hierarchy", filePath, line, column, err)
+	return nil
+}
+
+func hierarchyResultMeta[T any](result T) (int, bool) {
+	switch v := any(result).(type) {
+	case []CallHierarchyResult:
+		return len(v), true
+	case []TypeHierarchyResult:
+		return len(v), true
+	default:
+		return 0, false
 	}
 }
 
 func isHierarchyResultEmpty[T any](result T) bool {
-	switch v := any(result).(type) {
-	case []CallHierarchyResult:
-		return len(v) == 0
-	case []TypeHierarchyResult:
-		return len(v) == 0
-	default:
+	count, ok := hierarchyResultMeta(result)
+	if !ok {
 		return false
 	}
+	return count == 0
 }
 
 func hierarchyResultCount[T any](result T) int {
-	switch v := any(result).(type) {
-	case []CallHierarchyResult:
-		return len(v)
-	case []TypeHierarchyResult:
-		return len(v)
-	default:
-		return 0
-	}
+	count, _ := hierarchyResultMeta(result)
+	return count
 }
 
 func (h *ToolHandlers) SemanticTokens(args json.RawMessage) string {

@@ -37,7 +37,6 @@ func normalizeCodeActionRange(line, character, endLine, endCharacter int) (int, 
 	if line < 0 || character < 0 {
 		return 0, 0, apperrors.Newf("LSP.CodeAction", "line and column must be >= 0")
 	}
-
 	if endLine < 0 {
 		endLine = line
 	}
@@ -47,7 +46,6 @@ func normalizeCodeActionRange(line, character, endLine, endCharacter int) (int, 
 	if endLine < line || (endLine == line && endCharacter < character) {
 		return 0, 0, apperrors.Newf("LSP.CodeAction", "range end must be >= start position")
 	}
-
 	return endLine, endCharacter, nil
 }
 
@@ -98,7 +96,6 @@ func (m *Manager) CallHierarchy(filePath string, line, character int, direction 
 	if err != nil {
 		return nil, err
 	}
-
 	return withBootstrappedResult(m, filePath, func(client *Client, uri string) ([]CallHierarchyResult, error) {
 		return client.CallHierarchy(m.ctx, uri, line, character, dir)
 	})
@@ -109,7 +106,6 @@ func (m *Manager) TypeHierarchy(filePath string, line, character int, direction 
 	if err != nil {
 		return nil, err
 	}
-
 	return withBootstrappedResult(m, filePath, func(client *Client, uri string) ([]TypeHierarchyResult, error) {
 		return client.TypeHierarchy(m.ctx, uri, line, character, dir)
 	})
@@ -129,19 +125,9 @@ func normalizeDirection(direction string, allowed []string, scope, invalidMsg st
 }
 
 func normalizeCallHierarchyDirection(direction string) (string, error) {
-	return normalizeDirection(
-		direction,
-		[]string{"incoming", "outgoing", "both"},
-		"LSP.CallHierarchy",
-		"direction must be incoming|outgoing|both",
-	)
+	return normalizeDirection(direction, []string{"incoming", "outgoing", "both"}, "LSP.CallHierarchy", "direction must be incoming|outgoing|both")
 }
 
 func normalizeTypeHierarchyDirection(direction string) (string, error) {
-	return normalizeDirection(
-		direction,
-		[]string{"supertypes", "subtypes", "both"},
-		"LSP.TypeHierarchy",
-		"direction must be supertypes|subtypes|both",
-	)
+	return normalizeDirection(direction, []string{"supertypes", "subtypes", "both"}, "LSP.TypeHierarchy", "direction must be supertypes|subtypes|both")
 }

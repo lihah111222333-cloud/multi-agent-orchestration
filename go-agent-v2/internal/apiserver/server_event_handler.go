@@ -25,9 +25,7 @@ func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 			logger.FieldEventType, event.Type,
 		)
 
-		payload := map[string]any{
-			"threadId": agentID,
-		}
+		payload := map[string]any{"threadId": agentID}
 
 		mergePayloadFields(payload, event.Data)
 
@@ -43,8 +41,7 @@ func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 			if !hasWillRetry {
 				willRetry = strings.EqualFold(strings.TrimSpace(event.Type), agentcore.EventStreamError)
 			}
-			payload["willRetry"] = willRetry
-			payload["will_retry"] = willRetry
+			payload["willRetry"], payload["will_retry"] = willRetry, willRetry
 			if _, exists := payload["error"]; !exists {
 				payload["error"] = map[string]any{
 					"message":           util.ExtractFirstString(payload, "message", "reason"),

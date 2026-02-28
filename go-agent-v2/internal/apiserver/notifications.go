@@ -33,7 +33,7 @@ var eventMethodMap = map[string]string{
 
 	agentcore.EventExecCommandBegin:          "item/started",
 	agentcore.EventExecCommandEnd:            "item/completed",
-	"exec_output_delta":                      "item/commandExecution/outputDelta", // apiserver-only legacy alias, no agentcore constant
+	"exec_output_delta":                      "item/commandExecution/outputDelta",
 	agentcore.EventExecCommandOutputDelta:    "item/commandExecution/outputDelta",
 	agentcore.EventExecApprovalRequest:       "item/commandExecution/requestApproval",
 	agentcore.EventExecTerminalInteraction:   "item/commandExecution/terminalInteraction",
@@ -69,22 +69,22 @@ var eventMethodMap = map[string]string{
 	agentcore.EventCollabAgentInteractionEnd:   "item/completed",
 	agentcore.EventCollabWaitingBegin:          "item/started",
 	agentcore.EventCollabWaitingEnd:            "item/completed",
-	"collab_agent_launched":                    "item/started",   // apiserver-only, no agentcore constant
-	"collab_agent_completed":                   "item/completed", // apiserver-only, no agentcore constant
+	"collab_agent_launched":                    "item/started",
+	"collab_agent_completed":                   "item/completed",
 	agentcore.EventEnteredReviewMode:           "item/started",
 	agentcore.EventExitedReviewMode:            "item/completed",
 
-	"account_updated":     "account/updated",            // apiserver-only, no agentcore constant
-	"login_completed":     "account/login/completed",    // apiserver-only, no agentcore constant
-	"rate_limits_updated": "account/rateLimits/updated", // apiserver-only, no agentcore constant
-	"app_list_updated":    "app/list/updated",           // apiserver-only, no agentcore constant
+	"account_updated":     "account/updated",
+	"login_completed":     "account/login/completed",
+	"rate_limits_updated": "account/rateLimits/updated",
+	"app_list_updated":    "app/list/updated",
 
-	"fuzzy_search_updated":   "fuzzyFileSearch/sessionUpdated",   // apiserver-only, no agentcore constant
-	"fuzzy_search_completed": "fuzzyFileSearch/sessionCompleted", // apiserver-only, no agentcore constant
+	"fuzzy_search_updated":   "fuzzyFileSearch/sessionUpdated",
+	"fuzzy_search_completed": "fuzzyFileSearch/sessionCompleted",
 
 	agentcore.EventError:            "error",
 	agentcore.EventWarning:          "configWarning",
-	"deprecation_notice":            "deprecationNotice", // apiserver-only, no agentcore constant
+	"deprecation_notice":            "deprecationNotice",
 	agentcore.EventShutdownComplete: "codex/event/shutdown_complete",
 	agentcore.EventStreamError:      "error",
 	agentcore.EventBackgroundEvent:  "codex/event/background_event",

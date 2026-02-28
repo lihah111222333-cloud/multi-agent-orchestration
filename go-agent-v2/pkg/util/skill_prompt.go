@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// TrimInjectedLSPHint trims injected LSP hint suffix from user text.
 func TrimInjectedLSPHint(text string) string {
 	const marker = "\n已注入"
 	if idx := strings.Index(text, marker); idx >= 0 {
@@ -16,7 +15,6 @@ func TrimInjectedLSPHint(text string) string {
 	return text
 }
 
-// TrimInjectedSkillBlock trims injected [skill:*] block from user text.
 func TrimInjectedSkillBlock(text string) string {
 	lines := strings.Split(text, "\n")
 	for i := 0; i < len(lines); i++ {
@@ -32,7 +30,6 @@ func TrimInjectedSkillBlock(text string) string {
 	return text
 }
 
-// looksLikeInjectedSkillBlock checks whether a [skill:*] block is system-injected.
 func looksLikeInjectedSkillBlock(lines []string, start int) bool {
 	if start < 0 || start >= len(lines) {
 		return false
@@ -62,7 +59,6 @@ func looksLikeInjectedSkillBlock(lines []string, start int) bool {
 	return hasSummary && hasUsage
 }
 
-// BuildAttachmentPreviewURL builds preview URL for an attachment path.
 func BuildAttachmentPreviewURL(path string) string {
 	value := strings.TrimSpace(path)
 	if value == "" {
@@ -78,7 +74,6 @@ func BuildAttachmentPreviewURL(path string) string {
 	return (&url.URL{Scheme: "file", Path: value}).String()
 }
 
-// BuildAttachmentName normalizes display names for image/file attachments.
 func BuildAttachmentName(path string) string {
 	value := strings.TrimSpace(path)
 	if value == "" {
@@ -112,7 +107,6 @@ func BuildAttachmentName(path string) string {
 	return base
 }
 
-// ResolveCodeRunCallID resolves call ID from request context.
 func ResolveCodeRunCallID(callID string, requestID *int64) string {
 	trimmed := strings.TrimSpace(callID)
 	if trimmed != "" {

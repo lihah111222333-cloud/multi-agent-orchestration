@@ -1,13 +1,4 @@
-// resilient.go — 弹性发布层: 总线优先 + DB 降级。
-//
-// 设计目标: 所有 13 种能力统一走总线, 但总线异常时自动降级到 DB 落盘, 恢复后补发。
-//
-// 能力清单: Agent/DAG/Task/命令卡/提示词/Skill/LSP/审批/资源锁/心跳/预算/回滚/调度
-//
-// 降级策略:
-//
-//	正常: Publish → MessageBus → 实时 fan-out → 订阅者
-//	异常: Publish → DB bus_pending 表 → 后台轮询 → 补发到 MessageBus
+// resilient.go — 弹性发布层: 总线优先, 异常时自动降级到 DB 并在恢复后补发。
 package bus
 
 import (
@@ -31,12 +22,7 @@ type FallbackStore interface {
 	DeletePending(ctx context.Context, seq int64) error
 }
 
-// ResilientPublisher 弹性发布器。
-//
-// 包装 MessageBus, 添加降级保障:
-//   - 总线健康: 直接 Publish, 零开销
-//   - 总线异常: 写入 DB bus_pending 表
-//   - 后台协程: 定期扫描 pending, 恢复后补发
+// ResilientPublisher 包装 MessageBus，提供 DB fallback 和后台补发。
 type ResilientPublisher struct {
 	bus      *MessageBus
 	fallback FallbackStore
@@ -68,22 +54,16 @@ func (rp *ResilientPublisher) Stop() {
 	rp.wg.Wait()
 }
 
-// Publish 发布消息 (自动降级)。
-//
-// 正常: 直接走 MessageBus (零分配, 无 DB 开销)
-// 异常: 写入 FallbackStore, 后台补发
+// Publish 发布消息（自动降级）。
 func (rp *ResilientPublisher) Publish(msg Message) {
 	if rp.healthy.Load() {
-		// 尝试直接发布
 		if rp.tryPublish(msg) {
 			return
 		}
-		// 发布失败, 标记不健康
 		rp.healthy.Store(false)
 		logger.Warn("bus: marked unhealthy, switching to DB fallback")
 	}
 
-	// 降级: 写入 DB
 	rp.saveToDB(msg)
 }
 
@@ -157,21 +137,16 @@ func (rp *ResilientPublisher) recoverPending(ctx context.Context) {
 		return
 	}
 	if len(msgs) == 0 {
-		// 无 pending 消息, 恢复健康
-		if !rp.healthy.Load() {
-			rp.healthy.Store(true)
+		if rp.healthy.CompareAndSwap(false, true) {
 			logger.Info("bus: recovered, marked healthy")
 		}
 		return
 	}
 
-	// 尝试补发
 	for _, msg := range msgs {
 		if !rp.tryPublish(msg) {
-			// 总线还没恢复, 等下一轮
 			return
 		}
-		// 补发成功, 删除 pending
 		if err := rp.fallback.DeletePending(ctx, msg.Seq); err != nil {
 			logger.Error("bus: delete pending failed", logger.FieldSeq, msg.Seq, logger.FieldError, err)
 		}
@@ -180,45 +155,26 @@ func (rp *ResilientPublisher) recoverPending(ctx context.Context) {
 	logger.Info("bus: replayed pending messages", logger.FieldCount, len(msgs))
 }
 
-// ========================================
-// 通用发布方法 (替代 12 个重复的 Publish* 方法)
-// ========================================
-
 // PublishTo 发布系统事件到指定 topic。
-//
-// topicPrefix 使用 bus.go 中的 Topic 常量 (TopicDAG, TopicTask, ...)。
-// id 为资源标识 (taskID, runID, agentID 等)。
-//
-// 示例:
-//
-//	rp.PublishTo(TopicDAG, "run-1", MsgDAGNodeStart, nodePayload)
-//	rp.PublishTo(TopicTask, "task-42", MsgTaskComplete, resultPayload)
-//	rp.PublishTo(TopicLock, "file:main.go", MsgLockAcquire, lockPayload)
 func (rp *ResilientPublisher) PublishTo(topicPrefix, id, msgType string, payload any) {
 	rp.publishInternal(topicPrefix, id, "system", msgType, payload)
 }
 
 // PublishFrom 发布来自指定 Agent 的事件。
-//
-// 用于需要标识来源 Agent 的场景 (审批请求、心跳等)。
-//
-// 示例:
-//
-//	rp.PublishFrom(TopicApproval, "req-1", agentID, MsgApprovalRequest, reqPayload)
-//	rp.PublishFrom(TopicHeartbeat, agentID, agentID, MsgHeartbeat, nil)
 func (rp *ResilientPublisher) PublishFrom(topicPrefix, id, from, msgType string, payload any) {
 	rp.publishInternal(topicPrefix, id, from, msgType, payload)
 }
 
-// publishInternal 共享发布逻辑: marshal payload → 构造 Message → Publish。
+// publishInternal 共享发布逻辑。
 func (rp *ResilientPublisher) publishInternal(topicPrefix, id, from, msgType string, payload any) {
+	topic := topicPrefix + "." + id
 	data, err := json.Marshal(payload)
 	if err != nil {
-		logger.Error("bus: marshal payload failed", logger.FieldTopic, topicPrefix+"."+id, logger.FieldError, err)
+		logger.Error("bus: marshal payload failed", logger.FieldTopic, topic, logger.FieldError, err)
 		return
 	}
 	rp.Publish(Message{
-		Topic:   topicPrefix + "." + id,
+		Topic:   topic,
 		From:    from,
 		Type:    msgType,
 		Payload: data,

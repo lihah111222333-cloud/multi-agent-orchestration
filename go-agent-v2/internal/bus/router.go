@@ -75,12 +75,7 @@ func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prom
 	// 发射 user_message 事件使 UI 可见委托消息
 	r.publishUserMessageEvent(fromID, toThreadID, prompt)
 
-	delegateData := delegatePayload{
-		Prompt: prompt,
-		Images: images,
-		Files:  files,
-	}
-	data, err := json.Marshal(delegateData)
+	data, err := json.Marshal(delegatePayload{Prompt: prompt, Images: images, Files: files})
 	if err != nil {
 		return apperrors.Wrap(err, "AgentRouter.DelegateTask", "marshal delegate payload")
 	}
@@ -202,15 +197,15 @@ func (r *AgentRouter) ListAgents(ctx context.Context) ([]AgentEndpoint, error) {
 // getOrCreateClient returns a running cached client or creates a new one via factory.
 func (r *AgentRouter) getOrCreateClient(threadID string, port int) (AgentClient, error) {
 	r.mu.RLock()
-	c, ok := r.clients[threadID]
+	c := r.clients[threadID]
 	r.mu.RUnlock()
-	if ok && c != nil && c.Running() {
+	if c != nil && c.Running() {
 		return c, nil
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if c, ok := r.clients[threadID]; ok && c != nil && c.Running() {
+	if c = r.clients[threadID]; c != nil && c.Running() {
 		return c, nil
 	}
 
@@ -243,11 +238,7 @@ func (r *AgentRouter) publishUserMessageEvent(fromID, toID, prompt string) {
 	if r.bus == nil {
 		return
 	}
-	data, err := json.Marshal(map[string]string{
-		"prompt": prompt,
-		"from":   fromID,
-		"to":     toID,
-	})
+	data, err := json.Marshal(map[string]string{"prompt": prompt, "from": fromID, "to": toID})
 	if err != nil {
 		return
 	}

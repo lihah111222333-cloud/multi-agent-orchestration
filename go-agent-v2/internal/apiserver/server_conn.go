@@ -34,11 +34,7 @@ type connEntry struct {
 }
 
 func newConnEntry(ws *websocket.Conn) *connEntry {
-	return &connEntry{
-		ws:      ws,
-		outbox:  make(chan wsOutbound, connOutboxSize),
-		closeCh: make(chan struct{}),
-	}
+	return &connEntry{ws: ws, outbox: make(chan wsOutbound, connOutboxSize), closeCh: make(chan struct{})}
 }
 
 func (c *connEntry) writeMsg(msgType int, data []byte) error {
@@ -62,16 +58,12 @@ func (c *connEntry) enqueue(msgType int, data []byte) bool {
 	}
 }
 
-func (c *connEntry) outboxDepth() int {
-	return len(c.outbox)
-}
+func (c *connEntry) outboxDepth() int { return len(c.outbox) }
 
 func (c *connEntry) closeNow() {
 	c.closeOnce.Do(func() {
 		close(c.closeCh)
-		if c.ws != nil {
-			_ = c.ws.Close()
-		}
+		if c.ws != nil { _ = c.ws.Close() }
 	})
 }
 
@@ -81,9 +73,7 @@ func (c *connEntry) writeLoop() error {
 		case <-c.closeCh:
 			return nil
 		case msg := <-c.outbox:
-			if err := c.writeMsg(msg.msgType, msg.data); err != nil {
-				return err
-			}
+			if err := c.writeMsg(msg.msgType, msg.data); err != nil { return err }
 		}
 	}
 }
@@ -98,19 +88,10 @@ func (c *connEntry) writePing() error {
 
 func checkLocalOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
+	if origin == "" { return true }
 	origin = strings.ToLower(origin)
-	for _, allowed := range []string{
-		"http://localhost", "https://localhost",
-		"http://127.0.0.1", "https://127.0.0.1",
-		"http://[::1]", "https://[::1]",
-		"wails://",
-	} {
-		if strings.HasPrefix(origin, allowed) {
-			return true
-		}
+	for _, allowed := range []string{"http://localhost", "https://localhost", "http://127.0.0.1", "https://127.0.0.1", "http://[::1]", "https://[::1]", "wails://"} {
+		if strings.HasPrefix(origin, allowed) { return true }
 	}
 	logger.Warn("app-server: rejected non-local origin", logger.FieldOrigin, origin)
 	return false
@@ -127,13 +108,9 @@ func InvokeMethod(s *Server, ctx context.Context, method string, params json.Raw
 }
 
 func broadcastNotification(s *Server, method string, params any) {
-	if s == nil {
-		return
-	}
+	if s == nil { return }
 	hook := notifyHookFuncState(s)
-	if hook != nil {
-		hook(method, params)
-	}
+	if hook != nil { hook(method, params) }
 
 	notif := newNotification(method, params)
 	data, err := json.Marshal(notif)
@@ -177,9 +154,7 @@ func disconnectConn(s *Server, connID string) {
 	id := strings.TrimSpace(connID)
 	if s == nil || id == "" { return }
 	entry, ok := removeConnState(s, id)
-	if ok && entry != nil {
-		entry.closeNow()
-	}
+	if ok && entry != nil { entry.closeNow() }
 }
 
 func sendRequest(s *Server, connID, method string, params any) (*Response, error) {
@@ -187,11 +162,7 @@ func sendRequest(s *Server, connID, method string, params any) (*Response, error
 	reqID, ch, cleanupPending := allocPendingRequestState(s)
 	defer cleanupPending()
 
-	req := Request{
-		JSONRPC: jsonrpcVersion,
-		ID:      reqID,
-		Method:  method,
-	}
+	req := Request{JSONRPC: jsonrpcVersion, ID: reqID, Method: method}
 	if params != nil {
 		raw, err := json.Marshal(params)
 		if err != nil {
@@ -206,9 +177,7 @@ func sendRequest(s *Server, connID, method string, params any) (*Response, error
 	}
 
 	entry, ok := getConnState(s, connID)
-	if !ok {
-		return nil, pkgerr.Newf("Server.SendRequest", "connection %s not found", connID)
-	}
+	if !ok { return nil, pkgerr.Newf("Server.SendRequest", "connection %s not found", connID) }
 
 	if !enqueueConnMessage(s, connID, entry, websocket.TextMessage, data, "server_request_backpressure") {
 		return nil, pkgerr.Newf("Server.SendRequest", "connection %s overloaded; retry later", connID)
@@ -237,24 +206,17 @@ func sendRequestToAll(s *Server, method string, params any) (*Response, error) {
 
 func ResolvePendingRequest(s *Server, reqID int64, result map[string]any) bool {
 	if s == nil { return false }
-	resp := &Response{
-		JSONRPC: jsonrpcVersion,
-		ID:      reqID,
-		Result:  result,
-	}
+	resp := &Response{JSONRPC: jsonrpcVersion, ID: reqID, Result: result}
 	found, delivered := deliverPendingResponseState(s, reqID, resp)
 	if !found {
-		logger.Warn("app-server: ResolvePendingRequest — no pending request",
-			logger.FieldID, reqID)
+		logger.Warn("app-server: ResolvePendingRequest — no pending request", logger.FieldID, reqID)
 		return false
 	}
 	if delivered {
-		logger.Info("app-server: ResolvePendingRequest — delivered",
-			logger.FieldID, reqID)
+		logger.Info("app-server: ResolvePendingRequest — delivered", logger.FieldID, reqID)
 		return true
 	}
-	logger.Warn("app-server: ResolvePendingRequest — channel full",
-		logger.FieldID, reqID)
+	logger.Warn("app-server: ResolvePendingRequest — channel full", logger.FieldID, reqID)
 	return false
 }
 
@@ -311,9 +273,7 @@ func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
 }
 
 func pingConnLoop(s *Server, entry *connEntry, connID string) {
-	if s == nil || entry == nil {
-		return
-	}
+	if s == nil || entry == nil { return }
 	ticker := time.NewTicker(connPingInterval)
 	defer ticker.Stop()
 	for {
@@ -322,10 +282,7 @@ func pingConnLoop(s *Server, entry *connEntry, connID string) {
 			return
 		case <-ticker.C:
 			if err := entry.writePing(); err != nil {
-				logger.Warn("app-server: ping failed, disconnecting client",
-					logger.FieldConn, connID,
-					logger.FieldError, err,
-				)
+				logger.Warn("app-server: ping failed, disconnecting client", logger.FieldConn, connID, logger.FieldError, err)
 				disconnectConn(s, connID)
 				return
 			}
@@ -347,9 +304,7 @@ func validIncomingJSONRPCVersion(version string) bool {
 }
 
 func parseIntID(raw json.RawMessage) (int64, bool) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return 0, false
-	}
+	if len(raw) == 0 || string(raw) == "null" { return 0, false }
 	var n int64
 	neg := false
 	i := 0
@@ -357,29 +312,19 @@ func parseIntID(raw json.RawMessage) (int64, bool) {
 		neg = true
 		i = 1
 	}
-	if i >= len(raw) {
-		return 0, false
-	}
+	if i >= len(raw) { return 0, false }
 	for ; i < len(raw); i++ {
 		c := raw[i]
-		if c < '0' || c > '9' {
-			return 0, false
-		}
+		if c < '0' || c > '9' { return 0, false }
 		n = n*10 + int64(c-'0')
 	}
-	if neg {
-		n = -n
-	}
+	if neg { n = -n }
 	return n, true
 }
 
 func rawIDtoAny(raw json.RawMessage) any {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil
-	}
-	if n, ok := parseIntID(raw); ok {
-		return n
-	}
+	if len(raw) == 0 || string(raw) == "null" { return nil }
+	if n, ok := parseIntID(raw); ok { return n }
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
 		logger.Debug("app-server: rawIDtoAny unmarshal", logger.FieldError, err)
@@ -391,8 +336,7 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 	if s == nil { return }
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Error("app-server: readLoop panicked, disconnecting",
-				logger.FieldConn, connID, logger.FieldError, r)
+			logger.Error("app-server: readLoop panicked, disconnecting", logger.FieldConn, connID, logger.FieldError, r)
 			disconnectConn(s, connID)
 		}
 	}()
@@ -419,9 +363,7 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 		} else if handleClientResponse(s, env) {
 			continue
 		} else if env.Method != "" && len(env.ID) > 0 && string(env.ID) != "null" && entry.outboxDepth() >= connBacklogCut {
-			resp = newErrorData(rawIDtoAny(env.ID), CodeOverloaded, "Server overloaded; retry later.", map[string]any{
-				"retry_after_ms": 500,
-			})
+			resp = newErrorData(rawIDtoAny(env.ID), CodeOverloaded, "Server overloaded; retry later.", map[string]any{"retry_after_ms": 500})
 			reason = "request_overloaded"
 		} else {
 			resp = dispatchRequest(s, ctx, rawIDtoAny(env.ID), env.Method, env.Params)
@@ -448,10 +390,7 @@ func handleClientResponse(s *Server, env rpcEnvelope) bool {
 	if len(env.Result) == 0 && len(env.Error) == 0 { return false }
 	reqID, ok := parseIntID(env.ID)
 	if !ok { return false }
-	resp := &Response{
-		JSONRPC: jsonrpcVersion,
-		ID:      reqID,
-	}
+	resp := &Response{JSONRPC: jsonrpcVersion, ID: reqID}
 	if len(env.Result) > 0 {
 		var result any
 		if err := json.Unmarshal(env.Result, &result); err != nil {
@@ -477,39 +416,22 @@ func dispatchRequest(s *Server, ctx context.Context, id any, method string, para
 	handler, ok := s.methods[method]
 	if !ok {
 		if id == nil {
-			logger.Warn("app-server: notification for unregistered method (dropped)",
-				logger.FieldMethod, method,
-				logger.FieldParamsLen, len(params),
-			)
+			logger.Warn("app-server: notification for unregistered method (dropped)", logger.FieldMethod, method, logger.FieldParamsLen, len(params))
 			return nil
 		}
-		logger.Warn("app-server: request for unregistered method",
-			logger.FieldMethod, method,
-			logger.FieldID, id,
-		)
+		logger.Warn("app-server: request for unregistered method", logger.FieldMethod, method, logger.FieldID, id)
 		return newError(id, CodeMethodNotFound, "method not found: "+method)
 	}
 
 	result, err := handler(ctx, params)
 	if err != nil {
 		if id == nil {
-			logger.Warn("app-server: notification handler error (no response sent)",
-				logger.FieldMethod, method,
-				logger.FieldError, err,
-			)
+			logger.Warn("app-server: notification handler error (no response sent)", logger.FieldMethod, method, logger.FieldError, err)
 			return nil
 		}
-		logger.Warn("app-server: request handler error",
-			logger.FieldMethod, method,
-			logger.FieldID, id,
-			logger.FieldError, err,
-		)
+		logger.Warn("app-server: request handler error", logger.FieldMethod, method, logger.FieldID, id, logger.FieldError, err)
 		return newError(id, CodeInternalError, err.Error())
 	}
-
-	if id == nil {
-		return nil
-	}
-
+	if id == nil { return nil }
 	return newResult(id, result)
 }

@@ -50,14 +50,12 @@ func NewOrchestrationState(bus *MessageBus) *OrchestrationState {
 // BeginRun 开始一个编排任务运行。
 func (o *OrchestrationState) BeginRun(runID, statusHeader, statusDetails, source string) {
 	o.mu.Lock()
-	now := time.Now()
-	run := &RunState{
+	o.activeRuns[runID] = &RunState{
 		RunID:         runID,
 		StatusHeader:  statusHeader,
 		StatusDetails: statusDetails,
-		UpdatedAt:     now,
+		UpdatedAt:     time.Now(),
 	}
-	o.activeRuns[runID] = run
 	o.mu.Unlock()
 
 	o.publishEvent("BeginOrchestrationTaskState", runID, source, map[string]string{
@@ -118,12 +116,13 @@ func (o *OrchestrationState) Snapshot() OrchestrationSnapshot {
 	for _, r := range o.activeRuns {
 		runs = append(runs, *r)
 	}
+	activeCount := len(runs)
 
 	return OrchestrationSnapshot{
 		Seq:            o.bus.Seq(),
 		UpdatedAt:      time.Now(),
-		Running:        len(runs) > 0,
-		ActiveCount:    len(runs),
+		Running:        activeCount > 0,
+		ActiveCount:    activeCount,
 		BindingWarning: o.bindingWarning,
 		ActiveRuns:     runs,
 	}
@@ -141,10 +140,7 @@ func (o *OrchestrationState) Reset(source string) {
 
 // publishEvent 发布编排事件到总线。
 func (o *OrchestrationState) publishEvent(event, runID, source string, extra map[string]string) {
-	payload := map[string]string{
-		"event":  event,
-		"run_id": runID,
-	}
+	payload := map[string]string{"event": event, "run_id": runID}
 	for k, v := range extra {
 		payload[k] = v
 	}

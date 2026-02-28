@@ -314,20 +314,12 @@ func (m *Manager) SkillsConfigRead(_ context.Context, p SkillsConfigReadParams) 
 // SkillsConfigWrite handles skills/config/write.
 func (m *Manager) SkillsConfigWrite(_ context.Context, p SkillsConfigWriteParams) (any, error) {
 	skillSvc := m.skillService()
-	if skillSvc == nil {
-		return nil, apperrors.New("Server.skillsConfigWrite", "skill service unavailable")
-	}
-	if strings.TrimSpace(p.Name) == "" {
-		return nil, apperrors.New("Server.skillsConfigWrite", "name is required")
-	}
+	if skillSvc == nil { return nil, apperrors.New("Server.skillsConfigWrite", "skill service unavailable") }
+	if strings.TrimSpace(p.Name) == "" { return nil, apperrors.New("Server.skillsConfigWrite", "name is required") }
 	skillName, err := skillutil.NormalizeName(p.Name)
-	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "normalize skill name")
-	}
+	if err != nil { return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "normalize skill name") }
 	path, err := skillSvc.WriteSkillContent(skillName, p.Content)
-	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "write skill content")
-	}
+	if err != nil { return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "write skill content") }
 	logger.Info("skills/config/write: saved", logger.FieldSkill, skillName, logger.FieldBytes, len(p.Content))
 	return map[string]any{"ok": true, "path": path}, nil
 }
@@ -390,16 +382,10 @@ func (m *Manager) SkillsRemoteRead(_ context.Context, p SkillsRemoteReadParams) 
 // SkillsRemoteWrite handles skills/remote/write.
 func (m *Manager) SkillsRemoteWrite(_ context.Context, p SkillsRemoteWriteParams) (any, error) {
 	skillSvc := m.skillService()
-	if skillSvc == nil {
-		return nil, apperrors.New("Server.skillsRemoteWrite", "skill service unavailable")
-	}
+	if skillSvc == nil { return nil, apperrors.New("Server.skillsRemoteWrite", "skill service unavailable") }
 	skillName, err := skillutil.NormalizeName(p.Name)
-	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "normalize skill name")
-	}
+	if err != nil { return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "normalize skill name") }
 	path, err := skillSvc.WriteSkillContent(skillName, p.Content)
-	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "write skill content")
-	}
+	if err != nil { return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "write skill content") }
 	return map[string]any{"ok": true, "path": path}, nil
 }

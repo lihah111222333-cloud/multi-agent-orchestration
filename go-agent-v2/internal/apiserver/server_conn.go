@@ -325,7 +325,7 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 			_ = sendResponseViaOutbox(s, connID, entry, newError(nil, CodeParseError, "parse error: "+err.Error()), "parse_error_response")
 			continue
 		}
-		if !validIncomingJSONRPCVersion(env.JSONRPC) {
+		if strings.TrimSpace(env.JSONRPC) != jsonrpcVersion {
 			resp = newError(rawIDtoAny(env.ID), CodeInvalidRequest, "invalid request: jsonrpc must be \"2.0\"")
 			reason = "invalid_jsonrpc_version"
 		} else if handleClientResponse(s, env) {

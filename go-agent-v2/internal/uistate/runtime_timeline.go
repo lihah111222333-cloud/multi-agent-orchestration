@@ -438,10 +438,8 @@ type planEntry struct {
 func extractPlanSnapshot(payload map[string]any) (string, bool, bool) {
 	entries, explanation := extractPlanEntries(payload)
 	if len(entries) == 0 { return "", false, false }
-	if text, done := formatPlanSnapshot(entries, explanation); strings.TrimSpace(text) != "" {
-		return text, done, true
-	}
-	return "", false, false
+	text, done := formatPlanSnapshot(entries, explanation)
+	return text, done, strings.TrimSpace(text) != ""
 }
 
 func extractPlanEntries(payload map[string]any) ([]planEntry, string) {
@@ -655,10 +653,10 @@ func extractExitCode(value any) (int, bool) {
 	case float64:
 		return int(v), true
 	case json.Number:
-		i, err := v.Int64()
-		if err != nil {
-			return 0, false
-		}
+		i, err := v.Int64(); if err != nil { return 0, false }
+		return int(i), true
+	case string:
+		i, err := json.Number(strings.TrimSpace(v)).Int64(); if err != nil { return 0, false }
 		return int(i), true
 	default:
 		return 0, false
@@ -666,11 +664,6 @@ func extractExitCode(value any) (int, bool) {
 }
 
 func extractRunKey(raw map[string]any) string {
-	if raw == nil {
-		return ""
-	}
-	if value := strings.TrimSpace(util.ExtractFirstString(raw, "run_key", "runKey")); value != "" {
-		return value
-	}
-	return ""
+	if raw == nil { return "" }
+	return strings.TrimSpace(util.ExtractFirstString(raw, "run_key", "runKey"))
 }

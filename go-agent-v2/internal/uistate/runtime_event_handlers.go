@@ -805,22 +805,14 @@ func deriveStreamErrorDetails(payload map[string]any) string {
 }
 
 func shouldUseReasoningHeader(rt *threadRuntime) bool {
-	if rt == nil {
-		return false
-	}
-	if strings.TrimSpace(rt.statusHeader) == "" {
-		return false
-	}
-	if rt.turnDepth <= 0 {
-		return false
-	}
-	if rt.userInputDepth > 0 || rt.approvalDepth > 0 || rt.commandDepth > 0 || rt.fileEditDepth > 0 || rt.toolCallDepth > 0 || rt.collabDepth > 0 {
-		return false
-	}
-	if rt.terminalWaitOverlay || rt.mcpStartupOverlay || rt.backgroundOverlay {
-		return false
-	}
-	return strings.TrimSpace(rt.streamErrorText) == ""
+	return rt != nil &&
+		strings.TrimSpace(rt.statusHeader) != "" && rt.turnDepth > 0 &&
+		rt.userInputDepth == 0 && rt.approvalDepth == 0 && rt.commandDepth == 0 &&
+		rt.fileEditDepth == 0 && rt.toolCallDepth == 0 && rt.collabDepth == 0 &&
+		!rt.terminalWaitOverlay &&
+		!rt.mcpStartupOverlay &&
+		!rt.backgroundOverlay &&
+		strings.TrimSpace(rt.streamErrorText) == ""
 }
 
 func (m *RuntimeManager) captureReasoningHeaderLocked(threadID, delta string) {

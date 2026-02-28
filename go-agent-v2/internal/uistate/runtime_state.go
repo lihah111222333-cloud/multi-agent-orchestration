@@ -402,17 +402,10 @@ func hydrateContentPayload(rec HistoryRecord, payload map[string]any) {
 	if rec.Content == "" {
 		return
 	}
-	if _, ok := payload["delta"]; !ok {
-		payload["delta"] = rec.Content
-	}
-	if _, ok := payload["text"]; !ok {
-		payload["text"] = rec.Content
-	}
-	if _, ok := payload["content"]; !ok {
-		payload["content"] = rec.Content
-	}
-	if _, ok := payload["output"]; !ok {
-		payload["output"] = rec.Content
+	for _, key := range []string{"delta", "text", "content", "output"} {
+		if _, ok := payload[key]; !ok {
+			payload[key] = rec.Content
+		}
 	}
 }
 

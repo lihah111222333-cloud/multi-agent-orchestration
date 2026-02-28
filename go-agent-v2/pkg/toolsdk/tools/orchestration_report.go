@@ -28,15 +28,14 @@ func BuildOrchestrationCompletionReport(workerID, status, reason, summary string
 
 func TruncateOrchestrationSummary(value string, limit int) string {
 	text := strings.TrimSpace(value)
-	if text == "" || limit <= 0 {
-		return ""
-	}
+	if text == "" || limit <= 0 { return "" }
 	runes := []rune(text)
-	if len(runes) <= limit {
+	switch {
+	case len(runes) <= limit:
 		return text
-	}
-	if limit <= 3 {
+	case limit <= 3:
 		return "..."
+	default:
+		return string(runes[:limit-3]) + "..."
 	}
-	return string(runes[:limit-3]) + "..."
 }

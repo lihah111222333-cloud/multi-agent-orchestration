@@ -25,9 +25,7 @@ func (c *AppServerClient) pingLoop(conn *websocket.Conn) {
 			return
 		case <-ticker.C:
 			c.wsMu.Lock()
-			if c.ws != conn {
-				c.wsMu.Unlock(); return
-			}
+			if c.ws != conn { c.wsMu.Unlock(); return }
 			err := c.ws.WriteControl(websocket.PingMessage, []byte("ping"), time.Now().Add(appServerWriteTimeout))
 			if err != nil {
 				_ = c.ws.Close()
@@ -127,8 +125,9 @@ func (c *AppServerClient) Kill() error {
 	case waitErr := <-waitDone:
 		if waitErr == nil { return nil }
 		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) { return nil }
-		if strings.Contains(waitErr.Error(), "Wait was already called") || strings.Contains(waitErr.Error(), "no child processes") { return nil }
+		if errors.As(waitErr, &exitErr) || strings.Contains(waitErr.Error(), "Wait was already called") || strings.Contains(waitErr.Error(), "no child processes") {
+			return nil
+		}
 		return waitErr
 	case <-time.After(5 * time.Second):
 		logger.Warn("codex: Kill() Cmd.Wait timed out after 5s, abandoning",

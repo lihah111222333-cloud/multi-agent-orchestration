@@ -12,10 +12,10 @@ import (
 const DefaultHistoryLookupTimeout = 5 * time.Second
 
 func EnsureContext(ctx context.Context) context.Context {
-	if ctx != nil {
-		return ctx
+	if ctx == nil {
+		return context.Background()
 	}
-	return context.Background()
+	return ctx
 }
 
 func NormalizeHistoryTimeout(timeout time.Duration) time.Duration {

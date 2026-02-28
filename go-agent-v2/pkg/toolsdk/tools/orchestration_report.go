@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 const (
@@ -41,20 +40,12 @@ func TruncateOrchestrationSummary(value string, limit int) string {
 	if text == "" || limit <= 0 {
 		return ""
 	}
-	if utf8.RuneCountInString(text) <= limit {
+	runes := []rune(text)
+	if len(runes) <= limit {
 		return text
 	}
 	if limit <= 3 {
 		return "..."
 	}
-	var builder strings.Builder
-	used := 0
-	for _, r := range text {
-		if used >= limit-3 {
-			break
-		}
-		builder.WriteRune(r)
-		used++
-	}
-	return builder.String() + "..."
+	return string(runes[:limit-3]) + "..."
 }

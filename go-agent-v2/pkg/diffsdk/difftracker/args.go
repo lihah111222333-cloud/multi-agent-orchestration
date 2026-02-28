@@ -6,39 +6,27 @@ import (
 )
 
 func NormalizeDynamicToolName(tool string) string {
-	normalized := strings.ToLower(strings.TrimSpace(tool))
-	normalized = strings.TrimPrefix(normalized, "functions.")
-	normalized = strings.TrimPrefix(normalized, "tools.")
-	return normalized
+	tool = strings.ToLower(strings.TrimSpace(tool))
+	tool = strings.TrimPrefix(strings.TrimPrefix(tool, "functions."), "tools.")
+	return tool
 }
 
 func ExtractStringArg(args map[string]any, keys ...string) string {
-	if args == nil {
-		return ""
-	}
 	for _, key := range keys {
 		value, ok := args[key].(string)
 		if !ok {
 			continue
 		}
-		trimmed := strings.TrimSpace(value)
-		if trimmed != "" {
-			return trimmed
+		if value = strings.TrimSpace(value); value != "" {
+			return value
 		}
 	}
 	return ""
 }
 
 func ExtractBoolArg(args map[string]any, keys ...string) bool {
-	if args == nil {
-		return false
-	}
 	for _, key := range keys {
-		value, ok := args[key]
-		if !ok {
-			continue
-		}
-		switch typed := value.(type) {
+		switch typed := args[key].(type) {
 		case bool:
 			return typed
 		case string:
@@ -68,7 +56,7 @@ func ExtractBoolArg(args map[string]any, keys ...string) bool {
 func ShouldCaptureDynamicToolDiff(tool string, args map[string]any) bool {
 	switch NormalizeDynamicToolName(tool) {
 	case "lsp_file":
-		action := strings.ToLower(strings.TrimSpace(ExtractStringArg(args, "action")))
+		action := strings.ToLower(ExtractStringArg(args, "action"))
 		if action == "open_file" || action == "diagnostics" {
 			return false
 		}
@@ -108,7 +96,7 @@ func ResolveDynamicToolDiffRepoRoot(agentID string, args map[string]any, resolve
 
 	seen := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
-		normalized := filepath.Clean(strings.TrimSpace(candidate))
+		normalized := filepath.Clean(candidate)
 		if normalized == "" {
 			continue
 		}

@@ -1,6 +1,5 @@
 package difftracker
 
-// DiffResult carries emitted diff payload for UI/state consumers.
 type DiffResult struct {
 	ThreadID      string
 	CodexThreadID string
@@ -9,8 +8,7 @@ type DiffResult struct {
 	Files         []string
 }
 
-// DiffEmitter emits a diff result.
-type DiffEmitter func(result DiffResult)
-
-// WorkDirResolver resolves agent workdir by agent ID.
-type WorkDirResolver func(agentID string) string
+type (
+	DiffEmitter     func(DiffResult)
+	WorkDirResolver func(agentID string) string
+)

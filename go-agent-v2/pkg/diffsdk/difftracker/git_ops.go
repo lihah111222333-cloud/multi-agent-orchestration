@@ -10,14 +10,10 @@ import (
 )
 
 func RunGit(repoRoot string, args ...string) (string, error) {
-	cmdArgs := make([]string, 0, len(args)+2)
-	if strings.TrimSpace(repoRoot) != "" {
-		cmdArgs = append(cmdArgs, "-C", repoRoot)
+	if repoRoot = strings.TrimSpace(repoRoot); repoRoot != "" {
+		args = append([]string{"-C", repoRoot}, args...)
 	}
-	cmdArgs = append(cmdArgs, args...)
-
-	cmd := exec.Command("git", cmdArgs...)
-	output, err := cmd.CombinedOutput()
+	output, err := exec.Command("git", args...).CombinedOutput()
 	if err != nil {
 		return "", err
 	}
@@ -51,8 +47,7 @@ func ListRepoDirtyPaths(repoRoot string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	paths := append(CollectPathLines(trackedOutput), CollectPathLines(untrackedOutput)...)
-	return UniqueSortedPaths(paths), nil
+	return UniqueSortedPaths(append(CollectPathLines(trackedOutput), CollectPathLines(untrackedOutput)...)), nil
 }
 
 func CollectPathLines(output string) []string {
@@ -73,13 +68,10 @@ func CollectPathLines(output string) []string {
 				path = decoded
 			}
 		}
-		path = strings.TrimPrefix(path, "a/")
-		path = strings.TrimPrefix(path, "b/")
-		path = filepath.ToSlash(filepath.Clean(path))
-		if path == "" || path == "." {
-			continue
+		path = strings.TrimPrefix(strings.TrimPrefix(path, "a/"), "b/")
+		if path != "" {
+			paths = append(paths, path)
 		}
-		paths = append(paths, path)
 	}
 	return paths
 }
@@ -88,7 +80,7 @@ func UniqueSortedPaths(paths []string) []string {
 	seen := make(map[string]struct{}, len(paths))
 	out := make([]string, 0, len(paths))
 	for _, path := range paths {
-		clean := filepath.ToSlash(strings.TrimSpace(path))
+		clean := filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
 		if clean == "" || clean == "." {
 			continue
 		}

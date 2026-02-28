@@ -1,4 +1,3 @@
-// methods_config.go — 配置、模型、MCP、LSP 诊断、日志查询 JSON-RPC 方法。
 package apiserver
 
 import (
@@ -13,13 +12,12 @@ import (
 )
 
 func modelList(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
-	models := []map[string]string{
+	return map[string]any{"models": []map[string]string{
 		{"id": "o4-mini", "name": "O4 Mini"},
 		{"id": "o3", "name": "O3"},
 		{"id": "gpt-4.1", "name": "GPT-4.1"},
 		{"id": "codex-mini", "name": "Codex Mini"},
-	}
-	return map[string]any{"models": models}, nil
+	}}, nil
 }
 
 func configRead(s *Server, _ context.Context, _ json.RawMessage) (any, error) {
@@ -76,9 +74,6 @@ func configRead(s *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	}, nil
 }
 
-// configEnvAllowPrefixes 允许通过 JSON-RPC 设置的环境变量前缀。
-//
-// 拒绝设置 PATH, HOME, SHELL 等系统关键变量, 防止注入。
 var configEnvAllowPrefixes = []string{
 	"OPENAI_",
 	"ANTHROPIC_",
@@ -93,7 +88,6 @@ var configEnvAllowPrefixes = []string{
 	"TEST_E2E_",    // 测试用
 }
 
-// isAllowedEnvKey 检查环境变量名是否在允许列表中。
 func isAllowedEnvKey(key string) bool {
 	for _, prefix := range configEnvAllowPrefixes {
 		if strings.HasPrefix(strings.ToUpper(key), prefix) {
@@ -103,7 +97,6 @@ func isAllowedEnvKey(key string) bool {
 	return false
 }
 
-// configValueWriteParams config/value/write 请求参数。
 type configValueWriteParams struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
@@ -119,7 +112,6 @@ func configValueWriteTyped(_ *Server, _ context.Context, p configValueWriteParam
 	return map[string]any{}, nil
 }
 
-// configBatchWriteParams config/batchWrite 请求参数。
 type configBatchWriteParams struct {
 	Entries []configBatchWriteEntry `json:"entries"`
 }
@@ -140,11 +132,8 @@ func configBatchWriteTyped(_ *Server, _ context.Context, p configBatchWriteParam
 			logger.Warn("config/batchWrite: setenv failed", logger.FieldKey, e.Key, logger.FieldError, err)
 		}
 	}
-	result := map[string]any{}
-	if len(rejected) > 0 {
-		result["rejected"] = rejected
-	}
-	return result, nil
+	if len(rejected) == 0 { return map[string]any{}, nil }
+	return map[string]any{"rejected": rejected}, nil
 }
 
 func configLSPPromptHintRead(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
@@ -224,7 +213,6 @@ func mcpServerStatusList(s *Server, _ context.Context, _ json.RawMessage) (any, 
 	return map[string]any{"servers": servers}, nil
 }
 
-// mcpServerReload 重载所有 MCP/LSP 语言服务器 (JSON-RPC: config/mcpServer/reload)。
 func mcpServerReload(s *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	if s.lsp == nil {
 		return map[string]any{"reloaded": false}, nil
@@ -238,7 +226,6 @@ type lspDiagnosticsQueryParams struct {
 	FilePath string `json:"file_path"`
 }
 
-// collaborationModeList 列出协作模式 (experimental)。
 func collaborationModeList(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	return map[string]any{"modes": []map[string]string{
 		{"id": "default", "name": "Default"},
@@ -246,7 +233,6 @@ func collaborationModeList(_ *Server, _ context.Context, _ json.RawMessage) (any
 	}}, nil
 }
 
-// experimentalFeatureList 列出实验性功能。
 func experimentalFeatureList(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	return map[string]any{"features": map[string]bool{
 		"backgroundTerminals": true,
@@ -255,7 +241,6 @@ func experimentalFeatureList(_ *Server, _ context.Context, _ json.RawMessage) (a
 	}}, nil
 }
 
-// configRequirementsRead 读取配置需求。
 func configRequirementsRead(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	routerModel := strings.TrimSpace(os.Getenv("DYN_TOOL_ROUTER_MODEL"))
 	routerBaseURL := strings.TrimSpace(os.Getenv("DYN_TOOL_ROUTER_BASE_URL"))
@@ -271,15 +256,11 @@ func configRequirementsRead(_ *Server, _ context.Context, _ json.RawMessage) (an
 	}}, nil
 }
 
-// boolToStatus bool → "met" / "unmet"。
 func boolToStatus(ok bool) string {
-	if ok {
-		return "met"
-	}
+	if ok { return "met" }
 	return "unmet"
 }
 
-// logListParams log/list 请求参数。
 type logListParams struct {
 	Level     string `json:"level"`
 	Logger    string `json:"logger"`
@@ -293,7 +274,6 @@ type logListParams struct {
 	Limit     int    `json:"limit"`
 }
 
-// logListTyped 查询系统日志 (JSON-RPC: log/list)。
 func logListTyped(s *Server, ctx context.Context, p logListParams) (any, error) {
 	if s.sysLogStore == nil {
 		return nil, apperrors.New("Server.logList", "log store not initialized")
@@ -315,7 +295,6 @@ func logListTyped(s *Server, ctx context.Context, p logListParams) (any, error) 
 	})
 }
 
-// logFilters 返回日志筛选器可选值 (JSON-RPC: log/filters)。
 func logFilters(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
 	if s.sysLogStore == nil {
 		return nil, apperrors.New("Server.logFilters", "log store not initialized")

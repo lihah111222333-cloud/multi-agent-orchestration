@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
 type AILogStore struct{ BaseStore }
@@ -69,21 +70,16 @@ func extractModel(msg string) string {
 }
 
 func (s *AILogStore) Query(ctx context.Context, category, keyword string, limit int) ([]AILogRow, error) {
-	if limit < 1 {
-		limit = 1
-	}
-	if limit > 2000 {
-		limit = 2000
-	}
+	limit = util.ClampInt(limit, 1, 2000)
 	fetchLimit := limit
 	if category != "" {
 		fetchLimit = min(limit*5, 2000)
 	}
-	q := NewQueryBuilder().
-		KeywordLike(keyword, "message")
-	sql, params := q.Build(
-		"SELECT "+sysLogCols+" FROM system_logs",
-		"ts DESC, id DESC", fetchLimit)
+	sql, params := NewQueryBuilder().
+		KeywordLike(keyword, "message").
+		Build(
+			"SELECT "+sysLogCols+" FROM system_logs",
+			"ts DESC, id DESC", fetchLimit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err

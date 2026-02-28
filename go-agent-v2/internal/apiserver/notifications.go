@@ -94,28 +94,9 @@ var eventMethodMap = map[string]string{
 	"user_message": "codex/event/user_message",
 }
 
-var passthroughEventPrefixes = [...]string{
-	"thread/",
-	"turn/",
-	"item/",
-	"account/",
-	"app/",
-	"mcpServer/",
-	"fuzzyFileSearch/",
-	"rawResponseItem/",
-	"windows/",
-	"codex/event/",
-	"agent/event/",
-}
-
 func mapEventToMethod(eventType string) string {
 	if method, ok := eventMethodMap[eventType]; ok {
 		return method
-	}
-	for _, prefix := range passthroughEventPrefixes {
-		if strings.HasPrefix(eventType, prefix) {
-			return eventType
-		}
 	}
 	if strings.Contains(eventType, "/") {
 		return eventType

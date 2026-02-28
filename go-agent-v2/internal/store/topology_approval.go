@@ -10,26 +10,20 @@ import (
 
 type TopologyApprovalStore struct{ BaseStore }
 
-func NewTopologyApprovalStore(pool *pgxpool.Pool) *TopologyApprovalStore {
-	return &TopologyApprovalStore{NewBaseStore(pool)}
-}
+func NewTopologyApprovalStore(pool *pgxpool.Pool) *TopologyApprovalStore { return &TopologyApprovalStore{NewBaseStore(pool)} }
 
 const topologyApprovalCols = `id, proposal_hash, proposal_json, status, requested_by,
 	approved_by, rejected_by, expires_at, created_at, updated_at`
 
 func (s *TopologyApprovalStore) Create(ctx context.Context, a *TopologyApproval) (*TopologyApproval, error) {
 	proposalJSON, err := json.Marshal(a.ProposalJSON)
-	if err != nil {
-		return nil, pkgerr.Wrap(err, "TopologyApproval.Create", "marshal proposal")
-	}
+	if err != nil { return nil, pkgerr.Wrap(err, "TopologyApproval.Create", "marshal proposal") }
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO topology_approvals (proposal_hash, proposal_json, status, requested_by, expires_at, created_at, updated_at)
 		 VALUES ($1, $2::jsonb, 'pending', $3, $4, NOW(), NOW())
 		 RETURNING `+topologyApprovalCols,
 		a.ProposalHash, string(proposalJSON), a.RequestedBy, a.ExpiresAt)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	return collectOne[TopologyApproval](rows)
 }
 
@@ -51,8 +45,6 @@ func (s *TopologyApprovalStore) GetPending(ctx context.Context) ([]TopologyAppro
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+topologyApprovalCols+`
 		 FROM topology_approvals WHERE status='pending' AND expires_at > NOW() ORDER BY created_at DESC`)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	return collectRows[TopologyApproval](rows)
 }

@@ -100,7 +100,17 @@ func (a *Adapter) ThreadRead(_ context.Context, threadID string) (map[string]any
 }
 
 func (a *Adapter) ThreadResolve(ctx context.Context, threadID string) (map[string]any, error) {
-	return lifecyclesvc.RunThreadResolve(ctx, threadID, a.resolveRunningThreadIdentity, a.firstResolvedCodexThreadID, a.ThreadExistsInHistory)
+	return lifecyclesvc.RunThreadResolve(
+		ctx,
+		threadID,
+		func(id string) (state string, port int, codexThreadID string, found bool) {
+			return lifecyclesvc.ResolveRunningThreadIdentityFromAgents(id, toLifecycleAgentInfos(a.runningAgents()))
+		},
+		func(ctx context.Context, id string) string {
+			return lifecyclesvc.FirstResolvedCodexThreadIDFromCandidates(ctx, id, a.ResolveCodexThreadCandidates)
+		},
+		a.ThreadExistsInHistory,
+	)
 }
 
 func (a *Adapter) ResolveCodexThreadCandidates(ctx context.Context, agentID string, appendUniqueThreadID func(dst []string, seen map[string]struct{}, candidate string) []string, previewCandidates func([]string, int) []string) []string {
@@ -146,14 +156,6 @@ func (a *Adapter) ThreadExistsInHistory(ctx context.Context, threadID string) bo
 		},
 		a.loadThreadArchiveMap,
 	)
-}
-
-func (a *Adapter) firstResolvedCodexThreadID(ctx context.Context, threadID string) string {
-	return lifecyclesvc.FirstResolvedCodexThreadIDFromCandidates(ctx, threadID, a.ResolveCodexThreadCandidates)
-}
-
-func (a *Adapter) resolveRunningThreadIdentity(threadID string) (state string, port int, codexThreadID string, found bool) {
-	return lifecyclesvc.ResolveRunningThreadIdentityFromAgents(threadID, toLifecycleAgentInfos(a.runningAgents()))
 }
 
 func (a *Adapter) recoverProcess(threadID, reason string) {

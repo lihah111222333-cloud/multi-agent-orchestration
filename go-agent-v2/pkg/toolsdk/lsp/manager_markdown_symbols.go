@@ -54,19 +54,22 @@ func markdownSymbolsFromContent(content string) []DocumentSymbol {
 
 func parseMarkdownHeadings(lines []string) []markdownHeading {
 	headings := make([]markdownHeading, 0)
+	appendHeading := func(level int, line int, lineText, title string) {
+		headings = append(headings, markdownHeading{
+			Level:      level,
+			Line:       line,
+			LineText:   lineText,
+			Title:      title,
+			TitleStart: headingTitleStart(lineText, title),
+		})
+	}
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
 		match := markdownATXHeadingPattern.FindStringSubmatch(line)
 		if match != nil {
 			title := cleanMarkdownHeadingTitle(match[2])
 			if title != "" {
-				headings = append(headings, markdownHeading{
-					Level:      len(match[1]),
-					Line:       i,
-					LineText:   line,
-					Title:      title,
-					TitleStart: headingTitleStart(line, title),
-				})
+				appendHeading(len(match[1]), i, line, title)
 			}
 			continue
 		}
@@ -85,13 +88,7 @@ func parseMarkdownHeadings(lines []string) []markdownHeading {
 		if strings.HasPrefix(underline, "=") {
 			level = 1
 		}
-		headings = append(headings, markdownHeading{
-			Level:      level,
-			Line:       i,
-			LineText:   line,
-			Title:      title,
-			TitleStart: headingTitleStart(line, title),
-		})
+		appendHeading(level, i, line, title)
 		i++ // skip setext underline line
 	}
 	return headings

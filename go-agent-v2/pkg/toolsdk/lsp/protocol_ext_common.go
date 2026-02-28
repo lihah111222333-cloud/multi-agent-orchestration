@@ -118,14 +118,6 @@ func isNullRaw(raw json.RawMessage) bool {
 	return len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null"
 }
 
-func decodeRawArray(raw json.RawMessage, errPrefix string) ([]json.RawMessage, error) {
-	var arr []json.RawMessage
-	if err := json.Unmarshal(raw, &arr); err != nil {
-		return nil, fmt.Errorf("%s: %w", errPrefix, err)
-	}
-	return arr, nil
-}
-
 func decodeNullableSlice[T any](raw json.RawMessage, errPrefix string) ([]T, error) {
 	if isNullRaw(raw) {
 		return nil, nil
@@ -146,8 +138,9 @@ func decodeArrayLike[T any](
 	if isNullRaw(raw) {
 		return nil, nil
 	}
-	arr, err := decodeRawArray(raw, errPrefix)
-	if err == nil {
+	var arr []json.RawMessage
+	arrErr := json.Unmarshal(raw, &arr)
+	if arrErr == nil {
 		out := make([]T, 0, len(arr))
 		for _, item := range arr {
 			decoded, err := decodeOne(item)
@@ -158,6 +151,7 @@ func decodeArrayLike[T any](
 		}
 		return out, nil
 	}
+	err := fmt.Errorf("%s: %w", errPrefix, arrErr)
 	if !allowSingle {
 		return nil, err
 	}
@@ -662,18 +656,15 @@ func semanticTokenTypeName(index int, tokenTypes []string) string {
 }
 
 func decodeTokenModifiers(bits int, modifierNames []string) []string {
-	if bits == 0 || len(modifierNames) == 0 {
+	if bits == 0 {
 		return nil
 	}
 
-	out := make([]string, 0, len(modifierNames))
+	var out []string
 	for i, name := range modifierNames {
 		if bits&(1<<i) != 0 {
 			out = append(out, name)
 		}
-	}
-	if len(out) == 0 {
-		return nil
 	}
 	return out
 }

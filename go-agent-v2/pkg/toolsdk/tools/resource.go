@@ -281,8 +281,7 @@ func resourceDecodeArgsOptional(args json.RawMessage, dst any, logMsg string) { 
 func resourceWrapError(err error, op, msg string) string { return ToolError(pkgerr.Wrap(err, op, msg)) }
 
 func resourceWorkspaceOps(provider ResourceProvider, op string) (WorkspaceOps, string) {
-	if provider == nil { return nil, ToolError(pkgerr.New(op, "workspace manager not initialized")) }
-	if ops := provider.WorkspaceOps(); ops != nil { return ops, "" }
+	if provider != nil { if ops := provider.WorkspaceOps(); ops != nil { return ops, "" } }
 	return nil, ToolError(pkgerr.New(op, "workspace manager not initialized"))
 }
 

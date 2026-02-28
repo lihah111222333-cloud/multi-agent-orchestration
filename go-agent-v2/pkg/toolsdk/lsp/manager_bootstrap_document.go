@@ -66,17 +66,7 @@ func (m *Manager) bootstrapDocumentLocked(filePath, uri string) (*Client, *Serve
 
 	state := m.documentState(uri)
 	m.restoreDocumentStateFromCache(filePath, uri, cfg.Language, state)
-	// 最新内容来自 lsp_file(action=did_change)（未落盘）时，不可用磁盘快照回写旧内容。
-	// 若磁盘已追平内存哈希，则切回 disk-backed。
-	if state.Open && !state.DiskBacked {
-		if content, stat, hash, readErr := loadDocumentSnapshot(filePath); readErr == nil && hash == state.ContentHash {
-			version := state.Version
-			if version <= 0 {
-				version = 1
-			}
-			state.openWith(version, stat.ModTime().UnixNano(), stat.Size(), hash, content, cfg.Language, true)
-			m.upsertDocumentStateCache(filePath, uri, state)
-		}
+	if m.syncNonDiskBackedStateFromDisk(filePath, uri, cfg.Language, state) {
 		return client, cfg, state, nil
 	}
 
@@ -127,18 +117,7 @@ func (m *Manager) bootstrapDocumentLocked(filePath, uri string) (*Client, *Serve
 func (m *Manager) bootstrapDocumentWithoutClientLocked(filePath, uri, language string) (*documentSyncState, error) {
 	state := m.documentState(uri)
 	m.restoreDocumentStateFromCache(filePath, uri, language, state)
-
-	// 最新内容来自 lsp_file(action=did_change)（未落盘）时，不可用磁盘快照回写旧内容。
-	// 若磁盘已追平内存哈希，则切回 disk-backed。
-	if state.Open && !state.DiskBacked {
-		if content, stat, hash, readErr := loadDocumentSnapshot(filePath); readErr == nil && hash == state.ContentHash {
-			version := state.Version
-			if version <= 0 {
-				version = 1
-			}
-			state.openWith(version, stat.ModTime().UnixNano(), stat.Size(), hash, content, language, true)
-			m.upsertDocumentStateCache(filePath, uri, state)
-		}
+	if m.syncNonDiskBackedStateFromDisk(filePath, uri, language, state) {
 		return state, nil
 	}
 
@@ -329,6 +308,23 @@ func (m *Manager) changeDocumentWithoutClient(filePath string, version int, newC
 
 	m.applyDocumentState(filePath, uri, state, version, hash, newContent, language, false)
 	return nil
+}
+
+func (m *Manager) syncNonDiskBackedStateFromDisk(filePath, uri, language string, state *documentSyncState) bool {
+	// 最新内容来自 lsp_file(action=did_change)（未落盘）时，不可用磁盘快照回写旧内容。
+	// 若磁盘已追平内存哈希，则切回 disk-backed。
+	if !state.Open || state.DiskBacked {
+		return false
+	}
+	if content, stat, hash, readErr := loadDocumentSnapshot(filePath); readErr == nil && hash == state.ContentHash {
+		version := state.Version
+		if version <= 0 {
+			version = 1
+		}
+		state.openWith(version, stat.ModTime().UnixNano(), stat.Size(), hash, content, language, true)
+		m.upsertDocumentStateCache(filePath, uri, state)
+	}
+	return true
 }
 
 func (m *Manager) reopenDocument(client *Client, cfg *ServerConfig, uri string, version int, content string) error {

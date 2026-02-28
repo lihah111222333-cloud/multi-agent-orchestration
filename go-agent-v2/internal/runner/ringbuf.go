@@ -33,6 +33,6 @@ func (rb *RingBuffer) String() string {
 
 func (rb *RingBuffer) Reset() {
 	rb.mu.Lock()
+	defer rb.mu.Unlock()
 	rb.data = rb.data[:0]
-	rb.mu.Unlock()
 }

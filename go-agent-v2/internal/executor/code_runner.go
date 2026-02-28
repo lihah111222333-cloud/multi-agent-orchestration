@@ -1,4 +1,3 @@
-// code_runner.go — 代码块执行引擎: 隔离执行 Go/JS/TS 代码片段。
 package executor
 
 import (
@@ -20,12 +19,9 @@ import (
 
 const (
 	maxConcurrentRuns = 3
-
 	defaultRunTimeout = 30 * time.Second
-
-	maxOutputBytes = 512 * 1024 // 512KB
-
-	maxAuditPayload = 4096
+	maxOutputBytes    = 512 * 1024 // 512KB
+	maxAuditPayload   = 4096
 )
 
 const (
@@ -281,7 +277,8 @@ func (r *CodeRunner) runTS(ctx context.Context, req RunRequest) (*RunResult, err
 
 	name := "tsx"
 	if !commandExists(name) {
-		if name = resolveLocalTsxPath(r.workDir); name == "" {
+		name = resolveLocalTsxPath(r.workDir)
+		if name == "" {
 			return nil, pkgerr.New("CodeRunner.runTS", "tsx not available on PATH or node_modules/.bin/tsx")
 		}
 	}
@@ -426,10 +423,9 @@ func (r *CodeRunner) execCommand(ctx context.Context, timeout time.Duration, dir
 			output = combined.String() + "\n--- TIMEOUT ---\n"
 			return output, -1, lw.Overflow()
 		}
+		exitCode = -1
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
-		} else {
-			exitCode = -1
 		}
 	}
 

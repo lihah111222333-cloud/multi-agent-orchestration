@@ -1,5 +1,3 @@
-// interaction.go — 交互记录 CRUD (表 agent_interactions, 14 列)。
-// Python: agent_ops_store.py create_interaction/list_interactions/review_interaction
 package store
 
 import (
@@ -8,10 +6,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// InteractionStore 交互记录存储。
 type InteractionStore struct{ BaseStore }
 
-// NewInteractionStore 创建交互存储。
 func NewInteractionStore(pool *pgxpool.Pool) *InteractionStore {
 	return &InteractionStore{NewBaseStore(pool)}
 }
@@ -20,10 +16,8 @@ const interactionCols = `id, thread_id, parent_id, sender, receiver, msg_type, s
 	requires_review, reviewed_by, review_note, reviewed_at,
 	payload, created_at, updated_at`
 
-// 交互记录默认状态。
 const defaultInteractionStatus = "pending"
 
-// Create 创建交互记录 (对应 Python create_interaction)。
 func (s *InteractionStore) Create(ctx context.Context, i *Interaction) (*Interaction, error) {
 	payloadJSON := mustMarshalJSON(i.Payload)
 	rows, err := s.pool.Query(ctx,
@@ -39,7 +33,6 @@ func (s *InteractionStore) Create(ctx context.Context, i *Interaction) (*Interac
 	return collectOne[Interaction](rows)
 }
 
-// Get 按 ID 查询。
 func (s *InteractionStore) Get(ctx context.Context, id int) (*Interaction, error) {
 	rows, err := s.pool.Query(ctx,
 		"SELECT "+interactionCols+" FROM agent_interactions WHERE id = $1", id)
@@ -49,7 +42,6 @@ func (s *InteractionStore) Get(ctx context.Context, id int) (*Interaction, error
 	return collectOne[Interaction](rows)
 }
 
-// List 列表查询 (支持 thread_id / sender / receiver / msg_type / status / keyword)。
 func (s *InteractionStore) List(ctx context.Context, threadID, keyword string, limit int) ([]Interaction, error) {
 	q := NewQueryBuilder().
 		Eq("thread_id", threadID).
@@ -64,7 +56,6 @@ func (s *InteractionStore) List(ctx context.Context, threadID, keyword string, l
 	return collectRows[Interaction](rows)
 }
 
-// Review 审批交互记录 (对应 Python review_interaction)。
 func (s *InteractionStore) Review(ctx context.Context, id int, status, reviewer, note string) (*Interaction, error) {
 	rows, err := s.pool.Query(ctx,
 		`UPDATE agent_interactions

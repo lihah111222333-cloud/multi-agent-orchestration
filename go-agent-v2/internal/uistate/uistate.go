@@ -52,26 +52,26 @@ func NewPreferenceManager(s *store.UIPreferenceStore) *PreferenceManager {
 }
 
 func (m *PreferenceManager) Get(ctx context.Context, key string) (any, error) {
-	if store := m.store; store != nil {
-		return store.Get(ctx, key)
+	if m.store != nil {
+		return m.store.Get(ctx, key)
 	}
 	v, _ := m.fallback.Load(key)
 	return v, nil
 }
 
 func (m *PreferenceManager) Set(ctx context.Context, key string, value any) error {
-	if store := m.store; store != nil {
-		return store.Set(ctx, key, value)
+	if m.store != nil {
+		return m.store.Set(ctx, key, value)
 	}
 	m.fallback.Store(key, value)
 	return nil
 }
 
 func (m *PreferenceManager) GetAll(ctx context.Context) (map[string]any, error) {
-	if store := m.store; store != nil {
-		return store.GetAll(ctx)
+	if m.store != nil {
+		return m.store.GetAll(ctx)
 	}
-	result := map[string]any{}
+	result := make(map[string]any)
 	m.fallback.Range(func(key, value any) bool {
 		result[key.(string)] = value
 		return true

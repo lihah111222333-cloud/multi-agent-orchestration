@@ -80,30 +80,10 @@ func toolResultSuccess(result string) bool {
 	if value == "" {
 		return true
 	}
-	for _, prefix := range []string{"error", "failed", "unknown tool"} {
-		if strings.HasPrefix(value, prefix) {
-			return false
-		}
+	if strings.HasPrefix(value, "error") || strings.HasPrefix(value, "failed") || strings.HasPrefix(value, "unknown tool") {
+		return false
 	}
 	return !strings.HasPrefix(value, `{"error"`) && !strings.Contains(value, `"error":`)
-}
-
-func rememberFileChanges(s *Server, threadID string, files []string) {
-	if s == nil || threadID == "" {
-		return
-	}
-	files = uniqueStrings(files)
-	if len(files) == 0 {
-		return
-	}
-	rememberFileChangesState(s, threadID, files)
-}
-
-func consumeRememberedFileChanges(s *Server, threadID string) []string {
-	if s == nil || threadID == "" {
-		return nil
-	}
-	return consumeFileChangesState(s, threadID)
 }
 
 func enrichFileChangePayload(s *Server, threadID, eventType, method string, payload map[string]any) {
@@ -115,6 +95,10 @@ func enrichFileChangePayload(s *Server, threadID, eventType, method string, payl
 		strings.Contains(eventTypeLower, "patch_apply")
 	isFileChangeMethod := strings.Contains(method, "fileChange")
 	if !isFileChangeEvent && !isFileChangeMethod {
+		return
+	}
+	remember := method == "item/fileChange/outputDelta" || method == "item/started"
+	if !remember && method != "item/completed" {
 		return
 	}
 
@@ -131,16 +115,8 @@ func enrichFileChangePayload(s *Server, threadID, eventType, method string, payl
 		}
 	}
 
-	remember := false
-	switch method {
-	case "item/fileChange/outputDelta", "item/started":
-		remember = true
-	case "item/completed":
-		if len(files) == 0 {
-			files = consumeRememberedFileChanges(s, threadID)
-		}
-	default:
-		return
+	if method == "item/completed" && len(files) == 0 && s != nil && threadID != "" {
+		files = consumeFileChangesState(s, threadID)
 	}
 	if len(files) == 0 {
 		return
@@ -148,7 +124,7 @@ func enrichFileChangePayload(s *Server, threadID, eventType, method string, payl
 	payload["files"] = files
 	payload["file"] = files[0]
 	payload["type"] = "fileChange"
-	if remember {
-		rememberFileChanges(s, threadID, files)
+	if remember && s != nil && threadID != "" {
+		rememberFileChangesState(s, threadID, files)
 	}
 }

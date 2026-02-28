@@ -17,15 +17,11 @@ func TrimInjectedLSPHint(text string) string {
 
 func TrimInjectedSkillBlock(text string) string {
 	lines := strings.Split(text, "\n")
-	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(line, "[skill:") || !strings.Contains(line, "]") {
-			continue
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "[skill:") && strings.Contains(line, "]") && looksLikeInjectedSkillBlock(lines, i) {
+			return strings.TrimRight(strings.Join(lines[:i], "\n"), "\n")
 		}
-		if !looksLikeInjectedSkillBlock(lines, i) {
-			continue
-		}
-		return strings.TrimRight(strings.Join(lines[:i], "\n"), "\n")
 	}
 	return text
 }
@@ -34,11 +30,15 @@ func looksLikeInjectedSkillBlock(lines []string, start int) bool {
 	if start < 0 || start >= len(lines) {
 		return false
 	}
+	const (
+		lookahead     = 8
+		summaryPrefix = "摘要:"
+		usagePrefix   = "使用方式: "
+	)
 	current := strings.TrimSpace(lines[start])
-	hasSummary := strings.Contains(current, "摘要:")
-	hasUsage := strings.Contains(current, "使用方式: ")
+	hasSummary := strings.Contains(current, summaryPrefix)
+	hasUsage := strings.Contains(current, usagePrefix)
 
-	const lookahead = 8
 	for i := start + 1; i < len(lines) && i <= start+lookahead; i++ {
 		line := strings.TrimSpace(lines[i])
 		if line == "" {
@@ -47,13 +47,11 @@ func looksLikeInjectedSkillBlock(lines []string, start int) bool {
 		if strings.HasPrefix(line, "[skill:") {
 			break
 		}
-		if strings.HasPrefix(line, "摘要:") {
+		if strings.HasPrefix(line, summaryPrefix) {
 			hasSummary = true
-			continue
 		}
-		if strings.HasPrefix(line, "使用方式: ") {
+		if strings.HasPrefix(line, usagePrefix) {
 			hasUsage = true
-			continue
 		}
 	}
 	return hasSummary && hasUsage
@@ -81,7 +79,6 @@ func BuildAttachmentName(path string) string {
 	}
 	lower := strings.ToLower(value)
 	if ext, ok := strings.CutPrefix(lower, "data:image/"); ok {
-		ext = strings.TrimSpace(ext)
 		if idx := strings.Index(ext, ";"); idx >= 0 {
 			ext = ext[:idx]
 		}
@@ -108,12 +105,11 @@ func BuildAttachmentName(path string) string {
 }
 
 func ResolveCodeRunCallID(callID string, requestID *int64) string {
-	trimmed := strings.TrimSpace(callID)
-	if trimmed != "" {
-		return trimmed
+	if callID = strings.TrimSpace(callID); callID != "" {
+		return callID
 	}
-	if requestID != nil {
-		return fmt.Sprintf("req-%d", *requestID)
+	if requestID == nil {
+		return ""
 	}
-	return ""
+	return fmt.Sprintf("req-%d", *requestID)
 }

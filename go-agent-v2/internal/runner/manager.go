@@ -79,13 +79,6 @@ type AgentEvent struct {
 	Event   agentcore.Event `json:"event"`
 }
 
-type AgentMessage struct {
-	Type    string `json:"type"`
-	AgentID string `json:"agent_id"`
-	Data    string `json:"data"`
-	Ts      string `json:"ts"`
-}
-
 type EventHandler func(agentID string, event agentcore.Event)
 
 type AgentManager struct {
@@ -429,10 +422,6 @@ func (m *AgentManager) SendCommand(id, cmd, args string) error {
 		return err
 	}
 	return proc.Client.SendCommand(cmd, args)
-}
-
-func (m *AgentManager) SendInput(id string, data []byte) error {
-	return m.Submit(id, string(data), nil, nil)
 }
 
 func (m *AgentManager) Stop(id string) error {

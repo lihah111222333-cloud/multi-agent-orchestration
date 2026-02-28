@@ -7,7 +7,6 @@ import (
 )
 
 type dynamicToolDiffTracker = difftracker.Tracker
-type fileContentSnapshot = difftracker.FileContentSnapshot
 
 var shouldCaptureDynamicToolDiff = difftracker.ShouldCaptureDynamicToolDiff
 var listRepoDirtyPaths = difftracker.ListRepoDirtyPaths
@@ -50,8 +49,8 @@ func maybeEmitDynamicToolDiffUpdate(s *Server, threadID, codexThreadID, tool str
 
 		normalized := uistate.NormalizeEventFromPayload(agentcore.EventTurnDiff, "turn/diff/updated", payload)
 		payload["uiType"] = string(normalized.UIType)
-		if s.uiRuntime != nil {
-			s.uiRuntime.ApplyAgentEvent(result.ThreadID, normalized, payload)
+		if ui := s.uiRuntime; ui != nil {
+			ui.ApplyAgentEvent(result.ThreadID, normalized, payload)
 		}
 		notify(s, "turn/diff/updated", payload)
 	})

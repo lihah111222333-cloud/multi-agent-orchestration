@@ -14,8 +14,6 @@ const TransportSSE TransportMode = "sse"
 
 type EventHandler = agentcore.EventHandler
 
-// Client keeps the legacy REST-facing API surface while delegating runtime
-// lifecycle and transport behavior to AppServerClient.
 type Client struct {
 	*AppServerClient
 	Transport TransportMode
@@ -29,10 +27,10 @@ func NewClient(port int, agentID string) *Client {
 }
 
 func (c *Client) Health() error {
-	if c == nil || !c.Running() {
-		return apperrors.New("Client.Health", "client not running")
+	if c != nil && c.Running() {
+		return nil
 	}
-	return nil
+	return apperrors.New("Client.Health", "client not running")
 }
 
 func (c *Client) CreateThread(req CreateThreadRequest) (*CreateThreadResponse, error) {
@@ -49,9 +47,8 @@ func (c *Client) DeleteThread(threadID string) error {
 
 func checkPortFree(port int) error {
 	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return err
+	if err == nil {
+		_ = l.Close()
 	}
-	_ = l.Close()
-	return nil
+	return err
 }

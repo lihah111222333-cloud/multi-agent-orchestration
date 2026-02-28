@@ -163,7 +163,25 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 		s.uiRuntime.IncrActivityStat(threadID, "toolCall", call.Tool)
 	}
 
-	notifyPayload := buildToolNotifyPayload(threadID, agentID, call, argMap, filePath, success, totalCalls, elapsed, result)
+	notifyPayload := map[string]any{
+		"threadId":   threadID,
+		"agent":      agentID,
+		"tool":       call.Tool,
+		"callId":     call.CallID,
+		"arguments":  argMap,
+		"file":       filePath,
+		"success":    success,
+		"totalCalls": totalCalls,
+		"elapsedMs":  elapsed.Milliseconds(),
+		"resultLen":  len(result),
+	}
+	resultPreview := result
+	if len(resultPreview) > 500 {
+		resultPreview = resultPreview[:500]
+	}
+	if resultPreview != "" {
+		notifyPayload["resultPreview"] = resultPreview
+	}
 	if codexThreadID != "" {
 		notifyPayload["codexThreadId"] = codexThreadID
 	}
@@ -174,54 +192,18 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 	}
 
 	if event.RespondResultFunc != nil {
-		if err := event.RespondResultFunc(dynamicToolCallResultPayload(result)); err != nil {
+		if err := event.RespondResultFunc(map[string]any{
+			"contentItems": []map[string]any{{
+				"type": "inputText",
+				"text": result,
+			}},
+			"success": true,
+		}); err != nil {
 			logger.Warn("app-server: send tool result failed", logger.FieldAgentID, agentID, logger.FieldToolName, call.Tool, logger.FieldError, err)
 		}
 		return
 	}
 	if err := s.codexAdapter.SendDynamicToolResult(proc, call.CallID, result, event.RequestID); err != nil {
 		logger.Warn("app-server: send tool result failed", logger.FieldAgentID, agentID, logger.FieldToolName, call.Tool, logger.FieldError, err)
-	}
-}
-
-func buildToolNotifyPayload(
-	threadID string,
-	agentID string,
-	call agentcore.DynamicToolCallData,
-	argMap map[string]any,
-	filePath string,
-	success bool,
-	count int64,
-	elapsed time.Duration,
-	result string,
-) map[string]any {
-	payload := map[string]any{
-		"threadId":   threadID,
-		"agent":      agentID,
-		"tool":       call.Tool,
-		"callId":     call.CallID,
-		"arguments":  argMap,
-		"file":       filePath,
-		"success":    success,
-		"totalCalls": count,
-		"elapsedMs":  elapsed.Milliseconds(),
-		"resultLen":  len(result),
-	}
-	if len(result) > 500 {
-		result = result[:500]
-	}
-	if result != "" {
-		payload["resultPreview"] = result
-	}
-	return payload
-}
-
-func dynamicToolCallResultPayload(output string) map[string]any {
-	return map[string]any{
-		"contentItems": []map[string]any{{
-			"type": "inputText",
-			"text": output,
-		}},
-		"success": true,
 	}
 }

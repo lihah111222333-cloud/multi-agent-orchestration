@@ -96,7 +96,7 @@ func ThreadSkillsListResult(result map[string]any, err error) (any, error) {
 		return nil, err
 	}
 	if result == nil {
-		return map[string]any{}, nil
+		result = map[string]any{}
 	}
 	return result, nil
 }

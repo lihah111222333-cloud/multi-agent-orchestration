@@ -17,18 +17,12 @@ func BuildOrchestrationCompletionReport(workerID, status, reason, summary string
 	if worker == "" {
 		worker = "unknown-agent"
 	}
-
 	st := strings.TrimSpace(status)
 	if st == "" {
 		st = "completed"
 	}
-
 	rs := strings.TrimSpace(reason)
-	sm := strings.TrimSpace(summary)
-	if sm != "" {
-		sm = TruncateOrchestrationSummary(sm, MaxOrchestrationReportSummaryRunes)
-	}
-
+	sm := TruncateOrchestrationSummary(summary, MaxOrchestrationReportSummaryRunes)
 	lines := []string{
 		fmt.Sprintf("[Auto report] Agent %s finished delegated work.", worker),
 		fmt.Sprintf("status: %s", st),
@@ -53,13 +47,10 @@ func TruncateOrchestrationSummary(value string, limit int) string {
 	if limit <= 3 {
 		return "..."
 	}
-	target := limit - 3
-
 	var builder strings.Builder
-	builder.Grow(len(text))
 	used := 0
 	for _, r := range text {
-		if used >= target {
+		if used >= limit-3 {
 			break
 		}
 		builder.WriteRune(r)

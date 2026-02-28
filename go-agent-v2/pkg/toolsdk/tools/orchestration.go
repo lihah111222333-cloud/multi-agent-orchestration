@@ -156,12 +156,10 @@ func orchestrationSendMessage(provider OrchestrationProvider, senderID string, a
 	if provider == nil {
 		return ToolError(apperrors.New("orchestrationSendMessage", "orchestration provider not initialized"))
 	}
-
 	if err := provider.SubmitPrompt(p.AgentID, p.Message, nil, nil); err != nil {
 		return ToolError(apperrors.Wrap(err, "orchestrationSendMessage", "submit message"))
 	}
 	provider.RememberReportRequest(senderID, p.AgentID)
-
 	logger.Info("orchestration: message sent",
 		"from", strings.TrimSpace(senderID),
 		"to", p.AgentID,
@@ -186,7 +184,6 @@ func orchestrationLaunchAgent(provider OrchestrationProvider, runtime AgentRunti
 	if provider == nil || provider.AgentLauncher() == nil {
 		return ToolError(apperrors.New("orchestrationLaunchAgent", "agent manager not initialized"))
 	}
-
 	if p.WorkspaceRunKey != "" {
 		if provider.WorkspaceOps() == nil {
 			return ToolError(apperrors.New("orchestrationLaunchAgent", "workspace manager not initialized"))
@@ -200,20 +197,16 @@ func orchestrationLaunchAgent(provider OrchestrationProvider, runtime AgentRunti
 	if p.Cwd == "" {
 		p.Cwd = "."
 	}
-
 	if orchestrationListLen(provider.AgentLauncher().List()) >= maxAgents {
 		return ToolError(apperrors.Newf("orchestrationLaunchAgent", "max agents (%d) reached", maxAgents))
 	}
-
 	id := fmt.Sprintf("agent-%d-%d", time.Now().UnixMilli(), nextThreadSeq(provider))
-
 	baseCtx := callCtx.Ctx
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(baseCtx, 30*time.Second)
 	defer cancel()
-
 	var schemas []agentcore.DynamicTool
 	if schemaProvider != nil {
 		schemas = schemaProvider.AllSchemas()
@@ -225,7 +218,6 @@ func orchestrationLaunchAgent(provider OrchestrationProvider, runtime AgentRunti
 		runtime.SetAgentWorkDir(id, p.Cwd)
 	}
 	provider.SaveSubAgent(id, p.Name, p.Cwd)
-
 	logger.Info("orchestration: agent launched", logger.FieldID, id, logger.FieldName, p.Name, logger.FieldCwd, p.Cwd, logger.FieldRunKey, p.WorkspaceRunKey)
 	return ToolJSON(map[string]any{
 		"agent_id":          id,
@@ -249,7 +241,6 @@ func orchestrationStopAgent(provider OrchestrationProvider, runtime AgentRuntime
 	if provider == nil || provider.AgentLauncher() == nil {
 		return ToolError(apperrors.New("orchestrationStopAgent", "agent manager not initialized"))
 	}
-
 	if runtime != nil {
 		if cancelled := runtime.CancelCodeRuns(p.AgentID); cancelled > 0 {
 			logger.Info("orchestration: cancelled running code_run executions before stop",
@@ -258,7 +249,6 @@ func orchestrationStopAgent(provider OrchestrationProvider, runtime AgentRuntime
 			)
 		}
 	}
-
 	if err := provider.AgentLauncher().Stop(p.AgentID); err != nil {
 		return ToolError(apperrors.Wrap(err, "orchestrationStopAgent", "stop agent"))
 	}
@@ -266,7 +256,6 @@ func orchestrationStopAgent(provider OrchestrationProvider, runtime AgentRuntime
 		runtime.ClearAgentWorkDir(p.AgentID)
 	}
 	provider.DeleteSubAgent(p.AgentID)
-
 	logger.Info("orchestration: agent stopped", logger.FieldID, p.AgentID)
 	return ToolJSON(map[string]any{"success": true, "agent_id": p.AgentID})
 }

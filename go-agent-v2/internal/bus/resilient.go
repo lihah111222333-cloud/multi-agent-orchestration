@@ -41,10 +41,7 @@ func (rp *ResilientPublisher) Start(ctx context.Context) {
 	util.SafeGo(func() { rp.recoveryLoop(ctx) })
 }
 
-func (rp *ResilientPublisher) Stop() {
-	rp.stopOnce.Do(func() { close(rp.stopCh) })
-	rp.wg.Wait()
-}
+func (rp *ResilientPublisher) Stop() { rp.stopOnce.Do(func() { close(rp.stopCh) }); rp.wg.Wait() }
 
 func (rp *ResilientPublisher) Publish(msg Message) {
 	if rp.healthy.Load() {

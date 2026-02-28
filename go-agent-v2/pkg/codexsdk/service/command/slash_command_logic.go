@@ -37,12 +37,12 @@ func RunSendSlashCommand(
 	if withProcess == nil {
 		return nil, apperrors.New(methodName, "thread process resolver is not initialized")
 	}
+	if sendCommand == nil {
+		return nil, apperrors.New(methodName, "command sender is not initialized")
+	}
 	return withProcess(methodName, id, func(proc any) (map[string]any, error) {
 		if proc == nil {
 			return nil, apperrors.New(methodName, "thread process not available")
-		}
-		if sendCommand == nil {
-			return nil, apperrors.New(methodName, "command sender is not initialized")
 		}
 		if err := sendCommand(proc, command, args); err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "timeout") {

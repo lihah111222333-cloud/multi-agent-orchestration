@@ -79,13 +79,11 @@ type AppServerClient struct {
 	nextID           atomic.Int64
 	pending          sync.Map
 	activeTurnID     atomic.Value
-	listenerEnsureNeeded atomic.Bool
-	listenerEnsureInFlight atomic.Bool
+	listenerEnsureNeeded, listenerEnsureInFlight atomic.Bool
 	legacyMirrorDropCount  atomic.Int64
 	healthMu               sync.Mutex
 	health                 appServerConnectionHealth
-	respawnRecoverInFlight atomic.Bool
-	readLoopRunning        atomic.Bool
+	respawnRecoverInFlight, readLoopRunning atomic.Bool
 	streamErrorRecoveryMu    sync.Mutex
 	streamErrorRecoveryTimer *time.Timer
 }

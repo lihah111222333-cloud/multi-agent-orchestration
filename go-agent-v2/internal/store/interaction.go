@@ -15,16 +15,16 @@ func NewInteractionStore(pool *pgxpool.Pool) *InteractionStore {
 const interactionCols = `id, thread_id, parent_id, sender, receiver, msg_type, status,
 	requires_review, reviewed_by, review_note, reviewed_at,
 	payload, created_at, updated_at`
+const interactionSelect = "SELECT " + interactionCols + " FROM agent_interactions"
 
 func (s *InteractionStore) Create(ctx context.Context, i *Interaction) (*Interaction, error) {
-	payloadJSON := mustMarshalJSON(i.Payload)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO agent_interactions (thread_id, parent_id, sender, receiver, msg_type, status,
 		   requires_review, payload, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW())
 		 RETURNING `+interactionCols,
 		i.ThreadID, i.ParentID, i.Sender, i.Receiver, i.MsgType,
-		defaultStr(i.Status, "pending"), i.RequiresReview, string(payloadJSON))
+		defaultStr(i.Status, "pending"), i.RequiresReview, string(mustMarshalJSON(i.Payload)))
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +33,7 @@ func (s *InteractionStore) Create(ctx context.Context, i *Interaction) (*Interac
 
 func (s *InteractionStore) Get(ctx context.Context, id int) (*Interaction, error) {
 	rows, err := s.pool.Query(ctx,
-		"SELECT "+interactionCols+" FROM agent_interactions WHERE id = $1", id)
+		interactionSelect+" WHERE id = $1", id)
 	if err != nil {
 		return nil, err
 	}
@@ -44,8 +44,7 @@ func (s *InteractionStore) List(ctx context.Context, threadID, keyword string, l
 	sql, params := NewQueryBuilder().
 		Eq("thread_id", threadID).
 		KeywordLike(keyword, "sender", "receiver", "msg_type").
-		Build(
-			"SELECT "+interactionCols+" FROM agent_interactions",
+		Build(interactionSelect,
 			"created_at DESC, id DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {

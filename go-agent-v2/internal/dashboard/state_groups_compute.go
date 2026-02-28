@@ -6,10 +6,10 @@ import (
 )
 
 func NormalizeDurationOrDefault(value, fallback time.Duration) time.Duration {
-	if value <= 0 {
-		return fallback
+	if value > 0 {
+		return value
 	}
-	return value
+	return fallback
 }
 
 func PruneOrchestrationPendingReports(pending map[string]map[string]time.Time, now time.Time, ttl time.Duration) {

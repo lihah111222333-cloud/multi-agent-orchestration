@@ -442,12 +442,13 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 
 	relativePath := resolveCodeOpenRelativePath(resolvedPath, p.Project, p.Projects)
 	isImage, binaryContent := isImagePreviewExtension(resolvedPath), looksLikeBinaryContent(content)
-	buildSingleLineResult := func(line int, snippetText string, binary bool, mediaType string, sizeBytes int) map[string]any {
+	targetLine := max(p.Line, 1)
+	buildSingleLineResult := func(snippetText string, binary bool, mediaType string, sizeBytes int) map[string]any {
 		return map[string]any{
 			"ok":          true,
 			"filePath":    resolvedPath,
 			"relative":    relativePath,
-			"line":        line,
+			"line":        targetLine,
 			"column":      max(p.Column, 1),
 			"startLine":   1,
 			"endLine":     1,
@@ -465,7 +466,6 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 
 	if isImage || binaryContent {
 		mediaType := detectMediaType(resolvedPath, content)
-		targetLine := max(p.Line, 1)
 		if isImage {
 			fileURL := codePathToURI(resolvedPath)
 			previewURL := fileURL
@@ -481,7 +481,6 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 				"size_bytes", len(content),
 			)
 			result := buildSingleLineResult(
-				targetLine,
 				fmt.Sprintf("[image preview: %s, %d bytes]", mediaType, len(content)),
 				binaryContent,
 				mediaType,
@@ -500,7 +499,6 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 			"size_bytes", len(content),
 		)
 		return buildSingleLineResult(
-			targetLine,
 			fmt.Sprintf("[binary file omitted: %s, %d bytes]", mediaType, len(content)),
 			true,
 			mediaType,
@@ -511,7 +509,7 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 	text := strings.ReplaceAll(strings.ReplaceAll(string(content), "\r\n", "\n"), "\r", "\n")
 	lines := strings.Split(text, "\n")
 
-	targetLine := clampLine(p.Line, len(lines))
+	targetLine = clampLine(p.Line, len(lines))
 	targetColumn := max(p.Column, 1)
 	contextLines := clampCodeContextLines(p.Context)
 	startLine := targetLine - contextLines

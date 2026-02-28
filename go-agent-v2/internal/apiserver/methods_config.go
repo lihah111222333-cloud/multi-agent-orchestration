@@ -21,35 +21,31 @@ func modelList(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 }
 
 func configRead(s *Server, _ context.Context, _ json.RawMessage) (any, error) {
+	cfg := s.cfg
 	model := "o4-mini"
-	if s.cfg != nil && s.cfg.LLMModel != "" {
-		model = s.cfg.LLMModel
+	if cfg != nil && cfg.LLMModel != "" {
+		model = cfg.LLMModel
 	}
-	toolRoutingMode := "legacy"
-	toolRouterProvider := "openai_compatible"
-	toolRouterModel := ""
-	toolRouterBaseURL := ""
-	toolRouterConfidenceThreshold := 0.65
-	toolRouterTimeoutSec := 8
+	toolRoutingMode, toolRouterProvider := "legacy", "openai_compatible"
+	toolRouterModel, toolRouterBaseURL := "", ""
+	toolRouterConfidenceThreshold, toolRouterTimeoutSec := 0.65, 8
 	toolRouterHasAPIKey := false
-	if s.cfg != nil {
-		if strings.TrimSpace(s.cfg.DynToolRoutingMode) != "" {
-			toolRoutingMode = strings.TrimSpace(s.cfg.DynToolRoutingMode)
+	if cfg != nil {
+		if mode := strings.TrimSpace(cfg.DynToolRoutingMode); mode != "" {
+			toolRoutingMode = mode
 		}
-		if strings.TrimSpace(s.cfg.DynToolRouterProvider) != "" {
-			toolRouterProvider = strings.TrimSpace(s.cfg.DynToolRouterProvider)
+		if provider := strings.TrimSpace(cfg.DynToolRouterProvider); provider != "" {
+			toolRouterProvider = provider
 		}
-		toolRouterModel = strings.TrimSpace(s.cfg.DynToolRouterModel)
-		toolRouterBaseURL = strings.TrimSpace(s.cfg.DynToolRouterBaseURL)
-		toolRouterConfidenceThreshold = s.cfg.DynToolRouterConfidenceThreshold
-		if toolRouterConfidenceThreshold <= 0 {
-			toolRouterConfidenceThreshold = 0.65
+		toolRouterModel = strings.TrimSpace(cfg.DynToolRouterModel)
+		toolRouterBaseURL = strings.TrimSpace(cfg.DynToolRouterBaseURL)
+		if threshold := cfg.DynToolRouterConfidenceThreshold; threshold > 0 {
+			toolRouterConfidenceThreshold = threshold
 		}
-		toolRouterTimeoutSec = s.cfg.DynToolRouterTimeoutSec
-		if toolRouterTimeoutSec <= 0 {
-			toolRouterTimeoutSec = 8
+		if timeout := cfg.DynToolRouterTimeoutSec; timeout > 0 {
+			toolRouterTimeoutSec = timeout
 		}
-		toolRouterHasAPIKey = strings.TrimSpace(s.cfg.DynToolRouterAPIKey) != ""
+		toolRouterHasAPIKey = strings.TrimSpace(cfg.DynToolRouterAPIKey) != ""
 	}
 	cwd, _ := os.Getwd()
 	return map[string]any{
@@ -133,10 +129,11 @@ func configBatchWriteTyped(_ *Server, _ context.Context, p configBatchWriteParam
 			logger.Warn("config/batchWrite: setenv failed", logger.FieldKey, e.Key, logger.FieldError, err)
 		}
 	}
-	if len(rejected) == 0 {
-		return map[string]any{}, nil
+	result := map[string]any{}
+	if len(rejected) > 0 {
+		result["rejected"] = rejected
 	}
-	return map[string]any{"rejected": rejected}, nil
+	return result, nil
 }
 
 func configLSPPromptHintRead(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {

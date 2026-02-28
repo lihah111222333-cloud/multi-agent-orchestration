@@ -200,9 +200,7 @@ func baseLSPToolSpecs() []lspBaseToolSpec {
 }
 
 func lspActionCase(action string, required ...string) map[string]any {
-	req := make([]string, 0, len(required)+1)
-	req = append(req, "action")
-	req = append(req, required...)
+	req := append([]string{"action"}, required...)
 	return map[string]any{
 		"properties": map[string]any{
 			"action": map[string]any{"const": action},
@@ -216,10 +214,9 @@ func RegisterLSPHandlers(dst map[string]LSPDynamicToolHandler, provider LSPHandl
 		return
 	}
 	for _, spec := range baseLSPToolSpecs() {
-		if spec.handler == nil {
-			continue
+		if spec.handler != nil {
+			dst[spec.schema.Name] = spec.handler(provider)
 		}
-		dst[spec.schema.Name] = spec.handler(provider)
 	}
 }
 

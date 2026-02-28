@@ -197,10 +197,7 @@ func hasAvailableLSPServer(provider tools.LSPProvider) bool {
 		return true
 	}
 	available, known := availabilityFromAny(summary)
-	if !known {
-		return true
-	}
-	return available
+	return !known || available
 }
 
 func availabilityFromAny(value any) (bool, bool) {
@@ -238,18 +235,17 @@ func availabilityFromPreferredKeys(values map[string]any, keys ...string) (bool,
 
 func availabilityFromCollection(values []any) (bool, bool) {
 	known := false
-	anyAvailable := false
 	for _, raw := range values {
 		available, ok := availabilityFromAny(raw)
 		if !ok {
 			continue
 		}
-		known = true
 		if available {
-			anyAvailable = true
+			return true, true
 		}
+		known = true
 	}
-	return anyAvailable, known
+	return false, known
 }
 
 func availabilityFromStatus(status string) (bool, bool) {
@@ -282,10 +278,9 @@ func buildLSPAddonDynamicToolSchemas(providers []lspAddonDynamicToolProvider) []
 	}
 	out := make([]tools.DynamicTool, 0, len(providers))
 	for _, provider := range providers {
-		if provider.build == nil {
-			continue
+		if provider.build != nil {
+			out = append(out, provider.build()...)
 		}
-		out = append(out, provider.build()...)
 	}
 	return dedupeSchemasByName(out)
 }

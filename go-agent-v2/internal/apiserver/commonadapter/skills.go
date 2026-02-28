@@ -11,43 +11,36 @@ import (
 
 var inlineCodeTokenPattern = regexp.MustCompile("`([^`\\n]+)`")
 
-// CollectSkillNameSet normalizes a string list into lowercase unique set.
 func CollectSkillNameSet(raw []string) map[string]struct{} {
 	if len(raw) == 0 {
 		return nil
 	}
 	set := make(map[string]struct{}, len(raw))
 	for _, item := range raw {
-		name := strings.ToLower(strings.TrimSpace(item))
-		if name == "" {
-			continue
+		if name := strings.ToLower(strings.TrimSpace(item)); name != "" {
+			set[name] = struct{}{}
 		}
-		set[name] = struct{}{}
 	}
 	return set
 }
 
-// LowerMatchedTerms filters trigger terms that are included in prompt text.
-func LowerMatchedTerms(text string, candidates []string) []string {
+func matchedTerms(text string, candidates []string) []string {
 	if text == "" || len(candidates) == 0 {
 		return nil
 	}
 	terms := make([]string, 0, len(candidates))
 	seen := make(map[string]struct{}, len(candidates))
 	for _, raw := range candidates {
-		candidate := strings.TrimSpace(raw)
-		if candidate == "" {
+		term := strings.TrimSpace(raw)
+		if term == "" {
 			continue
 		}
-		lowerCandidate := strings.ToLower(candidate)
-		if _, ok := seen[lowerCandidate]; ok {
+		lowerTerm := strings.ToLower(term)
+		if _, ok := seen[lowerTerm]; ok || !strings.Contains(text, lowerTerm) {
 			continue
 		}
-		if !strings.Contains(text, lowerCandidate) {
-			continue
-		}
-		seen[lowerCandidate] = struct{}{}
-		terms = append(terms, candidate)
+		seen[lowerTerm] = struct{}{}
+		terms = append(terms, term)
 	}
 	if len(terms) == 0 {
 		return nil
@@ -55,48 +48,27 @@ func LowerMatchedTerms(text string, candidates []string) []string {
 	return terms
 }
 
-// ExplicitSkillMentionTerms extracts explicit @skill and [skill:*] mentions.
+func LowerMatchedTerms(text string, candidates []string) []string {
+	return matchedTerms(text, candidates)
+}
+
 func ExplicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords []string) []string {
-	trimmedName := strings.TrimSpace(skillName)
-	candidates := make([]string, 0, 1+len(triggerWords))
-	if trimmedName != "" {
-		candidates = append(candidates, "@"+trimmedName)
-		candidates = append(candidates, "[skill:"+trimmedName+"]")
+	candidates := make([]string, 0, 2+len(triggerWords))
+	if name := strings.TrimSpace(skillName); name != "" {
+		candidates = append(candidates, "@"+name, "[skill:"+name+"]")
 	}
 	for _, raw := range triggerWords {
 		word := strings.TrimSpace(raw)
 		if word == "" {
 			continue
 		}
-		lowerWord := strings.ToLower(word)
-		if strings.HasPrefix(lowerWord, "@") || strings.HasPrefix(lowerWord, "[skill:") {
+		if lowerWord := strings.ToLower(word); strings.HasPrefix(lowerWord, "@") || strings.HasPrefix(lowerWord, "[skill:") {
 			candidates = append(candidates, word)
 		}
 	}
-
-	terms := make([]string, 0, len(candidates))
-	seen := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		lowerCandidate := strings.ToLower(strings.TrimSpace(candidate))
-		if lowerCandidate == "" {
-			continue
-		}
-		if _, exists := seen[lowerCandidate]; exists {
-			continue
-		}
-		if !strings.Contains(normalizedPrompt, lowerCandidate) {
-			continue
-		}
-		seen[lowerCandidate] = struct{}{}
-		terms = append(terms, candidate)
-	}
-	if len(terms) == 0 {
-		return nil
-	}
-	return terms
+	return matchedTerms(normalizedPrompt, candidates)
 }
 
-// ClassifyAutoSkillMatch classifies prompt/skill match source and matched terms.
 func ClassifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
 	forceTerms := LowerMatchedTerms(normalizedPrompt, forceWords)
 	if len(forceTerms) > 0 {
@@ -113,7 +85,6 @@ func ClassifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, trig
 	return "", nil
 }
 
-// ForceMatchedSkillInstruction builds instruction prefix for force-matched skills.
 func ForceMatchedSkillInstruction(matchedTerms []string) string {
 	terms := make([]string, 0, len(matchedTerms))
 	for _, raw := range matchedTerms {
@@ -129,12 +100,10 @@ func ForceMatchedSkillInstruction(matchedTerms []string) string {
 	return fmt.Sprintf("强制触发词: %s\n执行要求: 本轮必须遵循该技能。", strings.Join(terms, ", "))
 }
 
-// NormalizeSkillName validates skill name.
 func NormalizeSkillName(raw string) (string, error) {
 	return skillutil.NormalizeName(raw)
 }
 
-// NormalizeSkillNames deduplicates and validates skill name list.
 func NormalizeSkillNames(rawNames []string) ([]string, error) {
 	if len(rawNames) == 0 {
 		return []string{}, nil
@@ -142,7 +111,7 @@ func NormalizeSkillNames(rawNames []string) ([]string, error) {
 	names := make([]string, 0, len(rawNames))
 	seen := make(map[string]struct{}, len(rawNames))
 	for _, raw := range rawNames {
-		name, err := NormalizeSkillName(raw)
+		name, err := skillutil.NormalizeName(raw)
 		if err != nil {
 			return nil, err
 		}
@@ -156,13 +125,11 @@ func NormalizeSkillNames(rawNames []string) ([]string, error) {
 	return names, nil
 }
 
-// CollectReferencedLSPToolNames extracts referenced lsp_* tool names from markdown inline code.
 func CollectReferencedLSPToolNames(hint string) []string {
-	trimmed := strings.TrimSpace(hint)
-	if trimmed == "" {
+	if hint = strings.TrimSpace(hint); hint == "" {
 		return nil
 	}
-	matches := inlineCodeTokenPattern.FindAllStringSubmatch(trimmed, -1)
+	matches := inlineCodeTokenPattern.FindAllStringSubmatch(hint, -1)
 	if len(matches) == 0 {
 		return nil
 	}

@@ -16,18 +16,14 @@ var (
 	}
 )
 
-func normalizeLower(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
-}
-
 func containsAnyFold(text string, terms ...string) bool {
-	normalized := normalizeLower(text)
-	if normalized == "" {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
 		return false
 	}
 	for _, term := range terms {
-		pattern := normalizeLower(term)
-		if pattern != "" && strings.Contains(normalized, pattern) {
+		term = strings.ToLower(strings.TrimSpace(term))
+		if term != "" && strings.Contains(text, term) {
 			return true
 		}
 	}
@@ -35,7 +31,7 @@ func containsAnyFold(text string, terms ...string) bool {
 }
 
 func NormalizeInterruptState(raw string) string {
-	state := normalizeLower(raw)
+	state := strings.ToLower(strings.TrimSpace(raw))
 	if state == "" {
 		return "idle"
 	}

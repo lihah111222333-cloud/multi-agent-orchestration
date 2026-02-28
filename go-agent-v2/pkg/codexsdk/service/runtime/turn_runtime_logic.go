@@ -331,13 +331,11 @@ func RegisterBinding(a RuntimeAdapter, ctx context.Context, agentID string, proc
 		return
 	}
 	if err := bindingStore.Bind(ctx, agentID, codexThreadID, ""); err != nil {
-		logger.Warn("turn/start: failed to register binding",
-			withThreadLogFields(a, agentID, "codex_thread_id", codexThreadID, logger.FieldError, err)...,
-		)
+		logger.Warn("turn/start: failed to register binding", withThreadLogFields(a, agentID, "codex_thread_id", codexThreadID, logger.FieldError, err)...)
 	}
 }
 
-func handleResumeCandidateError(a RuntimeAdapter, manager agentcore.Manager, threadID, resumeThreadID string, err error) (keepTrying bool, wrapped error) {
+func handleResumeCandidateError(a RuntimeAdapter, manager agentcore.Manager, threadID, resumeThreadID string, err error) (bool, error) {
 	if a.IsCodexProcessCrashError(err) {
 		logger.Error("turn/start: codex crashed during resume, returning error", withThreadLogFields(a, threadID, "resume_thread_id", resumeThreadID, logger.FieldError, err)...)
 		a.CancelCodeRuns(threadID)

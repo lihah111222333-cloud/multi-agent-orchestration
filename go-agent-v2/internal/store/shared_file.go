@@ -47,9 +47,8 @@ func (s *SharedFileStore) Read(ctx context.Context, path string) (*SharedFile, e
 }
 
 func (s *SharedFileStore) List(ctx context.Context, prefix string, limit int) ([]SharedFile, error) {
-	prefix = normalizePath(prefix)
 	sql, params := NewQueryBuilder().
-		KeywordLike(prefix, "path").
+		KeywordLike(normalizePath(prefix), "path").
 		Build("SELECT "+sharedFileCols+" FROM shared_files",
 			"updated_at DESC, path ASC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)

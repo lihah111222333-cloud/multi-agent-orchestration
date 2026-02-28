@@ -44,7 +44,6 @@ func NewAgentRouter(bus *MessageBus, discover AgentDiscoverer, factories ...Agen
 
 // DelegateTask routes one task from fromID to toThreadID.
 func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prompt string, images, files []string) error {
-	// 自动清理已停止的缓存客户端, 避免 clients map 无限增长。
 	r.CleanupStale()
 
 	endpoints, err := r.discover.ListRunning(ctx)
@@ -62,7 +61,6 @@ func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prom
 		if err := client.Submit(prompt, images, files, nil); err != nil {
 			return apperrors.Wrapf(err, "AgentRouter.DelegateTask", "submit to %s (port %d)", toThreadID, ep.Port)
 		}
-		// 发射 user_message 事件使 UI 可见委托消息
 		r.publishUserMessageEvent(fromID, toThreadID, prompt)
 		if r.bus != nil {
 			data, err := json.Marshal(delegatePayload{Prompt: prompt, Images: images, Files: files})
@@ -100,7 +98,6 @@ func (r *AgentRouter) SendToAgent(ctx context.Context, threadID, prompt string) 
 		if err := client.Submit(prompt, nil, nil, nil); err != nil {
 			return apperrors.Wrapf(err, "AgentRouter.SendToAgent", "submit to %s", threadID)
 		}
-		// 发射 user_message 事件使 UI 可见
 		r.publishUserMessageEvent("", threadID, prompt)
 		return nil
 	}
@@ -117,6 +114,14 @@ func (r *AgentRouter) Broadcast(ctx context.Context, fromID, prompt string) erro
 	}
 
 	var errs []error
+	recordError := func(message string, ep AgentEndpoint, err error) {
+		logger.Warn(message,
+			logger.FieldAgentID, ep.ThreadID,
+			logger.FieldPort, ep.Port,
+			logger.FieldError, err,
+		)
+		errs = append(errs, err)
+	}
 	for _, ep := range endpoints {
 		if ep.ThreadID == fromID {
 			continue
@@ -124,24 +129,13 @@ func (r *AgentRouter) Broadcast(ctx context.Context, fromID, prompt string) erro
 
 		client, err := r.getOrCreateClient(ep.ThreadID, ep.Port)
 		if err != nil {
-			logger.Warn("bus: broadcast getClient failed",
-				logger.FieldAgentID, ep.ThreadID,
-				logger.FieldPort, ep.Port,
-				logger.FieldError, err,
-			)
-			errs = append(errs, err)
+			recordError("bus: broadcast getClient failed", ep, err)
 			continue
 		}
 		if err := client.Submit(prompt, nil, nil, nil); err != nil {
-			logger.Warn("bus: broadcast submit failed",
-				logger.FieldAgentID, ep.ThreadID,
-				logger.FieldPort, ep.Port,
-				logger.FieldError, err,
-			)
-			errs = append(errs, err)
+			recordError("bus: broadcast submit failed", ep, err)
 			continue
 		}
-		// 发射 user_message 事件使 UI 可见
 		r.publishUserMessageEvent(fromID, ep.ThreadID, prompt)
 	}
 	return errors.Join(errs...)

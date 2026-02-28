@@ -201,10 +201,7 @@ func clampLine(value, total int) int {
 }
 
 func clampColumn(value int) int {
-	if value <= 0 {
-		return 1
-	}
-	return value
+	return max(value, 1)
 }
 
 func codePathToURI(path string) string {
@@ -490,10 +487,7 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 
 	if isImage || binaryContent {
 		mediaType := detectMediaType(resolvedPath, content)
-		targetLine := 1
-		if p.Line > 0 {
-			targetLine = p.Line
-		}
+		targetLine := max(p.Line, 1)
 		if isImage {
 			fileURL := codePathToURI(resolvedPath)
 			previewURL := fileURL

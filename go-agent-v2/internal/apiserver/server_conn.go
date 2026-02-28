@@ -101,9 +101,7 @@ func InvokeMethod(s *Server, ctx context.Context, method string, params json.Raw
 	if s == nil { return nil, pkgerr.New("Server.InvokeMethod", "server is nil") }
 	resp := dispatchRequest(s, ctx, 1, method, params)
 	if resp == nil { return nil, nil }
-	if resp.Error != nil {
-		return nil, pkgerr.Newf("Server.InvokeMethod", "%s (code %d)", resp.Error.Message, resp.Error.Code)
-	}
+	if resp.Error != nil { return nil, pkgerr.Newf("Server.InvokeMethod", "%s (code %d)", resp.Error.Message, resp.Error.Code) }
 	return resp.Result, nil
 }
 
@@ -198,9 +196,7 @@ func sendRequest(s *Server, connID, method string, params any) (*Response, error
 func sendRequestToAll(s *Server, method string, params any) (*Response, error) {
 	if s == nil { return nil, pkgerr.New("Server.SendRequestToAll", "server is nil") }
 	firstConn := firstConnIDState(s)
-	if firstConn == "" {
-		return nil, pkgerr.New("Server.SendRequestToAll", "no connected clients")
-	}
+	if firstConn == "" { return nil, pkgerr.New("Server.SendRequestToAll", "no connected clients") }
 	return sendRequest(s, firstConn, method, params)
 }
 
@@ -226,10 +222,7 @@ func allocPendingRequest(s *Server) (reqID int64, ch <-chan *Response, cleanup f
 }
 
 func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
-	if s == nil {
-		http.Error(w, "server not ready", http.StatusServiceUnavailable)
-		return
-	}
+	if s == nil { http.Error(w, "server not ready", http.StatusServiceUnavailable); return }
 	numConns := connectionCountState(s)
 	if numConns >= maxConnections {
 		http.Error(w, "too many connections", http.StatusServiceUnavailable)
@@ -238,17 +231,11 @@ func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
 	}
 
 	ws, err := s.upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		logger.Error("app-server: upgrade failed", logger.FieldError, err)
-		return
-	}
+	if err != nil { logger.Error("app-server: upgrade failed", logger.FieldError, err); return }
 
 	ws.SetReadLimit(maxMessageSize)
 	_ = ws.SetReadDeadline(time.Now().Add(connReadIdleTimeout))
-	ws.SetPongHandler(func(string) error {
-		_ = ws.SetReadDeadline(time.Now().Add(connReadIdleTimeout))
-		return nil
-	})
+	ws.SetPongHandler(func(string) error { _ = ws.SetReadDeadline(time.Now().Add(connReadIdleTimeout)); return nil })
 
 	connID := allocConnIDState(s)
 	entry := newConnEntry(ws)
@@ -263,11 +250,7 @@ func handleUpgrade(s *Server, w http.ResponseWriter, r *http.Request) {
 
 	logger.Info("app-server: client connected", logger.FieldConn, connID, logger.FieldRemote, r.RemoteAddr)
 
-	defer func() {
-		removeConnState(s, connID)
-		entry.closeNow()
-		logger.Info("app-server: client disconnected", logger.FieldConn, connID)
-	}()
+	defer func() { removeConnState(s, connID); entry.closeNow(); logger.Info("app-server: client disconnected", logger.FieldConn, connID) }()
 
 	readLoop(s, r.Context(), entry, connID)
 }
@@ -343,9 +326,7 @@ func readLoop(s *Server, ctx context.Context, entry *connEntry, connID string) {
 	for {
 		_, message, err := entry.ws.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				logger.Warn("app-server: read error", logger.FieldConn, connID, logger.FieldError, err)
-			}
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) { logger.Warn("app-server: read error", logger.FieldConn, connID, logger.FieldError, err) }
 			return
 		}
 		_ = entry.ws.SetReadDeadline(time.Now().Add(connReadIdleTimeout))
@@ -377,10 +358,7 @@ func sendResponseViaOutbox(s *Server, connID string, entry *connEntry, resp *Res
 	if s == nil { return false }
 	if resp == nil { return true }
 	data, err := json.Marshal(resp)
-	if err != nil {
-		logger.Error("app-server: marshal response failed", logger.FieldConn, connID, logger.FieldError, err)
-		return false
-	}
+	if err != nil { logger.Error("app-server: marshal response failed", logger.FieldConn, connID, logger.FieldError, err); return false }
 	return enqueueConnMessage(s, connID, entry, websocket.TextMessage, data, reason)
 }
 
@@ -393,16 +371,12 @@ func handleClientResponse(s *Server, env rpcEnvelope) bool {
 	resp := &Response{JSONRPC: jsonrpcVersion, ID: reqID}
 	if len(env.Result) > 0 {
 		var result any
-		if err := json.Unmarshal(env.Result, &result); err != nil {
-			logger.Warn("app-server: unmarshal client response result", logger.FieldError, err)
-		}
+		if err := json.Unmarshal(env.Result, &result); err != nil { logger.Warn("app-server: unmarshal client response result", logger.FieldError, err) }
 		resp.Result = result
 	}
 	if len(env.Error) > 0 {
 		var rpcErr RPCError
-		if err := json.Unmarshal(env.Error, &rpcErr); err != nil {
-			logger.Warn("app-server: unmarshal client response error", logger.FieldError, err)
-		}
+		if err := json.Unmarshal(env.Error, &rpcErr); err != nil { logger.Warn("app-server: unmarshal client response error", logger.FieldError, err) }
 		resp.Error = &rpcErr
 	}
 	found, _ := deliverPendingResponseState(s, reqID, resp)

@@ -55,18 +55,32 @@ func ClassifyStatus(lines []string, hasSession bool, stagnantSec int) string {
 		return "unknown"
 	}
 
-	normalized := normalizeLines(lines)
-	if isPromptOnly(normalized) {
+	normalized := make([]string, 0, len(lines))
+	promptOnly := true
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+		if promptOnly && !slices.Contains(promptMarkers, trimmed) {
+			promptOnly = false
+		}
+	}
+	if len(normalized) == 0 || promptOnly {
 		return "idle"
 	}
 
 	merged := strings.ToLower(strings.Join(normalized, "\n"))
-
-	if containsAny(merged, errorKeywords) {
-		return "error"
+	for _, kw := range errorKeywords {
+		if strings.Contains(merged, kw) {
+			return "error"
+		}
 	}
-	if containsAny(merged, disconnectedKeywords) {
-		return "disconnected"
+	for _, kw := range disconnectedKeywords {
+		if strings.Contains(merged, kw) {
+			return "disconnected"
+		}
 	}
 	if stagnantSec >= defaultStuckSec {
 		return "stuck"
@@ -221,38 +235,6 @@ func parseOutputTail(v any) []string {
 		return out
 	}
 	return nil
-}
-
-func normalizeLines(lines []string) []string {
-	var out []string
-	for _, l := range lines {
-		t := strings.TrimSpace(l)
-		if t != "" {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-func isPromptOnly(lines []string) bool {
-	if len(lines) == 0 {
-		return true
-	}
-	for _, l := range lines {
-		if !slices.Contains(promptMarkers, l) {
-			return false
-		}
-	}
-	return true
-}
-
-func containsAny(text string, keywords []string) bool {
-	for _, kw := range keywords {
-		if strings.Contains(text, kw) {
-			return true
-		}
-	}
-	return false
 }
 
 func emptySummary() map[string]int {

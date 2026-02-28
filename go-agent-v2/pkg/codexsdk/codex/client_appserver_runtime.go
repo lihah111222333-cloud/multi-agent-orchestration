@@ -71,7 +71,9 @@ func (c *AppServerClient) failPendingCalls(err error) {
 
 func (c *AppServerClient) SpawnAndConnect(ctx context.Context, prompt, cwd, model, instructions string, dynamicTools []DynamicTool) error {
 	if err := c.Spawn(ctx); err != nil { return err }
-	if err := c.connectWS(); err != nil { _ = c.Kill(); return err }
+	conn, err := c.dialWS(c.ctx)
+	if err != nil { _ = c.Kill(); return apperrors.Wrap(err, "AppServerClient.connectWS", "ws connect") }
+	c.replaceWSConnAndStartLoops(conn, false)
 	if err := c.Initialize(); err != nil { _ = c.Kill(); return apperrors.Wrap(err, "AppServerClient.SpawnAndConnect", "initialize") }
 	threadID, err := c.ThreadStart(cwd, model, instructions, dynamicTools)
 	if err != nil { _ = c.Kill(); return err }
@@ -126,8 +128,7 @@ func (c *AppServerClient) Kill() error {
 		if waitErr == nil { return nil }
 		var exitErr *exec.ExitError
 		if errors.As(waitErr, &exitErr) { return nil }
-		waitMsg := waitErr.Error()
-		if strings.Contains(waitMsg, "Wait was already called") || strings.Contains(waitMsg, "no child processes") { return nil }
+		if strings.Contains(waitErr.Error(), "Wait was already called") || strings.Contains(waitErr.Error(), "no child processes") { return nil }
 		return waitErr
 	case <-time.After(5 * time.Second):
 		logger.Warn("codex: Kill() Cmd.Wait timed out after 5s, abandoning",
@@ -138,6 +139,4 @@ func (c *AppServerClient) Kill() error {
 	}
 }
 
-func (c *AppServerClient) Running() bool {
-	return !c.stopped.Load() && c.Cmd != nil && c.Cmd.ProcessState == nil
-}
+func (c *AppServerClient) Running() bool { return !c.stopped.Load() && c.Cmd != nil && c.Cmd.ProcessState == nil }

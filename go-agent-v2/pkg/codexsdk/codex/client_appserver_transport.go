@@ -60,13 +60,6 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 	return apperrors.Newf("AppServerClient.Spawn", "app-server startup timeout on port %d", c.Port)
 }
 
-func (c *AppServerClient) connectWS() error {
-	conn, err := c.dialWS(c.ctx)
-	if err != nil { return apperrors.Wrap(err, "AppServerClient.connectWS", "ws connect") }
-	c.replaceWSConnAndStartLoops(conn, false)
-	return nil
-}
-
 func (c *AppServerClient) dialWS(ctx context.Context) (*websocket.Conn, error) {
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d", c.Port)
 	dialer := websocket.Dialer{

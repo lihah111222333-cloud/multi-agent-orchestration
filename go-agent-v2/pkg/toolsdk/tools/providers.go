@@ -32,8 +32,8 @@ func Schemas(list []Tool) []DynamicTool {
 
 func FindTool(list []Tool, name string) (Tool, bool) {
 	for i := range list {
-		if list[i].Schema.Name == name {
-			return list[i], true
+		if tool := list[i]; tool.Schema.Name == name {
+			return tool, true
 		}
 	}
 	return Tool{}, false
@@ -44,11 +44,9 @@ type (
 		CodeRunner() CodeExecRunner
 		AuditLogger() AuditLogger
 	}
-
 	ApprovalProvider interface {
 		AwaitApproval(agentID, callID, mode, command string, isDangerous bool) bool
 	}
-
 	ResourceProvider interface {
 		DAGManager() DAGManager
 		CommandCardStore() CardStore
@@ -57,7 +55,6 @@ type (
 		WorkspaceOps() WorkspaceOps
 		NotifyEvent(method string, params any)
 	}
-
 	OrchestrationProvider interface {
 		AgentLauncher() AgentLauncher
 		WorkspaceOps() WorkspaceOps
@@ -67,22 +64,18 @@ type (
 		SaveSubAgent(id, name, cwd string)
 		DeleteSubAgent(id string)
 	}
-
 	AgentRuntimeProvider interface {
 		CancelCodeRuns(agentID string) int
 		SetAgentWorkDir(agentID, cwd string)
 		ClearAgentWorkDir(agentID string)
 		GetAgentWorkDir(agentID string) string
 	}
-
 	SchemaProvider interface {
 		AllSchemas() []DynamicTool
 	}
-
 	CodeExecRunner interface {
 		Run(ctx context.Context, req CodeRunRequest) (*CodeRunResult, error)
 	}
-
 	AuditLogger interface {
 		Append(ctx context.Context, e *AuditEvent) error
 	}

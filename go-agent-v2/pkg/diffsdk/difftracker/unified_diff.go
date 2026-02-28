@@ -66,10 +66,7 @@ func BuildIncrementalDiffText(
 		if err != nil {
 			return "", err
 		}
-		if strings.TrimSpace(block) == "" {
-			continue
-		}
-		blocks = append(blocks, block)
+		if block = strings.TrimSpace(block); block != "" { blocks = append(blocks, block) }
 	}
 	return strings.Join(blocks, "\n"), nil
 }
@@ -102,10 +99,6 @@ func BuildUnifiedDiffBlock(path string, before, after FileContentSnapshot) (stri
 	if err != nil {
 		return "", err
 	}
-
-	patchText = strings.TrimSpace(patchText)
-	if patchText == "" {
-		return "", nil
-	}
+	if patchText = strings.TrimSpace(patchText); patchText == "" { return "", nil }
 	return patchText + "\n", nil
 }

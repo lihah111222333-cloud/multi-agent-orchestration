@@ -261,9 +261,18 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 	}
 
 	c.replaceWSConn(conn)
+	util.SafeGo(func() { c.pingLoop(conn) })
+	// Synchronously Initialize before resuming RPC to prevent "Not initialized" errors.
+	if initErr := c.Initialize(); initErr != nil {
+		logger.Warn("codex: ws reconnect initialize failed (connection usable, will retry via listener)",
+			logger.FieldAgentID, c.AgentID,
+			"trigger", trigger,
+			"attempt", attempt,
+			logger.FieldError, initErr,
+		)
+	}
 	c.listenerEnsureNeeded.Store(true)
 	util.SafeGo(func() { c.ensureListenerIfNeeded(c.call) })
-	util.SafeGo(func() { c.pingLoop(conn) })
 	health := c.noteReconnectSuccess(time.Now())
 	c.emitBackgroundEvent(
 		"Reconnected",

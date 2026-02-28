@@ -216,18 +216,18 @@ func (c *AppServerClient) handleRPCEvent(msg jsonRPCMessage) bool {
 		if isMCPStartupMethod(msg.Method) {
 			logFn = logger.Debug
 		}
-		logFn("codex: incoming event conversation mismatch", logger.FieldAgentID, c.AgentID, logger.FieldMethod, msg.Method, logger.FieldThreadID, boundThreadID, "conversation_id", conversationID)
+		logFn("codex: incoming event conversation mismatch", logger.FieldAgentID, c.AgentID, logger.FieldMethod, msg.Method, logger.FieldEventType, event.Type, logger.FieldThreadID, boundThreadID, "conversation_id", conversationID)
 		if !isMCPStartupMethod(msg.Method) {
-			if shouldRecoverLifecycleOnMismatchedConversation(
+			recovered := shouldRecoverLifecycleOnMismatchedConversation(
 				event,
 				msg.Method,
 				c.getActiveTurnID(),
 				c.listenerEnsureNeeded.Load(),
-			) {
+			)
+			if recovered {
 				c.trackTurnLifecycle(event, msg.Method)
-				logger.Warn("codex: recovered turn lifecycle from mismatched event", logger.FieldAgentID, c.AgentID, logger.FieldMethod, msg.Method, logger.FieldThreadID, boundThreadID, "conversation_id", conversationID)
 			}
-			logger.Warn("codex: dropping mismatched thread-scoped event", logger.FieldAgentID, c.AgentID, logger.FieldMethod, msg.Method, logger.FieldThreadID, boundThreadID, "conversation_id", conversationID)
+			logger.Warn("codex: dropping mismatched thread-scoped event", logger.FieldAgentID, c.AgentID, logger.FieldMethod, msg.Method, logger.FieldThreadID, boundThreadID, "conversation_id", conversationID, "lifecycle_recovered", recovered)
 			return false
 		}
 	}
@@ -335,7 +335,9 @@ func threadStatusChangedTerminalState(raw json.RawMessage) (string, bool) {
 
 func extractTurnIDFromEventData(data json.RawMessage) string {
 	payload, ok := decodeJSONObject(data)
-	if !ok { return "" }
+	if !ok {
+		return ""
+	}
 	return extractTurnIDFromPayload(payload)
 }
 
@@ -364,7 +366,9 @@ func extractTurnIDFromPayload(payload map[string]any) string {
 }
 
 func firstTrimmedString(payload map[string]any, keys ...string) string {
-	if payload == nil { return "" }
+	if payload == nil {
+		return ""
+	}
 	for _, key := range keys {
 		if value := trimmedStringValue(payload[key]); value != "" {
 			return value
@@ -374,20 +378,26 @@ func firstTrimmedString(payload map[string]any, keys ...string) string {
 }
 
 func nestedPayload(payload map[string]any, key string) map[string]any {
-	if payload == nil { return nil }
+	if payload == nil {
+		return nil
+	}
 	nested, _ := payload[key].(map[string]any)
 	return nested
 }
 
 func trimmedStringValue(value any) string {
 	text, ok := value.(string)
-	if !ok { return "" }
+	if !ok {
+		return ""
+	}
 	return strings.TrimSpace(text)
 }
 
 func (c *AppServerClient) getActiveTurnID() string {
 	v := c.activeTurnID.Load()
-	if v == nil { return "" }
+	if v == nil {
+		return ""
+	}
 	s, _ := v.(string)
 	return s
 }
@@ -483,9 +493,13 @@ func buildMethodToEventMap() map[string]string {
 	methodMap := make(map[string]string, 96)
 	maps.Copy(methodMap, baseMethodToEventMap)
 	for _, prefix := range [...]string{"agent/event/", "codex/event/"} {
-		for suffix, eventType := range sharedLegacySuffixToEventMap { methodMap[prefix+suffix] = eventType }
+		for suffix, eventType := range sharedLegacySuffixToEventMap {
+			methodMap[prefix+suffix] = eventType
+		}
 	}
-	for suffix, eventType := range codexOnlyLegacySuffixToEventMap { methodMap["codex/event/"+suffix] = eventType }
+	for suffix, eventType := range codexOnlyLegacySuffixToEventMap {
+		methodMap["codex/event/"+suffix] = eventType
+	}
 	return methodMap
 }
 
@@ -558,10 +572,14 @@ func normalizeErrorNotificationPayload(raw json.RawMessage) json.RawMessage {
 	}
 
 	if _, exists := payload["willRetry"]; !exists {
-		if v, ok := payload["will_retry"]; ok { payload["willRetry"] = v }
+		if v, ok := payload["will_retry"]; ok {
+			payload["willRetry"] = v
+		}
 	}
 	if _, exists := payload["will_retry"]; !exists {
-		if v, ok := payload["willRetry"]; ok { payload["will_retry"] = v }
+		if v, ok := payload["willRetry"]; ok {
+			payload["will_retry"] = v
+		}
 	}
 
 	normalized, err := json.Marshal(payload)
@@ -580,7 +598,9 @@ func decodeJSONObject(raw json.RawMessage) (map[string]any, bool) {
 }
 
 func truncateBytes(b []byte, max int) string {
-	if len(b) <= max { return string(b) }
+	if len(b) <= max {
+		return string(b)
+	}
 	return string(b[:max]) + "...(truncated)"
 }
 
@@ -622,7 +642,9 @@ func shouldDropLegacyMirrorNotification(msg jsonRPCMessage) (bool, string, strin
 
 func extractConversationIDFromEventParams(raw json.RawMessage) string {
 	payload, ok := decodeJSONObject(raw)
-	if !ok { return "" }
+	if !ok {
+		return ""
+	}
 	if value := firstTrimmedString(payload, "conversationId", "conversation_id", "threadId", "thread_id"); value != "" {
 		return value
 	}
@@ -663,9 +685,13 @@ func extractLegacyMirrorPreview(msgObj map[string]any) string {
 }
 
 func truncateString(s string, max int) string {
-	if max <= 0 { return s }
+	if max <= 0 {
+		return s
+	}
 	runes := []rune(s)
-	if len(runes) <= max { return s }
+	if len(runes) <= max {
+		return s
+	}
 	return string(runes[:max]) + "...(truncated)"
 }
 
@@ -742,7 +768,9 @@ func (c *AppServerClient) emitConnectionDeadEvent() {
 
 func streamErrorWillRetry(raw json.RawMessage) bool {
 	payload, ok := decodeJSONObject(raw)
-	if !ok { return false }
+	if !ok {
+		return false
+	}
 	value, _ := extractBoolValue(payload, "willRetry", "will_retry", "recoverable")
 	return value
 }
@@ -800,7 +828,9 @@ func (c *AppServerClient) cancelStreamErrorRecoveryTimer() {
 }
 
 func extractBoolValue(payload map[string]any, keys ...string) (bool, bool) {
-	if payload == nil { return false, false }
+	if payload == nil {
+		return false, false
+	}
 	for _, key := range keys {
 		value, exists := payload[key]
 		if !exists {
@@ -822,7 +852,9 @@ func extractBoolValue(payload map[string]any, keys ...string) (bool, bool) {
 }
 
 func isIdleTimeoutError(err error) bool {
-	if err == nil { return false }
+	if err == nil {
+		return false
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true

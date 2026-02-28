@@ -15,11 +15,14 @@ import (
 )
 
 var (
-	defaultLogger atomic.Pointer[slog.Logger]
-	logFile       *os.File
-	logFileMu     sync.Mutex
-	utc8          = time.FixedZone("UTC+8", 8*60*60)
-	exitFunc      = os.Exit
+	defaultLogger     atomic.Pointer[slog.Logger]
+	logFile           *os.File
+	logFilePath       string
+	logFileMu         sync.Mutex
+	fileWatcherStop   chan struct{}
+	utc8              = time.FixedZone("UTC+8", 8*60*60)
+	exitFunc          = os.Exit
+	fileWatchInterval = 30 * time.Second
 )
 
 func init() { defaultLogger.Store(newLogger(false)) }
@@ -72,26 +75,82 @@ func InitWithFile(logDir string) error {
 	date := time.Now().Format("2006-01-02")
 	logPath := filepath.Join(logDir, fmt.Sprintf("agent-terminal-%s.log", date))
 
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	absPath, err := filepath.Abs(logPath)
+	if err != nil {
+		absPath = logPath
+	}
+
+	f, err := os.OpenFile(absPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return pkgerr.Wrap(err, "Logger.Init", "open log file")
 	}
 	logFileMu.Lock()
+	stopFileWatcherLocked()
 	closeLogFileLocked()
 	logFile = f
+	logFilePath = absPath
+	stopCh := make(chan struct{})
+	fileWatcherStop = stopCh
 	logFileMu.Unlock()
+
+	rebuildLoggerWithFile(f)
+
+	go watchLogFile(absPath, stopCh)
+
+	slog.Info("log file opened", "path", absPath)
+	return nil
+}
+
+// rebuildLoggerWithFile replaces the global logger to write to both stdout and the given file.
+func rebuildLoggerWithFile(f *os.File) {
 	multi := io.MultiWriter(os.Stdout, f)
 	opts := &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: replaceTimeAttr}
 	handler := slog.NewJSONHandler(multi, opts)
 	storeLogger(slog.New(handler))
+}
 
-	slog.Info("log file opened", "path", logPath)
-	return nil
+// watchLogFile periodically checks if the log file was deleted and reopens it.
+func watchLogFile(path string, stop chan struct{}) {
+	ticker := time.NewTicker(fileWatchInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if _, err := os.Stat(path); err == nil {
+				continue // file exists, all good
+			}
+			// File was deleted — reopen it.
+			dir := filepath.Dir(path)
+			_ = os.MkdirAll(dir, 0o755)
+			f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+			if err != nil {
+				// Can't reopen — log to stdout only, will retry next tick.
+				slog.Warn("log file watchdog: reopen failed", "path", path, "error", err)
+				continue
+			}
+			logFileMu.Lock()
+			closeLogFileLocked()
+			logFile = f
+			logFileMu.Unlock()
+			rebuildLoggerWithFile(f)
+			slog.Info("log file watchdog: reopened deleted log file", "path", path)
+		}
+	}
+}
+
+func stopFileWatcherLocked() {
+	if fileWatcherStop != nil {
+		close(fileWatcherStop)
+		fileWatcherStop = nil
+	}
 }
 
 func ShutdownFileHandler() {
 	logFileMu.Lock()
 	defer logFileMu.Unlock()
+	stopFileWatcherLocked()
 	if logFile != nil {
 		closeLogFileLocked()
 		logFile = nil

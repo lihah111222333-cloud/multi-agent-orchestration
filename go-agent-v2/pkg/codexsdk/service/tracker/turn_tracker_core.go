@@ -1080,7 +1080,7 @@ func MaybeFinalizeTrackedTurnCore(
 		return
 	}
 	if strings.TrimSpace(eventTurnID) == "" {
-		logger.Warn("turn tracker: terminal event missing turn_id", diagFields...)
+		logger.Info("turn tracker: terminal event missing turn_id (using active turn)", diagFields...)
 		eventTurnID = turnID
 	}
 	completion, completed := CompleteTrackedTurnByIDCore(state, id, eventTurnID, status, reason)

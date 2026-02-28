@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"maps"
 	"strconv"
 	"strings"
 )
@@ -70,7 +71,10 @@ func ResolveState(input StateResolutionInput) StateResolution {
 		}
 		threads = append(threads, t)
 	}
-	meta := copyStateAgentMeta(input.AgentMetaByID)
+	meta := maps.Clone(input.AgentMetaByID)
+	if meta == nil {
+		meta = map[string]StateAgentMeta{}
+	}
 	for id, alias := range aliases {
 		if strings.TrimSpace(id) == "" || strings.TrimSpace(alias) == "" {
 			continue
@@ -192,14 +196,6 @@ func BuildUIStateResult(input UIStateResultInput) map[string]any {
 		result[PrefShowInjectedPromptInChat] = input.ShowInjectedPrompt
 	}
 	return result
-}
-
-func copyStateAgentMeta(input map[string]StateAgentMeta) map[string]StateAgentMeta {
-	out := make(map[string]StateAgentMeta, len(input))
-	for k, v := range input {
-		out[k] = v
-	}
-	return out
 }
 
 func resolveMainAgentPreference(threads []StateThread, meta map[string]StateAgentMeta, preferred string) string {

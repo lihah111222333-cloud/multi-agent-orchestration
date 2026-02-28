@@ -86,7 +86,7 @@ func (s *Server) createInteraction(c *gin.Context) {
 	}); err != nil {
 		serverError(c, err)
 	} else {
-		created(c, item)
+		c.JSON(http.StatusCreated, gin.H{"success": true, "data": item})
 	}
 }
 
@@ -339,10 +339,6 @@ func (s *Server) dbQuery(c *gin.Context) {
 
 func success(c *gin.Context, data any) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": data})
-}
-
-func created(c *gin.Context, data any) {
-	c.JSON(http.StatusCreated, gin.H{"success": true, "data": data})
 }
 
 func badRequest(c *gin.Context, code, message string) {

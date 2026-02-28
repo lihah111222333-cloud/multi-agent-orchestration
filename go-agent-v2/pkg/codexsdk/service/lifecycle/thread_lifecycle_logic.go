@@ -40,16 +40,17 @@ func RunThreadStart(
 	if err != nil {
 		return ThreadStartResult{}, err
 	}
+	startCwd := strings.TrimSpace(cwd)
+	if startCwd == "" {
+		startCwd = "."
+	}
 	result := ThreadStartResult{
 		ThreadID:       id,
 		Status:         "running",
 		Model:          model,
 		ModelProvider:  modelProvider,
-		Cwd:            strings.TrimSpace(cwd),
+		Cwd:            startCwd,
 		ApprovalPolicy: approvalPolicy,
-	}
-	if result.Cwd == "" {
-		result.Cwd = "."
 	}
 	if launchThread == nil {
 		return ThreadStartResult{}, apperrors.New("Server.threadStart", "thread launcher is not initialized")
@@ -77,22 +78,20 @@ func RunThreadResume(
 	resolveCandidates func(context.Context, string, func([]string, map[string]struct{}, string) []string, func([]string, int) []string) []string,
 	normalizeThreadID func(string) string, resumeThread func(*codexsdk.AgentProcess, agentcore.ResumeThreadRequest) error,
 ) (ThreadResumeResult, error) {
-	resolved := []string(nil)
+	candidates := BuildResumeCandidates(threadID, nil, normalizeThreadID)
 	if resolveCandidates != nil {
-		resolved = resolveCandidates(ctx, threadID, common.AppendUniqueThreadIDFallback, PreviewResumeCandidates)
+		candidates = BuildResumeCandidates(threadID, resolveCandidates(ctx, threadID, common.AppendUniqueThreadIDFallback, PreviewResumeCandidates), normalizeThreadID)
 	}
-	candidates := BuildResumeCandidates(threadID, resolved, normalizeThreadID)
 	logger.Info("thread/resume: resolved candidates",
 		append(common.ThreadLogFields(threadID), "candidate_count", len(candidates), "candidates", PreviewResumeCandidates(candidates, 4), "cwd", strings.TrimSpace(cwd))...,
 	)
 	if resumeThread == nil {
 		return ThreadResumeResult{}, apperrors.New("Server.threadResume", "resume handler is not initialized")
 	}
-	_, resumeErr := TryResumeCandidates(candidates, threadID, func(id string) error {
+	if _, err := TryResumeCandidates(candidates, threadID, func(id string) error {
 		return resumeThread(proc, agentcore.ResumeThreadRequest{ThreadID: id, Path: path, Cwd: cwd})
-	}, IsHistoricalResumeCandidateError)
-	if resumeErr != nil {
-		return ThreadResumeResult{}, apperrors.Wrap(resumeErr, "Server.threadResume", "resume thread")
+	}, IsHistoricalResumeCandidateError); err != nil {
+		return ThreadResumeResult{}, apperrors.Wrap(err, "Server.threadResume", "resume thread")
 	}
 	return ThreadResumeResult{ThreadID: threadID, Status: "resumed", Model: model}, nil
 }

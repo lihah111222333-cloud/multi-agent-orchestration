@@ -67,12 +67,8 @@ func main() {
 		DB:      dbPool,
 	})
 
-	mgr.SetOnEvent(func(agentID string, event agentcore.Event) {
-		apiserver.AgentEventHandler(srv, agentID)(event)
-	})
-
-	cwd, _ := os.Getwd()
-	apiserver.SetupLSP(srv, cwd)
+	mgr.SetOnEvent(func(agentID string, event agentcore.Event) { apiserver.AgentEventHandler(srv, agentID)(event) })
+	cwd, _ := os.Getwd(); apiserver.SetupLSP(srv, cwd)
 
 	logger.Info("app-server starting", logger.FieldListen, *listen)
 

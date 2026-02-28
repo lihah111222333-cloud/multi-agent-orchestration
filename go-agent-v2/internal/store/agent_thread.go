@@ -29,9 +29,7 @@ type AgentThreadStore struct{ BaseStore }
 var _ discovery.Discoverer = (*AgentThreadStore)(nil)
 
 // NewAgentThreadStore 创建 AgentThreadStore。
-func NewAgentThreadStore(pool *pgxpool.Pool) *AgentThreadStore {
-	return &AgentThreadStore{NewBaseStore(pool)}
-}
+func NewAgentThreadStore(pool *pgxpool.Pool) *AgentThreadStore { return &AgentThreadStore{NewBaseStore(pool)} }
 
 const atCols = "thread_id, prompt, model, cwd, status, port, pid, created_at, updated_at, finished_at, last_event_type, error_message"
 
@@ -68,8 +66,7 @@ func (s *AgentThreadStore) ListRunningFull(ctx context.Context) ([]AgentThread, 
 
 // Delete 删除线程记录。
 func (s *AgentThreadStore) Delete(ctx context.Context, threadID string) error {
-	_, err := s.pool.Exec(ctx, "DELETE FROM agent_threads WHERE thread_id=$1", threadID)
-	return err
+	_, err := s.pool.Exec(ctx, "DELETE FROM agent_threads WHERE thread_id=$1", threadID); return err
 }
 
 // Upsert 插入或更新子 agent 记录 (用于持久化动态创建的子 agent)。

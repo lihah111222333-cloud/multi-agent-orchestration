@@ -8,9 +8,7 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/dashrpc"
 )
 
-type uiDashboardGetParams struct {
-	Page string `json:"page"`
-}
+type uiDashboardGetParams = dashrpc.UIGetParams
 
 type dashboardProvider struct {
 	s *Server
@@ -80,5 +78,5 @@ func registerDashboardMethods(s *Server) {
 }
 
 func uiDashboardGet(s *Server, ctx context.Context, p uiDashboardGetParams) (any, error) {
-	return dashrpc.UIDashboardGet(ctx, dashboardMethodCaller(s), dashrpc.UIGetParams{Page: p.Page})
+	return dashrpc.UIDashboardGet(ctx, dashboardMethodCaller(s), p)
 }

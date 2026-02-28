@@ -713,7 +713,7 @@ func BeginTrackedTurnCore(
 	if tid == "" {
 		tid = fmt.Sprintf("turn-%d", time.Now().UnixMilli())
 	}
-	if turnMu == nil || activeTurns == nil {
+	if turnMu == nil || state.ActiveTurns == nil {
 		return tid
 	}
 	var superseded map[string]any
@@ -721,6 +721,7 @@ func BeginTrackedTurnCore(
 	var hadPrevTurn bool
 	turnMu.Lock()
 	EnsureTurnTrackerStateLocked(state)
+	activeTurns = *state.ActiveTurns
 	superseded, prevTurnID, hadPrevTurn = SupersedeActiveTurn(activeTurns, id, tid)
 	now := time.Now()
 	turn := &trackedTurn{

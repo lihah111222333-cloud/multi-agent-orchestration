@@ -39,7 +39,7 @@ func NewServer(stores *Stores, cfg *config.Config) *Server {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	proxies := make([]string, 0, strings.Count(cfg.TrustedProxies, ",")+1)
+	var proxies []string
 	for _, item := range strings.Split(cfg.TrustedProxies, ",") {
 		if proxy := strings.TrimSpace(item); proxy != "" {
 			proxies = append(proxies, proxy)
@@ -68,9 +68,9 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			logger.Warn("dashboard: shutdown error", logger.FieldError, err)
-			return
+		} else {
+			logger.Info("dashboard: shutdown completed")
 		}
-		logger.Info("dashboard: shutdown completed")
 	}()
 
 	logger.Info("dashboard: listening", logger.FieldAddr, addr)

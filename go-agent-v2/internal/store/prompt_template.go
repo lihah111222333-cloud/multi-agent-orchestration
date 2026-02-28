@@ -17,7 +17,7 @@ const ptCols = `id, prompt_key, title, agent_key, tool_name, prompt_text,
 	variables, tags, description, enabled, created_by, updated_by, created_at, updated_at`
 
 func (s *PromptTemplateStore) Save(ctx context.Context, t *PromptTemplate) (*PromptTemplate, error) {
-	if existing, _ := s.Get(ctx, t.PromptKey); existing != nil {
+	if existing, err := s.Get(ctx, t.PromptKey); err == nil && existing != nil {
 		if _, err := s.pool.Exec(ctx,
 			`INSERT INTO prompt_versions (prompt_key, title, agent_key, tool_name, prompt_text,
 			   variables, tags, enabled, created_by, updated_by, source_updated_at)

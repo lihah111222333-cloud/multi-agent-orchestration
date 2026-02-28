@@ -38,12 +38,6 @@ func reconnectDetails(trigger, activeTurnID string, details map[string]any) map[
 	}, details)
 }
 
-func mentionNameFromPath(path string) string {
-	base := strings.TrimSpace(filepath.Base(strings.TrimSpace(path)))
-	if base == "" || base == "." || base == string(filepath.Separator) { return "file" }
-	return base
-}
-
 func buildTurnStartInputs(prompt string, images, files []string) []asTurnStartInput {
 	inputs := make([]asTurnStartInput, 0, 1+len(images)+len(files))
 	trimmedPrompt := strings.TrimSpace(prompt)
@@ -68,9 +62,11 @@ func buildTurnStartInputs(prompt string, images, files []string) []asTurnStartIn
 		if path == "" {
 			continue
 		}
+		name := strings.TrimSpace(filepath.Base(strings.TrimSpace(path)))
+		if name == "" || name == "." || name == string(filepath.Separator) { name = "file" }
 		inputs = append(inputs, asTurnStartInput{
 			Type: "mention",
-			Name: mentionNameFromPath(path),
+			Name: name,
 			Path: path,
 		})
 	}

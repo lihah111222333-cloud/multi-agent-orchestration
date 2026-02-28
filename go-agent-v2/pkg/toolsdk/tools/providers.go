@@ -23,10 +23,7 @@ type ToolCallContext struct {
 }
 
 func Schemas(list []Tool) []DynamicTool {
-	if len(list) == 0 {
-		return nil
-	}
-	out := make([]DynamicTool, 0, len(list))
+	var out []DynamicTool
 	for _, tool := range list {
 		out = append(out, tool.Schema)
 	}

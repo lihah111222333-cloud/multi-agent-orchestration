@@ -18,7 +18,7 @@ func cloneBaseSnapshot(src RuntimeSnapshot, includeTimeline bool) RuntimeSnapsho
 	out := RuntimeSnapshot{
 		Threads:               make([]ThreadSnapshot, 0, len(src.Threads)),
 		Statuses:              make(map[string]string, len(src.Statuses)),
-		InterruptibleByThread: make(map[string]bool, len(src.Statuses)),
+		InterruptibleByThread: make(map[string]bool, len(src.InterruptibleByThread)),
 		StatusHeadersByThread: make(map[string]string, len(src.StatusHeadersByThread)),
 		StatusDetailsByThread: make(map[string]string, len(src.StatusDetailsByThread)),
 		TokenUsageByThread:    make(map[string]TokenUsageSnapshot, len(src.TokenUsageByThread)),
@@ -38,7 +38,9 @@ func cloneBaseSnapshot(src RuntimeSnapshot, includeTimeline bool) RuntimeSnapsho
 	out.Threads = append(out.Threads, src.Threads...)
 	for key, value := range src.Statuses {
 		out.Statuses[key] = value
-		out.InterruptibleByThread[key] = isInterruptibleThreadState(value)
+	}
+	for key, value := range src.InterruptibleByThread {
+		out.InterruptibleByThread[key] = value
 	}
 	for _, thread := range out.Threads {
 		threadID := strings.TrimSpace(thread.ID)
@@ -131,9 +133,6 @@ func cloneActivityStatsMap(src map[string]ActivityStats) map[string]ActivityStat
 func cloneAlerts(src map[string][]AlertEntry) map[string][]AlertEntry {
 	out := make(map[string][]AlertEntry, len(src))
 	for key, value := range src {
-		if len(value) == 0 {
-			continue
-		}
 		entries := make([]AlertEntry, len(value))
 		copy(entries, value)
 		out[key] = entries

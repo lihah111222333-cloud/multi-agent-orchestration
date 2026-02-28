@@ -7,106 +7,102 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-type classifyResult struct {
-	uiType UIType
+var classifyMap = map[string]UIType{
+	"agent_message_delta":         UITypeAssistantDelta,
+	"agent_message_content_delta": UITypeAssistantDelta,
+	"agent_message_completed":     UITypeAssistantDone,
+	"agent_message":               UITypeAssistantDone,
+
+	"agent_reasoning":               UITypeReasoningDelta,
+	"agent_reasoning_delta":         UITypeReasoningDelta,
+	"agent_reasoning_raw":           UITypeReasoningDelta,
+	"agent_reasoning_raw_delta":     UITypeReasoningDelta,
+	"agent_reasoning_section_break": UITypeReasoningDelta,
+
+	"exec_command_begin":        UITypeCommandStart,
+	"exec_output_delta":         UITypeCommandOutput,
+	"exec_command_output_delta": UITypeCommandOutput,
+	"exec_command_end":          UITypeCommandDone,
+	"exec_terminal_interaction": UITypeSystem,
+
+	"patch_apply_begin": UITypeFileEditStart,
+	"file_read":         UITypeFileEditStart,
+	"patch_apply":       UITypeCommandOutput,
+	"patch_apply_delta": UITypeCommandOutput,
+	"patch_apply_end":   UITypeFileEditDone,
+	"file_updated":      UITypeFileEditDone,
+
+	"mcp_tool_call_begin": UITypeToolCall,
+	"mcp_tool_call":       UITypeToolCall,
+	"dynamic_tool_call":   UITypeSystem,
+	"mcp_tool_call_end":   UITypeToolCall,
+
+	"exec_approval_request":        UITypeApprovalRequest,
+	"file_change_approval_request": UITypeApprovalRequest,
+
+	"turn_started":              UITypeTurnStarted,
+	"task_started":              UITypeTurnStarted,
+	"codex/event/task_started":  UITypeTurnStarted,
+	"agent/event/task_started":  UITypeTurnStarted,
+	"turn_complete":             UITypeTurnComplete,
+	"task_complete":             UITypeTurnComplete,
+	"codex/event/task_complete": UITypeTurnComplete,
+	"agent/event/task_complete": UITypeTurnComplete,
+	"turn/completed":            UITypeTurnComplete,
+	"turn_aborted":              UITypeTurnComplete,
+	"idle":                      UITypeTurnComplete,
+
+	"plan_delta":             UITypePlanDelta,
+	"plan_update":            UITypePlanDelta,
+	"turn_plan":              UITypePlanDelta,
+	"item/plan/delta":        UITypePlanDelta,
+	"codex/event/plan_delta": UITypePlanDelta,
+	"turn_diff":              UITypeDiffUpdate,
+
+	"user_message": UITypeUserMessage,
+
+	"error":           UITypeError,
+	"stream_error":    UITypeError,
+	"connection_dead": UITypeError,
+
+	"warning": UITypeSystem,
+
+	"shutdown_complete":       UITypeSystem,
+	"session_configured":      UITypeSystem,
+	"mcp_startup_update":      UITypeSystem,
+	"mcp_startup_complete":    UITypeSystem,
+	"mcp_list_tools_response": UITypeSystem,
+	"list_skills_response":    UITypeSystem,
+	"token_count":             UITypeSystem,
+	"context_compacted":       UITypeSystem,
+	"thread_name_updated":     UITypeSystem,
+	"thread_rolled_back":      UITypeSystem,
+	"undo_started":            UITypeSystem,
+	"undo_completed":          UITypeSystem,
+	"entered_review_mode":     UITypeSystem,
+	"exited_review_mode":      UITypeSystem,
+	"background_event":        UITypeSystem,
+
+	"collab_agent_spawn_begin":       UITypeSystem,
+	"collab_agent_interaction_begin": UITypeSystem,
+	"collab_waiting_begin":           UITypeSystem,
+	"collab_agent_spawn_end":         UITypeSystem,
+	"collab_agent_interaction_end":   UITypeSystem,
+	"collab_waiting_end":             UITypeSystem,
 }
 
-var classifyMap = map[string]classifyResult{
-	"agent_message_delta":         {UITypeAssistantDelta},
-	"agent_message_content_delta": {UITypeAssistantDelta},
-	"agent_message_completed":     {UITypeAssistantDone},
-	"agent_message":               {UITypeAssistantDone},
-
-	"agent_reasoning":               {UITypeReasoningDelta},
-	"agent_reasoning_delta":         {UITypeReasoningDelta},
-	"agent_reasoning_raw":           {UITypeReasoningDelta},
-	"agent_reasoning_raw_delta":     {UITypeReasoningDelta},
-	"agent_reasoning_section_break": {UITypeReasoningDelta},
-
-	"exec_command_begin":        {UITypeCommandStart},
-	"exec_output_delta":         {UITypeCommandOutput},
-	"exec_command_output_delta": {UITypeCommandOutput},
-	"exec_command_end":          {UITypeCommandDone},
-	"exec_terminal_interaction": {UITypeSystem},
-
-	"patch_apply_begin": {UITypeFileEditStart},
-	"file_read":         {UITypeFileEditStart},
-	"patch_apply":       {UITypeCommandOutput},
-	"patch_apply_delta": {UITypeCommandOutput},
-	"patch_apply_end":   {UITypeFileEditDone},
-	"file_updated":      {UITypeFileEditDone},
-
-	"mcp_tool_call_begin": {UITypeToolCall},
-	"mcp_tool_call":       {UITypeToolCall},
-	"dynamic_tool_call":   {UITypeSystem},
-	"mcp_tool_call_end":   {UITypeToolCall},
-
-	"exec_approval_request":        {UITypeApprovalRequest},
-	"file_change_approval_request": {UITypeApprovalRequest},
-
-	"turn_started":              {UITypeTurnStarted},
-	"task_started":              {UITypeTurnStarted},
-	"codex/event/task_started":  {UITypeTurnStarted},
-	"agent/event/task_started":  {UITypeTurnStarted},
-	"turn_complete":             {UITypeTurnComplete},
-	"task_complete":             {UITypeTurnComplete},
-	"codex/event/task_complete": {UITypeTurnComplete},
-	"agent/event/task_complete": {UITypeTurnComplete},
-	"turn/completed":            {UITypeTurnComplete},
-	"turn_aborted":              {UITypeTurnComplete},
-	"idle":                      {UITypeTurnComplete},
-
-	"plan_delta":             {UITypePlanDelta},
-	"plan_update":            {UITypePlanDelta},
-	"turn_plan":              {UITypePlanDelta},
-	"item/plan/delta":        {UITypePlanDelta},
-	"codex/event/plan_delta": {UITypePlanDelta},
-	"turn_diff":              {UITypeDiffUpdate},
-
-	"user_message": {UITypeUserMessage},
-
-	"error":           {UITypeError},
-	"stream_error":    {UITypeError},
-	"connection_dead": {UITypeError},
-
-	"warning": {UITypeSystem},
-
-	"shutdown_complete":       {UITypeSystem},
-	"session_configured":      {UITypeSystem},
-	"mcp_startup_update":      {UITypeSystem},
-	"mcp_startup_complete":    {UITypeSystem},
-	"mcp_list_tools_response": {UITypeSystem},
-	"list_skills_response":    {UITypeSystem},
-	"token_count":             {UITypeSystem},
-	"context_compacted":       {UITypeSystem},
-	"thread_name_updated":     {UITypeSystem},
-	"thread_rolled_back":      {UITypeSystem},
-	"undo_started":            {UITypeSystem},
-	"undo_completed":          {UITypeSystem},
-	"entered_review_mode":     {UITypeSystem},
-	"exited_review_mode":      {UITypeSystem},
-	"background_event":        {UITypeSystem},
-
-	"collab_agent_spawn_begin":       {UITypeSystem},
-	"collab_agent_interaction_begin": {UITypeSystem},
-	"collab_waiting_begin":           {UITypeSystem},
-	"collab_agent_spawn_end":         {UITypeSystem},
-	"collab_agent_interaction_end":   {UITypeSystem},
-	"collab_waiting_end":             {UITypeSystem},
-}
-
-var classifyMethodMap = map[string]classifyResult{
-	"turn/started":                              {UITypeTurnStarted},
-	"turn/completed":                            {UITypeTurnComplete},
-	"turn/plan/updated":                         {UITypePlanDelta},
-	"item/plan/delta":                           {UITypePlanDelta},
-	"codex/event/plan_delta":                    {UITypePlanDelta},
-	"codex/event/task_started":                  {UITypeTurnStarted},
-	"codex/event/task_complete":                 {UITypeTurnComplete},
-	"item/commandExecution/requestApproval":     {UITypeApprovalRequest},
-	"item/commandExecution/terminalInteraction": {UITypeSystem},
-	"codex/event/mcp_startup_update":            {UITypeSystem},
-	"codex/event/background_event":              {UITypeSystem},
+var classifyMethodMap = map[string]UIType{
+	"turn/started":                              UITypeTurnStarted,
+	"turn/completed":                            UITypeTurnComplete,
+	"turn/plan/updated":                         UITypePlanDelta,
+	"item/plan/delta":                           UITypePlanDelta,
+	"codex/event/plan_delta":                    UITypePlanDelta,
+	"codex/event/task_started":                  UITypeTurnStarted,
+	"codex/event/task_complete":                 UITypeTurnComplete,
+	"item/commandexecution/requestapproval":     UITypeApprovalRequest,
+	"item/commandexecution/terminalinteraction": UITypeSystem,
+	"codex/event/mcp_startup_update":            UITypeSystem,
+	"codex/event/background_event":              UITypeSystem,
 }
 
 func normalizeLifecycleItemKind(raw string) string {
@@ -143,34 +139,29 @@ func appendLifecycleTypeCandidates(candidates *[]string, payload map[string]any)
 }
 
 func parseNestedMapAny(raw any) map[string]any {
+	parseBytes := func(data []byte) map[string]any {
+		var decoded map[string]any
+		if json.Unmarshal(data, &decoded) != nil {
+			return nil
+		}
+		return decoded
+	}
 	switch nested := raw.(type) {
 	case map[string]any:
 		return nested
 	case string:
-		var decoded map[string]any
-		if json.Unmarshal([]byte(nested), &decoded) == nil {
-			return decoded
-		}
+		return parseBytes([]byte(nested))
 	case json.RawMessage:
-		var decoded map[string]any
-		if json.Unmarshal(nested, &decoded) == nil {
-			return decoded
-		}
+		return parseBytes(nested)
 	case []byte:
-		var decoded map[string]any
-		if json.Unmarshal(nested, &decoded) == nil {
-			return decoded
-		}
+		return parseBytes(nested)
 	}
 	return nil
 }
 
 func classifyItemLifecycleEvent(codexType, method string, payload map[string]any) (UIType, bool) {
-	codexLower := strings.ToLower(strings.TrimSpace(codexType))
-	methodLower := strings.ToLower(strings.TrimSpace(method))
-
-	isStart := codexLower == "item/started" || codexLower == "codex/event/item_started" || methodLower == "item/started"
-	isDone := codexLower == "item/completed" || codexLower == "codex/event/item_completed" || methodLower == "item/completed"
+	isStart := codexType == "item/started" || codexType == "codex/event/item_started" || method == "item/started"
+	isDone := codexType == "item/completed" || codexType == "codex/event/item_completed" || method == "item/completed"
 	if !isStart && !isDone {
 		return "", false
 	}
@@ -199,15 +190,15 @@ func classifyItemLifecycleEvent(codexType, method string, payload map[string]any
 }
 
 func classifyEventWithMethodAndPayload(codexType, method string, payload map[string]any) UIType {
-	if r, ok := classifyMap[codexType]; ok {
-		return r.uiType
+	codexKey := strings.ToLower(strings.TrimSpace(codexType))
+	methodKey := strings.ToLower(strings.TrimSpace(method))
+	if uiType, ok := classifyMap[codexKey]; ok {
+		return uiType
 	}
-	if key := strings.TrimSpace(method); key != "" {
-		if r, ok := classifyMethodMap[key]; ok {
-			return r.uiType
-		}
+	if uiType, ok := classifyMethodMap[methodKey]; ok {
+		return uiType
 	}
-	if uiType, ok := classifyItemLifecycleEvent(codexType, method, payload); ok {
+	if uiType, ok := classifyItemLifecycleEvent(codexKey, methodKey, payload); ok {
 		return uiType
 	}
 	return UITypeSystem
@@ -273,39 +264,41 @@ func extractNormalizedCommand(payload map[string]any) string {
 	return ""
 }
 
-func extractNormalizedFiles(codexType string, payload map[string]any) (file string, files []string) {
-	switch {
-	case codexType == "patch_apply_begin" || codexType == "item/fileChange/started":
-		if f, ok := payload["file"].(string); ok {
-			return f, []string{f}
-		}
-		return "", nil
-	default:
-		if v, ok := payload["file"].(string); ok {
-			return v, []string{v}
-		}
-		if arr, ok := payload["files"].([]any); ok {
-			var strs []string
-			for _, f := range arr {
-				if s, ok := f.(string); ok {
-					strs = append(strs, s)
-				}
-			}
-			if len(strs) > 0 {
-				return strs[0], strs
-			}
-		}
-		return "", nil
+func extractNormalizedFiles(_ string, payload map[string]any) (file string, files []string) {
+	if v, ok := payload["file"].(string); ok {
+		return v, []string{v}
 	}
+	if arr, ok := payload["files"].([]any); ok {
+		strs := make([]string, 0, len(arr))
+		for _, f := range arr {
+			if s, ok := f.(string); ok {
+				strs = append(strs, s)
+			}
+		}
+		if len(strs) > 0 {
+			return strs[0], strs
+		}
+	}
+	return "", nil
 }
 
 func extractExitCodeFromPayload(codexType string, payload map[string]any) *int {
+	codexType = strings.ToLower(strings.TrimSpace(codexType))
 	if codexType != "exec_command_end" &&
 		codexType != "item/completed" &&
 		codexType != "codex/event/item_completed" {
 		return nil
 	}
-	if code, ok := payload["exit_code"].(float64); ok {
+	switch code := payload["exit_code"].(type) {
+	case float64:
+		c := int(code)
+		return &c
+	case int:
+		return &code
+	case int32:
+		c := int(code)
+		return &c
+	case int64:
 		c := int(code)
 		return &c
 	}

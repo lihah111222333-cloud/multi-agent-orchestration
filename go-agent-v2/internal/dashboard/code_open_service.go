@@ -22,6 +22,49 @@ const (
 	binaryProbeBytes            = 8 << 10
 )
 
+var mediaTypeByExt = map[string]string{
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif":  "image/gif",
+	".webp": "image/webp",
+	".svg":  "image/svg+xml",
+	".bmp":  "image/bmp",
+	".ico":  "image/x-icon",
+}
+
+var imagePreviewExts = map[string]struct{}{
+	".png":  {},
+	".jpg":  {},
+	".jpeg": {},
+	".svg":  {},
+}
+
+var fileLanguageByExt = map[string]string{
+	"go":       "go",
+	"rs":       "rust",
+	"ts":       "typescript",
+	"tsx":      "typescript",
+	"js":       "javascript",
+	"jsx":      "javascript",
+	"py":       "python",
+	"c":        "c",
+	"h":        "c",
+	"hpp":      "c",
+	"cpp":      "c",
+	"cc":       "c",
+	"json":     "json",
+	"yaml":     "yaml",
+	"yml":      "yaml",
+	"md":       "markdown",
+	"markdown": "markdown",
+	"css":      "css",
+	"html":     "html",
+	"java":     "java",
+	"kt":       "kotlin",
+	"swift":    "swift",
+}
+
 type CodeOpenParams struct {
 	FilePath string   `json:"filePath"`
 	Line     int      `json:"line"`
@@ -81,7 +124,7 @@ func normalizeProjectRoots(project string, projects []string) []string {
 		if normalized == "" || normalized == "." {
 			return
 		}
-		key := strings.ToLower(filepath.Clean(normalized))
+		key := strings.ToLower(normalized)
 		if _, exists := seen[key]; exists {
 			return
 		}
@@ -303,29 +346,12 @@ func detectMediaType(path string, content []byte) string {
 }
 
 func mediaTypeByExtension(path string) string {
-	switch strings.ToLower(strings.TrimSpace(filepath.Ext(path))) {
-	case ".png":
-		return "image/png"
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".gif":
-		return "image/gif"
-	case ".webp":
-		return "image/webp"
-	case ".svg":
-		return "image/svg+xml"
-	case ".bmp":
-		return "image/bmp"
-	case ".ico":
-		return "image/x-icon"
-	default:
-		return ""
-	}
+	return mediaTypeByExt[strings.ToLower(strings.TrimSpace(filepath.Ext(path)))]
 }
 
 func isImagePreviewExtension(path string) bool {
-	ext := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(filepath.Ext(path)), "."))
-	return ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "svg"
+	_, ok := imagePreviewExts[strings.ToLower(strings.TrimSpace(filepath.Ext(path)))]
+	return ok
 }
 
 func imageDataURL(mediaType string, content []byte) string {
@@ -355,43 +381,15 @@ func fileLanguageByPath(path string) string {
 	if ext == "" {
 		return "text"
 	}
-	switch ext {
-	case "go":
-		return "go"
-	case "rs":
-		return "rust"
-	case "ts", "tsx":
-		return "typescript"
-	case "js", "jsx":
-		return "javascript"
-	case "py":
-		return "python"
-	case "c", "h", "hpp", "cpp", "cc":
-		return "c"
-	case "json":
-		return "json"
-	case "yaml", "yml":
-		return "yaml"
-	case "md", "markdown":
-		return "markdown"
-	case "css":
-		return "css"
-	case "html":
-		return "html"
-	case "java":
-		return "java"
-	case "kt":
-		return "kotlin"
-	case "swift":
-		return "swift"
-	default:
-		return ext
+	if language, ok := fileLanguageByExt[ext]; ok {
+		return language
 	}
+	return ext
 }
 
 func isMarkdownFilePath(path string) bool {
-	ext := strings.TrimPrefix(filepath.Ext(path), ".")
-	return strings.EqualFold(ext, "md") || strings.EqualFold(ext, "markdown")
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+	return ext == "md" || ext == "markdown"
 }
 
 func supportsLSPFileType(path string) bool {

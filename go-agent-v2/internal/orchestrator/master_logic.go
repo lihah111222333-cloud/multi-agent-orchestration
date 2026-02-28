@@ -188,22 +188,19 @@ func sanitizeGateway(raw any, idx int, seen map[string]bool) (map[string]any, bo
 	if !ok || len(agentsRaw) == 0 {
 		return nil, false
 	}
-	gatewayID := strings.TrimSpace(fmt.Sprint(gateway["id"]))
-	if gatewayID == "" || gatewayID == "<nil>" {
+	gatewayID := normalizeOptionalText(gateway["id"])
+	if gatewayID == "" {
 		gatewayID = fmt.Sprintf("gateway_%d", idx+1)
 	}
 	if seen[gatewayID] {
 		return nil, false
 	}
 	seen[gatewayID] = true
-	gatewayName := strings.TrimSpace(fmt.Sprint(gateway["name"]))
-	if gatewayName == "" || gatewayName == "<nil>" {
+	gatewayName := normalizeOptionalText(gateway["name"])
+	if gatewayName == "" {
 		gatewayName = gatewayID
 	}
-	gatewayDesc := strings.TrimSpace(fmt.Sprint(gateway["description"]))
-	if gatewayDesc == "<nil>" {
-		gatewayDesc = ""
-	}
+	gatewayDesc := normalizeOptionalText(gateway["description"])
 	return map[string]any{
 		"id":           gatewayID,
 		"name":         gatewayName,
@@ -218,16 +215,16 @@ func sanitizeAgent(raw any, gwID string, idx int, seen map[string]bool) (map[str
 	if !ok {
 		return nil, false
 	}
-	agentID := strings.TrimSpace(fmt.Sprint(agent["id"]))
-	if agentID == "" || agentID == "<nil>" {
+	agentID := normalizeOptionalText(agent["id"])
+	if agentID == "" {
 		agentID = fmt.Sprintf("%s_agent_%d", gwID, idx+1)
 	}
 	if seen[agentID] {
 		return nil, false
 	}
 	seen[agentID] = true
-	agentName := strings.TrimSpace(fmt.Sprint(agent["name"]))
-	if agentName == "" || agentName == "<nil>" {
+	agentName := normalizeOptionalText(agent["name"])
+	if agentName == "" {
 		agentName = agentID
 	}
 	return map[string]any{
@@ -256,6 +253,14 @@ func extractStringSlice(v any) []string {
 		}
 	}
 	return out
+}
+
+func normalizeOptionalText(v any) string {
+	text := strings.TrimSpace(fmt.Sprint(v))
+	if text == "<nil>" {
+		return ""
+	}
+	return text
 }
 
 // ========================================
@@ -470,10 +475,7 @@ func fallbackAssignments(task string, gateways map[string]bool) map[string]strin
 
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func gatewayPromptBrief(gwID string, gw map[string]any) string {
-	desc := fmt.Sprint(gw["description"])
-	if desc == "<nil>" {
-		desc = ""
-	}
+	desc := normalizeOptionalText(gw["description"])
 
 	capsRaw := extractStringSlice(gw["capabilities"])
 	capText := "未声明"

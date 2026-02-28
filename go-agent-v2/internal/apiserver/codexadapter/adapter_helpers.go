@@ -29,34 +29,31 @@ func defaultGetAgentSkillsProvider(string) []string { return nil }
 func defaultNotifyProvider(string, any)             {}
 
 func requireThreadID(caller, threadID string) (string, error) {
-	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return "", appErrors.New(caller, "threadId is required")
+	if id := strings.TrimSpace(threadID); id != "" {
+		return id, nil
 	}
-	return id, nil
+	return "", appErrors.New(caller, "threadId is required")
 }
 
 func threadLogFields(threadID string) []any {
 	id := strings.TrimSpace(threadID)
-	return []any{
-		logger.FieldAgentID, id,
-		logger.FieldThreadID, id,
-	}
+	return []any{logger.FieldAgentID, id, logger.FieldThreadID, id}
 }
 
 var errNoProcess = errors.New("codexadapter: agent process not found")
 
 func withClientE[T any](proc *codexsdk.AgentProcess, fn func(codexsdk.Client) (T, error)) (T, error) {
 	if proc == nil || proc.Client == nil {
-		var zero T
-		return zero, errNoProcess
+		return *new(T), errNoProcess
 	}
 	return fn(proc.Client)
 }
 
 func withClient(proc *codexsdk.AgentProcess, fn func(codexsdk.Client) error) error {
-	_, err := withClientE(proc, func(c codexsdk.Client) (struct{}, error) { return struct{}{}, fn(c) })
-	return err
+	if proc == nil || proc.Client == nil {
+		return errNoProcess
+	}
+	return fn(proc.Client)
 }
 
 func toLifecycleAgentInfos(items []codexsdk.AgentInfo) []lifecyclesvc.AgentInfo {
@@ -75,10 +72,9 @@ func threadExistsInRuntime(threadID string, runtime *uistate.RuntimeManager) boo
 	if runtime == nil {
 		return false
 	}
-	items := mapSlice(runtime.SnapshotLight().Threads, func(item uistate.ThreadSnapshot) lifecyclesvc.ThreadSnapshot {
+	return lifecyclesvc.ThreadExistsInRuntimeSnapshots(threadID, mapSlice(runtime.SnapshotLight().Threads, func(item uistate.ThreadSnapshot) lifecyclesvc.ThreadSnapshot {
 		return lifecyclesvc.ThreadSnapshot{ID: item.ID}
-	})
-	return lifecyclesvc.ThreadExistsInRuntimeSnapshots(threadID, items)
+	}))
 }
 
 func fuzzyFileSearch(query string, roots []string, fuzzyMatch func(text, pattern string) bool) []map[string]any {

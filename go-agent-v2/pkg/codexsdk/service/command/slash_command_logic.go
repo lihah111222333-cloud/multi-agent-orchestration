@@ -79,10 +79,8 @@ func ResolveThreadForSlashCommandLogic(
 		return "", apperrors.Wrap(err, "Server.sendSlashCommand", "resolve active thread")
 	}
 	for _, item := range threads {
-		if strings.EqualFold(strings.TrimSpace(item.State), "running") {
-			if resolved := strings.TrimSpace(item.ID); resolved != "" {
-				return resolved, nil
-			}
+		if resolved := strings.TrimSpace(item.ID); resolved != "" && strings.EqualFold(strings.TrimSpace(item.State), "running") {
+			return resolved, nil
 		}
 	}
 	if len(threads) > 0 {
@@ -97,10 +95,10 @@ func ThreadSkillsListResult(result map[string]any, err error) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if result != nil {
-		return result, nil
+	if result == nil {
+		return map[string]any{}, nil
 	}
-	return map[string]any{}, nil
+	return result, nil
 }
 
 func ParseSlashCommandArgParams(params json.RawMessage, argKey string, extractString func(map[string]any, ...string) string) (SlashCommandWithArgsParams, error) {
@@ -113,9 +111,9 @@ func ParseSlashCommandArgParams(params json.RawMessage, argKey string, extractSt
 		return parsed, apperrors.Wrap(err, "Server.parseSlashCommandWithArgsParams", "invalid params")
 	}
 	parsed.ThreadID = extractString(decoded, "threadId", "threadID", "thread_id")
-	key := strings.TrimSpace(argKey)
-	if key == "" || strings.EqualFold(key, "args") {
-		key = "args"
+	key := "args"
+	if arg := strings.TrimSpace(argKey); arg != "" && !strings.EqualFold(arg, key) {
+		key = arg
 	}
 	parsed.Args = extractString(decoded, key, "args")
 	return parsed, nil

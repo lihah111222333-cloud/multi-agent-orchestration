@@ -8,19 +8,15 @@ const (
 	defaultColumnDescription   = "0-indexed column number"
 )
 
-func lspDynamicTool(name string, description string, inputSchema map[string]any) agentcore.DynamicTool {
-	return agentcore.DynamicTool{Name: name, Description: description, InputSchema: inputSchema}
-}
-
 func lspBaseSpec(name string, description string, schema map[string]any, handler func(LSPHandlerProvider) LSPDynamicToolHandler) lspBaseToolSpec {
-	return lspBaseToolSpec{schema: lspDynamicTool(name, description, schema), handler: handler}
+	return lspBaseToolSpec{
+		schema:  agentcore.DynamicTool{Name: name, Description: description, InputSchema: schema},
+		handler: handler,
+	}
 }
 
 func lspRequired(fields ...string) []string {
-	if len(fields) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(fields))
+	out := fields[:0]
 	for _, field := range fields {
 		if field != "" {
 			out = append(out, field)
@@ -47,22 +43,25 @@ func lspSchema(properties map[string]any, required []string, extras map[string]a
 }
 
 func lspFileLineColumnSchema(filePathDescription string, lineDescription string, columnDescription string, extraProperties map[string]any, required []string, schemaExtras map[string]any) map[string]any {
+	if filePathDescription == "" {
+		filePathDescription = defaultFilePathDescription
+	}
+	if lineDescription == "" {
+		lineDescription = defaultLineDescription
+	}
+	if columnDescription == "" {
+		columnDescription = defaultColumnDescription
+	}
+
 	properties := map[string]any{
-		"file_path": lspStringProperty(defaultIfEmpty(filePathDescription, defaultFilePathDescription)),
-		"line":      lspNumberProperty(defaultIfEmpty(lineDescription, defaultLineDescription)),
-		"column":    lspNumberProperty(defaultIfEmpty(columnDescription, defaultColumnDescription)),
+		"file_path": lspStringProperty(filePathDescription),
+		"line":      lspNumberProperty(lineDescription),
+		"column":    lspNumberProperty(columnDescription),
 	}
 	for key, value := range extraProperties {
 		properties[key] = value
 	}
 	return lspSchema(properties, required, schemaExtras)
-}
-
-func defaultIfEmpty(value string, fallback string) string {
-	if value == "" {
-		return fallback
-	}
-	return value
 }
 
 func lspStringProperty(description string) map[string]any {

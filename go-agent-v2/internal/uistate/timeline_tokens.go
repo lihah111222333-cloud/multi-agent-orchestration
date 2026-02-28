@@ -39,35 +39,33 @@ func extractIntValue(value any) (int, bool) {
 	return 0, false
 }
 
-func extractNestedValue(payload map[string]any, path ...string) (any, bool) {
-	if payload == nil || len(path) == 0 {
-		return nil, false
-	}
-	current := any(payload)
-	for _, key := range path {
-		nextMap, ok := current.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		next, ok := nextMap[key]
-		if !ok {
-			return nil, false
-		}
-		current = next
-	}
-	return current, true
-}
-
 func extractFirstIntByPaths(payload map[string]any, paths ...[]string) (int, bool) {
+	if payload == nil {
+		return 0, false
+	}
 	for _, path := range paths {
 		if len(path) == 0 {
 			continue
 		}
-		value, ok := extractNestedValue(payload, path...)
+		current := any(payload)
+		ok := true
+		for _, key := range path {
+			nextMap, isMap := current.(map[string]any)
+			if !isMap {
+				ok = false
+				break
+			}
+			next, exists := nextMap[key]
+			if !exists {
+				ok = false
+				break
+			}
+			current = next
+		}
 		if !ok {
 			continue
 		}
-		if number, ok := extractIntValue(value); ok {
+		if number, ok := extractIntValue(current); ok {
 			return number, true
 		}
 	}
@@ -260,12 +258,7 @@ func computeTokenPercent(usedTokens, contextWindowTokens int) (usedPct, leftPct 
 		return 0, 0
 	}
 	usedPct = (float64(usedTokens) / float64(contextWindowTokens)) * 100
-	if usedPct < 0 {
-		usedPct = 0
-	}
-	if usedPct > 100 {
-		usedPct = 100
-	}
+	usedPct = min(100.0, max(0.0, usedPct))
 	leftPct = 100 - usedPct
 	return usedPct, leftPct
 }

@@ -16,18 +16,16 @@ type threadArtifactCandidate struct {
 
 func NormalizeThreadArchiveMap(value any) map[string]int64 {
 	result := map[string]int64{}
-	addEntries := func(entries map[string]any) {
-		for id, at := range entries {
-			addThreadArchiveMapEntry(result, id, at)
-		}
-	}
-	loadDecoded := func(raw []byte) {
+	addDecoded := func(raw []byte) {
 		if len(raw) == 0 {
 			return
 		}
 		decoded := map[string]any{}
-		if err := json.Unmarshal(raw, &decoded); err == nil {
-			addEntries(decoded)
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return
+		}
+		for id, at := range decoded {
+			addThreadArchiveMapEntry(result, id, at)
 		}
 	}
 	switch typed := value.(type) {
@@ -36,11 +34,13 @@ func NormalizeThreadArchiveMap(value any) map[string]int64 {
 			addThreadArchiveMapEntry(result, id, at)
 		}
 	case map[string]any:
-		addEntries(typed)
+		for id, at := range typed {
+			addThreadArchiveMapEntry(result, id, at)
+		}
 	case string:
-		loadDecoded([]byte(strings.TrimSpace(typed)))
+		addDecoded([]byte(strings.TrimSpace(typed)))
 	case json.RawMessage:
-		loadDecoded(typed)
+		addDecoded(typed)
 	}
 	return result
 }
@@ -71,7 +71,7 @@ func SanitizeArchiveNameStrict(raw string) (string, error) {
 	return sanitized, nil
 }
 
-func PathWithinRoot(root string, path string) (bool, error) {
+func PathWithinRoot(root, path string) (bool, error) {
 	root = strings.TrimSpace(root)
 	path = strings.TrimSpace(path)
 	if root == "" || path == "" {

@@ -222,14 +222,6 @@ func mergePayloadFromMap(payload map[string]any, data map[string]any) {
 	}
 }
 
-func walkNestedJSON(m map[string]any, fn func(map[string]any)) {
-	for _, key := range []string{"msg", "data", "payload"} {
-		if nested := parseMapAny(m[key]); nested != nil {
-			fn(nested)
-		}
-	}
-}
-
 func mergePayloadFields(payload map[string]any, raw json.RawMessage) {
 	if len(raw) == 0 {
 		return
@@ -241,7 +233,9 @@ func mergePayloadFields(payload map[string]any, raw json.RawMessage) {
 	}
 
 	mergePayloadFromMap(payload, dataMap)
-	walkNestedJSON(dataMap, func(nested map[string]any) {
-		mergePayloadFromMap(payload, nested)
-	})
+	for _, key := range []string{"msg", "data", "payload"} {
+		if nested := parseMapAny(dataMap[key]); nested != nil {
+			mergePayloadFromMap(payload, nested)
+		}
+	}
 }

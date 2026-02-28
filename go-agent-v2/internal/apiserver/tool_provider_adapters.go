@@ -105,7 +105,7 @@ func (a dagManagerAdapter) SaveDAG(ctx context.Context, d *tools.TaskDAG) (*tool
 	if err != nil {
 		return nil, err
 	}
-	return toToolsTaskDAG(saved), nil
+	return ptrMapped(saved, fromStoreTaskDAGValue), nil
 }
 
 func (a dagManagerAdapter) ListDAGs(ctx context.Context, keyword, status string, limit int) ([]tools.TaskDAG, error) {
@@ -121,7 +121,7 @@ func (a dagManagerAdapter) GetDAGDetail(ctx context.Context, dagKey string) (*to
 	if err != nil {
 		return nil, nil, err
 	}
-	return toToolsTaskDAG(dag), mapSlice(nodes, fromStoreTaskDAGNodeValue), nil
+	return ptrMapped(dag, fromStoreTaskDAGValue), mapSlice(nodes, fromStoreTaskDAGNodeValue), nil
 }
 
 func (a dagManagerAdapter) SaveNode(ctx context.Context, n *tools.TaskDAGNode) (*tools.TaskDAGNode, error) {
@@ -132,7 +132,7 @@ func (a dagManagerAdapter) SaveNode(ctx context.Context, n *tools.TaskDAGNode) (
 	if err != nil {
 		return nil, err
 	}
-	return toToolsTaskDAGNode(saved), nil
+	return ptrMapped(saved, fromStoreTaskDAGNodeValue), nil
 }
 
 func (a dagManagerAdapter) UpdateNodeStatus(ctx context.Context, dagKey, nodeKey, status string, result any) (*tools.TaskDAGNode, error) {
@@ -140,7 +140,7 @@ func (a dagManagerAdapter) UpdateNodeStatus(ctx context.Context, dagKey, nodeKey
 	if err != nil {
 		return nil, err
 	}
-	return toToolsTaskDAGNode(node), nil
+	return ptrMapped(node, fromStoreTaskDAGNodeValue), nil
 }
 
 func (a dagManagerAdapter) ListNodes(ctx context.Context, dagKey string) ([]tools.TaskDAGNode, error) {
@@ -170,15 +170,12 @@ func (a cardStoreAdapter) Save(ctx context.Context, c any) (any, error) {
 func (a cardStoreAdapter) Get(ctx context.Context, cardKey string) (any, error) {
 	return a.store.Get(ctx, cardKey)
 }
-
 func (a cardStoreAdapter) List(ctx context.Context, keyword string, limit int) (any, error) {
 	return a.store.List(ctx, keyword, limit)
 }
-
 func (a cardStoreAdapter) SetEnabled(ctx context.Context, cardKey string, enabled bool, updatedBy string) error {
 	return a.store.SetEnabled(ctx, cardKey, enabled, updatedBy)
 }
-
 func (a cardStoreAdapter) Delete(ctx context.Context, cardKey string) error {
 	return a.store.Delete(ctx, cardKey)
 }
@@ -202,15 +199,12 @@ func (a templateStoreAdapter) Save(ctx context.Context, t any) (any, error) {
 func (a templateStoreAdapter) Get(ctx context.Context, promptKey string) (any, error) {
 	return a.store.Get(ctx, promptKey)
 }
-
 func (a templateStoreAdapter) List(ctx context.Context, agentKey, keyword string, limit int) (any, error) {
 	return a.store.List(ctx, agentKey, keyword, limit)
 }
-
 func (a templateStoreAdapter) SetEnabled(ctx context.Context, promptKey string, enabled bool, updatedBy string) error {
 	return a.store.SetEnabled(ctx, promptKey, enabled, updatedBy)
 }
-
 func (a templateStoreAdapter) Delete(ctx context.Context, promptKey string) error {
 	return a.store.Delete(ctx, promptKey)
 }
@@ -230,15 +224,12 @@ func adaptFileStore(s *store.SharedFileStore) tools.FileStore {
 func (a fileStoreAdapter) Write(ctx context.Context, path, content, actor string) (any, error) {
 	return a.store.Write(ctx, path, content, actor)
 }
-
 func (a fileStoreAdapter) Read(ctx context.Context, path string) (any, error) {
 	return a.store.Read(ctx, path)
 }
-
 func (a fileStoreAdapter) List(ctx context.Context, prefix string, limit int) (any, error) {
 	return a.store.List(ctx, prefix, limit)
 }
-
 func (a fileStoreAdapter) Delete(ctx context.Context, path, actor string) (bool, error) {
 	return a.store.Delete(ctx, path, actor)
 }
@@ -269,15 +260,12 @@ func (a workspaceOpsAdapter) CreateRun(ctx context.Context, req tools.WorkspaceC
 func (a workspaceOpsAdapter) GetRun(ctx context.Context, runKey string) (any, error) {
 	return a.manager.GetRun(ctx, runKey)
 }
-
 func (a workspaceOpsAdapter) ListRuns(ctx context.Context, status, dagKey string, limit int) (any, error) {
 	return a.manager.ListRuns(ctx, status, dagKey, limit)
 }
-
 func (a workspaceOpsAdapter) ResolveRunWorkspace(ctx context.Context, runKey string) (string, error) {
 	return a.manager.ResolveRunWorkspace(ctx, runKey)
 }
-
 func (a workspaceOpsAdapter) AbortRun(ctx context.Context, runKey, updatedBy, reason string) (any, error) {
 	return a.manager.AbortRun(ctx, runKey, updatedBy, reason)
 }
@@ -306,24 +294,13 @@ func adaptAgentLauncher(mgr *runner.AgentManager) tools.AgentLauncher {
 func (a agentLauncherAdapter) Launch(ctx context.Context, id, name, prompt, cwd, instructions string, dynamicTools []agentcore.DynamicTool) error {
 	return a.manager.Launch(ctx, id, name, prompt, cwd, instructions, dynamicTools)
 }
-
 func (a agentLauncherAdapter) Submit(id, prompt string, images, files []string) error {
 	return a.manager.Submit(id, prompt, images, files)
 }
-
-func (a agentLauncherAdapter) Stop(id string) error {
-	return a.manager.Stop(id)
-}
-
-func (a agentLauncherAdapter) List() any {
-	return a.manager.List()
-}
-func (a agentLauncherAdapter) GetReport(id string) string {
-	return a.manager.GetReport(id)
-}
-func (a agentLauncherAdapter) GetState(id string) string {
-	return string(a.manager.GetState(id))
-}
+func (a agentLauncherAdapter) Stop(id string) error       { return a.manager.Stop(id) }
+func (a agentLauncherAdapter) List() any                  { return a.manager.List() }
+func (a agentLauncherAdapter) GetReport(id string) string { return a.manager.GetReport(id) }
+func (a agentLauncherAdapter) GetState(id string) string  { return string(a.manager.GetState(id)) }
 
 func saveStoreValue[T any](
 	ctx context.Context,
@@ -388,11 +365,11 @@ func fromStoreTaskDAGValue(d store.TaskDAG) tools.TaskDAG {
 	}
 }
 
-func toToolsTaskDAG(d *store.TaskDAG) *tools.TaskDAG {
-	if d == nil {
+func ptrMapped[S any, D any](src *S, mapFn func(S) D) *D {
+	if src == nil {
 		return nil
 	}
-	v := fromStoreTaskDAGValue(*d)
+	v := mapFn(*src)
 	return &v
 }
 
@@ -437,12 +414,4 @@ func fromStoreTaskDAGNodeValue(n store.TaskDAGNode) tools.TaskDAGNode {
 		CreatedAt:  n.CreatedAt,
 		UpdatedAt:  n.UpdatedAt,
 	}
-}
-
-func toToolsTaskDAGNode(n *store.TaskDAGNode) *tools.TaskDAGNode {
-	if n == nil {
-		return nil
-	}
-	v := fromStoreTaskDAGNodeValue(*n)
-	return &v
 }

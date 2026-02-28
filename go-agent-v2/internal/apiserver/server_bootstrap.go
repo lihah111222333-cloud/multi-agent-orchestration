@@ -32,17 +32,15 @@ func initRuntimeWiring(s *Server) {
 }
 
 func applyStallConfig(s *Server, cfg *appconfig.Config) {
-	if s == nil || cfg == nil {
+	if s == nil || cfg == nil || s.codexAdapter == nil {
 		return
 	}
 	if cfg.StallThresholdSec > 0 {
 		threshold := time.Duration(cfg.StallThresholdSec) * time.Second
-		if s.codexAdapter != nil {
-			s.codexAdapter.SetStallThreshold(threshold)
-			s.codexAdapter.SetStreamReadIdleTimeout(threshold)
-		}
+		s.codexAdapter.SetStallThreshold(threshold)
+		s.codexAdapter.SetStreamReadIdleTimeout(threshold)
 	}
-	if s.codexAdapter != nil && cfg.StallHeartbeatSec > 0 {
+	if cfg.StallHeartbeatSec > 0 {
 		s.codexAdapter.SetStallHeartbeat(time.Duration(cfg.StallHeartbeatSec) * time.Second)
 	}
 }
@@ -52,13 +50,14 @@ func initCodeRunner(s *Server) {
 		return
 	}
 
-	workDir, wdErr := os.Getwd()
-	if wdErr != nil {
-		logger.Warn("app-server: resolve working directory failed; fallback to current path", logger.FieldError, wdErr)
-		workDir = "."
+	workDir := "."
+	if wd, err := os.Getwd(); err != nil {
+		logger.Warn("app-server: resolve working directory failed; fallback to current path", logger.FieldError, err)
+	} else {
+		workDir = wd
 	}
-	if cr, crErr := executor.NewCodeRunner(workDir); crErr != nil {
-		logger.Warn("app-server: code runner unavailable", logger.FieldError, crErr)
+	if cr, err := executor.NewCodeRunner(workDir); err != nil {
+		logger.Warn("app-server: code runner unavailable", logger.FieldError, err)
 	} else {
 		s.codeRunner = cr
 	}

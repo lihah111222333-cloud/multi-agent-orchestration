@@ -18,13 +18,8 @@ type uiProjectsAddParams struct {
 	Path string `json:"path"`
 }
 
-type uiProjectsRemoveParams struct {
-	Path string `json:"path"`
-}
-
-type uiProjectsSetActiveParams struct {
-	Path string `json:"path"`
-}
+type uiProjectsRemoveParams = uiProjectsAddParams
+type uiProjectsSetActiveParams = uiProjectsAddParams
 
 func normalizeProjectPath(path string) string {
 	value := strings.TrimSpace(path)
@@ -48,31 +43,28 @@ func isASCIILetter(ch byte) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
 }
 
-func appendUniqueNormalizedProject(projects *[]string, path string) {
-	if projects == nil {
-		return
-	}
+func appendUniqueNormalizedProject(projects []string, path string) []string {
 	normalized := normalizeProjectPath(path)
 	if normalized == "" || normalized == "." {
-		return
+		return projects
 	}
-	if slices.Contains(*projects, normalized) {
-		return
+	if slices.Contains(projects, normalized) {
+		return projects
 	}
-	*projects = append(*projects, normalized)
+	return append(projects, normalized)
 }
 
 func parseProjectsList(value any) []string {
-	projects := []string{}
+	var projects []string
 
 	switch list := value.(type) {
 	case []string:
 		for _, item := range list {
-			appendUniqueNormalizedProject(&projects, item)
+			projects = appendUniqueNormalizedProject(projects, item)
 		}
 	case []any:
 		for _, item := range list {
-			appendUniqueNormalizedProject(&projects, dashboard.AsString(item))
+			projects = appendUniqueNormalizedProject(projects, dashboard.AsString(item))
 		}
 	}
 
@@ -159,10 +151,9 @@ func uiProjectsRemove(s *Server, ctx context.Context, p uiProjectsRemoveParams) 
 	target := normalizeProjectPath(p.Path)
 	next := make([]string, 0, len(projects))
 	for _, item := range projects {
-		if item == target {
-			continue
+		if item != target {
+			next = append(next, item)
 		}
-		next = append(next, item)
 	}
 	if active == target {
 		active = "."

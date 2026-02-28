@@ -55,12 +55,11 @@ func AppendUniqueThreadIDFallback(dst []string, seen map[string]struct{}, candid
 	if id == "" {
 		return dst
 	}
-	if seen == nil {
-		seen = map[string]struct{}{}
+	if seen != nil {
+		if _, ok := seen[id]; ok {
+			return dst
+		}
+		seen[id] = struct{}{}
 	}
-	if _, ok := seen[id]; ok {
-		return dst
-	}
-	seen[id] = struct{}{}
 	return append(dst, id)
 }

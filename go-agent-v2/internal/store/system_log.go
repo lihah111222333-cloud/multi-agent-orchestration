@@ -15,7 +15,6 @@ const sysLogCols = `id, ts, level, logger, message, raw,
 	source, component, agent_id, thread_id, trace_id,
 	event_type, tool_name, duration_ms, extra`
 
-// Append 追加系统日志 (v1 兼容: 只写基础 6 列)。
 func (s *SystemLogStore) Append(ctx context.Context, level, loggerName, message, raw string) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO system_logs (ts, level, logger, message, raw) VALUES (NOW(), $1, $2, $3, $4)`,
@@ -60,7 +59,6 @@ func (s *SystemLogStore) ListV2(ctx context.Context, p ListParams) ([]SystemLog,
 	return collectRows[SystemLog](rows)
 }
 
-// ListFilterValues 返回去重筛选值。
 func (s *SystemLogStore) ListFilterValues(ctx context.Context) (map[string][]string, error) {
 	return DistinctMap(ctx, s.pool, "system_logs", "level", "logger", "source", "component", "event_type", "tool_name")
 }

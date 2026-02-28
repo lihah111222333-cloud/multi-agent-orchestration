@@ -70,29 +70,24 @@ func ExplicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords 
 }
 
 func ClassifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
-	forceTerms := LowerMatchedTerms(normalizedPrompt, forceWords)
-	if len(forceTerms) > 0 {
+	if forceTerms := LowerMatchedTerms(normalizedPrompt, forceWords); len(forceTerms) > 0 {
 		return "force", forceTerms
 	}
-	explicitTerms := ExplicitSkillMentionTerms(normalizedPrompt, skillName, triggerWords)
-	if len(explicitTerms) > 0 {
+	if explicitTerms := ExplicitSkillMentionTerms(normalizedPrompt, skillName, triggerWords); len(explicitTerms) > 0 {
 		return "explicit", explicitTerms
 	}
-	triggerTerms := LowerMatchedTerms(normalizedPrompt, triggerWords)
-	if len(triggerTerms) > 0 {
+	if triggerTerms := LowerMatchedTerms(normalizedPrompt, triggerWords); len(triggerTerms) > 0 {
 		return "trigger", triggerTerms
 	}
 	return "", nil
 }
 
 func ForceMatchedSkillInstruction(matchedTerms []string) string {
-	terms := make([]string, 0, len(matchedTerms))
+	terms := matchedTerms[:0]
 	for _, raw := range matchedTerms {
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
-			continue
+		if trimmed := strings.TrimSpace(raw); trimmed != "" {
+			terms = append(terms, trimmed)
 		}
-		terms = append(terms, trimmed)
 	}
 	if len(terms) == 0 {
 		return "执行要求: 本轮必须遵循该技能。"
@@ -136,9 +131,6 @@ func CollectReferencedLSPToolNames(hint string) []string {
 	seen := make(map[string]struct{}, len(matches))
 	names := make([]string, 0, len(matches))
 	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
 		name := strings.TrimSpace(match[1])
 		if !strings.HasPrefix(name, "lsp_") {
 			continue

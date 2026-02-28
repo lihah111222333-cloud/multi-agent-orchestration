@@ -26,7 +26,7 @@ const (
 	maxConnections    = 100
 	maxMessageSize    = 4 << 20
 	connOutboxSize    = 256
-	connBacklogCut    = 256 - 16
+	connBacklogCut    = connOutboxSize - 16
 	uiStateThrottleMs = 500
 )
 
@@ -113,10 +113,8 @@ func New(deps Deps) *Server {
 	initRuntimeWiring(s)
 	initSkills(s, deps.SkillsDir)
 	s.registerMethods()
-
 	applyStallConfig(s, deps.Config)
 	initCodeRunner(s)
-
 	applyInjectedPromptVisibilityPreference(s, context.Background())
 	registerDynamicTools(s)
 	return s

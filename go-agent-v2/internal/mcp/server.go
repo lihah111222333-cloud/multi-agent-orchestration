@@ -75,32 +75,33 @@ func (s *Server) HandleTool(ctx context.Context, name string, args json.RawMessa
 	if s == nil || s.stores == nil {
 		return nil, apperrors.New("MCP.HandleTool", "stores is required")
 	}
+	stores := s.stores
 	p := parseToolParams(args)
 	switch name {
 	case "interaction":
-		return s.stores.Interaction.List(ctx, p.ThreadID, p.Keyword, p.Limit)
+		return stores.Interaction.List(ctx, p.ThreadID, p.Keyword, p.Limit)
 	case "task_trace":
-		return s.stores.TaskTrace.List(ctx, p.AgentID, p.Keyword, nil, p.Limit)
+		return stores.TaskTrace.List(ctx, p.AgentID, p.Keyword, nil, p.Limit)
 	case "prompt_template":
-		return s.stores.PromptTemplate.List(ctx, "", p.Keyword, p.Limit)
+		return stores.PromptTemplate.List(ctx, "", p.Keyword, p.Limit)
 	case "command_card":
-		return s.stores.CommandCard.List(ctx, p.Keyword, p.Limit)
+		return stores.CommandCard.List(ctx, p.Keyword, p.Limit)
 	case "shared_file":
-		if p.Path != "" && p.Content != "" {
-			return s.stores.SharedFile.Write(ctx, p.Path, p.Content, p.Actor)
+		if p.Path == "" || p.Content == "" {
+			return stores.SharedFile.List(ctx, p.Prefix, p.Limit)
 		}
-		return s.stores.SharedFile.List(ctx, p.Prefix, p.Limit)
+		return stores.SharedFile.Write(ctx, p.Path, p.Content, p.Actor)
 	case "audit_log":
-		return s.stores.AuditLog.List(ctx, p.EventType, p.Action, p.Actor, p.Keyword, p.Limit)
+		return stores.AuditLog.List(ctx, p.EventType, p.Action, p.Actor, p.Keyword, p.Limit)
 	case "agent_status":
-		return s.stores.AgentStatus.List(ctx, p.Status)
+		return stores.AgentStatus.List(ctx, p.Status)
 	case "topology_approval":
-		return s.stores.TopologyApproval.GetPending(ctx)
+		return stores.TopologyApproval.GetPending(ctx)
 	case "db_query":
 		if p.SQL == "" {
 			return nil, apperrors.New("MCP.HandleTool", "db_query: sql is required")
 		}
-		return s.stores.DBQuery.Query(ctx, p.SQL, p.Limit)
+		return stores.DBQuery.Query(ctx, p.SQL, p.Limit)
 	case "config_manage":
 		return nil, apperrors.New("MCP.HandleTool", "config_manage: not implemented")
 	default:
@@ -109,19 +110,12 @@ func (s *Server) HandleTool(ctx context.Context, name string, args json.RawMessa
 }
 
 func parseToolParams(args json.RawMessage) toolParams {
-	var params toolParams
-	if len(args) > 0 {
-		if err := json.Unmarshal(args, &params); err != nil {
-			logger.Debug("mcp: unmarshal tool args", logger.FieldError, err)
-		}
+	params := toolParams{Limit: 100}
+	if len(args) == 0 { return params }
+	if err := json.Unmarshal(args, &params); err != nil {
+		logger.Debug("mcp: unmarshal tool args", logger.FieldError, err)
+		return params
 	}
-	params.Limit = normalizeToolLimit(params.Limit)
+	if params.Limit <= 0 || params.Limit > 500 { params.Limit = 100 }
 	return params
-}
-
-func normalizeToolLimit(limit int) int {
-	if limit <= 0 || limit > 500 {
-		return 100
-	}
-	return limit
 }

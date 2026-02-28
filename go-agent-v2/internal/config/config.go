@@ -1,10 +1,4 @@
-// Package config 全局配置加载与管理。
-//
-// 所有字段通过 struct tag 声明环境变量映射:
-//
-//	`envconfig:"VAR_NAME" default:"value"`
-//
-// Load() 使用 kelseyhightower/envconfig 自动填充。
+// Package config loads process-wide settings from environment variables.
 package config
 
 import (

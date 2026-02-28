@@ -260,7 +260,7 @@ func extractNormalizedCommand(payload map[string]any) string {
 	return ""
 }
 
-func extractNormalizedFiles(_ string, payload map[string]any) (file string, files []string) {
+func extractNormalizedFiles(payload map[string]any) (file string, files []string) {
 	if file := util.AsString(payload["file"]); file != "" {
 		return file, []string{file}
 	}
@@ -294,14 +294,10 @@ func extractExitCodeFromPayload(codexType string, payload map[string]any) *int {
 }
 
 func NormalizeEvent(codexType, method string, data json.RawMessage) NormalizedEvent {
-	var payload map[string]any
+	payload := map[string]any{}
 	if len(data) > 0 {
 		_ = json.Unmarshal(data, &payload)
 	}
-	if payload == nil {
-		payload = map[string]any{}
-	}
-
 	return NormalizeEventFromPayload(codexType, method, payload)
 }
 
@@ -320,7 +316,7 @@ func NormalizeEventFromPayload(codexType, method string, payload map[string]any)
 	result.Text = extractText(payload)
 	result.Command = extractNormalizedCommand(payload)
 
-	result.File, result.Files = extractNormalizedFiles(codexType, payload)
+	result.File, result.Files = extractNormalizedFiles(payload)
 
 	if result.File == "" && len(result.Files) > 0 {
 		result.File = result.Files[0]

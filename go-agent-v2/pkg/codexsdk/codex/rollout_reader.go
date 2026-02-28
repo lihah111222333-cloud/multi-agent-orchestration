@@ -108,18 +108,13 @@ func parseRolloutLine(raw []byte, trimInjectedUserContent bool) (RolloutMessage,
 
 func normalizeRolloutUserText(text string, trimInjectedUserContent bool) (string, bool) {
 	text = util.StripLeadingSystemNoise(text)
-	if !hasMeaningfulText(text) || isSystemNoise(text) {
+	if strings.TrimSpace(text) == "" || util.IsSystemNoiseText(text) {
 		return "", false
 	}
 	if trimInjectedUserContent {
-		text = util.TrimInjectedSkillBlock(text)
-		text = util.TrimInjectedLSPHint(text)
+		text = util.TrimInjectedLSPHint(util.TrimInjectedSkillBlock(text))
 	}
-	return text, hasMeaningfulText(text)
-}
-
-func hasMeaningfulText(text string) bool {
-	return strings.TrimSpace(text) != ""
+	return text, strings.TrimSpace(text) != ""
 }
 
 // FindRolloutPath 根据 codexThreadID 查找 rollout 文件。
@@ -138,12 +133,7 @@ func FindRolloutPath(codexThreadID string) (string, error) {
 	suffix := "rollout-*-" + codexThreadID + ".jsonl"
 
 	now := time.Now()
-	todayDir := filepath.Join(sessionsDir, now.Format("2006"), now.Format("01"), now.Format("02"))
-	if match, found, err := latestGlobMatch(filepath.Join(todayDir, suffix)); err == nil && found {
-		return match, nil
-	}
-
-	for i := 1; i <= 7; i++ {
+	for i := 0; i <= 7; i++ {
 		d := now.AddDate(0, 0, -i)
 		dir := filepath.Join(sessionsDir, d.Format("2006"), d.Format("01"), d.Format("02"))
 		if match, found, err := latestGlobMatch(filepath.Join(dir, suffix)); err == nil && found {
@@ -178,16 +168,9 @@ func extractRolloutText(content []rolloutContentItem) string {
 	if len(content) == 0 {
 		return ""
 	}
-	if len(content) == 1 {
-		return content[0].Text
-	}
 	var sb strings.Builder
 	for _, item := range content {
 		sb.WriteString(item.Text)
 	}
 	return sb.String()
-}
-
-func isSystemNoise(text string) bool {
-	return util.IsSystemNoiseText(text)
 }

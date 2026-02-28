@@ -13,7 +13,7 @@ type ResumeThreadRequest = agentcore.ResumeThreadRequest
 type ForkThreadRequest = agentcore.ForkThreadRequest
 type ForkThreadResponse = agentcore.ForkThreadResponse
 type Client = agentcore.Client
-type ClientFactory = func(port int, agentID string) Client
+type ClientFactory = agentcore.ClientFactory
 
 type AgentState = runner.AgentState
 type AgentInfo = runner.AgentInfo
@@ -29,21 +29,7 @@ const (
 )
 
 func NewAgentManager(appFactory, restFactory ClientFactory) (*AgentManager, error) {
-	var app agentcore.ClientFactory
-	if appFactory != nil {
-		app = func(port int, agentID string) agentcore.Client {
-			return appFactory(port, agentID)
-		}
-	}
-
-	var rest agentcore.ClientFactory
-	if restFactory != nil {
-		rest = func(port int, agentID string) agentcore.Client {
-			return restFactory(port, agentID)
-		}
-	}
-
-	return runner.NewAgentManager(app, rest)
+	return runner.NewAgentManager(appFactory, restFactory)
 }
 
 func NewAgentProcess(client Client) *AgentProcess {

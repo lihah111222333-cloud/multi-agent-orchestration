@@ -19,8 +19,7 @@ func normalizePath(path string) string {
 }
 
 func (s *SharedFileStore) Write(ctx context.Context, path, content, actor string) (*SharedFile, error) {
-	p := normalizePath(path)
-	if p == "" {
+	if path = normalizePath(path); path == "" {
 		return nil, ErrInvalidPath
 	}
 	rows, err := s.pool.Query(ctx,
@@ -28,7 +27,7 @@ func (s *SharedFileStore) Write(ctx context.Context, path, content, actor string
 		 VALUES ($1, $2, $3, NOW(), NOW())
 		 ON CONFLICT (path) DO UPDATE SET content=EXCLUDED.content, updated_by=EXCLUDED.updated_by, updated_at=NOW()
 		 RETURNING path, content, updated_by, created_at, updated_at`,
-		p, content, actor)
+		path, content, actor)
 	if err != nil {
 		return nil, err
 	}
@@ -47,8 +46,8 @@ func (s *SharedFileStore) Read(ctx context.Context, path string) (*SharedFile, e
 
 func (s *SharedFileStore) List(ctx context.Context, prefix string, limit int) ([]SharedFile, error) {
 	q := NewQueryBuilder()
-	if prefix != "" {
-		q.KeywordLike(normalizePath(prefix), "path")
+	if prefix = normalizePath(prefix); prefix != "" {
+		q.KeywordLike(prefix, "path")
 	}
 	sql, params := q.Build(
 		"SELECT path, content, updated_by, created_at, updated_at FROM shared_files",

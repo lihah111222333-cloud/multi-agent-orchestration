@@ -16,8 +16,6 @@ const interactionCols = `id, thread_id, parent_id, sender, receiver, msg_type, s
 	requires_review, reviewed_by, review_note, reviewed_at,
 	payload, created_at, updated_at`
 
-const defaultInteractionStatus = "pending"
-
 func (s *InteractionStore) Create(ctx context.Context, i *Interaction) (*Interaction, error) {
 	payloadJSON := mustMarshalJSON(i.Payload)
 	rows, err := s.pool.Query(ctx,
@@ -26,7 +24,7 @@ func (s *InteractionStore) Create(ctx context.Context, i *Interaction) (*Interac
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW())
 		 RETURNING `+interactionCols,
 		i.ThreadID, i.ParentID, i.Sender, i.Receiver, i.MsgType,
-		defaultStr(i.Status, defaultInteractionStatus), i.RequiresReview, string(payloadJSON))
+		defaultStr(i.Status, "pending"), i.RequiresReview, string(payloadJSON))
 	if err != nil {
 		return nil, err
 	}
@@ -43,12 +41,12 @@ func (s *InteractionStore) Get(ctx context.Context, id int) (*Interaction, error
 }
 
 func (s *InteractionStore) List(ctx context.Context, threadID, keyword string, limit int) ([]Interaction, error) {
-	q := NewQueryBuilder().
+	sql, params := NewQueryBuilder().
 		Eq("thread_id", threadID).
-		KeywordLike(keyword, "sender", "receiver", "msg_type")
-	sql, params := q.Build(
-		"SELECT "+interactionCols+" FROM agent_interactions",
-		"created_at DESC, id DESC", limit)
+		KeywordLike(keyword, "sender", "receiver", "msg_type").
+		Build(
+			"SELECT "+interactionCols+" FROM agent_interactions",
+			"created_at DESC, id DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err

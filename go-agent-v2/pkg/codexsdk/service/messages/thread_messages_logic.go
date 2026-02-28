@@ -65,7 +65,6 @@ func StreamRemainingHistory(
 	if appendHistory == nil {
 		return
 	}
-
 	rolloutsvc.StreamRemainingHistory(
 		all,
 		first,
@@ -108,7 +107,6 @@ func HandleThreadMessagesHydration(
 			streamRemainingHistory(threadID, all, firstPage, limit)
 		}
 	}
-
 	rolloutsvc.HandleThreadMessagesHydration(
 		all,
 		page,

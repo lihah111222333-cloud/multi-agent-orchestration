@@ -1,4 +1,3 @@
-// ai_log.go — AI 日志查询（基于 system_logs 派生）。
 package store
 
 import (
@@ -9,10 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// AILogStore AI 日志存储。
 type AILogStore struct{ BaseStore }
 
-// NewAILogStore 创建 AI 日志存储。
 func NewAILogStore(pool *pgxpool.Pool) *AILogStore { return &AILogStore{NewBaseStore(pool)} }
 
 var (
@@ -74,15 +71,13 @@ func extractModel(msg string) string {
 func (s *AILogStore) Query(ctx context.Context, category, keyword string, limit int) ([]AILogRow, error) {
 	if limit < 1 {
 		limit = 1
-	} else if limit > 2000 {
+	}
+	if limit > 2000 {
 		limit = 2000
 	}
 	fetchLimit := limit
 	if category != "" {
-		fetchLimit *= 5
-		if fetchLimit > 2000 {
-			fetchLimit = 2000
-		}
+		fetchLimit = min(limit*5, 2000)
 	}
 	q := NewQueryBuilder().
 		KeywordLike(keyword, "message")

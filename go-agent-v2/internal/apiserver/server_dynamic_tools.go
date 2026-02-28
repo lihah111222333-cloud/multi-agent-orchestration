@@ -7,9 +7,10 @@ import (
 	"time"
 
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/diffsdk/difftracker"
+	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tooladapter"
-	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
 func toolAdapterProviders(s *Server) tooladapter.Providers {
@@ -34,20 +35,14 @@ func registerDynamicTools(s *Server) {
 	}
 	if s.dynTools == nil {
 		s.dynTools = make(map[string]tooladapter.RuntimeToolHandler)
-	} else {
-		for name := range s.dynTools {
-			delete(s.dynTools, name)
-		}
 	}
+	clear(s.dynTools)
 	tooladapter.Register(s, toolAdapterProviders(s))
 }
 
 // SetupLSP 初始化 LSP 事件转发: 诊断缓存 + 广播。
 func SetupLSP(s *Server, rootDir string) {
-	if s == nil {
-		return
-	}
-	if s.lsp == nil {
+	if s == nil || s.lsp == nil {
 		return
 	}
 	if rootDir != "" {
@@ -74,14 +69,12 @@ func SetupLSP(s *Server, rootDir string) {
 }
 
 func resolveDynamicToolThreadIDs(agentID, rawThreadID string) (threadID, codexThreadID string) {
-	agentThreadID := strings.TrimSpace(agentID)
+	threadID = strings.TrimSpace(agentID)
 	codexThreadID = strings.TrimSpace(rawThreadID)
-	if agentThreadID != "" {
-		threadID = agentThreadID
-	} else {
+	if threadID == "" {
 		threadID = codexThreadID
 	}
-	if codexThreadID == "" || codexThreadID == threadID {
+	if codexThreadID == threadID {
 		codexThreadID = ""
 	}
 	return threadID, codexThreadID
@@ -99,8 +92,7 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 	// 先查找 proc — 后续的所有错误路径都需要通过 codexAdapter 回传错误。
 	proc := s.mgr.Get(agentID)
 	if proc == nil {
-		logger.Error("app-server: dynamic_tool_call dropped — agent gone",
-			logger.FieldAgentID, agentID)
+		logger.Error("app-server: dynamic_tool_call dropped — agent gone", logger.FieldAgentID, agentID)
 		if event.RespondFunc != nil {
 			if respondErr := event.RespondFunc(-32603, "agent not found: "+agentID); respondErr != nil {
 				logger.Warn("app-server: RespondFunc failed on agent-gone",
@@ -122,15 +114,16 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 
 	var call agentcore.DynamicToolCallData
 	if err := json.Unmarshal(raw, &call); err != nil {
+		errMsg := "bad dynamic_tool_call data: " + err.Error()
 		logger.Warn("app-server: bad dynamic_tool_call data", logger.FieldAgentID, agentID, logger.FieldError, err,
 			"raw", string(event.Data))
 		// 必须回复 error response，否则 codex turn 永挂。
 		if event.RespondFunc != nil {
-			if respErr := event.RespondFunc(-32602, "bad dynamic_tool_call data: "+err.Error()); respErr != nil {
+			if respErr := event.RespondFunc(-32602, errMsg); respErr != nil {
 				logger.Warn("app-server: respond error failed", logger.FieldAgentID, agentID, logger.FieldError, respErr)
 			}
 		} else if event.RequestID != nil {
-			if respErr := s.codexAdapter.RespondError(proc, *event.RequestID, -32602, "bad dynamic_tool_call data: "+err.Error()); respErr != nil {
+			if respErr := s.codexAdapter.RespondError(proc, *event.RequestID, -32602, errMsg); respErr != nil {
 				logger.Warn("app-server: respond error failed", logger.FieldAgentID, agentID, logger.FieldError, respErr)
 			}
 		}
@@ -144,7 +137,7 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 			logger.Debug("app-server: unmarshal tool arguments", logger.FieldToolName, call.Tool, logger.FieldError, err)
 		}
 	}
-	filePath := extractToolFilePath(argMap)
+	filePath := difftracker.ExtractStringArg(argMap, "file_path", "path", "file")
 	diffTracker := beginDynamicToolDiffTracker(s, agentID, call.Tool, argMap)
 
 	start := time.Now()
@@ -203,10 +196,6 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 	}
 }
 
-func extractToolFilePath(args map[string]any) string {
-	return extractStringArg(args, "file_path", "path", "file")
-}
-
 func buildToolNotifyPayload(
 	threadID string,
 	agentID string,
@@ -230,14 +219,12 @@ func buildToolNotifyPayload(
 		"elapsedMs":  elapsed.Milliseconds(),
 		"resultLen":  len(result),
 	}
-	if result == "" {
-		return payload
+	if result != "" {
+		if len(result) > 500 {
+			result = result[:500]
+		}
+		payload["resultPreview"] = result
 	}
-	if len(result) > 500 {
-		payload["resultPreview"] = result[:500]
-		return payload
-	}
-	payload["resultPreview"] = result
 	return payload
 }
 

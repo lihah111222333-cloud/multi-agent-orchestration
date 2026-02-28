@@ -88,19 +88,18 @@ func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 		s.codexAdapter.FinalizeTrackedTurnEvent(agentID, event.Type, method, payload)
 		maybeAutoReportOrchestrationCompletion(s, agentID, event.Type, method, payload)
 
-		// § 二 审批事件: 需要客户端回复 (双向请求)
 		switch event.Type {
-		case agentcore.EventExecApprovalRequest:
-			util.SafeGo(func() { handleApprovalRequest(s, agentID, approvalMethodCommandExecution, payload, event) })
-			return
-		case agentcore.EventFileChangeApprovalRequest:
-			util.SafeGo(func() { handleApprovalRequest(s, agentID, approvalMethodFileChange, payload, event) })
-			return
-		case approvalMethodSkillRequest:
-			util.SafeGo(func() { handleApprovalRequest(s, agentID, approvalMethodSkillRequest, payload, event) })
-			return
 		case agentcore.EventDynamicToolCall:
 			util.SafeGo(func() { handleDynamicToolCall(s, agentID, event) })
+			return
+		case agentcore.EventExecApprovalRequest, agentcore.EventFileChangeApprovalRequest, approvalMethodSkillRequest:
+			method := approvalMethodSkillRequest
+			if event.Type == agentcore.EventExecApprovalRequest {
+				method = approvalMethodCommandExecution
+			} else if event.Type == agentcore.EventFileChangeApprovalRequest {
+				method = approvalMethodFileChange
+			}
+			util.SafeGo(func() { handleApprovalRequest(s, agentID, method, payload, event) })
 			return
 		}
 
@@ -122,10 +121,8 @@ func emitTurnStartDiffReset(s *Server, threadID string, payload map[string]any) 
 		"diff":     "",
 		"uiText":   "",
 	}
-	if payload != nil {
-		if codexThreadID, _ := payload["codexThreadId"].(string); strings.TrimSpace(codexThreadID) != "" {
-			resetPayload["codexThreadId"] = strings.TrimSpace(codexThreadID)
-		}
+	if codexThreadID := strings.TrimSpace(util.ExtractFirstString(payload, "codexThreadId")); codexThreadID != "" {
+		resetPayload["codexThreadId"] = codexThreadID
 	}
 
 	normalized := uistate.NormalizeEventFromPayload(agentcore.EventTurnDiff, "turn/diff/updated", resetPayload)
@@ -142,20 +139,11 @@ func emitTurnStartDiffReset(s *Server, threadID string, payload map[string]any) 
 //   - payload 追加 isReadCommand: true + lspHint 字段 (前端可展示警告)
 //   - 调用 IncrementToolCall("shell_read:<cmd>") 统计使用次数
 func enrichReadCommandPayload(s *Server, eventType string, payload map[string]any) {
-	if s == nil {
-		return
-	}
-	if payload == nil {
-		return
-	}
-	if eventType != agentcore.EventExecCommandBegin {
+	if s == nil || payload == nil || eventType != agentcore.EventExecCommandBegin {
 		return
 	}
 	cmd := extractCommandBaseName(payload)
-	if cmd == "" {
-		return
-	}
-	if !readCommands[cmd] {
+	if cmd == "" || !readCommands[cmd] {
 		return
 	}
 	payload["isReadCommand"] = true
@@ -173,31 +161,13 @@ func enrichReadCommandPayload(s *Server, eventType string, payload map[string]an
 //   - "/usr/bin/grep foo"   → "grep"
 //   - "grep -rn 'pattern'"  → "grep"
 func extractCommandBaseName(payload map[string]any) string {
-	raw := ""
-	switch v := payload["command"].(type) {
-	case string:
-		raw = v
-	default:
-		// 尝试 displayCommand / cmd 等别名
-		for _, key := range []string{"displayCommand", "command_display", "cmd"} {
-			if s, ok := payload[key].(string); ok && s != "" {
-				raw = s
-				break
-			}
-		}
-	}
-	raw = strings.TrimSpace(raw)
+	raw := strings.TrimSpace(util.ExtractFirstString(payload, "command", "displayCommand", "command_display", "cmd"))
 	if raw == "" {
 		return ""
 	}
-	// 取第一个 token 作为命令, 去掉路径前缀
 	fields := strings.Fields(raw)
-	if len(fields) == 0 {
-		return ""
-	}
-	// filepath.Base 处理 /usr/bin/grep → grep
 	base := fields[0]
-	if idx := strings.LastIndex(base, "/"); idx >= 0 {
+	if idx := strings.LastIndexByte(base, '/'); idx >= 0 {
 		base = base[idx+1:]
 	}
 	return base

@@ -182,7 +182,7 @@ func RunThreadNameSet(
 		return nil, apperrors.Newf("Server.threadNameSet", "thread %s not found", id)
 	}
 	if proc != nil && renameTarget != "" {
-		if err := callAction("Server.threadNameSet", "command sender is not initialized", "send rename command", sendCommand != nil, func() error {
+		if _, err := runNoContentAction("Server.threadNameSet", "command sender is not initialized", "send rename command", sendCommand != nil, func() error {
 			return sendCommand(proc, "/rename", renameTarget)
 		}); err != nil {
 			return nil, err
@@ -330,21 +330,14 @@ func runThreadRealtimeAction(method, threadID string, validate func() error) (ma
 }
 
 func runNoContentAction(method, missingHandlerMsg, wrapMsg string, handlerReady bool, invoke func() error) (map[string]any, error) {
-	if err := callAction(method, missingHandlerMsg, wrapMsg, handlerReady, invoke); err != nil {
-		return nil, err
-	}
-	return map[string]any{}, nil
-}
-
-func callAction(method, missingHandlerMsg, wrapMsg string, handlerReady bool, invoke func() error) error {
 	if !handlerReady {
-		return apperrors.New(method, missingHandlerMsg)
+		return nil, apperrors.New(method, missingHandlerMsg)
 	}
 	if err := invoke(); err != nil {
 		if wrapMsg == "" {
-			return err
+			return nil, err
 		}
-		return apperrors.Wrap(err, method, wrapMsg)
+		return nil, apperrors.Wrap(err, method, wrapMsg)
 	}
-	return nil
+	return map[string]any{}, nil
 }

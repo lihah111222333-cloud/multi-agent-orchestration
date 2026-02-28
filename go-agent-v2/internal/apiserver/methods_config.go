@@ -89,8 +89,9 @@ var configEnvAllowPrefixes = []string{
 }
 
 func isAllowedEnvKey(key string) bool {
+	key = strings.ToUpper(key)
 	for _, prefix := range configEnvAllowPrefixes {
-		if strings.HasPrefix(strings.ToUpper(key), prefix) {
+		if strings.HasPrefix(key, prefix) {
 			return true
 		}
 	}
@@ -132,7 +133,9 @@ func configBatchWriteTyped(_ *Server, _ context.Context, p configBatchWriteParam
 			logger.Warn("config/batchWrite: setenv failed", logger.FieldKey, e.Key, logger.FieldError, err)
 		}
 	}
-	if len(rejected) == 0 { return map[string]any{}, nil }
+	if len(rejected) == 0 {
+		return map[string]any{}, nil
+	}
 	return map[string]any{"rejected": rejected}, nil
 }
 
@@ -257,7 +260,9 @@ func configRequirementsRead(_ *Server, _ context.Context, _ json.RawMessage) (an
 }
 
 func boolToStatus(ok bool) string {
-	if ok { return "met" }
+	if ok {
+		return "met"
+	}
 	return "unmet"
 }
 

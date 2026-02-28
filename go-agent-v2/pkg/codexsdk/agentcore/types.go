@@ -124,53 +124,45 @@ type TextData struct {
 	Role    string `json:"role,omitempty"`
 }
 
-type ErrorData struct {
-	Message string `json:"message"`
-	Code    string `json:"code,omitempty"`
-}
-
-type WarningData struct {
-	Message string `json:"message"`
-}
-
-type TokenCountData struct {
-	Input  int `json:"input"`
-	Output int `json:"output"`
-}
-
-type SessionConfiguredData struct {
-	ThreadID string `json:"thread_id,omitempty"`
-}
-
-type ExecApprovalRequestData struct {
-	Command string `json:"command,omitempty"`
-	Reason  string `json:"reason,omitempty"`
-}
-
-type ExecCommandBeginData struct {
-	Command string `json:"command,omitempty"`
-}
-
-type ExecCommandEndData struct {
-	ExitCode int `json:"exit_code"`
-}
-
-type PatchApplyData struct {
-	File string `json:"file,omitempty"`
-}
-
-type CollabAgentData struct {
-	AgentID string `json:"agent_id,omitempty"`
-	Name    string `json:"name,omitempty"`
-}
-
-type ThreadNameUpdatedData struct {
-	Name string `json:"name,omitempty"`
-}
-
-type TurnDiffData struct {
-	Diff string `json:"diff,omitempty"`
-}
+type (
+	ErrorData struct {
+		Message string `json:"message"`
+		Code    string `json:"code,omitempty"`
+	}
+	WarningData struct {
+		Message string `json:"message"`
+	}
+	TokenCountData struct {
+		Input  int `json:"input"`
+		Output int `json:"output"`
+	}
+	SessionConfiguredData struct {
+		ThreadID string `json:"thread_id,omitempty"`
+	}
+	ExecApprovalRequestData struct {
+		Command string `json:"command,omitempty"`
+		Reason  string `json:"reason,omitempty"`
+	}
+	ExecCommandBeginData struct {
+		Command string `json:"command,omitempty"`
+	}
+	ExecCommandEndData struct {
+		ExitCode int `json:"exit_code"`
+	}
+	PatchApplyData struct {
+		File string `json:"file,omitempty"`
+	}
+	CollabAgentData struct {
+		AgentID string `json:"agent_id,omitempty"`
+		Name    string `json:"name,omitempty"`
+	}
+	ThreadNameUpdatedData struct {
+		Name string `json:"name,omitempty"`
+	}
+	TurnDiffData struct {
+		Diff string `json:"diff,omitempty"`
+	}
+)
 
 type DynamicTool struct {
 	Name        string         `json:"name"`
@@ -186,25 +178,24 @@ type DynamicToolCallData struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
-type ThreadInfo struct {
-	ThreadID string `json:"thread_id"`
-}
-
-type ResumeThreadRequest struct {
-	ThreadID string `json:"thread_id"`
-	Path     string `json:"path,omitempty"`
-	Cwd      string `json:"cwd,omitempty"`
-}
-
-type ForkThreadRequest struct {
-	SourceThreadID string `json:"source_thread_id"`
-	Cwd            string `json:"cwd,omitempty"`
-}
-
-type ForkThreadResponse struct {
-	ThreadID string `json:"thread_id"`
-	Port     int    `json:"port,omitempty"`
-}
+type (
+	ThreadInfo struct {
+		ThreadID string `json:"thread_id"`
+	}
+	ResumeThreadRequest struct {
+		ThreadID string `json:"thread_id"`
+		Path     string `json:"path,omitempty"`
+		Cwd      string `json:"cwd,omitempty"`
+	}
+	ForkThreadRequest struct {
+		SourceThreadID string `json:"source_thread_id"`
+		Cwd            string `json:"cwd,omitempty"`
+	}
+	ForkThreadResponse struct {
+		ThreadID string `json:"thread_id"`
+		Port     int    `json:"port,omitempty"`
+	}
+)
 
 const (
 	EventSessionConfigured = "session_configured"

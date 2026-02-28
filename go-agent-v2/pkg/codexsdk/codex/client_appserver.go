@@ -67,7 +67,6 @@ type AppServerClient struct {
 	ThreadID       string
 	AgentID        string
 	ApprovalPolicy string
-
 	ws              *websocket.Conn
 	wsMu            sync.Mutex
 	wsDone          chan struct{}
@@ -77,21 +76,16 @@ type AppServerClient struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	stderrCollector *logger.StderrCollector
-
-	nextID  atomic.Int64
-	pending sync.Map
-	activeTurnID atomic.Value
-
+	nextID           atomic.Int64
+	pending          sync.Map
+	activeTurnID     atomic.Value
 	listenerEnsureNeeded atomic.Bool
 	listenerEnsureInFlight atomic.Bool
-
-	legacyMirrorDropCount atomic.Int64
-
-	healthMu sync.Mutex
-	health   appServerConnectionHealth
+	legacyMirrorDropCount  atomic.Int64
+	healthMu               sync.Mutex
+	health                 appServerConnectionHealth
 	respawnRecoverInFlight atomic.Bool
-	readLoopRunning atomic.Bool
-
+	readLoopRunning        atomic.Bool
 	streamErrorRecoveryMu    sync.Mutex
 	streamErrorRecoveryTimer *time.Timer
 }
@@ -117,12 +111,12 @@ const (
 	appServerRespawnEscalationThreshold = 3
 )
 
-var appServerReadIdleTimeoutMs atomic.Int64
-var appServerStreamMaxRetries = appServerStreamMaxRetriesFromEnv()
+var (
+	appServerReadIdleTimeoutMs atomic.Int64
+	appServerStreamMaxRetries  = appServerStreamMaxRetriesFromEnv()
+)
 
-func init() {
-	setAppServerReadIdleTimeout(appServerReadIdleTimeoutFromEnv())
-}
+func init() { setAppServerReadIdleTimeout(appServerReadIdleTimeoutFromEnv()) }
 
 func appServerReadIdleTimeoutFromEnv() time.Duration {
 	raw, ms, err := parseEnvInt("GO_AGENT_APP_SERVER_STREAM_IDLE_TIMEOUT_MS")
@@ -141,22 +135,16 @@ func appServerReadIdleTimeoutFromEnv() time.Duration {
 
 func currentAppServerReadIdleTimeout() time.Duration {
 	ms := appServerReadIdleTimeoutMs.Load()
-	if ms <= 0 {
-		return defaultAppServerReadIdleTimeout
-	}
+	if ms <= 0 { return defaultAppServerReadIdleTimeout }
 	return time.Duration(ms) * time.Millisecond
 }
 
 func setAppServerReadIdleTimeout(timeout time.Duration) {
-	if timeout > 0 {
-		appServerReadIdleTimeoutMs.Store(timeout.Milliseconds())
-	}
+	if timeout > 0 { appServerReadIdleTimeoutMs.Store(timeout.Milliseconds()) }
 }
 
 func SetAppServerReadIdleTimeout(timeout time.Duration) {
-	if timeout <= 0 {
-		return
-	}
+	if timeout <= 0 { return }
 	setAppServerReadIdleTimeout(timeout)
 	logger.Info("codex: stream read idle timeout updated",
 		"timeout_ms", timeout.Milliseconds(),

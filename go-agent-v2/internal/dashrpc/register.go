@@ -32,17 +32,20 @@ func typedMethod[P any](fn func(ctx context.Context, p P) (any, error)) MethodHa
 	}
 }
 
-func listHandler[P any](logKey, responseKey string, query func(ctx context.Context, p P) (any, bool, error)) MethodHandler {
+func listHandler[P any](provider DashboardProvider, logKey, responseKey string, query func(ctx context.Context, provider DashboardProvider, p P) (any, bool, error)) MethodHandler {
 	return typedMethod(func(_ context.Context, p P) (any, error) {
+		if provider == nil {
+			return map[string]any{responseKey: []any{}}, nil
+		}
+
 		ctx, cancel := dashCtx()
 		defer cancel()
 
-		list, ok, err := query(ctx, p)
-		if !ok {
-			return map[string]any{responseKey: []any{}}, nil
-		}
-		if err != nil {
-			logger.Warn("dashboard/"+logKey+" failed", logger.FieldError, err)
+		list, ok, err := query(ctx, provider, p)
+		if !ok || err != nil {
+			if err != nil {
+				logger.Warn("dashboard/"+logKey+" failed", logger.FieldError, err)
+			}
 			return map[string]any{responseKey: []any{}}, nil
 		}
 		return map[string]any{responseKey: list}, nil
@@ -111,90 +114,59 @@ type dashBusLogParams struct {
 }
 
 // Register registers all dashboard/* methods via callback injection.
-func Register(register RegisterFn, provider DashboardProvider, caller MethodCaller) {
+func Register(register RegisterFn, provider DashboardProvider, _ MethodCaller) {
 	if register == nil {
 		return
 	}
-	_ = caller
 
-	register("dashboard/agentStatus", listHandler("agents", "agents",
-		func(ctx context.Context, p dashAgentStatusParams) (any, bool, error) {
-			if provider == nil {
-				return nil, false, nil
-			}
-			return provider.ListAgentStatus(ctx, p.Status)
+	register("dashboard/agentStatus", listHandler(provider, "agents", "agents",
+		func(ctx context.Context, dp DashboardProvider, p dashAgentStatusParams) (any, bool, error) {
+			return dp.ListAgentStatus(ctx, p.Status)
 		}))
 
-	register("dashboard/dags", listHandler("dags", "dags",
-		func(ctx context.Context, p dashDAGParams) (any, bool, error) {
-			if provider == nil {
-				return nil, false, nil
-			}
-			return provider.ListDAGs(ctx, p.Keyword, p.Status, clampLimit(p.Limit, 100))
+	register("dashboard/dags", listHandler(provider, "dags", "dags",
+		func(ctx context.Context, dp DashboardProvider, p dashDAGParams) (any, bool, error) {
+			return dp.ListDAGs(ctx, p.Keyword, p.Status, clampLimit(p.Limit, 100))
 		}))
 
-	register("dashboard/taskAcks", listHandler("acks", "acks",
-		func(ctx context.Context, p dashTaskAckParams) (any, bool, error) {
-			if provider == nil {
-				return nil, false, nil
-			}
-			return provider.ListTaskAcks(ctx, p.Keyword, p.Status, p.Priority, p.AssignedTo, clampLimit(p.Limit, 100))
+	register("dashboard/taskAcks", listHandler(provider, "acks", "acks",
+		func(ctx context.Context, dp DashboardProvider, p dashTaskAckParams) (any, bool, error) {
+			return dp.ListTaskAcks(ctx, p.Keyword, p.Status, p.Priority, p.AssignedTo, clampLimit(p.Limit, 100))
 		}))
 
-	register("dashboard/taskTraces", listHandler("traces", "traces",
-		func(ctx context.Context, p dashTaskTraceParams) (any, bool, error) {
-			if provider == nil {
-				return nil, false, nil
-			}
-			return provider.ListTaskTraces(ctx, p.AgentID, p.Keyword, nil, clampLimit(p.Limit, 100))
+	register("dashboard/taskTraces", listHandler(provider, "traces", "traces",
+		func(ctx context.Context, dp DashboardProvider, p dashTaskTraceParams) (any, bool, error) {
+			return dp.ListTaskTraces(ctx, p.AgentID, p.Keyword, nil, clampLimit(p.Limit, 100))
 		}))
 
-	register("dashboard/commandCards", listHandler("cards", "cards",
-		func(ctx context.Context, p dashCommandCardParams) (any, bool, error) {
-			if provider == nil {
-				return nil, false, nil
-			}
-			return provider.ListCommandCards(ctx, p.Keyword, clampLimit(p.Limit, 100))
+	register("dashboard/commandCards", listHandler(provider, "cards", "cards",
+		func(ctx context.Context, dp DashboardProvider, p dashCommandCardParams) (any, bool, error) {
+			return dp.ListCommandCards(ctx, p.Keyword, clampLimit(p.Limit, 100))
 		}))
 
-	register("dashboard/prompts", listHandler("prompts", "prompts",
-		func(ctx context.Context, p dashPromptParams) (any, bool, error) {
-			if provider == nil {
-				return nil, false, nil
-			}
-			return provider.ListPrompts(ctx, p.AgentKey, p.Keyword, clampLimit(p.Limit, 100))
+	register("dashboard/prompts", listHandler(provider, "prompts", "prompts",
+		func(ctx context.Context, dp DashboardProvider, p dashPromptParams) (any, bool, error) {
+			return dp.ListPrompts(ctx, p.AgentKey, p.Keyword, clampLimit(p.Limit, 100))
 		}))
 
-	register("dashboard/sharedFiles", listHandler("files", "files",
-		func(ctx context.Context, p dashSharedFileParams) (any, bool, error) {
-			if provider == nil {
-				return nil, false, nil
-			}
-			return provider.ListSharedFiles(ctx, p.Prefix, clampLimit(p.Limit, 500))
+	register("dashboard/sharedFiles", listHandler(provider, "files", "files",
+		func(ctx context.Context, dp DashboardProvider, p dashSharedFileParams) (any, bool, error) {
+			return dp.ListSharedFiles(ctx, p.Prefix, clampLimit(p.Limit, 500))
 		}))
 
-	register("dashboard/auditLogs", listHandler("logs", "logs",
-		func(ctx context.Context, p dashAuditLogParams) (any, bool, error) {
-			if provider == nil {
-				return nil, false, nil
-			}
-			return provider.ListAuditLogs(ctx, p.EventType, p.Action, p.Actor, p.Keyword, clampLimit(p.Limit, 100))
+	register("dashboard/auditLogs", listHandler(provider, "logs", "logs",
+		func(ctx context.Context, dp DashboardProvider, p dashAuditLogParams) (any, bool, error) {
+			return dp.ListAuditLogs(ctx, p.EventType, p.Action, p.Actor, p.Keyword, clampLimit(p.Limit, 100))
 		}))
 
-	register("dashboard/aiLogs", listHandler("logs", "logs",
-		func(ctx context.Context, p dashAILogParams) (any, bool, error) {
-			if provider == nil {
-				return nil, false, nil
-			}
-			return provider.QueryAILogs(ctx, p.Category, p.Keyword, clampLimit(p.Limit, 100))
+	register("dashboard/aiLogs", listHandler(provider, "logs", "logs",
+		func(ctx context.Context, dp DashboardProvider, p dashAILogParams) (any, bool, error) {
+			return dp.QueryAILogs(ctx, p.Category, p.Keyword, clampLimit(p.Limit, 100))
 		}))
 
-	register("dashboard/busLogs", listHandler("logs", "logs",
-		func(ctx context.Context, p dashBusLogParams) (any, bool, error) {
-			if provider == nil {
-				return nil, false, nil
-			}
-			return provider.ListBusLogs(ctx, p.Category, p.Severity, p.Keyword, clampLimit(p.Limit, 100))
+	register("dashboard/busLogs", listHandler(provider, "logs", "logs",
+		func(ctx context.Context, dp DashboardProvider, p dashBusLogParams) (any, bool, error) {
+			return dp.ListBusLogs(ctx, p.Category, p.Severity, p.Keyword, clampLimit(p.Limit, 100))
 		}))
 
 	register("dashboard/skills", func(_ context.Context, _ json.RawMessage) (any, error) {
@@ -202,11 +174,10 @@ func Register(register RegisterFn, provider DashboardProvider, caller MethodCall
 			return map[string]any{"skills": []any{}}, nil
 		}
 		list, ok, err := provider.ListSkills()
-		if !ok {
-			return map[string]any{"skills": []any{}}, nil
-		}
-		if err != nil {
-			logger.Warn("dashboard/skills failed", logger.FieldError, err)
+		if !ok || err != nil {
+			if err != nil {
+				logger.Warn("dashboard/skills failed", logger.FieldError, err)
+			}
 			return map[string]any{"skills": []any{}}, nil
 		}
 		return map[string]any{"skills": list}, nil

@@ -35,9 +35,7 @@ type ThreadArchiveFileState struct {
 	SizeBytes int64
 }
 
-func InferThreadArtifactKind(filename string) string {
-	return inferThreadArtifactKind(filename)
-}
+func InferThreadArtifactKind(filename string) string { return inferThreadArtifactKind(filename) }
 
 type ThreadArtifactCandidate = threadArtifactCandidate
 
@@ -96,14 +94,14 @@ type ThreadArchiveRestoreNotice struct {
 
 type ThreadArchiveRestoreDeps struct {
 	resolveThreadArchiveRoot, resolveCodexRootDir func() (string, error)
-	sanitizeArchiveNameStrict                      func(string) (string, error)
-	pathWithinRoot                                 func(root, path string) (bool, error)
-	copyFileOverwrite                              func(srcPath, targetPath string) error
-	fileSHA256                                     func(path string) (string, error)
-	findLatestManifestPath                         func(threadDir string) (manifestPath string, found bool, err error)
-	readManifestFile                               func(manifestPath string) (ThreadArchiveManifest, error)
-	fileState                                      func(path string) (ThreadArchiveFileState, error)
-	removeFile                                     func(path string) error
+	sanitizeArchiveNameStrict                     func(string) (string, error)
+	pathWithinRoot                                func(root, path string) (bool, error)
+	copyFileOverwrite                             func(srcPath, targetPath string) error
+	fileSHA256                                    func(path string) (string, error)
+	findLatestManifestPath                        func(threadDir string) (manifestPath string, found bool, err error)
+	readManifestFile                              func(manifestPath string) (ThreadArchiveManifest, error)
+	fileState                                     func(path string) (ThreadArchiveFileState, error)
+	removeFile                                    func(path string) error
 }
 
 func (deps ThreadArchiveRestoreDeps) validateInspect() error {
@@ -121,24 +119,23 @@ func (deps ThreadArchiveRestoreDeps) validateRestore() error {
 }
 
 func loadThreadArchiveManifestScope(threadID, op string, deps ThreadArchiveRestoreDeps) (manifestPath string, manifest ThreadArchiveManifest, found bool, err error) {
-	id := strings.TrimSpace(threadID)
-	if id == "" {
+	if threadID = strings.TrimSpace(threadID); threadID == "" {
 		return "", ThreadArchiveManifest{}, false, nil
 	}
 	rootDir, err := deps.resolveThreadArchiveRoot()
 	if err != nil {
 		return "", ThreadArchiveManifest{}, false, apperrors.Wrap(err, op, "resolve archive root")
 	}
-	safeThreadID, err := deps.sanitizeArchiveNameStrict(id)
+	safeThreadID, err := deps.sanitizeArchiveNameStrict(threadID)
 	if err != nil {
 		return "", ThreadArchiveManifest{}, false, apperrors.Wrap(err, op, "sanitize thread id")
 	}
 	manifestPath, found, err = deps.findLatestManifestPath(pathutil.Join(rootDir, safeThreadID))
-	if err != nil || !found {
-		if err != nil {
-			err = apperrors.Wrap(err, op, "find latest manifest")
-		}
-		return "", ThreadArchiveManifest{}, found, err
+	if err != nil {
+		return "", ThreadArchiveManifest{}, false, apperrors.Wrap(err, op, "find latest manifest")
+	}
+	if !found {
+		return "", ThreadArchiveManifest{}, false, nil
 	}
 	manifest, err = deps.readManifestFile(manifestPath)
 	if err != nil {
@@ -180,15 +177,11 @@ func ParseArchiveTimestamp(raw string) int64 {
 }
 
 func resolveArchivedPath(archiveDir string, archivedPath string) string {
-	resolved := strings.TrimSpace(archivedPath)
+	resolved, baseDir := strings.TrimSpace(archivedPath), strings.TrimSpace(archiveDir)
 	if resolved == "" {
 		return ""
 	}
-	baseDir := strings.TrimSpace(archiveDir)
-	if baseDir == "" {
-		return resolved
-	}
-	if pathutil.IsAbs(resolved) {
+	if baseDir == "" || pathutil.IsAbs(resolved) {
 		return resolved
 	}
 	return pathutil.Join(baseDir, resolved)

@@ -334,20 +334,20 @@ func RemoveEmptyCodexParentDirs(startDir string, codexRoot string) {
 		if err := os.Remove(currentAbs); err != nil {
 			return
 		}
-		if parent := filepath.Dir(currentAbs); parent == currentAbs {
+		parent := filepath.Dir(currentAbs)
+		if parent == currentAbs {
 			return
-		} else {
-			current = parent
 		}
+		current = parent
 	}
 }
 
 func LoadThreadArchiveMapFromDisk() (map[string]int64, error) {
-	rootDir, err := ResolveThreadArchiveRootDir()
-	if err != nil {
+	if rootDir, err := ResolveThreadArchiveRootDir(); err != nil {
 		return nil, err
+	} else {
+		return collectThreadArchiveMapFromRoot(rootDir)
 	}
-	return collectThreadArchiveMapFromRoot(rootDir)
 }
 
 func collectThreadArchiveMapFromRoot(rootDir string) (map[string]int64, error) {

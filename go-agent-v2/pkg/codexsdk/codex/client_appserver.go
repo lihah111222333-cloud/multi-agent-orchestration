@@ -148,10 +148,9 @@ func currentAppServerReadIdleTimeout() time.Duration {
 }
 
 func setAppServerReadIdleTimeout(timeout time.Duration) {
-	if timeout <= 0 {
-		return
+	if timeout > 0 {
+		appServerReadIdleTimeoutMs.Store(timeout.Milliseconds())
 	}
-	appServerReadIdleTimeoutMs.Store(timeout.Milliseconds())
 }
 
 func SetAppServerReadIdleTimeout(timeout time.Duration) {
@@ -164,9 +163,7 @@ func SetAppServerReadIdleTimeout(timeout time.Duration) {
 	)
 }
 
-func GetAppServerReadIdleTimeout() time.Duration {
-	return currentAppServerReadIdleTimeout()
-}
+func GetAppServerReadIdleTimeout() time.Duration { return currentAppServerReadIdleTimeout() }
 
 func appServerStreamMaxRetriesFromEnv() int {
 	raw, value, err := parseEnvInt("GO_AGENT_APP_SERVER_STREAM_MAX_RETRIES")

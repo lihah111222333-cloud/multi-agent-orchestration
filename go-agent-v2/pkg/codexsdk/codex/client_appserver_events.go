@@ -550,14 +550,12 @@ func normalizeErrorNotificationPayload(raw json.RawMessage) json.RawMessage {
 
 	if errObj, ok := payload["error"].(map[string]any); ok && errObj != nil {
 		if _, exists := payload["message"]; !exists {
-			if msg := strings.TrimSpace(trimmedStringValue(errObj["message"])); msg != "" {
+			if msg := firstTrimmedString(errObj, "message"); msg != "" {
 				payload["message"] = msg
 			}
 		}
 		if _, exists := payload["additional_details"]; !exists {
-			if details := strings.TrimSpace(trimmedStringValue(errObj["additionalDetails"])); details != "" {
-				payload["additional_details"] = details
-			} else if details := strings.TrimSpace(trimmedStringValue(errObj["additional_details"])); details != "" {
+			if details := firstTrimmedString(errObj, "additionalDetails", "additional_details"); details != "" {
 				payload["additional_details"] = details
 			}
 		}

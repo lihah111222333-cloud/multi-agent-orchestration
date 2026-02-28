@@ -72,16 +72,20 @@ func (s appServerHealthSnapshot) asDetailsMap() map[string]any {
 	}
 }
 
-func filterRecentTimes(values []time.Time, now time.Time, window time.Duration) []time.Time {
-	if len(values) == 0 {
-		return values
-	}
-	cutoff := now.Add(-window)
+func recentTimesStartIndex(values []time.Time, cutoff time.Time) int {
 	idx := 0
 	for idx < len(values) && values[idx].Before(cutoff) {
 		idx++
 	}
-	if idx <= 0 {
+	return idx
+}
+
+func filterRecentTimes(values []time.Time, now time.Time, window time.Duration) []time.Time {
+	if len(values) == 0 {
+		return values
+	}
+	idx := recentTimesStartIndex(values, now.Add(-window))
+	if idx == 0 {
 		return values
 	}
 	return append([]time.Time(nil), values[idx:]...)
@@ -91,15 +95,7 @@ func countRecentTimes(values []time.Time, now time.Time, window time.Duration) i
 	if len(values) == 0 {
 		return 0
 	}
-	cutoff := now.Add(-window)
-	count := 0
-	for i := len(values) - 1; i >= 0; i-- {
-		if values[i].Before(cutoff) {
-			break
-		}
-		count++
-	}
-	return count
+	return len(values) - recentTimesStartIndex(values, now.Add(-window))
 }
 
 func (c *AppServerClient) healthSnapshotLocked(now time.Time) appServerHealthSnapshot {

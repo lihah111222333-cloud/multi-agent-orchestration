@@ -270,13 +270,6 @@ func (m *RuntimeManager) TimelineStats() map[string]any {
 	}
 }
 
-func hasAccumulatedText(timeline []TimelineItem, index int) bool {
-	if index < 0 || index >= len(timeline) {
-		return false
-	}
-	return timeline[index].Text != ""
-}
-
 func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord) bool {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -288,8 +281,8 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 
 	if rt, ok := m.runtime[id]; ok {
 		timeline := m.snapshot.TimelinesByThread[id]
-		if hasAccumulatedText(timeline, rt.assistantIndex) ||
-			hasAccumulatedText(timeline, rt.thinkingIndex) {
+		if (rt.assistantIndex >= 0 && rt.assistantIndex < len(timeline) && timeline[rt.assistantIndex].Text != "") ||
+			(rt.thinkingIndex >= 0 && rt.thinkingIndex < len(timeline) && timeline[rt.thinkingIndex].Text != "") {
 			return false
 		}
 	}

@@ -19,11 +19,12 @@ func cloneBaseSnapshot(src RuntimeSnapshot, includeTimeline bool) RuntimeSnapsho
 		AgentMetaByID:         make(map[string]AgentMeta, len(src.AgentMetaByID)),
 	}
 
-	out.TimelinesByThread = map[string][]TimelineItem{}
-	out.DiffTextByThread = map[string]string{}
 	if includeTimeline {
 		out.TimelinesByThread = make(map[string][]TimelineItem, len(src.TimelinesByThread))
 		out.DiffTextByThread = make(map[string]string, len(src.DiffTextByThread))
+	} else {
+		out.TimelinesByThread = map[string][]TimelineItem{}
+		out.DiffTextByThread = map[string]string{}
 	}
 
 	out.Threads = append(out.Threads, src.Threads...)

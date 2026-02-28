@@ -42,18 +42,16 @@ func threadLogFields(threadID string) []any {
 
 var errNoProcess = errors.New("codexadapter: agent process not found")
 
-func withClientE[T any](proc *codexsdk.AgentProcess, fn func(codexsdk.Client) (T, error)) (T, error) {
+func withClientE[T any](proc *codexsdk.AgentProcess, fn func(codexsdk.Client) (T, error)) (zero T, err error) {
 	if proc == nil || proc.Client == nil {
-		return *new(T), errNoProcess
+		return zero, errNoProcess
 	}
 	return fn(proc.Client)
 }
 
 func withClient(proc *codexsdk.AgentProcess, fn func(codexsdk.Client) error) error {
-	if proc == nil || proc.Client == nil {
-		return errNoProcess
-	}
-	return fn(proc.Client)
+	_, err := withClientE(proc, func(c codexsdk.Client) (struct{}, error) { return struct{}{}, fn(c) })
+	return err
 }
 
 func toLifecycleAgentInfos(items []codexsdk.AgentInfo) []lifecyclesvc.AgentInfo {

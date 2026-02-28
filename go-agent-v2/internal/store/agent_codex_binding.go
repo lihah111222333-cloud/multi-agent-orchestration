@@ -11,7 +11,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 )
 
-// AgentCodexBinding is a 1:1 binding record.
 type AgentCodexBinding struct {
 	AgentID       string `json:"agent_id"`
 	CodexThreadID string `json:"codex_thread_id"`
@@ -20,7 +19,6 @@ type AgentCodexBinding struct {
 	UpdatedAt     int64  `json:"updated_at"`
 }
 
-// AgentCodexBindingStore reads/writes agent_codex_binding.
 type AgentCodexBindingStore struct{ BaseStore }
 
 func NewAgentCodexBindingStore(pool *pgxpool.Pool) *AgentCodexBindingStore {
@@ -29,11 +27,8 @@ func NewAgentCodexBindingStore(pool *pgxpool.Pool) *AgentCodexBindingStore {
 
 const acbCols = "agent_id, codex_thread_id, rollout_path, created_at, updated_at"
 
-// Bind creates a 1:1 binding and treats codex_thread_id as immutable.
 func (s *AgentCodexBindingStore) Bind(ctx context.Context, agentID, codexThreadID, rolloutPath string) error {
-	agentID = strings.TrimSpace(agentID)
-	codexThreadID = strings.TrimSpace(codexThreadID)
-	rolloutPath = strings.TrimSpace(rolloutPath)
+	agentID, codexThreadID, rolloutPath = strings.TrimSpace(agentID), strings.TrimSpace(codexThreadID), strings.TrimSpace(rolloutPath)
 	if agentID == "" || codexThreadID == "" {
 		return fmt.Errorf("bind requires non-empty agent_id and codex_thread_id")
 	}
@@ -50,20 +45,20 @@ func (s *AgentCodexBindingStore) Bind(ctx context.Context, agentID, codexThreadI
 			agentID, codexThreadID, rolloutPath, now, now)
 		return err
 	}
-	existingThreadID := strings.TrimSpace(existing.CodexThreadID)
-	if existingThreadID != codexThreadID {
+	switch existingThreadID := strings.TrimSpace(existing.CodexThreadID); {
+	case existingThreadID != codexThreadID:
 		return fmt.Errorf("immutable binding violation: agent %q already bound to %q, cannot bind to %q",
 			agentID, existingThreadID, codexThreadID)
-	}
-	if rolloutPath == "" || rolloutPath == strings.TrimSpace(existing.RolloutPath) {
+	case rolloutPath == "" || rolloutPath == strings.TrimSpace(existing.RolloutPath):
 		return nil
-	}
-	_, err = s.pool.Exec(ctx,
-		`UPDATE agent_codex_binding
+	default:
+		_, err = s.pool.Exec(ctx,
+			`UPDATE agent_codex_binding
 		 SET rollout_path = $1, updated_at = $2
 		 WHERE agent_id = $3 AND codex_thread_id = $4`,
-		rolloutPath, time.Now().Unix(), agentID, codexThreadID)
-	return err
+			rolloutPath, time.Now().Unix(), agentID, codexThreadID)
+		return err
+	}
 }
 
 func (s *AgentCodexBindingStore) Unbind(ctx context.Context, agentID string) error {
@@ -72,7 +67,6 @@ func (s *AgentCodexBindingStore) Unbind(ctx context.Context, agentID string) err
 	return err
 }
 
-// FindByAgentID loads the binding for an agent_id.
 func (s *AgentCodexBindingStore) FindByAgentID(ctx context.Context, agentID string) (*AgentCodexBinding, error) {
 	agentID = strings.TrimSpace(agentID)
 	rows, err := s.pool.Query(ctx,
@@ -83,7 +77,6 @@ func (s *AgentCodexBindingStore) FindByAgentID(ctx context.Context, agentID stri
 	return collectOne[AgentCodexBinding](rows)
 }
 
-// FindBindingByAgentID returns the lightweight binding contract used by runtime services.
 func (s *AgentCodexBindingStore) FindBindingByAgentID(ctx context.Context, agentID string) (*agentcore.Binding, error) {
 	binding, err := s.FindByAgentID(ctx, agentID)
 	if err != nil || binding == nil {
@@ -92,7 +85,6 @@ func (s *AgentCodexBindingStore) FindBindingByAgentID(ctx context.Context, agent
 	return &agentcore.Binding{CodexThreadID: strings.TrimSpace(binding.CodexThreadID)}, nil
 }
 
-// ListAll returns all bindings.
 func (s *AgentCodexBindingStore) ListAll(ctx context.Context) ([]AgentCodexBinding, error) {
 	rows, err := s.pool.Query(ctx,
 		"SELECT "+acbCols+" FROM agent_codex_binding ORDER BY created_at DESC")

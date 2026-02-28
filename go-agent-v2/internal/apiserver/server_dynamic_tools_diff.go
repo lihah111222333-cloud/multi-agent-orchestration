@@ -6,8 +6,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/diffsdk/difftracker"
 )
 
-type dynamicToolDiffTracker = difftracker.Tracker
-
 var shouldCaptureDynamicToolDiff = difftracker.ShouldCaptureDynamicToolDiff
 var listRepoDirtyPaths = difftracker.ListRepoDirtyPaths
 var captureWorkingTreeFileSnapshots = difftracker.CaptureWorkingTreeFileSnapshots
@@ -17,11 +15,11 @@ func resolveDynamicToolDiffRepoRoot(s *Server, agentID string, args map[string]a
 	return difftracker.ResolveDynamicToolDiffRepoRoot(agentID, args, func(id string) string { return getAgentWorkDirState(s, id) })
 }
 
-func beginDynamicToolDiffTracker(s *Server, agentID, tool string, args map[string]any) dynamicToolDiffTracker {
+func beginDynamicToolDiffTracker(s *Server, agentID, tool string, args map[string]any) difftracker.Tracker {
 	return difftracker.BeginTracker(agentID, tool, args, func(id string) string { return getAgentWorkDirState(s, id) })
 }
 
-func maybeEmitDynamicToolDiffUpdate(s *Server, threadID, codexThreadID, tool string, tracker dynamicToolDiffTracker) {
+func maybeEmitDynamicToolDiffUpdate(s *Server, threadID, codexThreadID, tool string, tracker difftracker.Tracker) {
 	if s == nil {
 		return
 	}

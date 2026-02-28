@@ -22,13 +22,9 @@ type commandExecParams struct {
 	Cwd  string            `json:"cwd,omitempty"`
 	Env  map[string]string `json:"env,omitempty"`
 }
-
 var commandBlocklist = map[string]bool{"rm": true, "rmdir": true, "sudo": true, "su": true, "chmod": true, "chown": true, "mkfs": true, "dd": true, "kill": true, "killall": true, "pkill": true, "shutdown": true, "reboot": true, "passwd": true, "useradd": true, "userdel": true, "mount": true, "umount": true, "fdisk": true, "iptables": true, "curl": true, "wget": true}
-
 const maxOutputSize = 1 << 20 // 1MB 输出限制
-
 var readCommands = map[string]bool{"cat": true, "head": true, "tail": true, "less": true, "more": true, "bat": true, "grep": true, "rg": true, "ag": true, "find": true, "fd": true, "tree": true, "wc": true, "sed": true, "awk": true}
-
 const lspPreferenceHint = "[LSP提示] 你有 7 个合并后的 LSP 工具：`lsp_file` `lsp_inspect` `lsp_xref` `lsp_grep` `lsp_structure` `lsp_edit` `lsp_completion`。请优先使用 LSP 工具而非命令行读取代码。\n---\n"
 
 type commandExecResponse struct {
@@ -152,52 +148,36 @@ func newSkillsManager(s *Server) *skillsruntime.Manager {
 }
 
 func skillsManagerDelegate(s *Server) *skillsruntime.Manager {
-	if s == nil || s.skillsMgr == nil {
-		return newSkillsManager(s)
+	if s != nil && s.skillsMgr != nil {
+		return s.skillsMgr
 	}
-	return s.skillsMgr
+	return newSkillsManager(s)
 }
 
-func skillsList(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
-	return skillsManagerDelegate(s).SkillsList(ctx)
-}
-
-func appList(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
-	return skillsManagerDelegate(s).AppList(ctx)
-}
-
-func skillsLocalReadTyped(s *Server, ctx context.Context, p skillsLocalReadParams) (any, error) {
-	return skillsManagerDelegate(s).SkillsLocalRead(ctx, skillsruntime.SkillsLocalReadParams(p))
-}
-
+func skillsList(s *Server, ctx context.Context, _ json.RawMessage) (any, error)                  { return skillsManagerDelegate(s).SkillsList(ctx) }
+func appList(s *Server, ctx context.Context, _ json.RawMessage) (any, error)                     { return skillsManagerDelegate(s).AppList(ctx) }
+func skillsLocalReadTyped(s *Server, ctx context.Context, p skillsLocalReadParams) (any, error) { return skillsManagerDelegate(s).SkillsLocalRead(ctx, skillsruntime.SkillsLocalReadParams(p)) }
 func skillsLocalImportDirTyped(s *Server, ctx context.Context, p skillsLocalImportDirParams) (any, error) {
 	return skillsManagerDelegate(s).SkillsLocalImportDir(ctx, skillsruntime.SkillsLocalImportDirParams(p))
 }
-
 func skillsLocalDeleteTyped(s *Server, ctx context.Context, p skillsLocalDeleteParams) (any, error) {
 	return skillsManagerDelegate(s).SkillsLocalDelete(ctx, skillsruntime.SkillsLocalDeleteParams(p))
 }
-
 func skillsMatchPreviewTyped(s *Server, ctx context.Context, p skillsMatchPreviewParams) (any, error) {
 	return skillsManagerDelegate(s).SkillsMatchPreview(ctx, skillsruntime.SkillsMatchPreviewParams(p))
 }
-
 func skillsConfigReadTyped(s *Server, ctx context.Context, p skillsConfigReadParams) (any, error) {
 	return skillsManagerDelegate(s).SkillsConfigRead(ctx, skillsruntime.SkillsConfigReadParams(p))
 }
-
 func skillsConfigWriteTyped(s *Server, ctx context.Context, p skillsConfigWriteParams) (any, error) {
 	return skillsManagerDelegate(s).SkillsConfigWrite(ctx, skillsruntime.SkillsConfigWriteParams(p))
 }
-
 func skillsSummaryWriteTyped(s *Server, ctx context.Context, p skillsSummaryWriteParams) (any, error) {
 	return skillsManagerDelegate(s).SkillsSummaryWrite(ctx, skillsruntime.SkillsSummaryWriteParams(p))
 }
-
 func skillsRemoteReadTyped(s *Server, ctx context.Context, p skillsRemoteReadParams) (any, error) {
 	return skillsManagerDelegate(s).SkillsRemoteRead(ctx, skillsruntime.SkillsRemoteReadParams(p))
 }
-
 func skillsRemoteWriteTyped(s *Server, ctx context.Context, p skillsRemoteWriteParams) (any, error) {
 	return skillsManagerDelegate(s).SkillsRemoteWrite(ctx, skillsruntime.SkillsRemoteWriteParams(p))
 }

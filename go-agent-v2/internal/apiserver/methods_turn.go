@@ -45,9 +45,7 @@ type turnStartResponse struct {
 }
 
 func toCodexTurnInputs(input []UserInput) []contracts.TurnInput {
-	if len(input) == 0 {
-		return nil
-	}
+	if len(input) == 0 { return nil }
 	return mapSlice(input, func(item UserInput) contracts.TurnInput { return contracts.TurnInput(item) })
 }
 
@@ -85,9 +83,10 @@ func (s *Server) turnSteerTyped(_ context.Context, p turnSteerParams) (any, erro
 	})
 }
 
-type turnInterruptParams = threadIDParams
-
-type turnForceCompleteParams = threadIDParams
+type (
+	turnInterruptParams     = threadIDParams
+	turnForceCompleteParams = threadIDParams
+)
 
 type threadRealtimeStartParams struct {
 	threadIDParams
@@ -157,9 +156,7 @@ func buildReviewStartArgs(p reviewStartParams) (string, error) {
 }
 
 func validateReviewStartParams(p reviewStartParams) (string, error) {
-	if strings.TrimSpace(p.ThreadID) == "" {
-		return "", pkgerr.New("Server.reviewStart", "threadId is required")
-	}
+	if strings.TrimSpace(p.ThreadID) == "" { return "", pkgerr.New("Server.reviewStart", "threadId is required") }
 	return buildReviewStartArgs(p)
 }
 

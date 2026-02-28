@@ -150,6 +150,7 @@ func turnInterrupt(
 	}
 	activeTrackedBefore := hasActiveTrackedTurn != nil && hasActiveTrackedTurn(id)
 	activeBefore := isInterruptActiveState(beforeState)
+	activeHint := activeBefore || activeTrackedBefore
 	fields := func(extra ...any) []any { return append(common.ThreadLogFields(id), extra...) }
 	logger.Info("turn/interrupt: request", fields(
 		"state_before", beforeState,
@@ -180,9 +181,8 @@ func turnInterrupt(
 			logger.Warn("turn/interrupt: send command failed", fields(logger.FieldError, err, logger.FieldDurationMS, durationMS)...)
 			return nil, err
 		}
-
 		if noActiveTurn {
-			if (activeBefore || activeTrackedBefore) && notifyTurnCompleted != nil {
+			if activeHint && notifyTurnCompleted != nil {
 				notifyTurnCompleted(id, "completed", "interrupt_no_active_turn")
 			}
 			logger.Info("turn/interrupt: no active turn",
@@ -190,18 +190,16 @@ func turnInterrupt(
 			)
 			return interruptPayload(false, "no_active_turn", false, beforeState, beforeState, 0, false), nil
 		}
-
 		logger.Info("turn/interrupt: command sent", fields(logger.FieldDurationMS, time.Since(start).Milliseconds())...)
 		if markTrackedTurnInterruptRequested != nil {
 			markTrackedTurnInterruptRequested(id)
 		}
-
 		confirmed := false
 		afterState := beforeState
 		waitedMS := int64(0)
-		observedActive := activeBefore || activeTrackedBefore
+		observedActive := activeHint
 		if waitOutcome != nil {
-			confirmed, afterState, waitedMS, observedActive = waitOutcome(id, 6*time.Second, activeBefore || activeTrackedBefore)
+			confirmed, afterState, waitedMS, observedActive = waitOutcome(id, 6*time.Second, activeHint)
 		}
 		mode := interruptSettleMode(confirmed, afterState)
 		if !observedActive {

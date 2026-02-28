@@ -102,16 +102,11 @@ func handleCodeRun(callCtx ToolCallContext, provider CodeRunProvider, runtime Ag
 	if p.Mode == "" {
 		p.Mode = codeRunModeRun
 	}
-
-	resolvedCallID := util.ResolveCodeRunCallID(callCtx.CallID, callCtx.RequestID)
-
-	if p.Mode == codeRunModeProjectCmd {
-		if dangerPattern := detectDangerous(p.Command); dangerPattern != "" {
-			approved := approvals != nil && approvals.AwaitApproval(callCtx.AgentID, resolvedCallID, p.Mode, p.Command, true)
-			if !approved {
-				writeCodeRunAudit(provider, callCtx.AgentID, p.Language, p.Mode, "denied", 0, 0, p.Code, p.Command, "")
-				return `{"error":"execution denied by user","exit_code":-1}`
-			}
+	if p.Mode == codeRunModeProjectCmd && detectDangerous(p.Command) != "" {
+		resolvedCallID := util.ResolveCodeRunCallID(callCtx.CallID, callCtx.RequestID)
+		if approvals == nil || !approvals.AwaitApproval(callCtx.AgentID, resolvedCallID, p.Mode, p.Command, true) {
+			writeCodeRunAudit(provider, callCtx.AgentID, p.Language, p.Mode, "denied", 0, 0, p.Code, p.Command, "")
+			return `{"error":"execution denied by user","exit_code":-1}`
 		}
 	}
 
@@ -160,7 +155,6 @@ func handleCodeRunTest(callCtx ToolCallContext, provider CodeRunProvider, runtim
 	if err := json.Unmarshal(args, &p); err != nil {
 		return ToolError(err)
 	}
-
 	timeout := parseCodeRunTimeout(p.Timeout)
 
 	result, err := runner.Run(contextOrBackground(callCtx.Ctx), CodeRunRequest{
@@ -249,7 +243,6 @@ func writeCodeRunAudit(provider CodeRunProvider, agentID, language, mode, result
 	if provider == nil || provider.AuditLogger() == nil {
 		return
 	}
-
 	extra := map[string]any{
 		"exit_code":        exitCode,
 		"duration_ms":      durationMS,

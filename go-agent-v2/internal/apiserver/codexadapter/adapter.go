@@ -150,19 +150,17 @@ func (a *Adapter) notify(method string, payload any) {
 }
 
 func (a *Adapter) findBindingByAgentID(ctx context.Context, agentID string) (*store.AgentCodexBinding, error) {
-	bindingStore := a.bindingStore()
-	if bindingStore == nil {
-		return nil, nil
+	if bindingStore := a.bindingStore(); bindingStore != nil {
+		return bindingStore.FindByAgentID(ctx, agentID)
 	}
-	return bindingStore.FindByAgentID(ctx, agentID)
+	return nil, nil
 }
 
 func (a *Adapter) findStatusByAgentID(ctx context.Context, agentID string) (*store.AgentStatus, error) {
-	statusStore := a.statusStore()
-	if statusStore == nil {
-		return nil, nil
+	if statusStore := a.statusStore(); statusStore != nil {
+		return statusStore.Get(ctx, agentID)
 	}
-	return statusStore.Get(ctx, agentID)
+	return nil, nil
 }
 
 func (a *Adapter) storeGetter() func(context.Context, string) (any, error) {

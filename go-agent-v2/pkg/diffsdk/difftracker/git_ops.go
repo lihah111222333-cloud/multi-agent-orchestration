@@ -62,14 +62,12 @@ func CollectPathLines(output string) []string {
 		if path == "" {
 			continue
 		}
-		if len(path) >= 2 && strings.HasPrefix(path, "\"") && strings.HasSuffix(path, "\"") {
-			decoded, err := strconv.Unquote(path)
-			if err == nil {
+		if len(path) >= 2 && path[0] == '"' && path[len(path)-1] == '"' {
+			if decoded, err := strconv.Unquote(path); err == nil {
 				path = decoded
 			}
 		}
-		path = strings.TrimPrefix(strings.TrimPrefix(path, "a/"), "b/")
-		if path != "" {
+		if path = strings.TrimPrefix(strings.TrimPrefix(path, "a/"), "b/"); path != "" {
 			paths = append(paths, path)
 		}
 	}

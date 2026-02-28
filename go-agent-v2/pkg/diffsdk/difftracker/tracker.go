@@ -52,26 +52,24 @@ func (t Tracker) EmitDiffUpdate(threadID, codexThreadID, tool string, emit DiffE
 	if threadID == "" {
 		return
 	}
-
-	afterPaths, err := ListRepoDirtyPaths(t.repoRoot)
-	if err != nil {
-		logger.Debug("dynamic-tool: capture post-dispatch dirty paths failed",
+	logDebug := func(message string, err error) {
+		logger.Debug(message,
 			logger.FieldThreadID, threadID,
 			logger.FieldToolName, tool,
 			logger.FieldPath, t.repoRoot,
 			logger.FieldError, err,
 		)
+	}
+
+	afterPaths, err := ListRepoDirtyPaths(t.repoRoot)
+	if err != nil {
+		logDebug("dynamic-tool: capture post-dispatch dirty paths failed", err)
 		return
 	}
 
 	incrementalDiff, err := BuildIncrementalDiffText(t.repoRoot, t.beforeFileSnapshots, afterPaths)
 	if err != nil {
-		logger.Debug("dynamic-tool: build incremental diff failed",
-			logger.FieldThreadID, threadID,
-			logger.FieldToolName, tool,
-			logger.FieldPath, t.repoRoot,
-			logger.FieldError, err,
-		)
+		logDebug("dynamic-tool: build incremental diff failed", err)
 		return
 	}
 	if incrementalDiff == "" {

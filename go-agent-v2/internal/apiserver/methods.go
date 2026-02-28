@@ -28,9 +28,14 @@ func bindTyped[P any](s *Server, fn func(*Server, context.Context, P) (any, erro
 
 func (s *Server) registerMethods() {
 	noop := noopHandler()
+	registerNoop := func(methods ...string) {
+		for _, method := range methods {
+			s.methods[method] = noop
+		}
+	}
 
 	s.methods["initialize"] = bindRaw(s, initialize)
-	s.methods["initialized"] = noop
+	registerNoop("initialized")
 
 	s.methods["thread/start"] = typedHandler(s.threadStartTyped)
 	s.methods["thread/resume"] = typedHandler(s.threadResumeTyped)
@@ -87,9 +92,11 @@ func (s *Server) registerMethods() {
 	s.methods["review/start"] = typedHandler(s.reviewStartTyped)
 
 	s.methods["fuzzyFileSearch"] = bindTyped(s, fuzzyFileSearchTyped)
-	s.methods["fuzzyFileSearch/sessionStart"] = noop
-	s.methods["fuzzyFileSearch/sessionUpdate"] = noop
-	s.methods["fuzzyFileSearch/sessionStop"] = noop
+	registerNoop(
+		"fuzzyFileSearch/sessionStart",
+		"fuzzyFileSearch/sessionUpdate",
+		"fuzzyFileSearch/sessionStop",
+	)
 
 	s.methods["skills/list"] = bindRaw(s, skillsList)
 	s.methods["skills/local/read"] = bindTyped(s, skillsLocalReadTyped)
@@ -123,7 +130,7 @@ func (s *Server) registerMethods() {
 	s.methods["account/read"] = bindRaw(s, accountRead)
 	s.methods["account/rateLimits/read"] = bindRaw(s, accountRateLimitsRead)
 
-	s.methods["mcpServer/oauth/login"] = noop
+	registerNoop("mcpServer/oauth/login")
 	s.methods["config/mcpServer/reload"] = bindRaw(s, mcpServerReload)
 	s.methods["mcpServerStatus/list"] = bindRaw(s, mcpServerStatusList)
 	s.methods["windowsSandbox/setupStart"] = stubHandler(map[string]any{})
@@ -131,7 +138,7 @@ func (s *Server) registerMethods() {
 
 	s.methods["command/exec"] = bindTyped(s, commandExecTyped)
 	s.methods["approval/respond"] = bindTyped(s, approvalRespondTyped)
-	s.methods["feedback/upload"] = noop
+	registerNoop("feedback/upload")
 
 	s.methods["thread/undo"] = func(ctx context.Context, params json.RawMessage) (any, error) {
 		return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/undo")
@@ -177,23 +184,27 @@ func (s *Server) registerMethods() {
 	s.methods["debug/runtime"] = bindRaw(s, debugRuntime)
 	s.methods["debug/gc"] = bindRaw(s, debugForceGC)
 
-	s.methods["workspace-root-options"] = stubHandler(map[string]any{"roots": []any{}, "labels": map[string]any{}})
-	s.methods["codex-home"] = stubHandler(map[string]any{"codexHome": ""})
-	s.methods["git-origins"] = stubHandler(map[string]any{"origins": []any{}})
-	s.methods["mcp-servers"] = stubHandler(map[string]any{"servers": []any{}})
-	s.methods["platform-info"] = stubHandler(map[string]any{"platform": runtime.GOOS, "arch": runtime.GOARCH})
-	s.methods["open-in-targets"] = stubHandler(map[string]any{"targets": []any{}})
-	s.methods["codex-agents-md"] = stubHandler(map[string]any{})
-	s.methods["local-environments/list"] = stubHandler(map[string]any{"environments": []any{}})
-	s.methods["worktrees/list"] = stubHandler(map[string]any{"worktrees": []any{}})
-	s.methods["tasks/list"] = stubHandler([]any{})
-	s.methods["tasks/get"] = stubHandler(map[string]any{})
-	s.methods["inbox-items"] = stubHandler(map[string]any{"items": []any{}})
-	s.methods["inbox-items/get"] = stubHandler(map[string]any{})
-	s.methods["pending-automation-runs"] = stubHandler(map[string]any{"runs": []any{}})
-	s.methods["mcp/status"] = stubHandler(map[string]any{})
-	s.methods["config/read-all"] = stubHandler(map[string]any{})
-	s.methods["diff/get"] = stubHandler(map[string]any{})
+	for method, payload := range map[string]any{
+		"workspace-root-options":  map[string]any{"roots": []any{}, "labels": map[string]any{}},
+		"codex-home":              map[string]any{"codexHome": ""},
+		"git-origins":             map[string]any{"origins": []any{}},
+		"mcp-servers":             map[string]any{"servers": []any{}},
+		"platform-info":           map[string]any{"platform": runtime.GOOS, "arch": runtime.GOARCH},
+		"open-in-targets":         map[string]any{"targets": []any{}},
+		"codex-agents-md":         map[string]any{},
+		"local-environments/list": map[string]any{"environments": []any{}},
+		"worktrees/list":          map[string]any{"worktrees": []any{}},
+		"tasks/list":              []any{},
+		"tasks/get":               map[string]any{},
+		"inbox-items":             map[string]any{"items": []any{}},
+		"inbox-items/get":         map[string]any{},
+		"pending-automation-runs": map[string]any{"runs": []any{}},
+		"mcp/status":              map[string]any{},
+		"config/read-all":         map[string]any{},
+		"diff/get":                map[string]any{},
+	} {
+		s.methods[method] = stubHandler(payload)
+	}
 
 	if s.cfg != nil && s.cfg.DisableOffline52Methods {
 		for _, method := range offline52MethodList() {

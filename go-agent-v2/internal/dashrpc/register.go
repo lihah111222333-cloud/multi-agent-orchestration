@@ -10,16 +10,16 @@ import (
 )
 
 func clampLimit(v, defaultVal int) int {
-	if v <= 0 || v > 2000 {
-		return defaultVal
+	if v > 0 && v <= 2000 {
+		return v
 	}
-	return v
+	return defaultVal
 }
 
 func typedMethod[P any](fn func(ctx context.Context, p P) (any, error)) MethodHandler {
 	return func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var p P
-		if raw != nil {
+		if len(raw) > 0 {
 			if err := json.Unmarshal(raw, &p); err != nil {
 				return nil, apperrors.Wrap(err, "TypedHandler", "invalid params")
 			}
@@ -29,12 +29,16 @@ func typedMethod[P any](fn func(ctx context.Context, p P) (any, error)) MethodHa
 }
 
 func listHandler[P any](provider DashboardProvider, logKey, responseKey string, query func(ctx context.Context, provider DashboardProvider, p P) (any, bool, error)) MethodHandler {
-	return typedMethod(func(_ context.Context, p P) (any, error) {
+	return typedMethod(func(ctx context.Context, p P) (any, error) {
+		empty := map[string]any{responseKey: []any{}}
 		if provider == nil {
-			return map[string]any{responseKey: []any{}}, nil
+			return empty, nil
+		}
+		if ctx == nil {
+			ctx = context.Background()
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 
 		list, ok, err := query(ctx, provider, p)
@@ -42,7 +46,7 @@ func listHandler[P any](provider DashboardProvider, logKey, responseKey string, 
 			if err != nil {
 				logger.Warn("dashboard/"+logKey+" failed", logger.FieldError, err)
 			}
-			return map[string]any{responseKey: []any{}}, nil
+			return empty, nil
 		}
 		return map[string]any{responseKey: list}, nil
 	})
@@ -164,25 +168,16 @@ func Register(register RegisterFn, provider DashboardProvider, _ MethodCaller) {
 			return dp.ListBusLogs(ctx, p.Category, p.Severity, p.Keyword, clampLimit(p.Limit, 100))
 		}))
 
-	register("dashboard/skills", func(_ context.Context, _ json.RawMessage) (any, error) {
-		if provider == nil {
-			return map[string]any{"skills": []any{}}, nil
-		}
-		list, ok, err := provider.ListSkills()
-		if !ok || err != nil {
-			if err != nil {
-				logger.Warn("dashboard/skills failed", logger.FieldError, err)
-			}
-			return map[string]any{"skills": []any{}}, nil
-		}
-		return map[string]any{"skills": list}, nil
-	})
+	register("dashboard/skills", listHandler(provider, "skills", "skills",
+		func(_ context.Context, dp DashboardProvider, _ struct{}) (any, bool, error) {
+			return dp.ListSkills()
+		}))
 
 	register("dashboard/dagDetail", dagDetailHandler(provider))
 }
 
 func dagDetailHandler(provider DashboardProvider) MethodHandler {
-	return func(_ context.Context, params json.RawMessage) (any, error) {
+	return func(ctx context.Context, params json.RawMessage) (any, error) {
 		if provider == nil || !provider.HasDAGStore() {
 			return nil, apperrors.New("Server.dashDAGDetail", "dag store not initialized")
 		}
@@ -196,8 +191,11 @@ func dagDetailHandler(provider DashboardProvider) MethodHandler {
 		if p.DAGKey == "" {
 			return nil, apperrors.New("Server.dashDAGDetail", "dagKey is required")
 		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		dag, nodes, ok, err := provider.GetDAGDetail(ctx, p.DAGKey)
 		if !ok {

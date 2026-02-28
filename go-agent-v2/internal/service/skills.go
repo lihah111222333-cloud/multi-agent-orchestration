@@ -111,10 +111,6 @@ func skillDisplayName(storedName string, meta skillMetadata, storageID string) s
 	return storageID
 }
 
-func matchSkillName(a, b string) bool {
-	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
-}
-
 func (s *SkillService) readSkillIndex(dirPath string) skillIndex {
 	path := filepath.Join(dirPath, skillIndexFile)
 	data, err := os.ReadFile(path)
@@ -203,7 +199,7 @@ func (s *SkillService) resolveSkillRecord(name string) (skillRecord, error) {
 			case 2:
 				candidate = record.Meta.Name
 			}
-			if matchSkillName(candidate, requested) {
+			if strings.EqualFold(strings.TrimSpace(candidate), requested) {
 				return record, nil
 			}
 		}
@@ -313,7 +309,10 @@ func (s *SkillService) UpdateSkillSummary(name, summary string) (skillPath strin
 	if err := os.WriteFile(record.SkillPath, []byte(updated), 0o644); err != nil {
 		return "", "", err
 	}
-	resolvedName = resolvedSkillName(record, name)
+	resolvedName = skillDisplayName(record.StoredName, record.Meta, record.ID)
+	if resolvedName == "" {
+		resolvedName = strings.TrimSpace(name)
+	}
 	return record.SkillPath, resolvedName, nil
 }
 
@@ -325,15 +324,11 @@ func (s *SkillService) DeleteSkill(name string) (resolvedName string, dir string
 	if err := os.RemoveAll(record.DirPath); err != nil {
 		return "", "", err
 	}
-	resolvedName = resolvedSkillName(record, name)
-	return resolvedName, record.DirPath, nil
-}
-
-func resolvedSkillName(record skillRecord, fallback string) string {
-	if resolved := skillDisplayName(record.StoredName, record.Meta, record.ID); resolved != "" {
-		return resolved
+	resolvedName = skillDisplayName(record.StoredName, record.Meta, record.ID)
+	if resolvedName == "" {
+		resolvedName = strings.TrimSpace(name)
 	}
-	return strings.TrimSpace(fallback)
+	return resolvedName, record.DirPath, nil
 }
 
 func (s *SkillService) ImportSkillDirectory(sourceDir, name string) (SkillImportResult, error) {

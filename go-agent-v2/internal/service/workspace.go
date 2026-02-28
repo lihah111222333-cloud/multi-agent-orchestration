@@ -123,17 +123,6 @@ func NewWorkspaceManager(
 
 func (m *WorkspaceManager) RootDir() string { return m.rootDir }
 
-func (m *WorkspaceManager) saveFileOrLog(ctx context.Context, file *store.WorkspaceRunFile) {
-	if _, err := m.runs.SaveFile(ctx, file); err != nil {
-		logger.Warn("workspace: save file state failed",
-			logger.FieldRunKey, file.RunKey,
-			logger.FieldPath, file.RelativePath,
-			logger.FieldStatus, file.State,
-			logger.FieldError, err,
-		)
-	}
-}
-
 func (m *WorkspaceManager) updateRunStatusOrLog(ctx context.Context, runKey, status, updatedBy string, meta map[string]any) {
 	if _, err := m.runs.UpdateRunStatus(ctx, runKey, status, updatedBy, meta); err != nil {
 		logger.Warn("workspace: update run status failed",
@@ -151,7 +140,14 @@ func (m *WorkspaceManager) saveFileAndRecord(
 	counter *int,
 	action, reason string,
 ) {
-	m.saveFileOrLog(ctx, file)
+	if _, err := m.runs.SaveFile(ctx, file); err != nil {
+		logger.Warn("workspace: save file state failed",
+			logger.FieldRunKey, file.RunKey,
+			logger.FieldPath, file.RelativePath,
+			logger.FieldStatus, file.State,
+			logger.FieldError, err,
+		)
+	}
 	recordMergeResult(result, counter, file.RelativePath, action, reason)
 }
 

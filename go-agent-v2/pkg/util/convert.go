@@ -1,10 +1,3 @@
-// convert.go — 统一 any→string / any→[]string 转换工具。
-//
-// 消除 4 处重复实现:
-//   - apiserver.asString
-//   - codex.trimmedStringValue
-//   - uistate.extractStringList
-//   - orchestrator.extractStringSlice
 package util
 
 import (
@@ -12,9 +5,6 @@ import (
 	"strings"
 )
 
-// AsString 将 any 安全转为 trimmed string。
-//
-// 支持 string / fmt.Stringer，其他类型返回 ""。
 func AsString(value any) string {
 	switch v := value.(type) {
 	case string:
@@ -26,16 +16,12 @@ func AsString(value any) string {
 	}
 }
 
-// AsStringSlice 将 any 安全转为 []string（去空、trim）。
-//
-// 支持 []string / []any，其他类型返回 nil。
 func AsStringSlice(raw any) []string {
 	switch value := raw.(type) {
 	case []string:
 		items := make([]string, 0, len(value))
 		for _, item := range value {
-			text := strings.TrimSpace(item)
-			if text != "" {
+			if text := strings.TrimSpace(item); text != "" {
 				items = append(items, text)
 			}
 		}
@@ -44,9 +30,8 @@ func AsStringSlice(raw any) []string {
 		items := make([]string, 0, len(value))
 		for _, item := range value {
 			if text, ok := item.(string); ok {
-				trimmed := strings.TrimSpace(text)
-				if trimmed != "" {
-					items = append(items, trimmed)
+				if text = strings.TrimSpace(text); text != "" {
+					items = append(items, text)
 				}
 			}
 		}
@@ -56,15 +41,10 @@ func AsStringSlice(raw any) []string {
 	}
 }
 
-// ExtractFirstString 从 payload 中按优先级提取第一个非空字符串字段。
-//
-// 用于统一 apiserver.extractFirstString 和 uistate.extractFirstString。
 func ExtractFirstString(payload map[string]any, keys ...string) string {
 	for _, key := range keys {
-		if v, ok := payload[key]; ok {
-			if s, ok := v.(string); ok && s != "" {
-				return s
-			}
+		if s, ok := payload[key].(string); ok && s != "" {
+			return s
 		}
 	}
 	return ""

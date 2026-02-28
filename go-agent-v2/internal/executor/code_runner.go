@@ -22,10 +22,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-// ========================================
-// 常量
-// ========================================
-
 const (
 	// maxConcurrentRuns 信号量容量 — 单实例最大并发执行数。
 	maxConcurrentRuns = 3
@@ -40,19 +36,11 @@ const (
 	maxAuditPayload = 4096
 )
 
-// ========================================
-// 执行模式
-// ========================================
-
 const (
 	ModeRun        = "run"         // 直接执行代码片段
 	ModeTest       = "test"        // go test -run
 	ModeProjectCmd = "project_cmd" // sh -c (高风险命令审批)
 )
-
-// ========================================
-// 类型定义
-// ========================================
 
 // CodeRunner 代码块执行引擎。
 //
@@ -91,10 +79,6 @@ type RunResult struct {
 	Mode      string        `json:"mode"`
 	Truncated bool          `json:"truncated"` // 输出是否被截断
 }
-
-// ========================================
-// 构造
-// ========================================
 
 // NewCodeRunner 创建代码执行引擎。
 //
@@ -165,10 +149,6 @@ func (r *CodeRunner) Cleanup() {
 	}
 }
 
-// ========================================
-// Run — 统一入口
-// ========================================
-
 // Run 执行代码块。信号量限流 → 按 Mode 分发。
 func (r *CodeRunner) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	// 超时兜底
@@ -223,10 +203,6 @@ func (r *CodeRunner) Run(ctx context.Context, req RunRequest) (*RunResult, error
 	return result, nil
 }
 
-// ========================================
-// 语言分发
-// ========================================
-
 // dispatchRun 按语言分发 run 模式请求。
 func (r *CodeRunner) dispatchRun(ctx context.Context, req RunRequest) (*RunResult, error) {
 	lang := strings.ToLower(strings.TrimSpace(req.Language))
@@ -241,10 +217,6 @@ func (r *CodeRunner) dispatchRun(ctx context.Context, req RunRequest) (*RunResul
 		return nil, pkgerr.Newf("CodeRunner.Run", "unsupported language: %s", req.Language)
 	}
 }
-
-// ========================================
-// Go 执行
-// ========================================
 
 // runGo 执行 Go 代码片段: MkdirTemp → main.go → go run。
 func (r *CodeRunner) runGo(ctx context.Context, req RunRequest) (*RunResult, error) {
@@ -289,7 +261,7 @@ func (r *CodeRunner) runGoTest(ctx context.Context, req RunRequest) (*RunResult,
 		pkg = "./..."
 	}
 
-	pattern := buildGoTestPattern(req.TestFunc)
+	pattern := "^" + regexp.QuoteMeta(strings.TrimSpace(req.TestFunc)) + "$"
 	workDir := r.workDir
 	if req.WorkDir != "" {
 		workDir = req.WorkDir
@@ -304,14 +276,6 @@ func (r *CodeRunner) runGoTest(ctx context.Context, req RunRequest) (*RunResult,
 		Truncated: truncated,
 	}, nil
 }
-
-func buildGoTestPattern(testFunc string) string {
-	return "^" + regexp.QuoteMeta(strings.TrimSpace(testFunc)) + "$"
-}
-
-// ========================================
-// JavaScript / TypeScript 执行
-// ========================================
 
 // runJS 执行 JavaScript 代码片段: MkdirTemp → script.js → node。
 func (r *CodeRunner) runJS(ctx context.Context, req RunRequest) (*RunResult, error) {
@@ -378,10 +342,6 @@ func (r *CodeRunner) runTS(ctx context.Context, req RunRequest) (*RunResult, err
 	}, nil
 }
 
-// ========================================
-// Project Command 执行
-// ========================================
-
 // runProjectCmd 执行 shell 命令 (高风险命令由上层审批)。
 //
 // 审批由上层 apiserver 处理, 此处仅负责执行。
@@ -405,10 +365,6 @@ func (r *CodeRunner) runProjectCmd(ctx context.Context, req RunRequest) (*RunRes
 		Truncated: truncated,
 	}, nil
 }
-
-// ========================================
-// wrapGoMain — 自动包裹 Go main 函数
-// ========================================
 
 // importHintRe 匹配代码中形如 pkgName.Identifier 的包引用。
 var importHintRe = regexp.MustCompile(`\b([a-z][a-z0-9]*)\.[A-Z]`)
@@ -509,10 +465,6 @@ func wrapGoMain(code string) string {
 	return sb.String()
 }
 
-// ========================================
-// execCommand — 进程管理核心
-// ========================================
-
 // execCommand 执行外部命令, 返回聚合输出、退出码和是否截断。
 //
 // 安全:
@@ -542,7 +494,6 @@ func (r *CodeRunner) execCommand(ctx context.Context, timeout time.Duration, dir
 	cmd.Stderr = lw
 
 	err := cmd.Run()
-	exitCode = 0
 
 	if err != nil {
 		if execCtx.Err() == context.DeadlineExceeded {
@@ -569,10 +520,6 @@ func (r *CodeRunner) killProcessGroup(cmd *exec.Cmd) {
 		logger.Debug("code-runner: kill process group failed", logger.FieldPID, cmd.Process.Pid, logger.FieldError, err)
 	}
 }
-
-// ========================================
-// 安全校验
-// ========================================
 
 // validateWorkDir 校验自定义工作目录是否在项目根内。
 //
@@ -629,10 +576,6 @@ func (r *CodeRunner) validateWorkDir(dir string) error {
 func DetectDangerous(command string) string {
 	return detectDangerous(command)
 }
-
-// ========================================
-// 工具函数
-// ========================================
 
 // commandExists 检测命令是否在 PATH 中可用。
 func commandExists(name string) bool {

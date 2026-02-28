@@ -22,10 +22,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-// ========================================
-// 常量 (对应 Python 模块级常量)
-// ========================================
-
 const (
 	defaultTimeoutSec = 240
 	minTimeoutSec     = 1
@@ -57,10 +53,6 @@ const runCols = `id, card_key, requested_by, params, rendered_command, risk_leve
 	status, requires_review, interaction_id, output, error, exit_code,
 	created_at, updated_at, executed_at`
 
-// ========================================
-// CommandCardExecutor
-// ========================================
-
 // CommandCardExecutor 命令卡执行器。
 type CommandCardExecutor struct {
 	pool     *pgxpool.Pool
@@ -72,10 +64,6 @@ type CommandCardExecutor struct {
 func NewCommandCardExecutor(pool *pgxpool.Pool, cards *store.CommandCardStore, audit *store.AuditLogStore) *CommandCardExecutor {
 	return &CommandCardExecutor{pool: pool, cards: cards, auditLog: audit}
 }
-
-// ========================================
-// Prepare — 渲染并创建运行实例 (对应 Python prepare_command_card_run)
-// ========================================
 
 // PrepareResult 准备结果。
 type PrepareResult struct {
@@ -167,10 +155,6 @@ func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, param
 	}, nil
 }
 
-// ========================================
-// Review — 审批/拒绝 (对应 Python review_command_card_run)
-// ========================================
-
 // ReviewResult 审批结果。
 type ReviewResult struct {
 	OK      bool                  `json:"ok"`
@@ -235,10 +219,6 @@ func (e *CommandCardExecutor) Review(ctx context.Context, runID int, decision, r
 
 	return &ReviewResult{OK: true, Run: updated}, nil
 }
-
-// ========================================
-// Execute — 实际执行命令 (对应 Python execute_command_card_run 的 subprocess 部分)
-// ========================================
 
 // ExecResult 执行结果。
 type ExecResult struct {
@@ -354,7 +334,6 @@ func runShellCommand(ctx context.Context, command string, timeoutSec int) (outpu
 	cmd.Stderr = util.NewLimitedWriter(&stderr, maxOutputLim)
 
 	execErr := cmd.Run()
-	exitCode = 0
 	if execErr != nil {
 		if exitErr, ok := execErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
@@ -372,10 +351,6 @@ func runShellCommand(ctx context.Context, command string, timeoutSec int) (outpu
 	}
 	return output, exitCode, execErr
 }
-
-// ========================================
-// RunOne — 一站式执行 (对应 Python execute_command_card)
-// ========================================
 
 // RunOneOpts 一站式执行参数。
 type RunOneOpts struct {
@@ -401,7 +376,6 @@ func (e *CommandCardExecutor) RunOne(ctx context.Context, cardKey string, params
 	}
 
 	run := prepared.Run
-	runID := run.ID
 
 	// 需要审批的情况
 	if prepared.NeedsReview {
@@ -424,7 +398,7 @@ func (e *CommandCardExecutor) RunOne(ctx context.Context, cardKey string, params
 		if reviewer == "" {
 			reviewer = requestedBy
 		}
-		reviewed, reviewErr := e.Review(ctx, runID, "approved", reviewer, opts.ReviewNote)
+		reviewed, reviewErr := e.Review(ctx, run.ID, DecisionApproved, reviewer, opts.ReviewNote)
 		if reviewErr != nil {
 			return nil, reviewErr
 		}
@@ -433,12 +407,8 @@ func (e *CommandCardExecutor) RunOne(ctx context.Context, cardKey string, params
 		}
 	}
 
-	return e.Execute(ctx, runID, requestedBy, opts.TimeoutSec)
+	return e.Execute(ctx, run.ID, requestedBy, opts.TimeoutSec)
 }
-
-// ========================================
-// GetRun / ListRuns — 查询运行记录
-// ========================================
 
 // GetRun 获取单条运行记录 (对应 Python get_command_card_run)。
 func (e *CommandCardExecutor) GetRun(ctx context.Context, runID int) (*store.CommandCardRun, error) {
@@ -463,10 +433,6 @@ func (e *CommandCardExecutor) ListRuns(ctx context.Context, cardKey, status, req
 	}
 	return store.CollectRowsExported[store.CommandCardRun](rows)
 }
-
-// ========================================
-// RecoverStaleRuns — 恢复超时任务 (对应 Python _recover_stale_runs)
-// ========================================
 
 // RecoverStaleRuns 恢复因崩溃卡在 running 状态的任务 (对应 Python _recover_stale_runs)。
 func (e *CommandCardExecutor) RecoverStaleRuns(ctx context.Context, timeoutSec int) (int64, error) {
@@ -494,10 +460,6 @@ func (e *CommandCardExecutor) RecoverStaleRuns(ctx context.Context, timeoutSec i
 	}
 	return count, nil
 }
-
-// ========================================
-// 内部工具 (DRY: 共享逻辑)
-// ========================================
 
 // renderTemplate 渲染命令模板 (对应 Python _render_template)。
 func renderTemplate(tmpl string, params map[string]string) (string, error) {

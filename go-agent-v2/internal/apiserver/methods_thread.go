@@ -55,18 +55,14 @@ func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any
 	}, nil
 }
 
-type threadIDParams struct {
-	ThreadID string `json:"threadId"`
-}
+type threadIDParams struct{ ThreadID string `json:"threadId"` }
 
 type threadForkParams struct {
 	ThreadID  string `json:"threadId"`
 	TurnIndex *int   `json:"turnIndex,omitempty"`
 }
 
-type threadForkResponse struct {
-	Thread threadInfo `json:"thread"`
-}
+type threadForkResponse struct{ Thread threadInfo `json:"thread"` }
 
 func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, error) {
 	result, err := s.codexAdapter.ThreadFork(strings.TrimSpace(p.ThreadID))
@@ -154,9 +150,7 @@ func (s *Server) threadList(ctx context.Context, params json.RawMessage) (any, e
 }
 
 func filterThreadsByArchived(threads []contracts.ThreadListItem, params json.RawMessage) []contracts.ThreadListItem {
-	var p struct {
-		Archived *bool `json:"archived,omitempty"`
-	}
+	var p struct{ Archived *bool `json:"archived,omitempty"` }
 	_ = json.Unmarshal(params, &p)
 	if p.Archived == nil {
 		return threads

@@ -26,7 +26,6 @@ func bindTyped[P any](s *Server, fn func(*Server, context.Context, P) (any, erro
 	return typedHandler(func(ctx context.Context, p P) (any, error) { return fn(s, ctx, p) })
 }
 
-// registerMethods 注册所有 JSON-RPC 方法 (完整对标 APP-SERVER-PROTOCOL.md)。
 func (s *Server) registerMethods() {
 	noop := noopHandler()
 
@@ -98,7 +97,6 @@ func (s *Server) registerMethods() {
 	s.methods["skills/local/delete"] = bindTyped(s, skillsLocalDeleteTyped)
 	s.methods["skills/remote/list"] = bindTyped(s, skillsRemoteReadTyped)
 	s.methods["skills/remote/export"] = bindTyped(s, skillsRemoteWriteTyped)
-	// Legacy aliases for compatibility with older clients.
 	s.methods["skills/remote/read"] = bindTyped(s, skillsRemoteReadTyped)
 	s.methods["skills/remote/write"] = bindTyped(s, skillsRemoteWriteTyped)
 	s.methods["skills/config/read"] = bindTyped(s, skillsConfigReadTyped)
@@ -150,9 +148,7 @@ func (s *Server) registerMethods() {
 	s.methods["thread/mcp/list"] = func(ctx context.Context, params json.RawMessage) (any, error) {
 		return s.codexAdapter.SendSlashCommandFromRawParams(ctx, params, "/mcp")
 	}
-	s.methods["thread/skills/list"] = func(_ context.Context, _ json.RawMessage) (any, error) {
-		return s.codexAdapter.ThreadSkillsList()
-	}
+	s.methods["thread/skills/list"] = func(_ context.Context, _ json.RawMessage) (any, error) { return s.codexAdapter.ThreadSkillsList() }
 	s.methods["thread/debugMemory"] = s.threadDebugMemory
 	s.methods["mock/experimentalMethod"] = stubHandler(map[string]any{})
 
@@ -235,7 +231,6 @@ func initialize(_ *Server, _ context.Context, params json.RawMessage) (any, erro
 	}, nil
 }
 
-// accountLoginStartParams account/login/start 请求参数。
 type accountLoginStartParams struct {
 	AuthMode string `json:"authMode"`
 	APIKey   string `json:"apiKey,omitempty"`

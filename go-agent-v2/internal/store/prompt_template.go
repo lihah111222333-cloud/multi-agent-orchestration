@@ -39,10 +39,10 @@ func (s *PromptTemplateStore) Save(ctx context.Context, t *PromptTemplate) (*Pro
 		   prompt_text=EXCLUDED.prompt_text, variables=EXCLUDED.variables, tags=EXCLUDED.tags,
 		   description=EXCLUDED.description, enabled=EXCLUDED.enabled,
 		   updated_by=EXCLUDED.updated_by, updated_at=NOW()
-		 RETURNING `+ptCols,
+	 RETURNING `+ptCols,
 		t.PromptKey, t.Title, t.AgentKey, t.ToolName, t.PromptText,
 		string(mustMarshalJSON(t.Variables)), string(mustMarshalJSON(t.Tags)), t.Description, t.Enabled,
-		defaultStr(t.UpdatedBy, ""), defaultStr(t.UpdatedBy, ""))
+		t.UpdatedBy, t.UpdatedBy)
 	if err != nil {
 		return nil, err
 	}

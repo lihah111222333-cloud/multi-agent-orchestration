@@ -98,9 +98,7 @@ func (c *AppServerClient) currentWSConn() *websocket.Conn {
 }
 
 func (c *AppServerClient) replaceWSConn(conn *websocket.Conn) {
-	if conn == nil {
-		return
-	}
+	if conn == nil { return }
 	c.wsMu.Lock()
 	prev := c.ws
 	c.ws = conn
@@ -131,9 +129,7 @@ func appServerReconnectBackoff() backofflib.BackOff {
 }
 
 func (c *AppServerClient) sleepWithContext(delay time.Duration) bool {
-	if delay <= 0 {
-		return true
-	}
+	if delay <= 0 { return true }
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
@@ -148,9 +144,7 @@ func (c *AppServerClient) emitBackgroundEvent(message string, status string, act
 	c.handlerMu.RLock()
 	handler := c.handler
 	c.handlerMu.RUnlock()
-	if handler == nil {
-		return
-	}
+	if handler == nil { return }
 	payload := map[string]any{
 		"message": strings.TrimSpace(message),
 		"status":  strings.TrimSpace(status),
@@ -195,9 +189,7 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 
 	bo := appServerReconnectBackoff()
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if c.stopped.Load() {
-			return false
-		}
+		if c.stopped.Load() { return false }
 		if !c.Running() {
 			logger.Warn("codex: reconnect aborted — process exited",
 				logger.FieldAgentID, c.AgentID,
@@ -208,9 +200,7 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 		var delay time.Duration
 		if attempt > 1 {
 			delay = bo.NextBackOff()
-			if delay == backofflib.Stop {
-				delay = appServerReconnectMaxDelay
-			}
+			if delay == backofflib.Stop { delay = appServerReconnectMaxDelay }
 		}
 		if !c.sleepWithContext(delay) {
 			return false
@@ -247,9 +237,7 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 		health := c.noteReconnectFailure(time.Now())
 		willRetry := attempt < maxRetries
 		reconnectMessage := fmt.Sprintf("Reconnecting... %d/%d", attempt, maxRetries)
-		if !willRetry {
-			reconnectMessage = fmt.Sprintf("Reconnect failed %d/%d", attempt, maxRetries)
-		}
+		if !willRetry { reconnectMessage = fmt.Sprintf("Reconnect failed %d/%d", attempt, maxRetries) }
 		details := reconnectDetails(trigger, activeTurnID, map[string]any{
 			"message":     reconnectMessage,
 			"attempt":     attempt,
@@ -337,9 +325,7 @@ func (c *AppServerClient) recoverByRespawn(trigger, activeTurnID, reason string,
 	defer c.respawnRecoverInFlight.Store(false)
 
 	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		reason = "reconnect_recovery"
-	}
+	if reason == "" { reason = "reconnect_recovery" }
 	c.emitBackgroundEvent("Recovering connection (restart app-server)...", "reconnecting", true, false, reconnectDetails(trigger, activeTurnID, map[string]any{
 		"phase":  "reconnect",
 		"reason": reason,
@@ -382,9 +368,7 @@ func (c *AppServerClient) recoverByRespawn(trigger, activeTurnID, reason string,
 			)
 			return
 		}
-		if threadID == "" {
-			return
-		}
+		if threadID == "" { return }
 		if err := c.ResumeThread(ResumeThreadRequest{ThreadID: threadID}); err != nil {
 			logger.Warn("codex: restart recovery resume failed",
 				logger.FieldAgentID, c.AgentID,
@@ -440,9 +424,7 @@ func (c *AppServerClient) emitReconnectResolved() {
 	c.handlerMu.RLock()
 	handler := c.handler
 	c.handlerMu.RUnlock()
-	if handler == nil {
-		return
-	}
+	if handler == nil { return }
 	payload, _ := json.Marshal(map[string]any{
 		"message":  "Reconnected",
 		"resolved": true,

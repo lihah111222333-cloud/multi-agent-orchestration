@@ -81,20 +81,12 @@ type asTurnStartInput struct {
 func (c *AppServerClient) ensureListenerIfNeeded(
 	rpcCall func(method string, params any, timeout time.Duration) (json.RawMessage, error),
 ) {
-	if c == nil || !c.listenerEnsureNeeded.Load() {
-		return
-	}
+	if c == nil || !c.listenerEnsureNeeded.Load() { return }
 	threadID := strings.TrimSpace(c.ThreadID)
-	if threadID == "" {
-		return
-	}
-	if !c.listenerEnsureInFlight.CompareAndSwap(false, true) {
-		return
-	}
+	if threadID == "" { return }
+	if !c.listenerEnsureInFlight.CompareAndSwap(false, true) { return }
 	defer c.listenerEnsureInFlight.Store(false)
-	if rpcCall == nil {
-		rpcCall = c.call
-	}
+	if rpcCall == nil { rpcCall = c.call }
 	resolvedID, _, err := ensureListenerWithAutoInitialize(threadID, rpcCall, c.Initialize)
 	if err != nil {
 		if isMethodNotFoundRPCError(err) || isInvalidParamsRPCError(err) {
@@ -103,25 +95,17 @@ func (c *AppServerClient) ensureListenerIfNeeded(
 		}
 		return
 	}
-	if strings.EqualFold(strings.TrimSpace(c.ThreadID), threadID) {
-		c.ThreadID = resolvedID
-	}
+	if strings.EqualFold(strings.TrimSpace(c.ThreadID), threadID) { c.ThreadID = resolvedID }
 	c.listenerEnsureNeeded.Store(false)
 }
 
 func (c *AppServerClient) Submit(prompt string, images, files []string, outputSchema json.RawMessage) error {
 	c.ensureListenerIfNeeded(c.call)
 	params := map[string]any{"threadId": strings.TrimSpace(c.ThreadID), "input": buildTurnStartInputs(prompt, images, files)}
-	if len(outputSchema) > 0 {
-		params["outputSchema"] = json.RawMessage(outputSchema)
-	}
+	if len(outputSchema) > 0 { params["outputSchema"] = json.RawMessage(outputSchema) }
 	result, _, err := callWithNotInitializedRecovery(c.call, c.Initialize, "turn/start", params, 10*time.Second)
-	if err != nil {
-		return err
-	}
-	if turnID := extractTurnIDFromEventData(result); turnID != "" {
-		c.setActiveTurnID(turnID)
-	}
+	if err != nil { return err }
+	if turnID := extractTurnIDFromEventData(result); turnID != "" { c.setActiveTurnID(turnID) }
 	return nil
 }
 
@@ -138,9 +122,7 @@ func (c *AppServerClient) SendCommand(cmd, args string) error {
 
 func (c *AppServerClient) tryInterruptCommand() (bool, error) {
 	threadID := strings.TrimSpace(c.ThreadID)
-	if threadID == "" {
-		return false, apperrors.New("AppServerClient.SendCommand", "interrupt requires active thread id")
-	}
+	if threadID == "" { return false, apperrors.New("AppServerClient.SendCommand", "interrupt requires active thread id") }
 	turnID := strings.TrimSpace(c.getActiveTurnID())
 	callTurnInterrupt := func(turnID, turnScope string) error {
 		_, _, err := callWithNotInitializedRecovery(c.call, c.Initialize, "turn/interrupt", buildTurnInterruptParams(threadID, turnID, turnScope), appServerInterruptTimeout)
@@ -186,9 +168,7 @@ func (c *AppServerClient) SendDynamicToolResult(callID, output string, requestID
 }
 
 func (c *AppServerClient) ListThreads() ([]ThreadInfo, error) {
-	if c.ThreadID == "" {
-		return nil, nil
-	}
+	if c.ThreadID == "" { return nil, nil }
 	return []ThreadInfo{{ThreadID: c.ThreadID}}, nil
 }
 
@@ -200,9 +180,7 @@ type asThreadResumeParams struct {
 
 func (c *AppServerClient) ResumeThread(req ResumeThreadRequest) error {
 	id := strings.TrimSpace(req.ThreadID)
-	if id == "" {
-		return apperrors.New("AppServerClient.ResumeThread", "thread/resume requires thread ID")
-	}
+	if id == "" { return apperrors.New("AppServerClient.ResumeThread", "thread/resume requires thread ID") }
 	resolvedID, err := callThreadResume("AppServerClient.ResumeThread", c.call, asThreadResumeParams{
 		ThreadID: id,
 		Path:     strings.TrimSpace(req.Path),

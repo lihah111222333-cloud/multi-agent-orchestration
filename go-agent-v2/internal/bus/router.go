@@ -30,7 +30,7 @@ type AgentRouter struct {
 
 // NewAgentRouter creates a router with optional client factory injection.
 func NewAgentRouter(bus *MessageBus, discover AgentDiscoverer, factories ...AgentClientFactory) *AgentRouter {
-	var factory AgentClientFactory
+	factory := AgentClientFactory(nil)
 	if len(factories) > 0 {
 		factory = factories[0]
 	}
@@ -52,35 +52,26 @@ func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prom
 	if err != nil {
 		return apperrors.Wrap(err, "AgentRouter.DelegateTask", "discover agents")
 	}
-
-	var target *AgentEndpoint
-	for i := range endpoints {
-		if endpoints[i].ThreadID == toThreadID {
-			target = &endpoints[i]
-			break
+	for _, ep := range endpoints {
+		if ep.ThreadID != toThreadID {
+			continue
 		}
-	}
-	if target == nil {
-		return apperrors.Newf("AgentRouter.DelegateTask", "agent %s not found or not running", toThreadID)
-	}
-
-	client, err := r.getOrCreateClient(target.ThreadID, target.Port)
-	if err != nil {
-		return apperrors.Wrapf(err, "AgentRouter.DelegateTask", "get client for %s (port %d)", toThreadID, target.Port)
-	}
-	if err := client.Submit(prompt, images, files, nil); err != nil {
-		return apperrors.Wrapf(err, "AgentRouter.DelegateTask", "submit to %s (port %d)", toThreadID, target.Port)
-	}
-
-	// 发射 user_message 事件使 UI 可见委托消息
-	r.publishUserMessageEvent(fromID, toThreadID, prompt)
-
-	data, err := json.Marshal(delegatePayload{Prompt: prompt, Images: images, Files: files})
-	if err != nil {
-		return apperrors.Wrap(err, "AgentRouter.DelegateTask", "marshal delegate payload")
-	}
-
-	if r.bus != nil {
+		client, err := r.getOrCreateClient(ep.ThreadID, ep.Port)
+		if err != nil {
+			return apperrors.Wrapf(err, "AgentRouter.DelegateTask", "get client for %s (port %d)", toThreadID, ep.Port)
+		}
+		if err := client.Submit(prompt, images, files, nil); err != nil {
+			return apperrors.Wrapf(err, "AgentRouter.DelegateTask", "submit to %s (port %d)", toThreadID, ep.Port)
+		}
+		// 发射 user_message 事件使 UI 可见委托消息
+		r.publishUserMessageEvent(fromID, toThreadID, prompt)
+		if r.bus == nil {
+			return nil
+		}
+		data, err := json.Marshal(delegatePayload{Prompt: prompt, Images: images, Files: files})
+		if err != nil {
+			return apperrors.Wrap(err, "AgentRouter.DelegateTask", "marshal delegate payload")
+		}
 		r.bus.Publish(Message{
 			Topic:   fmt.Sprintf("agent.%s.input", toThreadID),
 			From:    fromID,
@@ -88,9 +79,9 @@ func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prom
 			Type:    MsgTaskDelegate,
 			Payload: data,
 		})
+		return nil
 	}
-
-	return nil
+	return apperrors.Newf("AgentRouter.DelegateTask", "agent %s not found or not running", toThreadID)
 }
 
 // SendToAgent sends one prompt to one target agent.
@@ -101,18 +92,19 @@ func (r *AgentRouter) SendToAgent(ctx context.Context, threadID, prompt string) 
 	}
 
 	for _, ep := range endpoints {
-		if ep.ThreadID == threadID {
-			client, err := r.getOrCreateClient(ep.ThreadID, ep.Port)
-			if err != nil {
-				return apperrors.Wrapf(err, "AgentRouter.SendToAgent", "get client for %s (port %d)", ep.ThreadID, ep.Port)
-			}
-			if err := client.Submit(prompt, nil, nil, nil); err != nil {
-				return apperrors.Wrapf(err, "AgentRouter.SendToAgent", "submit to %s", threadID)
-			}
-			// 发射 user_message 事件使 UI 可见
-			r.publishUserMessageEvent("", threadID, prompt)
-			return nil
+		if ep.ThreadID != threadID {
+			continue
 		}
+		client, err := r.getOrCreateClient(ep.ThreadID, ep.Port)
+		if err != nil {
+			return apperrors.Wrapf(err, "AgentRouter.SendToAgent", "get client for %s (port %d)", ep.ThreadID, ep.Port)
+		}
+		if err := client.Submit(prompt, nil, nil, nil); err != nil {
+			return apperrors.Wrapf(err, "AgentRouter.SendToAgent", "submit to %s", threadID)
+		}
+		// 发射 user_message 事件使 UI 可见
+		r.publishUserMessageEvent("", threadID, prompt)
+		return nil
 	}
 	return apperrors.Newf("AgentRouter.SendToAgent", "agent %s not found", threadID)
 }

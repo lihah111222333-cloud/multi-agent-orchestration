@@ -15,7 +15,6 @@ func NewRingBuffer(maxLines int) *RingBuffer {
 func (rb *RingBuffer) Write(p []byte) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
-
 	rb.data = append(rb.data, p...)
 	if excess := len(rb.data) - rb.limit; excess > 0 {
 		rb.data = rb.data[:copy(rb.data, rb.data[excess:])]

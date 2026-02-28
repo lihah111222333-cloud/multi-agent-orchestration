@@ -508,13 +508,10 @@ func CleanOrphanedProcesses() {
 	lines := bytes.Split(bytes.TrimSpace(out), []byte("\n"))
 	killed := 0
 	for _, line := range lines {
-		pidStr := strings.TrimSpace(string(line))
-		pid, parseErr := strconv.Atoi(pidStr)
-		if parseErr != nil || pid <= 0 {
-			continue
-		}
-		if killErr := syscall.Kill(pid, syscall.SIGKILL); killErr == nil {
-			killed++
+		if pid, parseErr := strconv.Atoi(strings.TrimSpace(string(line))); parseErr == nil && pid > 0 {
+			if killErr := syscall.Kill(pid, syscall.SIGKILL); killErr == nil {
+				killed++
+			}
 		}
 	}
 	if killed > 0 {
@@ -672,9 +669,6 @@ func (m *AgentManager) RecoverAgent(id, reason string) error {
 }
 
 func extractLastAgentMessage(data json.RawMessage) string {
-	if len(data) == 0 {
-		return ""
-	}
 	var payload map[string]any
 	if err := json.Unmarshal(data, &payload); err != nil || payload == nil {
 		return ""
@@ -683,9 +677,6 @@ func extractLastAgentMessage(data json.RawMessage) string {
 }
 
 func extractLastAgentMessageFromMap(payload map[string]any) string {
-	if payload == nil {
-		return ""
-	}
 	for _, key := range []string{"last_agent_message", "lastAgentMessage", "summary", "result", "message", "output", "content", "response", "text"} {
 		if v, ok := payload[key].(string); ok && strings.TrimSpace(v) != "" {
 			return strings.TrimSpace(v)

@@ -15,11 +15,10 @@ func NewAuditLogStore(pool *pgxpool.Pool) *AuditLogStore { return &AuditLogStore
 
 // Append 追加审计事件。
 func (s *AuditLogStore) Append(ctx context.Context, e *AuditEvent) error {
-	extraJSON := mustMarshalJSON(e.Extra)
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO audit_events (ts, event_type, action, result, actor, target, detail, level, extra)
 		 VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
-		e.EventType, e.Action, e.Result, e.Actor, e.Target, e.Detail, e.Level, string(extraJSON))
+		e.EventType, e.Action, e.Result, e.Actor, e.Target, e.Detail, e.Level, string(mustMarshalJSON(e.Extra)))
 	return err
 }
 

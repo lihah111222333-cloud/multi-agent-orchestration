@@ -17,7 +17,6 @@ const nodeCols = `id, dag_key, node_key, title, node_type, assigned_to,
 	started_at, finished_at, created_at, updated_at`
 
 func (s *TaskDAGStore) SaveDAG(ctx context.Context, d *TaskDAG) (*TaskDAG, error) {
-	metaJSON := mustMarshalJSON(d.Metadata)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO task_dags (dag_key, title, description, status, created_by, metadata)
 		 VALUES ($1, $2, $3, $4, $5, $6::jsonb)
@@ -25,7 +24,7 @@ func (s *TaskDAGStore) SaveDAG(ctx context.Context, d *TaskDAG) (*TaskDAG, error
 		   title=EXCLUDED.title, description=EXCLUDED.description, status=EXCLUDED.status,
 		   created_by=EXCLUDED.created_by, metadata=EXCLUDED.metadata, updated_at=NOW()
 		 RETURNING `+dagCols,
-		d.DagKey, d.Title, d.Description, defaultStr(d.Status, "draft"), d.CreatedBy, string(metaJSON))
+		d.DagKey, d.Title, d.Description, defaultStr(d.Status, "draft"), d.CreatedBy, string(mustMarshalJSON(d.Metadata)))
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +57,6 @@ func (s *TaskDAGStore) GetDAGDetail(ctx context.Context, dagKey string) (*TaskDA
 }
 
 func (s *TaskDAGStore) SaveNode(ctx context.Context, n *TaskDAGNode) (*TaskDAGNode, error) {
-	depsJSON, cfgJSON := mustMarshalJSON(n.DependsOn), mustMarshalJSON(n.Config)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO task_dag_nodes (dag_key, node_key, title, node_type, assigned_to,
 		   depends_on, command_ref, config)
@@ -69,7 +67,7 @@ func (s *TaskDAGStore) SaveNode(ctx context.Context, n *TaskDAGNode) (*TaskDAGNo
 		   config=EXCLUDED.config, updated_at=NOW()
 		 RETURNING `+nodeCols,
 		n.DagKey, n.NodeKey, n.Title, defaultStr(n.NodeType, "task"),
-		n.AssignedTo, string(depsJSON), n.CommandRef, string(cfgJSON))
+		n.AssignedTo, string(mustMarshalJSON(n.DependsOn)), n.CommandRef, string(mustMarshalJSON(n.Config)))
 	if err != nil {
 		return nil, err
 	}
@@ -77,11 +75,10 @@ func (s *TaskDAGStore) SaveNode(ctx context.Context, n *TaskDAGNode) (*TaskDAGNo
 }
 
 func (s *TaskDAGStore) UpdateNodeStatus(ctx context.Context, dagKey, nodeKey, status string, result any) (*TaskDAGNode, error) {
-	resJSON := mustMarshalJSON(result)
 	rows, err := s.pool.Query(ctx,
 		`UPDATE task_dag_nodes SET status=$1, result=$2::jsonb, updated_at=NOW()
 		 WHERE dag_key=$3 AND node_key=$4 RETURNING `+nodeCols,
-		status, string(resJSON), dagKey, nodeKey)
+		status, string(mustMarshalJSON(result)), dagKey, nodeKey)
 	if err != nil {
 		return nil, err
 	}

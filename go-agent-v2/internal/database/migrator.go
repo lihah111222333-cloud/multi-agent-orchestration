@@ -37,9 +37,10 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 	}
 	var sqlFiles []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			sqlFiles = append(sqlFiles, e.Name())
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
 		}
+		sqlFiles = append(sqlFiles, e.Name())
 	}
 	sort.Strings(sqlFiles)
 
@@ -49,13 +50,15 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 	}
 	var pending []string
 	for _, name := range sqlFiles {
-		if !applied[name] {
-			pending = append(pending, name)
+		if applied[name] {
+			continue
 		}
+		pending = append(pending, name)
 	}
-	if len(pending) > 0 {
-		logger.Info("migrate: applying pending migrations", logger.FieldCount, len(pending))
+	if len(pending) == 0 {
+		return nil
 	}
+	logger.Info("migrate: applying pending migrations", logger.FieldCount, len(pending))
 	for _, name := range pending {
 		if err := applyOneMigration(ctx, pool, migrationsDir, name); err != nil {
 			return err

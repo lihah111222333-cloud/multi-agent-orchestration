@@ -51,7 +51,6 @@ func lspFileLineColumnSchema(filePathDescription string, lineDescription string,
 	if columnDescription == "" {
 		columnDescription = defaultColumnDescription
 	}
-
 	properties := map[string]any{
 		"file_path": lspStringProperty(filePathDescription),
 		"line":      lspNumberProperty(lineDescription),

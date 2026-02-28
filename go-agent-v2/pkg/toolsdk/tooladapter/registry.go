@@ -210,51 +210,46 @@ func availabilityFromAny(value any) (bool, bool) {
 	case string:
 		return availabilityFromStatus(v)
 	case map[string]any:
-		if raw, ok := v["available"]; ok {
-			if available, known := availabilityFromAny(raw); known {
-				return available, true
-			}
+		if available, known := availabilityFromPreferredKeys(v, "available", "enabled", "status"); known {
+			return available, true
 		}
-		if raw, ok := v["enabled"]; ok {
-			if available, known := availabilityFromAny(raw); known {
-				return available, true
-			}
-		}
-		if raw, ok := v["status"]; ok {
-			if available, known := availabilityFromAny(raw); known {
-				return available, true
-			}
-		}
-		known := false
-		anyAvailable := false
+		values := make([]any, 0, len(v))
 		for _, raw := range v {
-			available, ok := availabilityFromAny(raw)
-			if !ok {
-				continue
-			}
-			known = true
-			if available {
-				anyAvailable = true
-			}
+			values = append(values, raw)
 		}
-		return anyAvailable, known
+		return availabilityFromCollection(values)
 	case []any:
-		known := false
-		anyAvailable := false
-		for _, raw := range v {
-			available, ok := availabilityFromAny(raw)
-			if !ok {
-				continue
-			}
-			known = true
-			if available {
-				anyAvailable = true
-			}
-		}
-		return anyAvailable, known
+		return availabilityFromCollection(v)
 	default:
 		return false, false
 	}
+}
+
+func availabilityFromPreferredKeys(values map[string]any, keys ...string) (bool, bool) {
+	for _, key := range keys {
+		if raw, ok := values[key]; ok {
+			if available, known := availabilityFromAny(raw); known {
+				return available, true
+			}
+		}
+	}
+	return false, false
+}
+
+func availabilityFromCollection(values []any) (bool, bool) {
+	known := false
+	anyAvailable := false
+	for _, raw := range values {
+		available, ok := availabilityFromAny(raw)
+		if !ok {
+			continue
+		}
+		known = true
+		if available {
+			anyAvailable = true
+		}
+	}
+	return anyAvailable, known
 }
 
 func availabilityFromStatus(status string) (bool, bool) {

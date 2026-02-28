@@ -106,9 +106,8 @@ func handleCodeRun(callCtx ToolCallContext, provider CodeRunProvider, runtime Ag
 	resolvedCallID := util.ResolveCodeRunCallID(callCtx.CallID, callCtx.RequestID)
 
 	if p.Mode == codeRunModeProjectCmd {
-		isDangerous := detectDangerous(p.Command) != ""
-		if isDangerous {
-			approved := approvals != nil && approvals.AwaitApproval(callCtx.AgentID, resolvedCallID, p.Mode, p.Command, isDangerous)
+		if dangerPattern := detectDangerous(p.Command); dangerPattern != "" {
+			approved := approvals != nil && approvals.AwaitApproval(callCtx.AgentID, resolvedCallID, p.Mode, p.Command, true)
 			if !approved {
 				writeCodeRunAudit(provider, callCtx.AgentID, p.Language, p.Mode, "denied", 0, 0, p.Code, p.Command, "")
 				return `{"error":"execution denied by user","exit_code":-1}`
@@ -229,10 +228,13 @@ func (w workDirCodeRunner) Run(ctx context.Context, req CodeRunRequest) (*CodeRu
 }
 
 func resolveCodeRunner(provider CodeRunProvider, runtime AgentRuntimeProvider, agentID string) (CodeExecRunner, error) {
-	if provider == nil || provider.CodeRunner() == nil {
+	if provider == nil {
 		return nil, fmt.Errorf("code runner not available")
 	}
 	runner := provider.CodeRunner()
+	if runner == nil {
+		return nil, fmt.Errorf("code runner not available")
+	}
 	agentCwd := ""
 	if runtime != nil {
 		agentCwd = NormalizeAgentWorkDir(runtime.GetAgentWorkDir(agentID))
@@ -264,7 +266,7 @@ func writeCodeRunAudit(provider CodeRunProvider, agentID, language, mode, result
 		extra["output"] = truncateForAudit(output, 0)
 	}
 
-	event := &AuditEvent{
+	if err := provider.AuditLogger().Append(context.Background(), &AuditEvent{
 		Ts:        time.Now(),
 		EventType: "code_run",
 		Action:    mode,
@@ -274,8 +276,7 @@ func writeCodeRunAudit(provider CodeRunProvider, agentID, language, mode, result
 		Detail:    fmt.Sprintf("exit_code=%d duration_ms=%d", exitCode, durationMS),
 		Level:     "INFO",
 		Extra:     extra,
-	}
-	if err := provider.AuditLogger().Append(context.Background(), event); err != nil {
+	}); err != nil {
 		logger.Warn("code-run: audit write failed", logger.FieldAgentID, agentID, logger.FieldError, err)
 	}
 }

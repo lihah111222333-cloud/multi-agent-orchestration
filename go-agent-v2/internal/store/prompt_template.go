@@ -1,5 +1,3 @@
-// prompt_template.go — 提示词模板 CRUD (表 prompt_templates + prompt_versions)。
-// Python: agent_ops_store.py save_prompt_template / list_prompt_template_versions / rollback
 package store
 
 import (
@@ -9,10 +7,8 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-// PromptTemplateStore 提示词模板存储。
 type PromptTemplateStore struct{ BaseStore }
 
-// NewPromptTemplateStore 创建。
 func NewPromptTemplateStore(pool *pgxpool.Pool) *PromptTemplateStore {
 	return &PromptTemplateStore{NewBaseStore(pool)}
 }
@@ -20,26 +16,20 @@ func NewPromptTemplateStore(pool *pgxpool.Pool) *PromptTemplateStore {
 const ptCols = `id, prompt_key, title, agent_key, tool_name, prompt_text,
 	variables, tags, description, enabled, created_by, updated_by, created_at, updated_at`
 
-// Save 创建或更新 (UPSERT)。先保存旧版本快照。
 func (s *PromptTemplateStore) Save(ctx context.Context, t *PromptTemplate) (*PromptTemplate, error) {
-	// 版本快照: 若已存在，先写入 prompt_versions
-	existing, _ := s.Get(ctx, t.PromptKey)
-	if existing != nil {
-		varsJSON := mustMarshalJSON(existing.Variables)
-		tagsJSON := mustMarshalJSON(existing.Tags)
+	if existing, _ := s.Get(ctx, t.PromptKey); existing != nil {
 		if _, err := s.pool.Exec(ctx,
 			`INSERT INTO prompt_versions (prompt_key, title, agent_key, tool_name, prompt_text,
 			   variables, tags, enabled, created_by, updated_by, source_updated_at)
 			 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11)`,
 			existing.PromptKey, existing.Title, existing.AgentKey, existing.ToolName,
-			existing.PromptText, string(varsJSON), string(tagsJSON), existing.Enabled,
+			existing.PromptText, string(mustMarshalJSON(existing.Variables)), string(mustMarshalJSON(existing.Tags)),
+			existing.Enabled,
 			existing.CreatedBy, existing.UpdatedBy, existing.UpdatedAt); err != nil {
 			logger.Warn("store: save prompt version failed", "prompt_key", existing.PromptKey, logger.FieldError, err)
 		}
 	}
 
-	varsJSON := mustMarshalJSON(t.Variables)
-	tagsJSON := mustMarshalJSON(t.Tags)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO prompt_templates (prompt_key, title, agent_key, tool_name, prompt_text,
 		   variables, tags, description, enabled, created_by, updated_by, updated_at)
@@ -51,7 +41,7 @@ func (s *PromptTemplateStore) Save(ctx context.Context, t *PromptTemplate) (*Pro
 		   updated_by=EXCLUDED.updated_by, updated_at=NOW()
 		 RETURNING `+ptCols,
 		t.PromptKey, t.Title, t.AgentKey, t.ToolName, t.PromptText,
-		string(varsJSON), string(tagsJSON), t.Description, t.Enabled,
+		string(mustMarshalJSON(t.Variables)), string(mustMarshalJSON(t.Tags)), t.Description, t.Enabled,
 		defaultStr(t.UpdatedBy, ""), defaultStr(t.UpdatedBy, ""))
 	if err != nil {
 		return nil, err
@@ -59,7 +49,6 @@ func (s *PromptTemplateStore) Save(ctx context.Context, t *PromptTemplate) (*Pro
 	return collectOne[PromptTemplate](rows)
 }
 
-// Get 按 prompt_key 查询。
 func (s *PromptTemplateStore) Get(ctx context.Context, promptKey string) (*PromptTemplate, error) {
 	rows, err := s.pool.Query(ctx, "SELECT "+ptCols+" FROM prompt_templates WHERE prompt_key = $1", promptKey)
 	if err != nil {
@@ -68,11 +57,8 @@ func (s *PromptTemplateStore) Get(ctx context.Context, promptKey string) (*Promp
 	return collectOne[PromptTemplate](rows)
 }
 
-// List 列表查询。
 func (s *PromptTemplateStore) List(ctx context.Context, agentKey, keyword string, limit int) ([]PromptTemplate, error) {
-	q := NewQueryBuilder().
-		Eq("agent_key", agentKey).
-		KeywordLike(keyword, "prompt_key", "title", "prompt_text")
+	q := NewQueryBuilder().Eq("agent_key", agentKey).KeywordLike(keyword, "prompt_key", "title", "prompt_text")
 	sql, params := q.Build("SELECT "+ptCols+" FROM prompt_templates", "updated_at DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
@@ -81,12 +67,10 @@ func (s *PromptTemplateStore) List(ctx context.Context, agentKey, keyword string
 	return collectRows[PromptTemplate](rows)
 }
 
-// SetEnabled 启用/禁用。
 func (s *PromptTemplateStore) SetEnabled(ctx context.Context, promptKey string, enabled bool, updatedBy string) error {
 	return SetEnabledByKey(ctx, s.pool, "prompt_templates", "prompt_key", promptKey, updatedBy, enabled)
 }
 
-// Delete 删除模板。
 func (s *PromptTemplateStore) Delete(ctx context.Context, promptKey string) error {
 	return DeleteByKey(ctx, s.pool, "prompt_templates", "prompt_key", promptKey)
 }

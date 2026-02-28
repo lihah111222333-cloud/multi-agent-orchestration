@@ -36,9 +36,8 @@ func (a *Adapter) ThreadMessages(ctx context.Context, threadID string, limit int
 	msgs := messagessvc.PaginateRolloutMessages(allMsgs, limit, before)
 	logger.Info("thread/messages: page selected", append(threadLogFields(id), "before", before, "limit", limit, "page_count", len(msgs), "total", total)...)
 
-	runtime := a.uiRuntime()
 	diffLen, timelineLen := 0, 0
-	if runtime != nil {
+	if runtime := a.uiRuntime(); runtime != nil {
 		messagessvc.HandleThreadMessagesHydration(
 			id,
 			allMsgs,

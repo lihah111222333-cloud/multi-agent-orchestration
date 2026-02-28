@@ -1,9 +1,9 @@
 package apiserver
 
 import (
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/pkg/diffsdk/difftracker"
-	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 
 type dynamicToolDiffTracker = difftracker.Tracker
@@ -11,10 +11,6 @@ type fileContentSnapshot = difftracker.FileContentSnapshot
 
 func shouldCaptureDynamicToolDiff(tool string, args map[string]any) bool {
 	return difftracker.ShouldCaptureDynamicToolDiff(tool, args)
-}
-
-func extractStringArg(args map[string]any, keys ...string) string {
-	return difftracker.ExtractStringArg(args, keys...)
 }
 
 func resolveDynamicToolDiffRepoRoot(s *Server, agentID string, args map[string]any) string {

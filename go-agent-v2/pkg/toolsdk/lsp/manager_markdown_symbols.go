@@ -44,9 +44,7 @@ func (m *Manager) markdownDocumentSymbols(filePath string) ([]DocumentSymbol, er
 }
 
 func markdownSymbolsFromContent(content string) []DocumentSymbol {
-	normalized := strings.ReplaceAll(content, "\r\n", "\n")
-	normalized = strings.ReplaceAll(normalized, "\r", "\n")
-	lines := strings.Split(normalized, "\n")
+	lines := strings.Split(strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(content), "\n")
 	headings := parseMarkdownHeadings(lines)
 	if len(headings) == 0 {
 		return nil
@@ -58,7 +56,8 @@ func parseMarkdownHeadings(lines []string) []markdownHeading {
 	headings := make([]markdownHeading, 0)
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
-		if match := markdownATXHeadingPattern.FindStringSubmatch(line); match != nil {
+		match := markdownATXHeadingPattern.FindStringSubmatch(line)
+		if match != nil {
 			title := cleanMarkdownHeadingTitle(match[2])
 			if title != "" {
 				headings = append(headings, markdownHeading{
@@ -71,12 +70,11 @@ func parseMarkdownHeadings(lines []string) []markdownHeading {
 			}
 			continue
 		}
-
 		if i+1 >= len(lines) {
 			continue
 		}
-		underlineMatch := markdownSetextUnderlinePattern.FindStringSubmatch(lines[i+1])
-		if underlineMatch == nil {
+		underline := strings.TrimSpace(lines[i+1])
+		if !markdownSetextUnderlinePattern.MatchString(underline) {
 			continue
 		}
 		title := strings.TrimSpace(line)
@@ -84,7 +82,7 @@ func parseMarkdownHeadings(lines []string) []markdownHeading {
 			continue
 		}
 		level := 2
-		if strings.HasPrefix(strings.TrimSpace(underlineMatch[1]), "=") {
+		if strings.HasPrefix(underline, "=") {
 			level = 1
 		}
 		headings = append(headings, markdownHeading{
@@ -104,9 +102,6 @@ func buildMarkdownSymbolTree(headings []markdownHeading) []DocumentSymbol {
 	stack := make([]*markdownSymbolNode, 0, len(headings))
 	for _, heading := range headings {
 		lineLen := len(heading.LineText)
-		if lineLen < 0 {
-			lineLen = 0
-		}
 		selectionStart := heading.TitleStart
 		if selectionStart < 0 {
 			selectionStart = 0
@@ -173,9 +168,8 @@ func cleanMarkdownHeadingTitle(raw string) string {
 }
 
 func headingTitleStart(line, title string) int {
-	idx := strings.Index(line, title)
-	if idx < 0 {
-		return 0
+	if idx := strings.Index(line, title); idx >= 0 {
+		return idx
 	}
-	return idx
+	return 0
 }

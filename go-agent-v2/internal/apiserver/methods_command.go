@@ -68,9 +68,7 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 	cmd.Stdout = util.NewLimitedWriter(&stdout, maxOutputSize)
 	cmd.Stderr = util.NewLimitedWriter(&stderr, maxOutputSize)
 
-	start := time.Now()
-	err := cmd.Run()
-	elapsed := time.Since(start)
+	start := time.Now(); err := cmd.Run(); elapsed := time.Since(start)
 	exitCode := 0
 	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)

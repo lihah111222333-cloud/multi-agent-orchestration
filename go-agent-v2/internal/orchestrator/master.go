@@ -1,4 +1,3 @@
-// Package orchestrator 提供主编排器。
 package orchestrator
 
 import (
@@ -9,7 +8,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-// State 编排状态。
 type State string
 
 const (
@@ -21,7 +19,6 @@ const (
 	StateError       State = "error"
 )
 
-// Master 主编排器。
 type Master struct {
 	state     State
 	taskTrace *store.TaskTraceStore
@@ -30,7 +27,6 @@ type Master struct {
 	gateways  []*Gateway
 }
 
-// NewMaster 创建主编排器。
 func NewMaster(traces *store.TaskTraceStore, dag *store.TaskDAGStore, ack *store.TaskAckStore) *Master {
 	return &Master{
 		state:     StateIdle,
@@ -40,16 +36,12 @@ func NewMaster(traces *store.TaskTraceStore, dag *store.TaskDAGStore, ack *store
 	}
 }
 
-// AddGateway 添加 Gateway。
 func (m *Master) AddGateway(gw *Gateway) { m.gateways = append(m.gateways, gw) }
 
-// Run 执行编排循环。
 func (m *Master) Run(ctx context.Context) error {
 	logger.Info("orchestrator started", "gateways", len(m.gateways))
-
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -65,22 +57,18 @@ func (m *Master) Run(ctx context.Context) error {
 	}
 }
 
-// tick 单次状态转换。
 func (m *Master) tick() error {
-	switch m.state {
-	case StateCompleted, StateError:
+	if m.state == StateCompleted || m.state == StateError {
 		m.state = StateIdle
 	}
 	return nil
 }
 
-// Gateway 单个 Gateway 执行器。
 type Gateway struct {
 	ID   string
 	Name string
 }
 
-// Execute 执行任务分发。
 func (g *Gateway) Execute(ctx context.Context, task string) (string, error) {
 	logger.Info("gateway executing", logger.FieldGatewayID, g.ID, "task", task)
 	// TODO: 实现 Gateway 任务分发逻辑

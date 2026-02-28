@@ -13,7 +13,6 @@ import (
 	slogmulti "github.com/samber/slog-multi"
 )
 
-// LogEntry 对应 system_logs 表的一行。
 type LogEntry struct {
 	Ts         time.Time
 	Level      string
@@ -38,13 +37,12 @@ const (
 )
 
 type DBHandler struct {
-	pool  *pgxpool.Pool
-	buf   chan LogEntry
-	attrs []slog.Attr
-	group string
-	level slog.Level
-	done  chan struct{}
-	// closed 在 handler clone(WithAttrs/WithGroup) 间共享，避免 shutdown 后继续写入已关闭通道 panic。
+	pool   *pgxpool.Pool
+	buf    chan LogEntry
+	attrs  []slog.Attr
+	group  string
+	level  slog.Level
+	done   chan struct{}
 	closed *atomic.Bool
 }
 
@@ -86,12 +84,11 @@ func (h *DBHandler) Handle(_ context.Context, r slog.Record) error {
 
 	func() {
 		defer func() {
-			recover() //nolint:errcheck // 恢复值无需处理
+			recover() //nolint:errcheck
 		}()
 		select {
 		case h.buf <- entry:
 		default:
-			// drop: 避免 DB 慢时阻塞主流程
 		}
 	}()
 	return nil
@@ -208,14 +205,18 @@ func applyAttr(e *LogEntry, a slog.Attr) {
 	case FieldToolName:
 		e.ToolName = a.Value.String()
 	case FieldDurationMS:
+		ms, ok := 0, true
 		switch v := a.Value.Any().(type) {
 		case int64:
-			ms := int(v)
-			e.DurationMS = &ms
+			ms = int(v)
 		case int:
-			e.DurationMS = &v
+			ms = v
 		case float64:
-			ms := int(v)
+			ms = int(v)
+		default:
+			ok = false
+		}
+		if ok {
 			e.DurationMS = &ms
 		}
 	case "logger":

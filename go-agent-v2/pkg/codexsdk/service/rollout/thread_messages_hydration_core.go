@@ -65,14 +65,10 @@ func StreamRemainingHistory(
 		pageSize = ThreadMessageHydrationPageSize
 	}
 
-	before := int64(0)
+	before, pageNum := int64(0), 0
 	if len(first) > 0 {
 		before = first[len(first)-1].ID
-	}
-
-	pageNum := 1
-	if len(first) == 0 {
-		pageNum = 0
+		pageNum = 1
 	}
 	loaded := len(first)
 	for loaded < limit {

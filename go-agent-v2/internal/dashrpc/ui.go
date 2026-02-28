@@ -38,22 +38,24 @@ func copyListField(dst map[string]any, dstKey string, src any, srcKey string) {
 	}
 }
 
-func callMethod(ctx context.Context, caller MethodCaller, method string, params json.RawMessage) (any, error) {
+func callDash(ctx context.Context, caller MethodCaller, method string) (any, error) {
 	if caller == nil {
 		return nil, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return caller(ctx, method, params)
-}
-
-func callDash(ctx context.Context, caller MethodCaller, method string) (any, error) {
-	return callMethod(ctx, caller, "dashboard/"+method, json.RawMessage(`{}`))
+	return caller(ctx, "dashboard/"+method, json.RawMessage(`{}`))
 }
 
 func buildAgentFallbackFromThreads(ctx context.Context, caller MethodCaller) []any {
-	out, err := callMethod(ctx, caller, "thread/list", json.RawMessage(`{}`))
+	if caller == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	out, err := caller(ctx, "thread/list", json.RawMessage(`{}`))
 	if err != nil || out == nil {
 		return nil
 	}

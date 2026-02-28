@@ -16,14 +16,10 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 )
 
-func (s *Server) RegisterRuntimeTool(name string, handler tooladapter.RuntimeToolHandler) {
-	setRuntimeTool(s, name, handler)
-}
+func (s *Server) RegisterRuntimeTool(name string, handler tooladapter.RuntimeToolHandler) { setRuntimeTool(s, name, handler) }
 func (s *Server) LookupRuntimeTool(name string) (tooladapter.RuntimeToolHandler, bool) { return lookupRuntimeTool(s, name) }
 func (s *Server) IncrementToolCall(name string) int64 { return incrementToolCallState(s, name) }
-func (s *Server) RegisterCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string {
-	return registerCodeRunCancelState(s, agentID, callID, cancel)
-}
+func (s *Server) RegisterCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string { return registerCodeRunCancelState(s, agentID, callID, cancel) }
 func (s *Server) UnregisterCodeRunCancel(agentID, runKey string) { unregisterCodeRunCancelState(s, agentID, runKey) }
 
 func (s *Server) CodeRunner() tools.CodeExecRunner {
@@ -171,9 +167,7 @@ func (p approvalProvider) AwaitApproval(agentID, callID, mode, command string, i
 
 func (p approvalProvider) waitForFrontendDecision(agentID, method string, payload map[string]any) bool {
 	resp, wsErr := sendRequestToAll(p.s, method, payload)
-	if wsErr == nil && resp != nil {
-		if approved, ok := extractApproval(resp.Result); ok { return approved }
-	}
+	if wsErr == nil && resp != nil { if approved, ok := extractApproval(resp.Result); ok { return approved } }
 
 	if !hasNotifyHookState(p.s) {
 		logger.Warn("code-run: approval auto-denied — no frontend", "method", method)
@@ -204,9 +198,7 @@ func (p approvalProvider) waitForFrontendDecision(agentID, method string, payloa
 
 	select {
 	case wailsResp := <-ch:
-		if wailsResp != nil {
-			if approved, ok := extractApproval(wailsResp.Result); ok { return approved }
-		}
+		if wailsResp != nil { if approved, ok := extractApproval(wailsResp.Result); ok { return approved } }
 	case <-timer.C:
 		logger.Warn("code-run: approval timed out", "method", method)
 	}

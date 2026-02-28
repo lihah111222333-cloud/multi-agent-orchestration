@@ -17,8 +17,7 @@ const ccCols = `id, card_key, title, description, command_template,
 	args_schema, risk_level, enabled, created_by, updated_by, created_at, updated_at`
 
 func (s *CommandCardStore) Save(ctx context.Context, c *CommandCard) (*CommandCard, error) {
-	existing, _ := s.Get(ctx, c.CardKey)
-	if existing != nil {
+	if existing, err := s.Get(ctx, c.CardKey); err == nil && existing != nil {
 		schemaJSON := mustMarshalJSON(existing.ArgsSchema)
 		if _, err := s.pool.Exec(ctx,
 			`INSERT INTO command_card_versions (card_key, title, description, command_template,
@@ -32,7 +31,6 @@ func (s *CommandCardStore) Save(ctx context.Context, c *CommandCard) (*CommandCa
 	}
 
 	schemaJSON := mustMarshalJSON(c.ArgsSchema)
-	updatedBy := defaultStr(c.UpdatedBy, "")
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO command_cards (card_key, title, description, command_template, args_schema,
 		   risk_level, enabled, created_by, updated_by, updated_at)
@@ -41,10 +39,10 @@ func (s *CommandCardStore) Save(ctx context.Context, c *CommandCard) (*CommandCa
 		   title=EXCLUDED.title, description=EXCLUDED.description,
 		   command_template=EXCLUDED.command_template, args_schema=EXCLUDED.args_schema,
 		   risk_level=EXCLUDED.risk_level, enabled=EXCLUDED.enabled,
-		   updated_by=EXCLUDED.updated_by, updated_at=NOW()
+	   updated_by=EXCLUDED.updated_by, updated_at=NOW()
 		 RETURNING `+ccCols,
 		c.CardKey, c.Title, c.Description, c.CommandTemplate, string(schemaJSON),
-		defaultStr(c.RiskLevel, "normal"), c.Enabled, updatedBy, updatedBy)
+		defaultStr(c.RiskLevel, "normal"), c.Enabled, defaultStr(c.UpdatedBy, ""), defaultStr(c.UpdatedBy, ""))
 	if err != nil {
 		return nil, err
 	}

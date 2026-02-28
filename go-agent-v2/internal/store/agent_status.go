@@ -1,60 +1,59 @@
-// agent_status.go — Agent 状态存储 CRUD (对应 Python agent_status_store.py)。
-// 增加输入验证 (M4) 和 status 过滤 (H12)。
+// agent_status.go stores agent runtime status records.
 package store
 
 import (
 	"context"
 	"regexp"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
-// AgentStatusStore Agent 状态存储。
 type AgentStatusStore struct{ BaseStore }
 
-// NewAgentStatusStore 创建。
 func NewAgentStatusStore(pool *pgxpool.Pool) *AgentStatusStore {
 	return &AgentStatusStore{NewBaseStore(pool)}
 }
 
 var agentIDRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
-var validStatuses = map[string]bool{
-	"idle": true, "running": true, "stagnant": true,
-	"error": true, "stopped": true, "unknown": true,
-}
+var validStatuses = map[string]bool{"idle": true, "running": true, "stagnant": true, "error": true, "stopped": true, "unknown": true}
 
 const asCols = "agent_id, agent_name, session_id, status, stagnant_sec, error, output_tail, created_at, updated_at"
 
-// validateAgentID 验证 agent_id 格式 (对应 Python _normalize_agent_id)。
 func validateAgentID(id string) error {
+	id = strings.TrimSpace(id)
 	if id == "" || !agentIDRe.MatchString(id) {
 		return apperrors.Newf("validateAgentID", "agent_id 格式非法: %q", id)
 	}
 	return nil
 }
 
-// normalizeOutputTail 截断输出尾部 (对应 Python _normalize_output_tail, 最多 50 行)。
 func normalizeOutputTail(tail any) any {
-	if tail == nil {
+	switch lines := tail.(type) {
+	case nil:
 		return []string{}
-	}
-	if lines, ok := tail.([]string); ok {
+	case []string:
 		if len(lines) > 50 {
 			return lines[len(lines)-50:]
 		}
 		return lines
+	default:
+		return tail
 	}
-	return tail
 }
 
-// Upsert 更新或插入 Agent 状态 (含输入验证)。
 func (s *AgentStatusStore) Upsert(ctx context.Context, a *AgentStatus) (*AgentStatus, error) {
+	if a == nil {
+		return nil, apperrors.New("upsertAgentStatus", "agent status is required")
+	}
+	a.AgentID = strings.TrimSpace(a.AgentID)
 	if err := validateAgentID(a.AgentID); err != nil {
 		return nil, err
 	}
+	a.Status = strings.ToLower(strings.TrimSpace(a.Status))
 	if !validStatuses[a.Status] {
 		a.Status = "unknown"
 	}
@@ -78,8 +77,8 @@ func (s *AgentStatusStore) Upsert(ctx context.Context, a *AgentStatus) (*AgentSt
 	return collectOne[AgentStatus](rows)
 }
 
-// Get 按 agent_id 查询。
 func (s *AgentStatusStore) Get(ctx context.Context, agentID string) (*AgentStatus, error) {
+	agentID = strings.TrimSpace(agentID)
 	rows, err := s.pool.Query(ctx,
 		"SELECT "+asCols+" FROM agent_status WHERE agent_id = $1", agentID)
 	if err != nil {
@@ -88,8 +87,8 @@ func (s *AgentStatusStore) Get(ctx context.Context, agentID string) (*AgentStatu
 	return collectOne[AgentStatus](rows)
 }
 
-// List 查询 Agent 状态 (支持 status 过滤, 对应 Python query_agent_status)。
 func (s *AgentStatusStore) List(ctx context.Context, status string) ([]AgentStatus, error) {
+	status = strings.ToLower(strings.TrimSpace(status))
 	q := NewQueryBuilder().Eq("status", status)
 	sql, params := q.Build("SELECT "+asCols+" FROM agent_status", "updated_at DESC", 500)
 	rows, err := s.pool.Query(ctx, sql, params...)

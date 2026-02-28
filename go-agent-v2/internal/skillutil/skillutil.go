@@ -25,11 +25,9 @@ func CollectInputSkillNames[T any](inputs []T, typeOf func(T) string, nameOf fun
 		if !strings.EqualFold(strings.TrimSpace(typeOf(input)), "skill") {
 			continue
 		}
-		name := strings.ToLower(strings.TrimSpace(nameOf(input)))
-		if name == "" {
-			continue
+		if name := strings.ToLower(strings.TrimSpace(nameOf(input))); name != "" {
+			set[name] = struct{}{}
 		}
-		set[name] = struct{}{}
 	}
 	return set
 }

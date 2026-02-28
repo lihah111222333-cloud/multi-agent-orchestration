@@ -569,12 +569,10 @@ func (m *WorkspaceManager) handleDeletedFiles(
 			m.saveFileAndRecord(ctx, result, toTrackedFile(WorkspaceFileStateConflict, "", reason), &result.Conflicts, "conflict", reason)
 			continue
 		}
-
 		if req.DryRun {
 			recordMergeResult(result, &result.Merged, normalizedRel, "would_delete", "")
 			continue
 		}
-
 		if err := os.Remove(sourcePath); err != nil && !os.IsNotExist(err) {
 			msg := err.Error()
 			m.saveFileAndRecord(ctx, result, toTrackedFile(WorkspaceFileStateError, "", msg), &result.Errors, "error", msg)
@@ -613,7 +611,6 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 	seen := make(map[string]struct{}, len(files))
 	totalBytes := int64(0)
 	copied := 0
-
 	for _, raw := range files {
 		rel, err := normalizeRelativePath(raw)
 		if err != nil {
@@ -626,12 +623,10 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 		if len(seen) > m.maxFiles {
 			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap files exceed limit (%d)", m.maxFiles)
 		}
-
 		sourcePath := filepath.Join(run.SourceRoot, rel)
 		if !isPathWithinRoot(run.SourceRoot, sourcePath) {
 			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap path escapes source root: %s", rel)
 		}
-
 		info, err := os.Lstat(sourcePath)
 		if err != nil {
 			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "bootstrap stat %s", rel)
@@ -641,7 +636,6 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 			return copied, totalBytes, err
 		}
 		totalBytes = nextTotalBytes
-
 		targetPath := filepath.Join(run.WorkspacePath, rel)
 		if !isPathWithinRoot(run.WorkspacePath, targetPath) {
 			return copied, totalBytes, apperrors.Newf("WorkspaceManager.bootstrapFiles", "bootstrap target escapes workspace: %s", rel)
@@ -652,7 +646,6 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 		if err := copyFileAtomic(sourcePath, targetPath, info.Mode().Perm()); err != nil {
 			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "copy bootstrap file %s", rel)
 		}
-
 		hash, err := hashFile(sourcePath)
 		if err != nil {
 			return copied, totalBytes, apperrors.Wrapf(err, "WorkspaceManager.bootstrapFiles", "hash bootstrap source %s", rel)
@@ -710,15 +703,12 @@ func copyFileAtomic(source, target string, perm os.FileMode) error {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-
 	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 		return err
 	}
-
 	if stat, err := os.Lstat(target); err == nil && stat.Mode()&os.ModeSymlink != 0 {
 		return apperrors.Newf("copyFileAtomic", "target is symlink: %s", target)
 	}
-
 	tmp, err := os.CreateTemp(filepath.Dir(target), ".workspace-merge-*")
 	if err != nil {
 		return err
@@ -730,7 +720,6 @@ func copyFileAtomic(source, target string, perm os.FileMode) error {
 			_ = os.Remove(tmpPath)
 		}
 	}()
-
 	if _, err := io.Copy(tmp, in); err != nil {
 		_ = tmp.Close()
 		return err

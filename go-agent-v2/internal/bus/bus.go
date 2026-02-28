@@ -117,9 +117,7 @@ type MessageBus struct {
 }
 
 func NewMessageBus() *MessageBus {
-	return &MessageBus{
-		subscribers: make(map[string]*Subscriber),
-	}
+	return &MessageBus{subscribers: make(map[string]*Subscriber)}
 }
 
 func (b *MessageBus) SetOnPublish(fn func(Message)) {
@@ -194,9 +192,8 @@ func (b *MessageBus) Unsubscribe(id string) {
 
 func (b *MessageBus) SubscriberCount() int {
 	b.mu.RLock()
-	n := len(b.subscribers)
-	b.mu.RUnlock()
-	return n
+	defer b.mu.RUnlock()
+	return len(b.subscribers)
 }
 
 func (b *MessageBus) Seq() int64 {

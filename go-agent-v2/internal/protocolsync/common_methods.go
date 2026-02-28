@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
 	"strings"
 
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
@@ -203,13 +202,4 @@ func toLowerCamel(value string) string {
 		builder.WriteString(part[1:])
 	}
 	return builder.String()
-}
-
-func sortedKeys(values map[string]struct{}) []string {
-	out := make([]string, 0, len(values))
-	for key := range values {
-		out = append(out, key)
-	}
-	sort.Strings(out)
-	return out
 }

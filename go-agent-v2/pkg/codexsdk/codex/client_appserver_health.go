@@ -81,9 +81,6 @@ func recentTimesStartIndex(values []time.Time, cutoff time.Time) int {
 }
 
 func filterRecentTimes(values []time.Time, now time.Time, window time.Duration) []time.Time {
-	if len(values) == 0 {
-		return values
-	}
 	idx := recentTimesStartIndex(values, now.Add(-window))
 	if idx == 0 {
 		return values
@@ -92,21 +89,17 @@ func filterRecentTimes(values []time.Time, now time.Time, window time.Duration) 
 }
 
 func countRecentTimes(values []time.Time, now time.Time, window time.Duration) int {
-	if len(values) == 0 {
-		return 0
-	}
 	return len(values) - recentTimesStartIndex(values, now.Add(-window))
 }
 
 func (c *AppServerClient) healthSnapshotLocked(now time.Time) appServerHealthSnapshot {
-	readErrorsWindow := countRecentTimes(c.health.readFailureTimes, now, appServerCircuitBreakerWindow)
 	remaining := c.health.circuitOpenUntil.Sub(now)
 	if remaining < 0 {
 		remaining = 0
 	}
 	return appServerHealthSnapshot{
 		ReadFailureStreak:      c.health.consecutiveReadFailures,
-		ReadErrorsWindow:       readErrorsWindow,
+		ReadErrorsWindow:       countRecentTimes(c.health.readFailureTimes, now, appServerCircuitBreakerWindow),
 		ReconnectFailureStreak: c.health.consecutiveReconnectFailures,
 		NotInitializedStreak:   c.health.consecutiveNotInitializedRPC,
 		CircuitOpen:            remaining > 0,
@@ -145,8 +138,7 @@ func (c *AppServerClient) noteReadFailure(now time.Time) (appServerHealthSnapsho
 		c.health.totalCircuitTrips++
 		openedCircuit = true
 	}
-	snapshot := c.healthSnapshotLocked(now)
-	return snapshot, recentForRespawn >= appServerRespawnEscalationThreshold, openedCircuit
+	return c.healthSnapshotLocked(now), recentForRespawn >= appServerRespawnEscalationThreshold, openedCircuit
 }
 
 func (c *AppServerClient) noteReconnectAttempt() {

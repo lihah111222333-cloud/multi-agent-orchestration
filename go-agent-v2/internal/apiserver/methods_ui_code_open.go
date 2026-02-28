@@ -7,10 +7,8 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/dashboard"
 )
 
-type uiCodeOpenParams = dashboard.CodeOpenParams
-
-func uiCodeOpenTyped(s *Server, _ context.Context, p uiCodeOpenParams) (any, error) {
-	service := dashboard.NewCodeOpenService(dashboard.CodeOpenHooks{
+func uiCodeOpenTyped(s *Server, _ context.Context, p dashboard.CodeOpenParams) (any, error) {
+	return dashboard.NewCodeOpenService(dashboard.CodeOpenHooks{
 		OpenLSPFile: func(path, content string) error {
 			if s == nil || s.lsp == nil {
 				return nil
@@ -36,6 +34,5 @@ func uiCodeOpenTyped(s *Server, _ context.Context, p uiCodeOpenParams) (any, err
 			}
 			return out
 		},
-	})
-	return service.Open(p)
+	}).Open(p)
 }

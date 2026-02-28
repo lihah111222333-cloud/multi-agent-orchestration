@@ -19,7 +19,7 @@ func (a serverDiagnosticsAccessor) GetDiagnostics(uri string) []lsp.Diagnostic {
 }
 
 func (a serverDiagnosticsAccessor) GetAllDiagnostics() map[string][]lsp.Diagnostic {
-	return getAllDiagnostics(a.s)
+	return allDiagnosticsCacheState(a.s)
 }
 
 func diagnosticsAccessor(s *Server) lsp.DiagnosticsAccessor {
@@ -44,10 +44,6 @@ func getDiagnostics(s *Server, uri string) []lsp.Diagnostic {
 		return nil
 	}
 	return getDiagnosticsCacheState(s, uri)
-}
-
-func getAllDiagnostics(s *Server) map[string][]lsp.Diagnostic {
-	return allDiagnosticsCacheState(s)
 }
 
 func cloneDiagnostics(in []lsp.Diagnostic) []lsp.Diagnostic {

@@ -217,7 +217,6 @@ func ResolvePendingRequest(s *Server, reqID int64, result map[string]any) bool {
 }
 
 func allocPendingRequest(s *Server) (reqID int64, ch <-chan *Response, cleanup func()) {
-	if s == nil { return 0, nil, func() {} }
 	return allocPendingRequestState(s)
 }
 

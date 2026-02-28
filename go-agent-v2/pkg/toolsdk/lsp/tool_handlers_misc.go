@@ -1883,7 +1883,7 @@ func parseSearchOutputLines(
 	if len(lines) == 0 {
 		return nil
 	}
-	matches := make([]lspSearchMatch, 0, lspSearchMinInt(limit, len(lines)))
+	matches := make([]lspSearchMatch, 0, min(limit, len(lines)))
 	for _, raw := range lines {
 		if len(matches) >= limit {
 			break
@@ -2013,13 +2013,6 @@ func toInt(value any) int {
 	return 0
 }
 
-func lspSearchMinInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 type lspWorkspaceSymbolParam struct {
 	Path     string `json:"path"`
 	Language string `json:"language"`
@@ -2045,7 +2038,7 @@ func (h *ToolHandlers) WorkspaceSymbol(args json.RawMessage) string {
 			if err != nil {
 				return nil, err
 			}
-			return limitWorkspaceSymbolResults(result), nil
+			return limitResults(result, XRefResultLimit), nil
 		},
 		nil,
 		"no symbols found",
@@ -2129,7 +2122,7 @@ func (h *ToolHandlers) Implementation(args json.RawMessage) string {
 			if err != nil {
 				return nil, err
 			}
-			return limitLocationResults(result), nil
+			return limitResults(result, XRefResultLimit), nil
 		},
 		func(filePath string, line, column int, err error) string {
 			return h.contextualToolError("lsp_implementation", filePath, line, column, err)
@@ -2151,7 +2144,7 @@ func (h *ToolHandlers) TypeDefinition(args json.RawMessage) string {
 			if err != nil {
 				return nil, err
 			}
-			return limitLocationResults(result), nil
+			return limitResults(result, XRefResultLimit), nil
 		},
 		func(filePath string, line, column int, err error) string {
 			return h.contextualToolError("lsp_type_definition", filePath, line, column, err)
@@ -2161,14 +2154,6 @@ func (h *ToolHandlers) TypeDefinition(args json.RawMessage) string {
 		func(result []LocationResult) []any { return []any{"result_count", len(result)} },
 		nil,
 	)
-}
-
-func limitWorkspaceSymbolResults(in []WorkspaceSymbolResult) []WorkspaceSymbolResult {
-	return limitResults(in, XRefResultLimit)
-}
-
-func limitLocationResults(in []LocationResult) []LocationResult {
-	return limitResults(in, XRefResultLimit)
 }
 
 func limitResults[T any](in []T, limit int) []T {

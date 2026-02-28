@@ -313,7 +313,6 @@ func trackedTurnTerminalKindFor(eventKey, methodKey string) trackedTurnTerminalK
 	}
 	return trackedTurnTerminalNone
 }
-func trackedTurnReasonOr(payload map[string]any, fallback string) string { return util.FirstNonEmpty(ExtractTrackedTurnReason(payload), fallback) }
 
 var threadStatusTerminalMap = map[string]struct {
 	status string
@@ -346,13 +345,13 @@ func TrackedTurnTerminalFromEvent(eventType, method string, payload map[string]a
 	turnID := ExtractTrackedTurnID(payload)
 	switch trackedTurnTerminalKindFor(eventKey, methodKey) {
 	case trackedTurnTerminalAborted:
-		return turnID, "interrupted", trackedTurnReasonOr(payload, "turn_aborted"), true, false
+		return turnID, "interrupted", util.FirstNonEmpty(ExtractTrackedTurnReason(payload), "turn_aborted"), true, false
 	case trackedTurnTerminalCompleted:
-		return turnID, util.FirstNonEmpty(ExtractTrackedTurnStatus(payload), "completed"), trackedTurnReasonOr(payload, "turn_complete"), true, false
+		return turnID, util.FirstNonEmpty(ExtractTrackedTurnStatus(payload), "completed"), util.FirstNonEmpty(ExtractTrackedTurnReason(payload), "turn_complete"), true, false
 	case trackedTurnTerminalConnectionDead:
-		return turnID, "failed", trackedTurnReasonOr(payload, "connection_dead"), true, true
+		return turnID, "failed", util.FirstNonEmpty(ExtractTrackedTurnReason(payload), "connection_dead"), true, true
 	case trackedTurnTerminalShutdownComplete:
-		return turnID, "completed", trackedTurnReasonOr(payload, "shutdown_complete"), true, true
+		return turnID, "completed", util.FirstNonEmpty(ExtractTrackedTurnReason(payload), "shutdown_complete"), true, true
 	case trackedTurnTerminalStreamError:
 		retryable, known := extractTrackedRetryable(payload)
 		if !known || retryable {

@@ -24,6 +24,45 @@ type skillImportResult struct {
 	Bytes     int64  `json:"bytes"`
 }
 
+func skillImportResultPayload(result skillImportResult) map[string]any {
+	return map[string]any{
+		"name":       result.Name,
+		"dir":        result.Dir,
+		"skill_file": result.SkillFile,
+		"source":     result.Source,
+		"files":      result.Files,
+		"bytes":      result.Bytes,
+	}
+}
+
+func skillImportFailurePayload(failure skillImportFailure) map[string]string {
+	return map[string]string{
+		"source": failure.Source,
+		"error":  failure.Error,
+	}
+}
+
+func skillImportResponse(requested int, results []skillImportResult, failures []skillImportFailure) map[string]any {
+	skillsPayload := make([]map[string]any, len(results))
+	for i, result := range results {
+		skillsPayload[i] = skillImportResultPayload(result)
+	}
+	failuresPayload := make([]map[string]string, len(failures))
+	for i, failure := range failures {
+		failuresPayload[i] = skillImportFailurePayload(failure)
+	}
+	return map[string]any{
+		"ok": len(failures) == 0,
+		"summary": map[string]int{
+			"requested": requested,
+			"imported":  len(results),
+			"failed":    len(failures),
+		},
+		"skills":   skillsPayload,
+		"failures": failuresPayload,
+	}
+}
+
 func skillImportDirName(rawName, sourceDir string) (string, error) {
 	name := strings.TrimSpace(rawName)
 	if name != "" {

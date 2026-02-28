@@ -247,17 +247,12 @@ func ApplyThreadAliases(threads []ThreadListItem, aliases map[string]string) {
 
 func LoadThreadAliases(ctx context.Context, getPref func(context.Context, string) (any, error)) map[string]string {
 	aliases, err := loadThreadAliases(ctx, getPref)
-	if err != nil {
-		logger.Warn("thread aliases: load preference failed", logger.FieldError, err)
-		return map[string]string{}
-	}
+	if err != nil { logger.Warn("thread aliases: load preference failed", logger.FieldError, err); return map[string]string{} }
 	return aliases
 }
 
 func loadThreadAliases(ctx context.Context, getPref func(context.Context, string) (any, error)) (map[string]string, error) {
-	if getPref == nil {
-		return map[string]string{}, nil
-	}
+	if getPref == nil { return map[string]string{}, nil }
 	value, err := getPref(ctx, PrefThreadAliases)
 	if err != nil {
 		return nil, err
@@ -266,13 +261,9 @@ func loadThreadAliases(ctx context.Context, getPref func(context.Context, string
 }
 
 func PersistThreadAlias(ctx context.Context, threadID string, alias string, getPref func(context.Context, string) (any, error), setPref func(context.Context, string, any) error) error {
-	if getPref == nil || setPref == nil {
-		return nil
-	}
+	if getPref == nil || setPref == nil { return nil }
 	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return nil
-	}
+	if id == "" { return nil }
 	aliases, err := loadThreadAliases(ctx, getPref)
 	if err != nil {
 		return err

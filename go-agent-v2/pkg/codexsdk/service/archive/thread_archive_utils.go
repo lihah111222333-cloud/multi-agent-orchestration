@@ -51,13 +51,7 @@ func SanitizeArchiveName(raw string) string {
 	b.Grow(len(trimmed))
 	for _, r := range trimmed {
 		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '.', r == '-', r == '_':
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_':
 			b.WriteRune(r)
 		default:
 			b.WriteByte('_')
@@ -89,10 +83,8 @@ func PathWithinRoot(root string, path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if rel = pathutil.Clean(rel); rel == "." {
-		return true, nil
-	}
-	return !strings.HasPrefix(rel, ".."+pathutil.Separator) && rel != "..", nil
+	rel = pathutil.Clean(rel)
+	return rel == "." || (!strings.HasPrefix(rel, ".."+pathutil.Separator) && rel != ".."), nil
 }
 
 func addThreadArchiveMapEntry(result map[string]int64, rawID string, rawAt any) {

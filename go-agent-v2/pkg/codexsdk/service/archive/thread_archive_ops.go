@@ -116,8 +116,7 @@ func ThreadUnarchive(ctx context.Context, threadID string, deps ThreadArchiveDep
 	// won't re-discover this thread as archived on the next thread/list call.
 	if rootDir, rootErr := ResolveThreadArchiveRootDir(); rootErr == nil {
 		if safeName, sanitizeErr := SanitizeArchiveNameStrict(id); sanitizeErr == nil {
-			threadArchiveDir := filepath.Join(rootDir, safeName)
-			if removeErr := os.RemoveAll(threadArchiveDir); removeErr != nil {
+			if removeErr := os.RemoveAll(filepath.Join(rootDir, safeName)); removeErr != nil {
 				logger.Warn("thread/unarchive: remove archive dir failed", logger.FieldThreadID, id, logger.FieldError, removeErr)
 			}
 		}

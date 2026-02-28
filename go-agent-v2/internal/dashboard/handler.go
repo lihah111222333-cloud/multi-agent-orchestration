@@ -141,17 +141,17 @@ func (s *Server) togglePromptTemplate(c *gin.Context) {
 	}
 	if err := s.stores.PromptTemplate.SetEnabled(c.Request.Context(), req.PromptKey, req.Enabled, req.UpdatedBy); err != nil {
 		serverError(c, err)
-	} else {
-		success(c, gin.H{"ok": true})
+		return
 	}
+	success(c, gin.H{"ok": true})
 }
 
 func (s *Server) deletePromptTemplate(c *gin.Context) {
 	if err := s.stores.PromptTemplate.Delete(c.Request.Context(), c.Param("key")); err != nil {
 		serverError(c, err)
-	} else {
-		success(c, gin.H{"ok": true})
+		return
 	}
+	success(c, gin.H{"ok": true})
 }
 
 func (s *Server) listCommandCards(c *gin.Context) {
@@ -178,9 +178,9 @@ func (s *Server) saveCommandCard(c *gin.Context) {
 func (s *Server) deleteCommandCard(c *gin.Context) {
 	if err := s.stores.CommandCard.Delete(c.Request.Context(), c.Param("key")); err != nil {
 		serverError(c, err)
-	} else {
-		success(c, gin.H{"ok": true})
+		return
 	}
+	success(c, gin.H{"ok": true})
 }
 
 func (s *Server) listAuditLog(c *gin.Context) {
@@ -299,9 +299,9 @@ func (s *Server) approveTopology(c *gin.Context) {
 	}
 	if err := s.stores.TopologyApproval.Approve(c.Request.Context(), req.ID, req.ApprovedBy); err != nil {
 		serverError(c, err)
-	} else {
-		success(c, gin.H{"ok": true})
+		return
 	}
+	success(c, gin.H{"ok": true})
 }
 
 func (s *Server) rejectTopology(c *gin.Context) {
@@ -315,9 +315,9 @@ func (s *Server) rejectTopology(c *gin.Context) {
 	}
 	if err := s.stores.TopologyApproval.Reject(c.Request.Context(), req.ID, req.RejectedBy); err != nil {
 		serverError(c, err)
-	} else {
-		success(c, gin.H{"ok": true})
+		return
 	}
+	success(c, gin.H{"ok": true})
 }
 
 func (s *Server) dbQuery(c *gin.Context) {
@@ -336,10 +336,7 @@ func (s *Server) dbQuery(c *gin.Context) {
 	}
 }
 
-func success(c *gin.Context, data any) {
-	c.JSON(http.StatusOK, gin.H{"success": true, "data": data})
-}
-
+func success(c *gin.Context, data any) { c.JSON(http.StatusOK, gin.H{"success": true, "data": data}) }
 func badRequest(c *gin.Context, code, message string) {
 	c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": code, "message": message}})
 }

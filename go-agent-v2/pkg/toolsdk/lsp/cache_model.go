@@ -34,14 +34,7 @@ type documentCacheRecord struct {
 }
 
 func (r documentCacheRecord) expired(now time.Time, ttl time.Duration) bool {
-	if ttl <= 0 {
-		return false
-	}
-	if r.LastSyncedAt <= 0 {
-		return true
-	}
-	syncedAt := time.Unix(0, r.LastSyncedAt)
-	return now.After(syncedAt.Add(ttl))
+	return ttl > 0 && (r.LastSyncedAt <= 0 || now.After(time.Unix(0, r.LastSyncedAt).Add(ttl)))
 }
 
 func loadLSPCacheConfigFromEnv() lspCacheConfig {
@@ -51,14 +44,9 @@ func loadLSPCacheConfigFromEnv() lspCacheConfig {
 		cleanupInterval: defaultLSPCacheCleanupInterval,
 	}
 
-	switch raw := strings.ToLower(strings.TrimSpace(os.Getenv(envLSPCacheEnabled))); raw {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(envLSPCacheEnabled))) {
 	case "1", "true", "yes", "on":
 		cfg.enabled = true
-	case "0", "false", "no", "off", "":
-		cfg.enabled = false
-	default:
-		// Invalid values default to disabled to preserve fail-closed behavior.
-		cfg.enabled = false
 	}
 
 	if dir := strings.TrimSpace(os.Getenv(envLSPCacheDir)); dir != "" {

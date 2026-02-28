@@ -361,11 +361,11 @@ type itemRequest[T any] struct {
 	Item T `json:"item"`
 }
 
-type PrepareCallHierarchyParams = TextDocumentPositionParams
-
-type CallHierarchyIncomingCallsParams = itemRequest[CallHierarchyItem]
-
-type CallHierarchyOutgoingCallsParams = itemRequest[CallHierarchyItem]
+type (
+	PrepareCallHierarchyParams       = TextDocumentPositionParams
+	CallHierarchyIncomingCallsParams = itemRequest[CallHierarchyItem]
+	CallHierarchyOutgoingCallsParams = itemRequest[CallHierarchyItem]
+)
 
 type CallHierarchyIncomingCall struct {
 	From       CallHierarchyItem `json:"from"`
@@ -377,11 +377,11 @@ type CallHierarchyOutgoingCall struct {
 	FromRanges []Range           `json:"fromRanges"`
 }
 
-type PrepareTypeHierarchyParams = TextDocumentPositionParams
-
-type TypeHierarchySupertypesParams = itemRequest[TypeHierarchyItem]
-
-type TypeHierarchySubtypesParams = itemRequest[TypeHierarchyItem]
+type (
+	PrepareTypeHierarchyParams    = TextDocumentPositionParams
+	TypeHierarchySupertypesParams = itemRequest[TypeHierarchyItem]
+	TypeHierarchySubtypesParams   = itemRequest[TypeHierarchyItem]
+)
 
 type CallHierarchyResult struct {
 	Item     CallHierarchyItem           `json:"item"`

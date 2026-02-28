@@ -94,23 +94,19 @@ type HoverCapability struct {
 	ContentFormat []string `json:"contentFormat,omitempty"`
 }
 
-type CompletionClientCapability = DynamicRegistrationCapability
-
 type RenameClientCapability struct {
 	PrepareSupport bool `json:"prepareSupport,omitempty"`
 }
 
-type CallHierarchyCapability = DynamicRegistrationCapability
-
-type TypeHierarchyCapability = DynamicRegistrationCapability
-
-type CodeActionCapability = DynamicRegistrationCapability
-
-type SignatureHelpCapability = DynamicRegistrationCapability
-
-type FormattingCapability = DynamicRegistrationCapability
-
-type FoldingRangeCapability = DynamicRegistrationCapability
+type (
+	CompletionClientCapability = DynamicRegistrationCapability
+	CallHierarchyCapability    = DynamicRegistrationCapability
+	TypeHierarchyCapability    = DynamicRegistrationCapability
+	CodeActionCapability       = DynamicRegistrationCapability
+	SignatureHelpCapability    = DynamicRegistrationCapability
+	FormattingCapability       = DynamicRegistrationCapability
+	FoldingRangeCapability     = DynamicRegistrationCapability
+)
 
 type SemanticTokensCapability struct {
 	DynamicRegistration bool                              `json:"dynamicRegistration,omitempty"`
@@ -213,8 +209,6 @@ type PublishDiagnosticsParams struct {
 	Diagnostics []Diagnostic `json:"diagnostics"`
 }
 
-type HoverParams = TextDocumentPositionParams
-
 type HoverResult struct {
 	Contents MarkupContent `json:"contents"`
 	Range    *Range        `json:"range,omitempty"`
@@ -225,8 +219,6 @@ type MarkupContent struct {
 	Value string `json:"value"`
 }
 
-type DefinitionParams = TextDocumentPositionParams
-
 type ReferenceParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
 	Position     Position               `json:"position"`
@@ -236,8 +228,6 @@ type ReferenceParams struct {
 type ReferenceContext struct {
 	IncludeDeclaration bool `json:"includeDeclaration"`
 }
-
-type DocumentSymbolParams = DidCloseTextDocumentParams
 
 type DocumentSymbol struct {
 	Name           string           `json:"name"`
@@ -298,8 +288,6 @@ func (k SymbolKind) String() string {
 	return "unknown"
 }
 
-type CompletionParams = TextDocumentPositionParams
-
 type CompletionItem struct {
 	Label         string `json:"label"`
 	Kind          int    `json:"kind,omitempty"`
@@ -312,6 +300,13 @@ type CompletionList struct {
 	IsIncomplete bool             `json:"isIncomplete"`
 	Items        []CompletionItem `json:"items"`
 }
+
+type (
+	HoverParams          = TextDocumentPositionParams
+	DefinitionParams     = TextDocumentPositionParams
+	DocumentSymbolParams = DidCloseTextDocumentParams
+	CompletionParams     = TextDocumentPositionParams
+)
 
 type RenameParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`

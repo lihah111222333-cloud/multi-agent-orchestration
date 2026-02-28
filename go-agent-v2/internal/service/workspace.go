@@ -569,12 +569,10 @@ func (m *WorkspaceManager) handleDeletedFiles(
 			m.saveFileAndRecord(ctx, result, toTrackedFile(WorkspaceFileStateConflict, "", reason), &result.Conflicts, "conflict", reason)
 			continue
 		}
-
 		if req.DryRun {
 			recordMergeResult(result, &result.Merged, normalizedRel, "would_delete", "")
 			continue
 		}
-
 		if err := os.Remove(sourcePath); err != nil && !os.IsNotExist(err) {
 			msg := err.Error()
 			m.saveFileAndRecord(ctx, result, toTrackedFile(WorkspaceFileStateError, "", msg), &result.Errors, "error", msg)
@@ -710,15 +708,12 @@ func copyFileAtomic(source, target string, perm os.FileMode) error {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-
 	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 		return err
 	}
-
 	if stat, err := os.Lstat(target); err == nil && stat.Mode()&os.ModeSymlink != 0 {
 		return apperrors.Newf("copyFileAtomic", "target is symlink: %s", target)
 	}
-
 	tmp, err := os.CreateTemp(filepath.Dir(target), ".workspace-merge-*")
 	if err != nil {
 		return err
@@ -730,7 +725,6 @@ func copyFileAtomic(source, target string, perm os.FileMode) error {
 			_ = os.Remove(tmpPath)
 		}
 	}()
-
 	if _, err := io.Copy(tmp, in); err != nil {
 		_ = tmp.Close()
 		return err

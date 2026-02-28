@@ -146,7 +146,6 @@ func (s *SkillService) scanSkillRecords() ([]skillRecord, error) {
 		}
 		return nil, err
 	}
-
 	records := make([]skillRecord, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -170,7 +169,6 @@ func (s *SkillService) scanSkillRecords() ([]skillRecord, error) {
 			Meta:       extractSkillMetadata(skillPath),
 		})
 	}
-
 	sort.Slice(records, func(i, j int) bool {
 		left := strings.ToLower(skillDisplayName(records[i].StoredName, records[i].Meta, records[i].ID))
 		right := strings.ToLower(skillDisplayName(records[j].StoredName, records[j].Meta, records[j].ID))
@@ -194,7 +192,6 @@ func (s *SkillService) resolveSkillRecord(name string) (skillRecord, error) {
 	if len(records) == 0 {
 		return skillRecord{}, os.ErrNotExist
 	}
-
 	for _, record := range records {
 		displayName := skillDisplayName(record.StoredName, record.Meta, record.ID)
 		if matchSkillName(displayName, requested) {
@@ -224,7 +221,6 @@ func (s *SkillService) ListSkills() ([]SkillInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	skills := make([]SkillInfo, 0, len(records))
 	for _, record := range records {
 		meta := record.Meta
@@ -356,7 +352,6 @@ func (s *SkillService) ImportSkillDirectory(sourceDir, name string) (SkillImport
 	if _, err := ensureSourceSkillFile(sourceDir); err != nil {
 		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "missing SKILL.md in source directory")
 	}
-
 	storedName := strings.TrimSpace(name)
 	if storedName == "" {
 		candidate := strings.TrimSpace(strings.TrimRight(sourceDir, `/\\`))
@@ -368,7 +363,6 @@ func (s *SkillService) ImportSkillDirectory(sourceDir, name string) (SkillImport
 	if storedName == "" {
 		return SkillImportResult{}, apperrors.New("SkillService.ImportSkillDirectory", "skill name is required")
 	}
-
 	if err := s.ensureByIDRoot(); err != nil {
 		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "mkdir by-id root")
 	}
@@ -379,7 +373,6 @@ func (s *SkillService) ImportSkillDirectory(sourceDir, name string) (SkillImport
 		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "clean staging dir")
 	}
 	defer func() { _ = os.RemoveAll(stagingDir) }()
-
 	stats, err := copySkillDirectory(sourceDir, stagingDir)
 	if err != nil {
 		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "copy skill directory")
@@ -393,7 +386,6 @@ func (s *SkillService) ImportSkillDirectory(sourceDir, name string) (SkillImport
 	if err := activateStagedSkillDir(targetDir, stagingDir); err != nil {
 		return SkillImportResult{}, apperrors.Wrap(err, "SkillService.ImportSkillDirectory", "activate imported skill dir")
 	}
-
 	return SkillImportResult{
 		Name:      storedName,
 		Dir:       targetDir,

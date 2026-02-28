@@ -15,7 +15,6 @@ const taCols = `id, ack_key, title, description, assigned_to, requested_by,
 	metadata, due_at, acked_at, started_at, finished_at, created_at, updated_at`
 
 func (s *TaskAckStore) Save(ctx context.Context, a *TaskAck) (*TaskAck, error) {
-	metaJSON := mustMarshalJSON(a.Metadata)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO task_acks (ack_key, title, description, assigned_to, requested_by,
 		   priority, status, progress, ack_message, result_summary, metadata, due_at)
@@ -30,10 +29,8 @@ func (s *TaskAckStore) Save(ctx context.Context, a *TaskAck) (*TaskAck, error) {
 		 RETURNING `+taCols,
 		a.AckKey, a.Title, a.Description, a.AssignedTo, a.RequestedBy,
 		defaultStr(a.Priority, "normal"), defaultStr(a.Status, "pending"), util.ClampInt(a.Progress, 0, 100), a.AckMessage, a.ResultSummary,
-		string(metaJSON), a.DueAt)
-	if err != nil {
-		return nil, err
-	}
+		string(mustMarshalJSON(a.Metadata)), a.DueAt)
+	if err != nil { return nil, err }
 	return collectOne[TaskAck](rows)
 }
 
@@ -45,8 +42,6 @@ func (s *TaskAckStore) List(ctx context.Context, keyword, status, priority, assi
 		KeywordLike(keyword, "ack_key", "title", "description").
 		Build("SELECT "+taCols+" FROM task_acks", "updated_at DESC, id DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	return collectRows[TaskAck](rows)
 }

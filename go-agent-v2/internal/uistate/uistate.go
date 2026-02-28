@@ -1,4 +1,3 @@
-// uistate.go — UI 状态类型定义与偏好管理。
 package uistate
 
 import (
@@ -8,11 +7,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/store"
 )
 
-// ========================================
-// UI 类型常量
-// ========================================
-
-// UIType 前端渲染事件类型 (17 种, 完整覆盖 codex/events.go 全部事件)。
 type UIType string
 
 const (
@@ -35,37 +29,29 @@ const (
 	UITypeSystem          UIType = "system"
 )
 
-// NormalizedEvent 归一化后的 UI 事件。
 type NormalizedEvent struct {
 	UIType   UIType   `json:"uiType"`
 	Text     string   `json:"text,omitempty"`
 	Command  string   `json:"command,omitempty"`
 	File     string   `json:"file,omitempty"`
-	Files    []string `json:"files,omitempty"` // 涉及文件列表 (Go 提取)
-	Ref      string   `json:"ref,omitempty"`   // 引用 ID (run_id/thread_id)
-	Error    string   `json:"error,omitempty"` // 错误信息
+	Files    []string `json:"files,omitempty"`
+	Ref      string   `json:"ref,omitempty"`
+	Error    string   `json:"error,omitempty"`
 	ExitCode *int     `json:"exitCode,omitempty"`
 	RawType  string   `json:"-"`
 	Method   string   `json:"-"`
 }
 
-// ========================================
-// 偏好管理
-// ========================================
-
-// PreferenceManager handles UI preference logic.
-// 当 store 为 nil 时，降级为内存存储。
+// PreferenceManager handles UI preferences and uses memory fallback when store is nil.
 type PreferenceManager struct {
 	store    *store.UIPreferenceStore
-	fallback sync.Map // nil-store 时的内存降级
+	fallback sync.Map
 }
 
-// NewPreferenceManager 创建偏好管理器。
 func NewPreferenceManager(s *store.UIPreferenceStore) *PreferenceManager {
 	return &PreferenceManager{store: s}
 }
 
-// Get retrieves a single preference.
 func (m *PreferenceManager) Get(ctx context.Context, key string) (any, error) {
 	if m.store == nil {
 		v, _ := m.fallback.Load(key)
@@ -74,7 +60,6 @@ func (m *PreferenceManager) Get(ctx context.Context, key string) (any, error) {
 	return m.store.Get(ctx, key)
 }
 
-// Set updates a preference.
 func (m *PreferenceManager) Set(ctx context.Context, key string, value any) error {
 	if m.store == nil {
 		m.fallback.Store(key, value)
@@ -83,7 +68,6 @@ func (m *PreferenceManager) Set(ctx context.Context, key string, value any) erro
 	return m.store.Set(ctx, key, value)
 }
 
-// GetAll retrieves all preferences.
 func (m *PreferenceManager) GetAll(ctx context.Context) (map[string]any, error) {
 	if m.store == nil {
 		result := make(map[string]any)

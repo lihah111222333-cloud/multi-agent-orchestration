@@ -5,14 +5,12 @@ import (
 	"time"
 )
 
-// ThreadSnapshot is UI-ready thread info.
 type ThreadSnapshot struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	State string `json:"state"`
 }
 
-// TimelineAttachment is a lightweight attachment reference.
 type TimelineAttachment struct {
 	Kind       string `json:"kind,omitempty"`
 	Name       string `json:"name,omitempty"`
@@ -20,7 +18,6 @@ type TimelineAttachment struct {
 	PreviewURL string `json:"previewUrl,omitempty"`
 }
 
-// TimelineItem is the unified render item for chat timeline.
 type TimelineItem struct {
 	ID          string               `json:"id"`
 	Ts          string               `json:"ts"`
@@ -39,14 +36,12 @@ type TimelineItem struct {
 	ElapsedMS   *int                 `json:"elapsedMs,omitempty"`
 }
 
-// AgentMeta tracks runtime meta for thread cards.
 type AgentMeta struct {
 	Alias        string `json:"alias,omitempty"`
 	LastActiveAt string `json:"lastActiveAt,omitempty"`
 	IsMain       bool   `json:"isMain,omitempty"`
 }
 
-// TokenUsageSnapshot stores context-window token usage for UI.
 type TokenUsageSnapshot struct {
 	UsedTokens          int     `json:"usedTokens"`
 	ContextWindowTokens int     `json:"contextWindowTokens,omitempty"`
@@ -55,7 +50,6 @@ type TokenUsageSnapshot struct {
 	UpdatedAt           string  `json:"updatedAt,omitempty"`
 }
 
-// ActivityStats holds per-thread cumulative activity counters.
 type ActivityStats struct {
 	LSPCalls  int64            `json:"lspCalls"`
 	Commands  int64            `json:"commands"`
@@ -63,7 +57,6 @@ type ActivityStats struct {
 	ToolCalls map[string]int64 `json:"toolCalls"`
 }
 
-// AlertEntry is a single high-priority alert for the UI panel.
 type AlertEntry struct {
 	ID      string `json:"id"`
 	Time    string `json:"time"`
@@ -71,7 +64,6 @@ type AlertEntry struct {
 	Message string `json:"message"`
 }
 
-// RuntimeSnapshot is a full UI runtime state snapshot.
 type RuntimeSnapshot struct {
 	Threads                 []ThreadSnapshot              `json:"threads"`
 	Statuses                map[string]string             `json:"statuses"`
@@ -89,7 +81,6 @@ type RuntimeSnapshot struct {
 	AlertsByThread          map[string][]AlertEntry       `json:"alertsByThread"`
 }
 
-// HistoryRecord is a compact history message for timeline hydration.
 type HistoryRecord struct {
 	ID        int64
 	Role      string
@@ -128,10 +119,7 @@ type threadRuntime struct {
 	reasoningHeaderBuf  string
 	hasDerivedState     bool
 
-	// Fix 2: 用于检测过期 turn — 如果上一个 turn 的 depth 计数器未归零，
-	// 新 turn 开始时强制重置。
-	lastEventAt time.Time
-	// Fix 4: 缓存审批请求的描述文本，用于 statusHeader 展示具体审批内容。
+	lastEventAt     time.Time
 	approvalContext string
 
 	// pendingHydration 暂存在流式期间被跳过的 hydration records。

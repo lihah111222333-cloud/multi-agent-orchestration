@@ -230,6 +230,7 @@ func (m *RuntimeManager) ClearThreadTimeline(threadID string) {
 	m.runtime[id] = newThreadRuntime()
 }
 
+// ApplyAgentEvent mutates runtime state by normalized backend events.
 func (m *RuntimeManager) ApplyAgentEvent(threadID string, normalized NormalizedEvent, payload map[string]any) {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -244,6 +245,14 @@ func (m *RuntimeManager) ApplyAgentEvent(threadID string, normalized NormalizedE
 
 	m.ensureThreadLocked(id)
 	m.applyAgentEventLocked(id, normalized, payload, time.Now())
+
+	// turn 完成后，若有延迟的 hydration records，现在重放。
+	// 不能放在 completeTurnLocked 中，否则会产生 init cycle。
+	if rt := m.runtime[id]; rt != nil && len(rt.pendingHydration) > 0 {
+		pending := rt.pendingHydration
+		rt.pendingHydration = nil
+		m.replayPendingHydrationLocked(id, pending)
+	}
 }
 
 func (m *RuntimeManager) TimelineStats() map[string]any {
@@ -270,6 +279,17 @@ func (m *RuntimeManager) TimelineStats() map[string]any {
 	}
 }
 
+// hasAccumulatedText returns true if the timeline item at the given index
+// exists and has non-empty Text (i.e. streaming deltas have been accumulated).
+func hasAccumulatedText(timeline []TimelineItem, index int) bool {
+	if index < 0 || index >= len(timeline) {
+		return false
+	}
+	return timeline[index].Text != ""
+}
+
+// HydrateHistory rebuilds thread timeline from stored messages.
+// Returns false if skipped (e.g. thread is actively streaming).
 func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord) bool {
 	id := strings.TrimSpace(threadID)
 	if id == "" {
@@ -281,8 +301,11 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 
 	if rt, ok := m.runtime[id]; ok {
 		timeline := m.snapshot.TimelinesByThread[id]
-		if (rt.assistantIndex >= 0 && rt.assistantIndex < len(timeline) && timeline[rt.assistantIndex].Text != "") ||
-			(rt.thinkingIndex >= 0 && rt.thinkingIndex < len(timeline) && timeline[rt.thinkingIndex].Text != "") {
+		if hasAccumulatedText(timeline, rt.assistantIndex) ||
+			hasAccumulatedText(timeline, rt.thinkingIndex) {
+			// 暂存 records，等流式结束后重放
+			rt.pendingHydration = make([]HistoryRecord, len(records))
+			copy(rt.pendingHydration, records)
 			return false
 		}
 	}
@@ -343,6 +366,66 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 		rt.backgroundDetails = ""
 	}
 	return true
+}
+
+// replayPendingHydrationLocked 重放延迟的 hydration records。
+// 调用方已持有 m.mu 写锁。
+func (m *RuntimeManager) replayPendingHydrationLocked(threadID string, records []HistoryRecord) {
+	m.snapshot.TimelinesByThread[threadID] = []TimelineItem{}
+	m.snapshot.DiffTextByThread[threadID] = ""
+	m.runtime[threadID] = newThreadRuntime()
+
+	ordered := make([]HistoryRecord, 0, len(records))
+	ordered = append(ordered, records...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].ID < ordered[j].ID
+	})
+
+	for _, rec := range ordered {
+		ts := rec.CreatedAt
+		if ts.IsZero() {
+			ts = time.Now()
+		}
+		role := strings.ToLower(strings.TrimSpace(rec.Role))
+		if role == "user" {
+			var payload map[string]any
+			if len(rec.Metadata) > 0 {
+				_ = json.Unmarshal(rec.Metadata, &payload)
+			}
+			m.appendUserLocked(threadID, rec.Content, extractUserAttachmentsFromPayload(payload), ts)
+			continue
+		}
+
+		var payload map[string]any
+		if len(rec.Metadata) > 0 {
+			_ = json.Unmarshal(rec.Metadata, &payload)
+		}
+		if payload == nil {
+			payload = map[string]any{}
+		}
+		hydrateContentPayload(rec, payload)
+
+		normalized := NormalizeEvent(rec.EventType, rec.Method, rec.Metadata)
+		if normalized.Text == "" {
+			normalized.Text = rec.Content
+		}
+		if normalized.UIType == UITypeSystem && role == "assistant" && strings.TrimSpace(rec.Content) != "" {
+			normalized.UIType = UITypeAssistantDone
+		}
+
+		m.applyAgentEventLocked(threadID, normalized, payload, ts)
+	}
+
+	// 清理瞬态 overlay
+	if rt := m.runtime[threadID]; rt != nil {
+		rt.mcpStartupOverlay = false
+		rt.mcpStartupLabel = ""
+		rt.terminalWaitOverlay = false
+		rt.terminalWaitLabel = ""
+		rt.backgroundOverlay = false
+		rt.backgroundLabel = ""
+		rt.backgroundDetails = ""
+	}
 }
 
 func (m *RuntimeManager) AppendHistory(threadID string, records []HistoryRecord) {

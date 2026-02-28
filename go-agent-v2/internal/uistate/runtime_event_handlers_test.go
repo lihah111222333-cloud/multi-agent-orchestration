@@ -185,7 +185,6 @@ func TestApplyUITypeDepthsToolCallUsesPayloadToolName(t *testing.T) {
 	}
 }
 
-
 func TestApplyAgentEventStartedStreamingTerminalOrder(t *testing.T) {
 	mgr := NewRuntimeManager()
 	threadID := "thread-order"
@@ -246,5 +245,93 @@ func TestApplyAgentEventUnknownMethodIgnored(t *testing.T) {
 	}
 	if got := len(snap.TimelinesByThread[threadID]); got != 0 {
 		t.Fatalf("timeline entries for unknown method = %d, want 0", got)
+	}
+}
+
+func TestHydrateHistoryDeferredDuringStreaming(t *testing.T) {
+	mgr := NewRuntimeManager()
+	threadID := "thread-deferred"
+
+	// Step 1: 模拟 turn 开始 + assistant 流式 delta
+	mgr.ApplyAgentEvent(threadID, NormalizedEvent{
+		UIType:  UITypeTurnStarted,
+		RawType: "turn_started",
+		Method:  "turn/started",
+	}, map[string]any{"turnId": "turn-1"})
+
+	mgr.ApplyAgentEvent(threadID, NormalizedEvent{
+		UIType:  UITypeAssistantDelta,
+		RawType: "agent_message_delta",
+		Method:  "item/agentMessage/delta",
+		Text:    "streaming...",
+	}, map[string]any{"delta": "streaming..."})
+
+	// Step 2: 在流式中调用 HydrateHistory — 应该被跳过
+	records := []HistoryRecord{
+		{ID: 1, Role: "user", Content: "hello from history"},
+		{ID: 2, Role: "assistant", EventType: "agent_message", Content: "reply from history"},
+	}
+	hydrated := mgr.HydrateHistory(threadID, records)
+	if hydrated {
+		t.Fatalf("HydrateHistory should return false during streaming")
+	}
+
+	// 确认 timeline 仍保留流式内容（未被覆盖）
+	snap := mgr.Snapshot()
+	timeline := snap.TimelinesByThread[threadID]
+	foundStreaming := false
+	for _, item := range timeline {
+		if item.Text == "streaming..." {
+			foundStreaming = true
+			break
+		}
+	}
+	if !foundStreaming {
+		t.Fatalf("expected streaming delta to remain in timeline during skip")
+	}
+
+	// Step 3: 确认 pendingHydration 已被设置
+	mgr.mu.RLock()
+	rt := mgr.runtime[threadID]
+	hasPending := rt != nil && len(rt.pendingHydration) > 0
+	mgr.mu.RUnlock()
+	if !hasPending {
+		t.Fatalf("expected pendingHydration to be set after skipped HydrateHistory")
+	}
+
+	// Step 4: 触发 turn_complete — 应触发延迟 hydration
+	mgr.ApplyAgentEvent(threadID, NormalizedEvent{
+		UIType:  UITypeTurnComplete,
+		RawType: "turn_complete",
+		Method:  "turn/completed",
+	}, map[string]any{"turnId": "turn-1"})
+
+	// Step 5: 验证 timeline 已包含 pending records 的内容
+	snap = mgr.Snapshot()
+	timeline = snap.TimelinesByThread[threadID]
+	foundUser := false
+	foundAssistant := false
+	for _, item := range timeline {
+		if item.Kind == "user" && item.Text == "hello from history" {
+			foundUser = true
+		}
+		if item.Kind == "assistant" && item.Text == "reply from history" {
+			foundAssistant = true
+		}
+	}
+	if !foundUser {
+		t.Fatalf("expected user message from hydration in timeline, got: %+v", timeline)
+	}
+	if !foundAssistant {
+		t.Fatalf("expected assistant message from hydration in timeline, got: %+v", timeline)
+	}
+
+	// Step 6: 确认 pendingHydration 已被清空
+	mgr.mu.RLock()
+	rt = mgr.runtime[threadID]
+	hasPending = rt != nil && len(rt.pendingHydration) > 0
+	mgr.mu.RUnlock()
+	if hasPending {
+		t.Fatalf("expected pendingHydration to be cleared after replay")
 	}
 }

@@ -26,14 +26,18 @@ func (m *RuntimeManager) setThreadStateLocked(threadID, state string) {
 
 func (m *RuntimeManager) markAgentActiveLocked(threadID string, ts time.Time) {
 	meta := m.snapshot.AgentMetaByID[threadID]
-	if ts.IsZero() { ts = time.Now() }
+	if ts.IsZero() {
+		ts = time.Now()
+	}
 	meta.LastActiveAt = ts.UTC().Format(time.RFC3339)
 	m.snapshot.AgentMetaByID[threadID] = meta
 }
 
 func (m *RuntimeManager) nextItemIDLocked(kind string) string {
 	m.seq++
-	if kind == "" { kind = "item" }
+	if kind == "" {
+		kind = "item"
+	}
 	return fmt.Sprintf("%s-%d-%d", kind, time.Now().UnixMilli(), m.seq)
 }
 
@@ -60,7 +64,9 @@ func (m *RuntimeManager) patchTimelineItemLocked(threadID string, index int, pat
 	m.snapshot.TimelinesByThread[threadID] = list
 }
 
-func (m *RuntimeManager) timelineLocked(threadID string) []TimelineItem { return m.snapshot.TimelinesByThread[threadID] }
+func (m *RuntimeManager) timelineLocked(threadID string) []TimelineItem {
+	return m.snapshot.TimelinesByThread[threadID]
+}
 
 func (m *RuntimeManager) appendUserLocked(threadID, text string, attachments []TimelineAttachment, ts time.Time) {
 	if strings.TrimSpace(text) == "" && len(attachments) == 0 {
@@ -75,7 +81,9 @@ func (m *RuntimeManager) appendUserLocked(threadID, text string, attachments []T
 
 func (m *RuntimeManager) startThinkingLocked(threadID string, ts time.Time) {
 	rt := m.runtime[threadID]
-	if rt.thinkingIndex >= 0 { return }
+	if rt.thinkingIndex >= 0 {
+		return
+	}
 	rt.thinkingIndex = m.pushTimelineItemLocked(threadID, TimelineItem{
 		Kind: "thinking",
 		Text: "",
@@ -176,7 +184,9 @@ func (m *RuntimeManager) appendAssistantLocked(threadID, delta string, ts time.T
 	})
 }
 
-func (m *RuntimeManager) finishAssistantLocked(threadID string) { m.runtime[threadID].assistantIndex = -1 }
+func (m *RuntimeManager) finishAssistantLocked(threadID string) {
+	m.runtime[threadID].assistantIndex = -1
+}
 
 func (m *RuntimeManager) startCommandLocked(threadID, command string, ts time.Time) {
 	m.finishThinkingLocked(threadID)
@@ -437,7 +447,9 @@ type planEntry struct {
 
 func extractPlanSnapshot(payload map[string]any) (string, bool, bool) {
 	entries, explanation := extractPlanEntries(payload)
-	if len(entries) == 0 { return "", false, false }
+	if len(entries) == 0 {
+		return "", false, false
+	}
 	if text, done := formatPlanSnapshot(entries, explanation); strings.TrimSpace(text) != "" {
 		return text, done, true
 	}

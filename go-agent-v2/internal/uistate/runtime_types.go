@@ -133,6 +133,10 @@ type threadRuntime struct {
 	lastEventAt time.Time
 	// Fix 4: 缓存审批请求的描述文本，用于 statusHeader 展示具体审批内容。
 	approvalContext string
+
+	// pendingHydration 暂存在流式期间被跳过的 hydration records。
+	// completeTurnLocked 时会检测并重放。
+	pendingHydration []HistoryRecord
 }
 
 func newThreadRuntime() *threadRuntime {

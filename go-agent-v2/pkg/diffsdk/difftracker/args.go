@@ -7,18 +7,13 @@ import (
 
 func NormalizeDynamicToolName(tool string) string {
 	tool = strings.ToLower(strings.TrimSpace(tool))
-	tool = strings.TrimPrefix(strings.TrimPrefix(tool, "functions."), "tools.")
-	return tool
+	return strings.TrimPrefix(strings.TrimPrefix(tool, "functions."), "tools.")
 }
 
 func ExtractStringArg(args map[string]any, keys ...string) string {
 	for _, key := range keys {
-		value, ok := args[key].(string)
-		if !ok {
-			continue
-		}
-		if value = strings.TrimSpace(value); value != "" {
-			return value
+		if value, ok := args[key].(string); ok {
+			if value = strings.TrimSpace(value); value != "" { return value }
 		}
 	}
 	return ""
@@ -76,10 +71,7 @@ func ResolveDynamicToolDiffRepoRoot(agentID string, args map[string]any, resolve
 
 	candidates := make([]string, 0, 16)
 	addCandidate := func(path string) {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			return
-		}
+		if path = strings.TrimSpace(path); path == "" { return }
 		candidates = append(candidates, path, filepath.Dir(path))
 		if baseDir != "" && !filepath.IsAbs(path) {
 			absPath := filepath.Join(baseDir, path)
@@ -97,18 +89,9 @@ func ResolveDynamicToolDiffRepoRoot(agentID string, args map[string]any, resolve
 	seen := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
 		normalized := filepath.Clean(candidate)
-		if normalized == "" {
-			continue
-		}
-		if _, exists := seen[normalized]; exists {
-			continue
-		}
+		if _, exists := seen[normalized]; exists { continue }
 		seen[normalized] = struct{}{}
-		repoRoot, err := GitRepoRootFromPath(normalized)
-		if err != nil {
-			continue
-		}
-		return repoRoot
+		if repoRoot, err := GitRepoRootFromPath(normalized); err == nil { return repoRoot }
 	}
 
 	return ""

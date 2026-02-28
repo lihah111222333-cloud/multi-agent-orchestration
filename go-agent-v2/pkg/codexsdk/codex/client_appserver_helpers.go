@@ -13,8 +13,7 @@ import (
 )
 
 func parseEnvInt(name string) (raw string, value int, err error) {
-	raw = strings.TrimSpace(os.Getenv(name))
-	if raw == "" { return "", 0, nil }
+	if raw = strings.TrimSpace(os.Getenv(name)); raw == "" { return "", 0, nil }
 	value, err = strconv.Atoi(raw)
 	return raw, value, err
 }
@@ -62,7 +61,7 @@ func buildTurnStartInputs(prompt string, images, files []string) []asTurnStartIn
 		if path == "" {
 			continue
 		}
-		name := strings.TrimSpace(filepath.Base(strings.TrimSpace(path)))
+		name := strings.TrimSpace(filepath.Base(path))
 		if name == "" || name == "." || name == string(filepath.Separator) { name = "file" }
 		inputs = append(inputs, asTurnStartInput{
 			Type: "mention",
@@ -78,9 +77,7 @@ func buildTurnStartInputs(prompt string, images, files []string) []asTurnStartIn
 }
 
 func isNotInitializedRPCError(err error) bool {
-	if err == nil { return false }
-	text := strings.ToLower(err.Error())
-	return strings.Contains(text, "not initialized")
+	return rpcErrorContains(err, false, "not initialized")
 }
 
 func retryAfterNotInitialized[T any](

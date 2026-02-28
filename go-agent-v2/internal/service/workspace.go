@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -668,7 +669,7 @@ func (m *WorkspaceManager) bootstrapFiles(ctx context.Context, run *store.Worksp
 
 func normalizeRelativePath(path string) (string, error) {
 	p := filepath.Clean(strings.TrimSpace(path))
-	if p == "" || p == "." {
+	if p == "." {
 		return "", apperrors.New("normalizeRelativePath", "path is empty")
 	}
 	if filepath.IsAbs(p) {
@@ -767,12 +768,8 @@ func hashFileIfExists(path string) (string, error) {
 func mergeMetadata(base any, extra map[string]any) map[string]any {
 	out := map[string]any{}
 	if m, ok := base.(map[string]any); ok {
-		for k, v := range m {
-			out[k] = v
-		}
+		maps.Copy(out, m)
 	}
-	for k, v := range extra {
-		out[k] = v
-	}
+	maps.Copy(out, extra)
 	return out
 }

@@ -54,10 +54,6 @@ func NewServer(stores *Stores, cfg *config.Config) *Server {
 	return s
 }
 
-func (s *Server) Engine() *gin.Engine { return s.router }
-
-func (s *Server) Bus() *EventBus { return s.bus }
-
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	srv := &http.Server{
 		Addr:              addr,

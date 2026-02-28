@@ -1,4 +1,3 @@
-// agent_thread.go — agent_threads 表 CRUD (Codex 线程注册/发现)。
 package store
 
 import (
@@ -27,7 +26,6 @@ type AgentThread struct {
 // AgentThreadStore agent_threads 存储。
 type AgentThreadStore struct{ BaseStore }
 
-// Ensure AgentThreadStore satisfies discovery contract at compile time.
 var _ discovery.Discoverer = (*AgentThreadStore)(nil)
 
 // NewAgentThreadStore 创建 AgentThreadStore。

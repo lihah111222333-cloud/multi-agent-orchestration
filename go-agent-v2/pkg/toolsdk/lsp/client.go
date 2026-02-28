@@ -195,18 +195,15 @@ func (c *Client) callWhenRunning(method string, params any, result any) error {
 	return c.callWithTimeout(method, params, result, 30*time.Second)
 }
 
-func (c *Client) callRawWhenRunning(method string, params any) (json.RawMessage, error) {
-	var raw json.RawMessage
-	err := c.callWhenRunning(method, params, &raw)
+func (c *Client) callRawWhenRunning(method string, params any) (raw json.RawMessage, err error) {
+	err = c.callWhenRunning(method, params, &raw)
 	return raw, err
 }
 
-// DidOpen 通知服务器打开了文件。
 func (c *Client) DidOpen(uri, languageID, text string) error {
 	return c.DidOpenVersioned(uri, languageID, 1, text)
 }
 
-// DidOpenVersioned 通知服务器打开了文件（可指定文档版本）。
 func (c *Client) DidOpenVersioned(uri, languageID string, version int, text string) error {
 	if version <= 0 {
 		version = 1
@@ -221,14 +218,12 @@ func (c *Client) DidOpenVersioned(uri, languageID string, version int, text stri
 	})
 }
 
-// DidClose 通知服务器关闭了文件。
 func (c *Client) DidClose(uri string) error {
 	return c.notify("textDocument/didClose", DidCloseTextDocumentParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
 	})
 }
 
-// DidChange 通知服务器文档内容发生变化 (全量替换)。
 func (c *Client) DidChange(uri string, version int, newText string) error {
 	return c.notify("textDocument/didChange", DidChangeTextDocumentParams{
 		TextDocument: VersionedTextDocumentIdentifier{
@@ -241,7 +236,6 @@ func (c *Client) DidChange(uri string, version int, newText string) error {
 	})
 }
 
-// Hover 请求 hover 信息。
 func (c *Client) Hover(ctx context.Context, uri string, line, character int) (*HoverResult, error) {
 	var result HoverResult
 	err := c.callWhenRunning("textDocument/hover", TextDocumentPositionParams{
@@ -289,7 +283,6 @@ func (c *Client) Definition(ctx context.Context, uri string, line, character int
 	return out, nil
 }
 
-// References 查找引用 — 返回符号的所有引用位置。
 func (c *Client) References(ctx context.Context, uri string, line, character int, includeDecl bool) ([]Location, error) {
 	var result []Location
 	err := c.callWhenRunning("textDocument/references", ReferenceParams{
@@ -303,7 +296,6 @@ func (c *Client) References(ctx context.Context, uri string, line, character int
 	return result, nil
 }
 
-// DocumentSymbol 文件大纲 — 返回文件中所有符号的层次结构。
 func (c *Client) DocumentSymbol(ctx context.Context, uri string) ([]DocumentSymbol, error) {
 	raw, err := c.callRawWhenRunning("textDocument/documentSymbol", DocumentSymbolParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
@@ -314,9 +306,6 @@ func (c *Client) DocumentSymbol(ctx context.Context, uri string) ([]DocumentSymb
 	return decodeArrayLike(raw, "decode document symbols", false, decodeDocumentSymbolOne)
 }
 
-// Completion 代码补全 — 返回补全列表。
-//
-// LSP 规范: 返回值可能是 CompletionItem[] | CompletionList | null。
 func (c *Client) Completion(ctx context.Context, uri string, line, character int) ([]CompletionItem, error) {
 	raw, err := c.callRawWhenRunning("textDocument/completion", CompletionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
@@ -328,7 +317,6 @@ func (c *Client) Completion(ctx context.Context, uri string, line, character int
 	return decodeCompletionItems(raw)
 }
 
-// Rename 重命名 — 返回重命名所需的全部编辑。
 func (c *Client) Rename(ctx context.Context, uri string, line, character int, newName string) (*WorkspaceEdit, error) {
 	var result WorkspaceEdit
 	err := c.callWhenRunning("textDocument/rename", RenameParams{
@@ -342,7 +330,6 @@ func (c *Client) Rename(ctx context.Context, uri string, line, character int, ne
 	return &result, nil
 }
 
-// WorkspaceSymbol 工作区符号检索。
 func (c *Client) WorkspaceSymbol(ctx context.Context, query string) ([]WorkspaceSymbolResult, error) {
 	raw, err := c.callRawWhenRunning("workspace/symbol", WorkspaceSymbolParams{
 		Query: query,

@@ -16,8 +16,7 @@ func CollectTrimmedUniqueValues(values []string, keyFn func(string) string) []st
 		if value == "" { continue }
 		key := value
 		if keyFn != nil {
-			key = strings.TrimSpace(keyFn(value))
-			if key == "" { key = value }
+			if key = strings.TrimSpace(keyFn(value)); key == "" { key = value }
 		}
 		if _, ok := seen[key]; ok { continue }
 		seen[key] = struct{}{}

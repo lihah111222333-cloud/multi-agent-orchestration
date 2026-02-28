@@ -20,8 +20,7 @@ func CollectTrimmedUniqueValues(values []string, keyFn func(string) string) []st
 		}
 		key := value
 		if keyFn != nil {
-			key = strings.TrimSpace(keyFn(value))
-			if key == "" {
+			if key = strings.TrimSpace(keyFn(value)); key == "" {
 				key = value
 			}
 		}
@@ -55,12 +54,11 @@ func AppendUniqueThreadIDFallback(dst []string, seen map[string]struct{}, candid
 	if id == "" {
 		return dst
 	}
-	if seen == nil {
-		seen = map[string]struct{}{}
+	if seen != nil {
+		if _, ok := seen[id]; ok {
+			return dst
+		}
+		seen[id] = struct{}{}
 	}
-	if _, ok := seen[id]; ok {
-		return dst
-	}
-	seen[id] = struct{}{}
 	return append(dst, id)
 }

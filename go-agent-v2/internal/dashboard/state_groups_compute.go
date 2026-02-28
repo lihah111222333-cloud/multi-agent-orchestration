@@ -5,15 +5,13 @@ import (
 	"time"
 )
 
-// NormalizeDurationOrDefault returns fallback when value is not positive.
 func NormalizeDurationOrDefault(value, fallback time.Duration) time.Duration {
-	if value > 0 {
-		return value
+	if value <= 0 {
+		return fallback
 	}
-	return fallback
+	return value
 }
 
-// PruneOrchestrationPendingReports removes expired requester entries in place.
 func PruneOrchestrationPendingReports(pending map[string]map[string]time.Time, now time.Time, ttl time.Duration) {
 	if len(pending) == 0 || ttl <= 0 {
 		return
@@ -31,7 +29,6 @@ func PruneOrchestrationPendingReports(pending map[string]map[string]time.Time, n
 	}
 }
 
-// RememberOrchestrationRequester records one requester and returns watcher count.
 func RememberOrchestrationRequester(pending map[string]map[string]time.Time, workerID, requesterID string, now time.Time) int {
 	target, requester := strings.TrimSpace(workerID), strings.TrimSpace(requesterID)
 	if pending == nil || target == "" || requester == "" {
@@ -46,7 +43,6 @@ func RememberOrchestrationRequester(pending map[string]map[string]time.Time, wor
 	return len(waiters)
 }
 
-// TakeOrchestrationRequesters removes and returns requesters for one worker.
 func TakeOrchestrationRequesters(pending map[string]map[string]time.Time, workerID string) []string {
 	target := strings.TrimSpace(workerID)
 	if pending == nil || target == "" {

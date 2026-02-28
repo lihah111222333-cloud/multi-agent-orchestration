@@ -47,11 +47,10 @@ func looksLikeInjectedSkillBlock(lines []string, start int) bool {
 		if strings.HasPrefix(line, "[skill:") {
 			break
 		}
-		if strings.HasPrefix(line, summaryPrefix) {
-			hasSummary = true
-		}
-		if strings.HasPrefix(line, usagePrefix) {
-			hasUsage = true
+		hasSummary = hasSummary || strings.HasPrefix(line, summaryPrefix)
+		hasUsage = hasUsage || strings.HasPrefix(line, usagePrefix)
+		if hasSummary && hasUsage {
+			return true
 		}
 	}
 	return hasSummary && hasUsage
@@ -83,25 +82,23 @@ func BuildAttachmentName(path string) string {
 			ext = ext[:idx]
 		}
 		ext = strings.TrimSpace(ext)
-		if ext == "" {
-			return "image"
+		if ext != "" {
+			return "image." + ext
 		}
-		return "image." + ext
+		return "image"
 	}
 	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
 		if parsed, err := url.Parse(value); err == nil {
-			base := strings.TrimSpace(filepath.Base(parsed.Path))
-			if base != "" && base != "." && base != string(filepath.Separator) {
+			if base := strings.TrimSpace(filepath.Base(parsed.Path)); base != "" && base != "." && base != string(filepath.Separator) {
 				return base
 			}
 		}
 		return value
 	}
-	base := strings.TrimSpace(filepath.Base(value))
-	if base == "" || base == "." || base == string(filepath.Separator) {
-		return value
+	if base := strings.TrimSpace(filepath.Base(value)); base != "" && base != "." && base != string(filepath.Separator) {
+		return base
 	}
-	return base
+	return value
 }
 
 func ResolveCodeRunCallID(callID string, requestID *int64) string {

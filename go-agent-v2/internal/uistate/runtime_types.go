@@ -84,33 +84,23 @@ type (
 		CreatedAt time.Time
 	}
 	threadRuntime struct {
-		thinkingIndex       int
-		assistantIndex      int
-		commandIndex        int
-		planIndex           int
-		editingFiles        map[string]struct{}
-		turnDepth           int
-		approvalDepth       int
-		userInputDepth      int
-		commandDepth        int
-		fileEditDepth       int
-		toolCallDepth       int
-		collabDepth         int
-		terminalWaitOverlay bool
-		terminalWaitLabel   string
-		mcpStartupOverlay   bool
-		mcpStartupLabel     string
-		backgroundOverlay   bool
-		backgroundLabel     string
-		backgroundDetails   string
-		streamErrorText     string
-		streamErrorDetails  string
-		statusHeader        string
-		reasoningHeaderBuf  string
-		hasDerivedState     bool
-		lastEventAt         time.Time
-		approvalContext     string
-		pendingHydration    []HistoryRecord
+		thinkingIndex, assistantIndex, commandIndex, planIndex int
+		editingFiles                                           map[string]struct{}
+
+		turnDepth, approvalDepth, userInputDepth                int
+		commandDepth, fileEditDepth, toolCallDepth, collabDepth int
+
+		terminalWaitOverlay, mcpStartupOverlay, backgroundOverlay bool
+		terminalWaitLabel, mcpStartupLabel, backgroundLabel       string
+		backgroundDetails                                         string
+
+		streamErrorText, streamErrorDetails string
+		statusHeader, reasoningHeaderBuf    string
+
+		hasDerivedState  bool
+		lastEventAt      time.Time
+		approvalContext  string
+		pendingHydration []HistoryRecord
 	}
 )
 

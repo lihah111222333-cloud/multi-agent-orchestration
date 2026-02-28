@@ -1,6 +1,10 @@
 package tools
 
-import agentcore "github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+import (
+	"maps"
+
+	agentcore "github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+)
 
 const (
 	defaultFilePathDescription = "Absolute or relative path to the file"
@@ -33,9 +37,7 @@ func lspSchema(properties map[string]any, required []string, extras map[string]a
 	if len(required) > 0 {
 		schema["required"] = required
 	}
-	for key, value := range extras {
-		schema[key] = value
-	}
+	maps.Copy(schema, extras)
 	return schema
 }
 
@@ -55,9 +57,7 @@ func lspFileLineColumnSchema(filePathDescription string, lineDescription string,
 		"line":      lspNumberProperty(lineDescription),
 		"column":    lspNumberProperty(columnDescription),
 	}
-	for key, value := range extraProperties {
-		properties[key] = value
-	}
+	maps.Copy(properties, extraProperties)
 	return lspSchema(properties, required, schemaExtras)
 }
 

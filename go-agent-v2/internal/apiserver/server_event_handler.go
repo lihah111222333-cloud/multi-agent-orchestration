@@ -97,11 +97,8 @@ func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 }
 
 func emitTurnStartDiffReset(s *Server, threadID string, payload map[string]any) {
-	if s == nil {
-		return
-	}
 	id := strings.TrimSpace(threadID)
-	if id == "" {
+	if s == nil || id == "" {
 		return
 	}
 	resetPayload := map[string]any{

@@ -19,85 +19,59 @@ import (
 func (s *Server) RegisterRuntimeTool(name string, handler tooladapter.RuntimeToolHandler) {
 	setRuntimeTool(s, name, handler)
 }
-func (s *Server) LookupRuntimeTool(name string) (tooladapter.RuntimeToolHandler, bool) {
-	return lookupRuntimeTool(s, name)
-}
+func (s *Server) LookupRuntimeTool(name string) (tooladapter.RuntimeToolHandler, bool) { return lookupRuntimeTool(s, name) }
 func (s *Server) IncrementToolCall(name string) int64 { return incrementToolCallState(s, name) }
 func (s *Server) RegisterCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string {
 	return registerCodeRunCancelState(s, agentID, callID, cancel)
 }
-func (s *Server) UnregisterCodeRunCancel(agentID, runKey string) {
-	unregisterCodeRunCancelState(s, agentID, runKey)
-}
+func (s *Server) UnregisterCodeRunCancel(agentID, runKey string) { unregisterCodeRunCancelState(s, agentID, runKey) }
 
 func (s *Server) CodeRunner() tools.CodeExecRunner {
-	if s != nil {
-		return adaptCodeExecRunner(s.codeRunner)
-	}
-	return nil
+	if s == nil { return nil }
+	return adaptCodeExecRunner(s.codeRunner)
 }
 
 func (s *Server) AuditLogger() tools.AuditLogger {
-	if s != nil {
-		return adaptAuditLogger(s.auditLogStore)
-	}
-	return nil
+	if s == nil { return nil }
+	return adaptAuditLogger(s.auditLogStore)
 }
 
 func (s *Server) DAGManager() tools.DAGManager {
-	if s != nil {
-		return adaptDAGManager(s.dagStore)
-	}
-	return nil
+	if s == nil { return nil }
+	return adaptDAGManager(s.dagStore)
 }
 
 func (s *Server) CommandCardStore() tools.CardStore {
-	if s != nil {
-		return adaptCardStore(s.cmdStore)
-	}
-	return nil
+	if s == nil { return nil }
+	return adaptCardStore(s.cmdStore)
 }
 
 func (s *Server) PromptTemplateStore() tools.TemplateStore {
-	if s != nil {
-		return adaptTemplateStore(s.promptStore)
-	}
-	return nil
+	if s == nil { return nil }
+	return adaptTemplateStore(s.promptStore)
 }
 
 func (s *Server) SharedFileStore() tools.FileStore {
-	if s != nil {
-		return adaptFileStore(s.fileStore)
-	}
-	return nil
+	if s == nil { return nil }
+	return adaptFileStore(s.fileStore)
 }
 
 func (s *Server) WorkspaceOps() tools.WorkspaceOps {
-	if s != nil {
-		return adaptWorkspaceOps(s.workspaceMgr)
-	}
-	return nil
+	if s == nil { return nil }
+	return adaptWorkspaceOps(s.workspaceMgr)
 }
 
-func (s *Server) NotifyEvent(method string, params any) {
-	if s != nil {
-		notify(s, method, params)
-	}
-}
+func (s *Server) NotifyEvent(method string, params any) { if s != nil { notify(s, method, params) } }
 
 func (s *Server) AgentLauncher() tools.AgentLauncher {
-	if s != nil {
-		return adaptAgentLauncher(s.mgr)
-	}
-	return nil
+	if s == nil { return nil }
+	return adaptAgentLauncher(s.mgr)
 }
 
 func (s *Server) SubmitPrompt(agentID, prompt string, images, files []string) error {
 	return submitPrompt(s, agentID, prompt, images, files)
 }
-func (s *Server) RememberReportRequest(senderID, workerID string) {
-	rememberReportRequest(s, senderID, workerID)
-}
+func (s *Server) RememberReportRequest(senderID, workerID string) { rememberReportRequest(s, senderID, workerID) }
 func (s *Server) NextThreadSeq() int64 { return nextThreadSeqState(s) }
 
 func (s *Server) SaveSubAgent(id, name, cwd string) {
@@ -128,10 +102,8 @@ func (s *Server) ClearAgentWorkDir(agentID string)      { clearAgentWorkDirState
 func (s *Server) GetAgentWorkDir(agentID string) string { return getAgentWorkDirState(s, agentID) }
 
 func (s *Server) AllSchemas() []agentcore.DynamicTool {
-	if s != nil {
-		return tooladapter.AllSchemas(toolAdapterProviders(s))
-	}
-	return nil
+	if s == nil { return nil }
+	return tooladapter.AllSchemas(toolAdapterProviders(s))
 }
 
 func setRuntimeTool(s *Server, name string, handler tooladapter.RuntimeToolHandler) {
@@ -200,9 +172,7 @@ func (p approvalProvider) AwaitApproval(agentID, callID, mode, command string, i
 func (p approvalProvider) waitForFrontendDecision(agentID, method string, payload map[string]any) bool {
 	resp, wsErr := sendRequestToAll(p.s, method, payload)
 	if wsErr == nil && resp != nil {
-		if approved, ok := extractApproval(resp.Result); ok {
-			return approved
-		}
+		if approved, ok := extractApproval(resp.Result); ok { return approved }
 	}
 
 	if !hasNotifyHookState(p.s) {
@@ -212,9 +182,7 @@ func (p approvalProvider) waitForFrontendDecision(agentID, method string, payloa
 
 	reqID, ch, cleanup := allocPendingRequest(p.s)
 	defer cleanup()
-	if payload == nil {
-		payload = make(map[string]any)
-	}
+	if payload == nil { payload = make(map[string]any) }
 	payload["requestId"] = reqID
 
 	if p.s.uiRuntime != nil {
@@ -237,9 +205,7 @@ func (p approvalProvider) waitForFrontendDecision(agentID, method string, payloa
 	select {
 	case wailsResp := <-ch:
 		if wailsResp != nil {
-			if approved, ok := extractApproval(wailsResp.Result); ok {
-				return approved
-			}
+			if approved, ok := extractApproval(wailsResp.Result); ok { return approved }
 		}
 	case <-timer.C:
 		logger.Warn("code-run: approval timed out", "method", method)

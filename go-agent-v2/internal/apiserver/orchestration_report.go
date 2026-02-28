@@ -35,25 +35,14 @@ func rememberReportRequest(s *Server, senderID, workerID string) {
 	if requester == "" || target == "" || strings.EqualFold(requester, target) {
 		return
 	}
-
-	waiterCount := rememberReportRequesterState(s, target, requester, time.Now())
-	if waiterCount == 0 {
-		return
+	if waiterCount := rememberReportRequesterState(s, target, requester, time.Now()); waiterCount > 0 {
+		logger.Info("orchestration: report waiter registered", "worker", target, "requester", requester, "waiter_count", waiterCount)
 	}
-	logger.Info("orchestration: report waiter registered",
-		"worker", target,
-		"requester", requester,
-		"waiter_count", waiterCount,
-	)
 }
 
 func maybeAutoReportOrchestrationCompletion(s *Server, agentID, eventType, method string, payload map[string]any) {
 	workerID := strings.TrimSpace(agentID)
-	if workerID == "" {
-		return
-	}
-
-	if s == nil || s.codexAdapter == nil {
+	if workerID == "" || s == nil || s.codexAdapter == nil {
 		return
 	}
 	_, status, reason, terminal, _ := trackersvc.TrackedTurnTerminalFromEvent(eventType, method, payload)
@@ -66,10 +55,7 @@ func maybeAutoReportOrchestrationCompletion(s *Server, agentID, eventType, metho
 		return
 	}
 	sort.Strings(requesters)
-	logger.Info("orchestration: report waiters drained",
-		"worker", workerID,
-		"requester_count", len(requesters),
-	)
+	logger.Info("orchestration: report waiters drained", "worker", workerID, "requester_count", len(requesters))
 
 	summary := strings.TrimSpace(trackersvc.TrackedTurnSummaryFromPayload(payload))
 	if summary == "" {
@@ -79,11 +65,7 @@ func maybeAutoReportOrchestrationCompletion(s *Server, agentID, eventType, metho
 	report := tools.BuildOrchestrationCompletionReport(workerID, status, reason, summary)
 	for _, requesterID := range requesters {
 		if err := submitPrompt(s, requesterID, report, nil, nil); err != nil {
-			logger.Warn("orchestration: auto report delivery failed",
-				"from", workerID,
-				"to", requesterID,
-				logger.FieldError, err,
-			)
+			logger.Warn("orchestration: auto report delivery failed", "from", workerID, "to", requesterID, logger.FieldError, err)
 			continue
 		}
 		logger.Info("orchestration: auto report delivered", "from", workerID, "to", requesterID, logger.FieldStatus, status)

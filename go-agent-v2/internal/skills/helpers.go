@@ -35,13 +35,6 @@ func skillImportResultPayload(result skillImportResult) map[string]any {
 	}
 }
 
-func skillImportFailurePayload(failure skillImportFailure) map[string]string {
-	return map[string]string{
-		"source": failure.Source,
-		"error":  failure.Error,
-	}
-}
-
 func skillImportResponse(requested int, results []skillImportResult, failures []skillImportFailure) map[string]any {
 	skillsPayload := make([]map[string]any, len(results))
 	for i, result := range results {
@@ -49,7 +42,10 @@ func skillImportResponse(requested int, results []skillImportResult, failures []
 	}
 	failuresPayload := make([]map[string]string, len(failures))
 	for i, failure := range failures {
-		failuresPayload[i] = skillImportFailurePayload(failure)
+		failuresPayload[i] = map[string]string{
+			"source": failure.Source,
+			"error":  failure.Error,
+		}
 	}
 	return map[string]any{
 		"ok": len(failures) == 0,
@@ -72,8 +68,7 @@ func skillImportDirName(rawName, sourceDir string) (string, error) {
 	if candidate == "" {
 		return "", apperrors.New("skillImportDirName", "source directory is required")
 	}
-	base := filepath.Base(candidate)
-	return skillutil.NormalizeName(base)
+	return skillutil.NormalizeName(filepath.Base(candidate))
 }
 
 func collectSkillImportSources(path string, paths []string) []string {

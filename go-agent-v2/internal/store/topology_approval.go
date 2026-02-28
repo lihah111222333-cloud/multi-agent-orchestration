@@ -3,13 +3,16 @@ package store
 import (
 	"context"
 	"encoding/json"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
 type TopologyApprovalStore struct{ BaseStore }
 
-func NewTopologyApprovalStore(pool *pgxpool.Pool) *TopologyApprovalStore { return &TopologyApprovalStore{NewBaseStore(pool)} }
+func NewTopologyApprovalStore(pool *pgxpool.Pool) *TopologyApprovalStore {
+	return &TopologyApprovalStore{NewBaseStore(pool)}
+}
 
 const topologyApprovalCols = `id, proposal_hash, proposal_json, status, requested_by,
 	approved_by, rejected_by, expires_at, created_at, updated_at`

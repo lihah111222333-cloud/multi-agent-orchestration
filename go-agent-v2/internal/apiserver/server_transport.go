@@ -30,16 +30,14 @@ func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 	if resp == nil { w.WriteHeader(http.StatusNoContent); return }
 	if resp.Error != nil { writeJSONRPCError(w, req.ID, resp.Error.Code, resp.Error.Message); return }
 
-	result := map[string]any{"jsonrpc": jsonrpcVersion, "id": req.ID, "result": resp.Result}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(result); err != nil { logger.Warn("http-rpc: encode response failed", logger.FieldError, err) }
+	if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": jsonrpcVersion, "id": req.ID, "result": resp.Result}); err != nil { logger.Warn("http-rpc: encode response failed", logger.FieldError, err) }
 }
 
 func writeJSONRPCError(w http.ResponseWriter, id any, code int, message string) {
-	resp := map[string]any{"jsonrpc": jsonrpcVersion, "id": id, "error": map[string]any{"code": code, "message": message}}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(resp); err != nil { logger.Warn("http-rpc: encode error response failed", logger.FieldError, err) }
+	if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": jsonrpcVersion, "id": id, "error": map[string]any{"code": code, "message": message}}); err != nil { logger.Warn("http-rpc: encode error response failed", logger.FieldError, err) }
 }
 
 func recoveryMiddleware(next http.Handler) http.Handler {
@@ -66,8 +64,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 func handleSSE(s *Server, w http.ResponseWriter, r *http.Request) {
 	if s == nil { http.Error(w, "server not ready", http.StatusServiceUnavailable); return }
-	flusher, ok := w.(http.Flusher)
-	if !ok { http.Error(w, "SSE not supported", http.StatusInternalServerError); return }
+	flusher, ok := w.(http.Flusher); if !ok { http.Error(w, "SSE not supported", http.StatusInternalServerError); return }
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -76,15 +73,14 @@ func handleSSE(s *Server, w http.ResponseWriter, r *http.Request) {
 
 	ch := make(chan []byte, 64)
 	addSSEClientState(s, ch)
-	defer func() { removeSSEClientState(s, ch) }()
+	defer removeSSEClientState(s, ch)
 
 	logger.Info("sse: client connected", logger.FieldRemote, r.RemoteAddr)
 
 	for {
 		select {
 		case data := <-ch:
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data); flusher.Flush()
 		case <-r.Context().Done():
 			logger.Info("sse: client disconnected", logger.FieldRemote, r.RemoteAddr)
 			return

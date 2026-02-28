@@ -42,8 +42,7 @@ func (s *connManagerState) firstConnID() string {
 func (s *connManagerState) connsSnapshot() map[string]*connEntry {
 	if s == nil { return nil }
 	s.mu.RLock(); defer s.mu.RUnlock()
-	snapshot := make(map[string]*connEntry, len(s.conns)); maps.Copy(snapshot, s.conns)
-	return snapshot
+	return maps.Clone(s.conns)
 }
 
 func (s *connManagerState) getConn(connID string) (*connEntry, bool) {
@@ -189,27 +188,24 @@ func (s *codeRunState) unregisterCodeRunCancel(agentID, runKey string) {
 	})
 }
 
+func cancelRunMap(runs map[string]context.CancelFunc) int {
+	for _, cancel := range runs { cancel() }
+	return len(runs)
+}
+
 func (s *codeRunState) cancelCodeRuns(agentID string) int {
 	id := s.normalizeAgentID(agentID)
 	if id == "" { return 0 }
 	runs := s.takeCodeRunsByAgentID(id)
 	if len(runs) == 0 { return 0 }
-	for _, cancel := range runs {
-		cancel()
-	}
-	return len(runs)
+	return cancelRunMap(runs)
 }
 
 func (s *codeRunState) cancelAllCodeRuns() int {
 	if s == nil { return 0 }
-	s.codeRunMu.Lock(); all := s.activeCodeRuns; s.activeCodeRuns = make(map[string]map[string]context.CancelFunc); s.codeRunMu.Unlock()
+	s.codeRunMu.Lock(); all := s.activeCodeRuns; s.activeCodeRuns = nil; s.codeRunMu.Unlock()
 	total := 0
-	for _, runs := range all {
-		for _, cancel := range runs {
-			cancel()
-			total++
-		}
-	}
+	for _, runs := range all { total += cancelRunMap(runs) }
 	return total
 }
 

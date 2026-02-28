@@ -106,8 +106,7 @@ func normalizeCodeReferencePath(raw string) string {
 }
 
 func normalizeProjectPath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
+	if path = strings.TrimSpace(path); path == "" {
 		return ""
 	}
 	if abs, err := filepath.Abs(path); err == nil {
@@ -227,24 +226,14 @@ func clampCodeContextLines(value int) int {
 	if value <= 0 {
 		return defaultCodeOpenContextLines
 	}
-	if value > maxCodeOpenContextLines {
-		return maxCodeOpenContextLines
-	}
-	return value
+	return min(value, maxCodeOpenContextLines)
 }
 
 func clampLine(value, total int) int {
-	if total <= 0 || value <= 0 {
+	if total <= 0 {
 		return 1
 	}
-	if value > total {
-		return total
-	}
-	return value
-}
-
-func clampColumn(value int) int {
-	return max(value, 1)
+	return max(1, min(value, total))
 }
 
 func codePathToURI(path string) string {
@@ -459,7 +448,7 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 			"filePath":    resolvedPath,
 			"relative":    relativePath,
 			"line":        line,
-			"column":      clampColumn(p.Column),
+			"column":      max(p.Column, 1),
 			"startLine":   1,
 			"endLine":     1,
 			"totalLines":  1,
@@ -523,7 +512,7 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 	lines := strings.Split(text, "\n")
 
 	targetLine := clampLine(p.Line, len(lines))
-	targetColumn := clampColumn(p.Column)
+	targetColumn := max(p.Column, 1)
 	contextLines := clampCodeContextLines(p.Context)
 	startLine := targetLine - contextLines
 	if startLine < 1 {

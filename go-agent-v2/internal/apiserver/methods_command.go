@@ -90,15 +90,6 @@ func commandExecTyped(_ *Server, ctx context.Context, p commandExecParams) (any,
 	return commandExecResponse{ExitCode: exitCode, Stdout: outStr, Stderr: stderr.String()}, nil
 }
 
-type skillsLocalReadParams = skillsruntime.SkillsLocalReadParams
-type skillsLocalImportDirParams = skillsruntime.SkillsLocalImportDirParams
-type skillsLocalDeleteParams = skillsruntime.SkillsLocalDeleteParams
-type skillsConfigWriteParams = skillsruntime.SkillsConfigWriteParams
-type skillsSummaryWriteParams = skillsruntime.SkillsSummaryWriteParams
-type skillsMatchPreviewParams = skillsruntime.SkillsMatchPreviewParams
-type skillsConfigReadParams = skillsruntime.SkillsConfigReadParams
-type skillsRemoteReadParams = skillsruntime.SkillsRemoteReadParams
-type skillsRemoteWriteParams = skillsruntime.SkillsRemoteWriteParams
 func newSkillsManager(s *Server) *skillsruntime.Manager {
 	if s == nil {
 		return skillsruntime.NewManager(nil, nil)
@@ -151,15 +142,15 @@ func skillsManagerDelegate(s *Server) *skillsruntime.Manager {
 
 func skillsList(s *Server, ctx context.Context, _ json.RawMessage) (any, error)                  { return skillsManagerDelegate(s).SkillsList(ctx) }
 func appList(s *Server, ctx context.Context, _ json.RawMessage) (any, error)                     { return skillsManagerDelegate(s).AppList(ctx) }
-func skillsLocalReadTyped(s *Server, ctx context.Context, p skillsLocalReadParams) (any, error) { return skillsManagerDelegate(s).SkillsLocalRead(ctx, skillsruntime.SkillsLocalReadParams(p)) }
-func skillsLocalImportDirTyped(s *Server, ctx context.Context, p skillsLocalImportDirParams) (any, error) { return skillsManagerDelegate(s).SkillsLocalImportDir(ctx, skillsruntime.SkillsLocalImportDirParams(p)) }
-func skillsLocalDeleteTyped(s *Server, ctx context.Context, p skillsLocalDeleteParams) (any, error)       { return skillsManagerDelegate(s).SkillsLocalDelete(ctx, skillsruntime.SkillsLocalDeleteParams(p)) }
-func skillsMatchPreviewTyped(s *Server, ctx context.Context, p skillsMatchPreviewParams) (any, error)     { return skillsManagerDelegate(s).SkillsMatchPreview(ctx, skillsruntime.SkillsMatchPreviewParams(p)) }
-func skillsConfigReadTyped(s *Server, ctx context.Context, p skillsConfigReadParams) (any, error)         { return skillsManagerDelegate(s).SkillsConfigRead(ctx, skillsruntime.SkillsConfigReadParams(p)) }
-func skillsConfigWriteTyped(s *Server, ctx context.Context, p skillsConfigWriteParams) (any, error)       { return skillsManagerDelegate(s).SkillsConfigWrite(ctx, skillsruntime.SkillsConfigWriteParams(p)) }
-func skillsSummaryWriteTyped(s *Server, ctx context.Context, p skillsSummaryWriteParams) (any, error)     { return skillsManagerDelegate(s).SkillsSummaryWrite(ctx, skillsruntime.SkillsSummaryWriteParams(p)) }
-func skillsRemoteReadTyped(s *Server, ctx context.Context, p skillsRemoteReadParams) (any, error)         { return skillsManagerDelegate(s).SkillsRemoteRead(ctx, skillsruntime.SkillsRemoteReadParams(p)) }
-func skillsRemoteWriteTyped(s *Server, ctx context.Context, p skillsRemoteWriteParams) (any, error)       { return skillsManagerDelegate(s).SkillsRemoteWrite(ctx, skillsruntime.SkillsRemoteWriteParams(p)) }
+func skillsLocalReadTyped(s *Server, ctx context.Context, p skillsruntime.SkillsLocalReadParams) (any, error) { return skillsManagerDelegate(s).SkillsLocalRead(ctx, p) }
+func skillsLocalImportDirTyped(s *Server, ctx context.Context, p skillsruntime.SkillsLocalImportDirParams) (any, error) { return skillsManagerDelegate(s).SkillsLocalImportDir(ctx, p) }
+func skillsLocalDeleteTyped(s *Server, ctx context.Context, p skillsruntime.SkillsLocalDeleteParams) (any, error)       { return skillsManagerDelegate(s).SkillsLocalDelete(ctx, p) }
+func skillsMatchPreviewTyped(s *Server, ctx context.Context, p skillsruntime.SkillsMatchPreviewParams) (any, error)     { return skillsManagerDelegate(s).SkillsMatchPreview(ctx, p) }
+func skillsConfigReadTyped(s *Server, ctx context.Context, p skillsruntime.SkillsConfigReadParams) (any, error)         { return skillsManagerDelegate(s).SkillsConfigRead(ctx, p) }
+func skillsConfigWriteTyped(s *Server, ctx context.Context, p skillsruntime.SkillsConfigWriteParams) (any, error)       { return skillsManagerDelegate(s).SkillsConfigWrite(ctx, p) }
+func skillsSummaryWriteTyped(s *Server, ctx context.Context, p skillsruntime.SkillsSummaryWriteParams) (any, error)     { return skillsManagerDelegate(s).SkillsSummaryWrite(ctx, p) }
+func skillsRemoteReadTyped(s *Server, ctx context.Context, p skillsruntime.SkillsRemoteReadParams) (any, error)         { return skillsManagerDelegate(s).SkillsRemoteRead(ctx, p) }
+func skillsRemoteWriteTyped(s *Server, ctx context.Context, p skillsruntime.SkillsRemoteWriteParams) (any, error)       { return skillsManagerDelegate(s).SkillsRemoteWrite(ctx, p) }
 
 func getAgentSkills(s *Server, agentID string) []string { return skillsManagerDelegate(s).GetAgentSkills(agentID) }
 func listSkillMatchCandidates(s *Server) ([]contracts.SkillMatchCandidate, error) {

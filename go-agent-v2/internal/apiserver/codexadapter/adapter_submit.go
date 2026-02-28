@@ -148,11 +148,10 @@ func (a *Adapter) runtimeServiceAdapter() runtimesvc.RuntimeAdapter {
 			return a.GetThreadID(coreProcess(proc))
 		},
 		BindingStore: func() agentcore.BindingStore {
-			bindingStore := a.bindingStore()
-			if bindingStore == nil {
-				return nil
+			if bindingStore := a.bindingStore(); bindingStore != nil {
+				return bindingStore
 			}
-			return bindingStore
+			return nil
 		},
 		ResumeThread: func(proc agentcore.Process, req runtimesvc.ResumeThreadRequest) error {
 			return a.ResumeThread(coreProcess(proc), codexsdk.ResumeThreadRequest{ThreadID: req.ThreadID, Cwd: req.Cwd})

@@ -32,7 +32,6 @@ func (s *UIPreferenceStore) Set(ctx context.Context, key string, value any) erro
 	if err != nil {
 		return apperrors.Wrap(err, "UIPreferenceStore.Set", "marshal preference")
 	}
-
 	if _, err = s.pool.Exec(ctx, `
 		INSERT INTO ui_preferences (key, value, updated_at)
 		VALUES ($1, $2, NOW())
@@ -59,9 +58,7 @@ func (s *UIPreferenceStore) GetAll(ctx context.Context) (map[string]any, error) 
 			return nil, apperrors.Wrap(err, "UIPreferenceStore.GetAll", "scan preference")
 		}
 		var val any
-		if err := json.Unmarshal(raw, &val); err == nil {
-			result[key] = val
-		}
+		if err := json.Unmarshal(raw, &val); err == nil { result[key] = val }
 	}
 	if err := rows.Err(); err != nil {
 		return nil, apperrors.Wrap(err, "UIPreferenceStore.GetAll", "iterate preferences")

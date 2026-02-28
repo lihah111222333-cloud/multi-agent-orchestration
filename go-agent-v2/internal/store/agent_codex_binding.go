@@ -43,8 +43,7 @@ func (s *AgentCodexBindingStore) Bind(ctx context.Context, agentID, codexThreadI
 		return err
 	}
 	if existing != nil {
-		existingThreadID := strings.TrimSpace(existing.CodexThreadID)
-		if existingThreadID != codexThreadID {
+		if existingThreadID := strings.TrimSpace(existing.CodexThreadID); existingThreadID != codexThreadID {
 			return fmt.Errorf("immutable binding violation: agent %q already bound to %q, cannot bind to %q",
 				agentID, existingThreadID, codexThreadID)
 		}
@@ -88,7 +87,7 @@ func (s *AgentCodexBindingStore) FindByAgentID(ctx context.Context, agentID stri
 // FindBindingByAgentID returns the lightweight binding contract used by runtime services.
 func (s *AgentCodexBindingStore) FindBindingByAgentID(ctx context.Context, agentID string) (*agentcore.Binding, error) {
 	binding, err := s.FindByAgentID(ctx, agentID)
-	if err != nil || binding == nil {
+	if binding == nil || err != nil {
 		return nil, err
 	}
 	return &agentcore.Binding{CodexThreadID: strings.TrimSpace(binding.CodexThreadID)}, nil

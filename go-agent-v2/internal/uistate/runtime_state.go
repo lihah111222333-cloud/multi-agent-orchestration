@@ -288,6 +288,50 @@ func hasAccumulatedText(timeline []TimelineItem, index int) bool {
 	return timeline[index].Text != ""
 }
 
+func (m *RuntimeManager) applyHistoryRecordsLocked(threadID string, records []HistoryRecord) {
+	if len(records) == 0 {
+		return
+	}
+	ordered := append(make([]HistoryRecord, 0, len(records)), records...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].ID < ordered[j].ID
+	})
+	for _, rec := range ordered {
+		m.applyHistoryRecordLocked(threadID, rec)
+	}
+}
+
+func (m *RuntimeManager) applyHistoryRecordLocked(threadID string, rec HistoryRecord) {
+	ts := rec.CreatedAt
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	role := strings.ToLower(strings.TrimSpace(rec.Role))
+
+	var payload map[string]any
+	if len(rec.Metadata) > 0 {
+		_ = json.Unmarshal(rec.Metadata, &payload)
+	}
+	if role == "user" {
+		m.appendUserLocked(threadID, rec.Content, extractUserAttachmentsFromPayload(payload), ts)
+		return
+	}
+
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	hydrateContentPayload(rec, payload)
+
+	normalized := NormalizeEvent(rec.EventType, rec.Method, rec.Metadata)
+	if normalized.Text == "" {
+		normalized.Text = rec.Content
+	}
+	if normalized.UIType == UITypeSystem && role == "assistant" && strings.TrimSpace(rec.Content) != "" {
+		normalized.UIType = UITypeAssistantDone
+	}
+	m.applyAgentEventLocked(threadID, normalized, payload, ts)
+}
+
 // HydrateHistory rebuilds thread timeline from stored messages.
 // Returns false if skipped (e.g. thread is actively streaming).
 func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord) bool {
@@ -314,47 +358,7 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 	m.snapshot.TimelinesByThread[id] = []TimelineItem{}
 	m.snapshot.DiffTextByThread[id] = ""
 	m.runtime[id] = newThreadRuntime()
-
-	ordered := make([]HistoryRecord, 0, len(records))
-	ordered = append(ordered, records...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return ordered[i].ID < ordered[j].ID
-	})
-
-	for _, rec := range ordered {
-		ts := rec.CreatedAt
-		if ts.IsZero() {
-			ts = time.Now()
-		}
-		role := strings.ToLower(strings.TrimSpace(rec.Role))
-		if role == "user" {
-			var payload map[string]any
-			if len(rec.Metadata) > 0 {
-				_ = json.Unmarshal(rec.Metadata, &payload)
-			}
-			m.appendUserLocked(id, rec.Content, extractUserAttachmentsFromPayload(payload), ts)
-			continue
-		}
-
-		var payload map[string]any
-		if len(rec.Metadata) > 0 {
-			_ = json.Unmarshal(rec.Metadata, &payload)
-		}
-		if payload == nil {
-			payload = map[string]any{}
-		}
-		hydrateContentPayload(rec, payload)
-
-		normalized := NormalizeEvent(rec.EventType, rec.Method, rec.Metadata)
-		if normalized.Text == "" {
-			normalized.Text = rec.Content
-		}
-		if normalized.UIType == UITypeSystem && role == "assistant" && strings.TrimSpace(rec.Content) != "" {
-			normalized.UIType = UITypeAssistantDone
-		}
-
-		m.applyAgentEventLocked(id, normalized, payload, ts)
-	}
+	m.applyHistoryRecordsLocked(id, records)
 
 	if rt := m.runtime[id]; rt != nil {
 		rt.mcpStartupOverlay = false
@@ -374,47 +378,7 @@ func (m *RuntimeManager) replayPendingHydrationLocked(threadID string, records [
 	m.snapshot.TimelinesByThread[threadID] = []TimelineItem{}
 	m.snapshot.DiffTextByThread[threadID] = ""
 	m.runtime[threadID] = newThreadRuntime()
-
-	ordered := make([]HistoryRecord, 0, len(records))
-	ordered = append(ordered, records...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return ordered[i].ID < ordered[j].ID
-	})
-
-	for _, rec := range ordered {
-		ts := rec.CreatedAt
-		if ts.IsZero() {
-			ts = time.Now()
-		}
-		role := strings.ToLower(strings.TrimSpace(rec.Role))
-		if role == "user" {
-			var payload map[string]any
-			if len(rec.Metadata) > 0 {
-				_ = json.Unmarshal(rec.Metadata, &payload)
-			}
-			m.appendUserLocked(threadID, rec.Content, extractUserAttachmentsFromPayload(payload), ts)
-			continue
-		}
-
-		var payload map[string]any
-		if len(rec.Metadata) > 0 {
-			_ = json.Unmarshal(rec.Metadata, &payload)
-		}
-		if payload == nil {
-			payload = map[string]any{}
-		}
-		hydrateContentPayload(rec, payload)
-
-		normalized := NormalizeEvent(rec.EventType, rec.Method, rec.Metadata)
-		if normalized.Text == "" {
-			normalized.Text = rec.Content
-		}
-		if normalized.UIType == UITypeSystem && role == "assistant" && strings.TrimSpace(rec.Content) != "" {
-			normalized.UIType = UITypeAssistantDone
-		}
-
-		m.applyAgentEventLocked(threadID, normalized, payload, ts)
-	}
+	m.applyHistoryRecordsLocked(threadID, records)
 
 	// 清理瞬态 overlay
 	if rt := m.runtime[threadID]; rt != nil {
@@ -438,47 +402,7 @@ func (m *RuntimeManager) AppendHistory(threadID string, records []HistoryRecord)
 	defer m.mu.Unlock()
 
 	m.ensureThreadLocked(id)
-
-	ordered := make([]HistoryRecord, 0, len(records))
-	ordered = append(ordered, records...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return ordered[i].ID < ordered[j].ID
-	})
-
-	for _, rec := range ordered {
-		ts := rec.CreatedAt
-		if ts.IsZero() {
-			ts = time.Now()
-		}
-		role := strings.ToLower(strings.TrimSpace(rec.Role))
-		if role == "user" {
-			var payload map[string]any
-			if len(rec.Metadata) > 0 {
-				_ = json.Unmarshal(rec.Metadata, &payload)
-			}
-			m.appendUserLocked(id, rec.Content, extractUserAttachmentsFromPayload(payload), ts)
-			continue
-		}
-
-		var payload map[string]any
-		if len(rec.Metadata) > 0 {
-			_ = json.Unmarshal(rec.Metadata, &payload)
-		}
-		if payload == nil {
-			payload = map[string]any{}
-		}
-		hydrateContentPayload(rec, payload)
-
-		normalized := NormalizeEvent(rec.EventType, rec.Method, rec.Metadata)
-		if normalized.Text == "" {
-			normalized.Text = rec.Content
-		}
-		if normalized.UIType == UITypeSystem && role == "assistant" && strings.TrimSpace(rec.Content) != "" {
-			normalized.UIType = UITypeAssistantDone
-		}
-
-		m.applyAgentEventLocked(id, normalized, payload, ts)
-	}
+	m.applyHistoryRecordsLocked(id, records)
 }
 
 func hydrateContentPayload(rec HistoryRecord, payload map[string]any) {

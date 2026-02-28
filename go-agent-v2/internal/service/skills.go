@@ -192,25 +192,20 @@ func (s *SkillService) resolveSkillRecord(name string) (skillRecord, error) {
 	if len(records) == 0 {
 		return skillRecord{}, os.ErrNotExist
 	}
-	for _, record := range records {
-		displayName := skillDisplayName(record.StoredName, record.Meta, record.ID)
-		if matchSkillName(displayName, requested) {
-			return record, nil
-		}
-	}
-	for _, record := range records {
-		if matchSkillName(record.StoredName, requested) {
-			return record, nil
-		}
-	}
-	for _, record := range records {
-		if matchSkillName(record.Meta.Name, requested) {
-			return record, nil
-		}
-	}
-	for _, record := range records {
-		if matchSkillName(record.ID, requested) {
-			return record, nil
+	for pass := 0; pass < 4; pass++ {
+		for _, record := range records {
+			candidate := record.ID
+			switch pass {
+			case 0:
+				candidate = skillDisplayName(record.StoredName, record.Meta, record.ID)
+			case 1:
+				candidate = record.StoredName
+			case 2:
+				candidate = record.Meta.Name
+			}
+			if matchSkillName(candidate, requested) {
+				return record, nil
+			}
 		}
 	}
 	return skillRecord{}, os.ErrNotExist
@@ -567,17 +562,17 @@ func parseSkillMetadata(content string) skillMetadata {
 					meta.TriggerWords = words
 				}
 			}
-			}
 		}
-		name := strings.TrimSpace(meta.Name)
-		if name != "" {
-			meta.TriggerWords = append(meta.TriggerWords,
+	}
+	name := strings.TrimSpace(meta.Name)
+	if name != "" {
+		meta.TriggerWords = append(meta.TriggerWords,
 			"@"+name,
-				"[skill:"+name+"]",
-			)
-		}
-		meta.Description = truncateRunes(meta.Description, 120)
-		if strings.TrimSpace(meta.Summary) == "" {
+			"[skill:"+name+"]",
+		)
+	}
+	meta.Description = truncateRunes(meta.Description, 120)
+	if strings.TrimSpace(meta.Summary) == "" {
 		meta.Summary = meta.Description
 		if strings.TrimSpace(meta.Summary) != "" {
 			meta.SummarySource = "description"
@@ -617,8 +612,8 @@ func UpsertSkillSummaryFrontmatter(content, summary string) string {
 		if trimmedBody != "" {
 			lines = append(lines, "", trimmedBody)
 		}
-			return strings.Join(lines, "\n")
-		}
+		return strings.Join(lines, "\n")
+	}
 	lines := strings.Split(frontmatter, "\n")
 	next := make([]string, 0, len(lines)+1)
 	insertAt := -1
@@ -649,9 +644,9 @@ func UpsertSkillSummaryFrontmatter(content, summary string) string {
 			insertAt = len(next)
 		}
 		next = append(next, "")
-			copy(next[insertAt+1:], next[insertAt:])
-			next[insertAt] = summaryLine
-		}
+		copy(next[insertAt+1:], next[insertAt:])
+		next[insertAt] = summaryLine
+	}
 	rebuilt := strings.TrimSpace(strings.Join(next, "\n"))
 	if rebuilt == "" {
 		return body

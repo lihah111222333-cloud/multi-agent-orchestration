@@ -58,12 +58,12 @@ func shouldEmitUIStateChanged(method string, payload map[string]any) bool {
 	if strings.HasPrefix(method, "workspace/run/") {
 		return true
 	}
-	threadID, _ := payload["threadId"].(string)
-	if strings.TrimSpace(threadID) != "" {
-		return true
+	for _, key := range []string{"threadId", "agent_id"} {
+		if value, _ := payload[key].(string); strings.TrimSpace(value) != "" {
+			return true
+		}
 	}
-	agentID, _ := payload["agent_id"].(string)
-	return strings.TrimSpace(agentID) != ""
+	return false
 }
 
 // throttledUIStateChanged 全局节流发送 ui/state/changed。
@@ -103,10 +103,7 @@ func flushUIStateChanged(s *Server, key string) {
 }
 
 func syncUIRuntimeFromNotifyPayload(s *Server, method string, payload map[string]any) {
-	if s == nil {
-		return
-	}
-	if s.uiRuntime == nil {
+	if s == nil || s.uiRuntime == nil {
 		return
 	}
 	switch method {
@@ -177,24 +174,23 @@ var payloadExtractKeys = []string{
 }
 
 func parseMapAny(raw any) map[string]any {
-	switch value := raw.(type) {
-	case map[string]any:
+	if value, ok := raw.(map[string]any); ok {
 		return value
+	}
+	var data []byte
+	switch value := raw.(type) {
 	case string:
-		var out map[string]any
-		if json.Unmarshal([]byte(value), &out) == nil {
-			return out
-		}
+		data = []byte(value)
 	case json.RawMessage:
-		var out map[string]any
-		if json.Unmarshal(value, &out) == nil {
-			return out
-		}
+		data = value
 	case []byte:
-		var out map[string]any
-		if json.Unmarshal(value, &out) == nil {
-			return out
-		}
+		data = value
+	default:
+		return nil
+	}
+	var out map[string]any
+	if json.Unmarshal(data, &out) == nil {
+		return out
 	}
 	return nil
 }
@@ -212,24 +208,17 @@ func mergePayloadFromMap(payload map[string]any, data map[string]any) {
 		payload[key] = v
 	}
 
-	if v, ok := data["call_id"]; ok {
-		if _, exists := payload["id"]; !exists {
-			payload["id"] = v
+	for _, alias := range [][2]string{
+		{"call_id", "id"},
+		{"item_id", "id"},
+		{"file_path", "file"},
+		{"path", "file"},
+	} {
+		if _, exists := payload[alias[1]]; exists {
+			continue
 		}
-	}
-	if v, ok := data["item_id"]; ok {
-		if _, exists := payload["id"]; !exists {
-			payload["id"] = v
-		}
-	}
-	if v, ok := data["file_path"]; ok {
-		if _, exists := payload["file"]; !exists {
-			payload["file"] = v
-		}
-	}
-	if v, ok := data["path"]; ok {
-		if _, exists := payload["file"]; !exists {
-			payload["file"] = v
+		if value, ok := data[alias[0]]; ok {
+			payload[alias[1]] = value
 		}
 	}
 	if errObj, ok := data["error"].(map[string]any); ok && errObj != nil {
@@ -239,10 +228,11 @@ func mergePayloadFromMap(payload map[string]any, data map[string]any) {
 			}
 		}
 		if _, exists := payload["additional_details"]; !exists {
-			if details, ok := errObj["additional_details"]; ok {
-				payload["additional_details"] = details
-			} else if details, ok := errObj["additionalDetails"]; ok {
-				payload["additional_details"] = details
+			for _, key := range []string{"additional_details", "additionalDetails"} {
+				if details, ok := errObj[key]; ok {
+					payload["additional_details"] = details
+					break
+				}
 			}
 		}
 	}
@@ -257,28 +247,8 @@ func mergePayloadFromMap(payload map[string]any, data map[string]any) {
 // mergePayloadFields 使用此逻辑。
 func walkNestedJSON(m map[string]any, fn func(map[string]any)) {
 	for _, key := range []string{"msg", "data", "payload"} {
-		v, ok := m[key]
-		if !ok {
-			continue
-		}
-		switch nested := v.(type) {
-		case map[string]any:
+		if nested := parseMapAny(m[key]); nested != nil {
 			fn(nested)
-		case string:
-			var nm map[string]any
-			if json.Unmarshal([]byte(nested), &nm) == nil {
-				fn(nm)
-			}
-		case json.RawMessage:
-			var nm map[string]any
-			if json.Unmarshal(nested, &nm) == nil {
-				fn(nm)
-			}
-		case []byte:
-			var nm map[string]any
-			if json.Unmarshal(nested, &nm) == nil {
-				fn(nm)
-			}
 		}
 	}
 }

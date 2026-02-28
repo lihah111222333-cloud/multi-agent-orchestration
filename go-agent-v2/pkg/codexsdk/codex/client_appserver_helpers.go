@@ -39,8 +39,7 @@ func reconnectDetails(trigger, activeTurnID string, details map[string]any) map[
 
 func buildTurnStartInputs(prompt string, images, files []string) []asTurnStartInput {
 	inputs := make([]asTurnStartInput, 0, 1+len(images)+len(files))
-	trimmedPrompt := strings.TrimSpace(prompt)
-	if trimmedPrompt != "" || (len(images) == 0 && len(files) == 0) {
+	if strings.TrimSpace(prompt) != "" || (len(images) == 0 && len(files) == 0) {
 		inputs = append(inputs, asTurnStartInput{Type: "text", Text: prompt})
 	}
 
@@ -154,8 +153,7 @@ func callThreadResume(
 
 func parseThreadResumeResult(raw json.RawMessage, fallbackID string) (string, error) {
 	fallback := strings.TrimSpace(fallbackID)
-	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" || trimmed == "null" {
+	if trimmed := strings.TrimSpace(string(raw)); trimmed == "" || trimmed == "null" {
 		if fallback == "" {
 			return "", apperrors.New("parseThreadResumeResult", "thread/resume returned empty response without fallback thread ID")
 		}

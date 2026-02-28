@@ -26,9 +26,8 @@ func buildSelectedSkillPrompt(
 	}
 
 	texts := make([]string, 0, len(ordered))
-	inputText := skillInputText
-	if inputText == nil {
-		inputText = func(_ string, content string) string { return content }
+	if skillInputText == nil {
+		skillInputText = func(_ string, content string) string { return content }
 	}
 	for _, skillName := range ordered {
 		content, err := readSkillContent(skillName)
@@ -39,7 +38,7 @@ func buildSelectedSkillPrompt(
 			)
 			continue
 		}
-		texts = append(texts, inputText(skillName, content))
+		texts = append(texts, skillInputText(skillName, content))
 	}
 	if len(texts) == 0 {
 		return "", 0
@@ -82,11 +81,10 @@ func prependLSPAvailabilityWarning(
 	collectReferencedToolNames func(string) []string,
 	mergePromptText func(string, string) string,
 ) (string, []string) {
-	collectRefs := collectReferencedToolNames
-	if collectRefs == nil {
+	if collectReferencedToolNames == nil {
 		return hint, nil
 	}
-	referenced := collectRefs(hint)
+	referenced := collectReferencedToolNames(hint)
 	if len(referenced) == 0 {
 		return hint, nil
 	}
@@ -200,8 +198,7 @@ func renderAutoMatchedSkillPrompt(
 			continue
 		}
 		if match.MatchedBy == "force" {
-			instruction := support.ForceMatchedSkillInstruction(match.MatchedTerms)
-			if strings.TrimSpace(instruction) != "" {
+			if instruction := support.ForceMatchedSkillInstruction(match.MatchedTerms); strings.TrimSpace(instruction) != "" {
 				if mergePromptText != nil {
 					content = mergePromptText(instruction, content)
 				} else {

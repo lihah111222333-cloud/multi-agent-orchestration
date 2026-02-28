@@ -80,48 +80,40 @@ func (s *WorkspaceRunStore) ListRuns(ctx context.Context, status, dagKey string,
 	return collectRows[WorkspaceRun](rows)
 }
 
-// UpdateRunStatus 更新 run 状态与 metadata。
-func (s *WorkspaceRunStore) UpdateRunStatus(ctx context.Context, runKey, status, updatedBy string, metadata any) (*WorkspaceRun, error) {
+func (s *WorkspaceRunStore) updateRunStatus(ctx context.Context, runKey, expectedStatus, status, updatedBy string, metadata any) (*WorkspaceRun, error) {
 	metaJSON := mustMarshalJSON(metadata)
-	rows, err := s.pool.Query(ctx, `
+	query := `
 		UPDATE workspace_runs
 		SET status = $1,
 			updated_by = $2,
 			metadata = $3::jsonb,
 			updated_at = NOW(),
-			finished_at = CASE WHEN $1 IN ('merged', 'aborted', 'failed') THEN NOW() ELSE finished_at END
-		WHERE run_key = $4
-		RETURNING `+workspaceRunCols,
-		status, updatedBy, string(metaJSON), runKey,
-	)
+			finished_at = CASE
+				WHEN $1 IN ('merged', 'aborted', 'failed') THEN NOW()
+				WHEN $1 = 'active' THEN NULL
+				ELSE finished_at
+			END
+		WHERE run_key = $4`
+	args := []any{status, updatedBy, string(metaJSON), runKey}
+	if expectedStatus != "" {
+		query += " AND status = $5"
+		args = append(args, expectedStatus)
+	}
+	rows, err := s.pool.Query(ctx, query+"\nRETURNING "+workspaceRunCols, args...)
 	if err != nil {
 		return nil, err
 	}
 	return collectOne[WorkspaceRun](rows)
 }
 
+// UpdateRunStatus 更新 run 状态与 metadata。
+func (s *WorkspaceRunStore) UpdateRunStatus(ctx context.Context, runKey, status, updatedBy string, metadata any) (*WorkspaceRun, error) {
+	return s.updateRunStatus(ctx, runKey, "", status, updatedBy, metadata)
+}
+
 // TryTransitionRunStatus CAS 状态流转: 仅当当前状态等于 fromStatus 时生效。
-func (s *WorkspaceRunStore) TryTransitionRunStatus(
-	ctx context.Context,
-	runKey, fromStatus, toStatus, updatedBy string,
-	metadata any,
-) (*WorkspaceRun, bool, error) {
-	metaJSON := mustMarshalJSON(metadata)
-	rows, err := s.pool.Query(ctx, `
-		UPDATE workspace_runs
-		SET status = $1,
-			updated_by = $2,
-			metadata = $3::jsonb,
-			updated_at = NOW(),
-			finished_at = CASE WHEN $1 IN ('merged', 'aborted', 'failed') THEN NOW() ELSE finished_at END
-		WHERE run_key = $4 AND status = $5
-		RETURNING `+workspaceRunCols,
-		toStatus, updatedBy, string(metaJSON), runKey, fromStatus,
-	)
-	if err != nil {
-		return nil, false, err
-	}
-	run, err := collectOne[WorkspaceRun](rows)
+func (s *WorkspaceRunStore) TryTransitionRunStatus(ctx context.Context, runKey, fromStatus, toStatus, updatedBy string, metadata any) (*WorkspaceRun, bool, error) {
+	run, err := s.updateRunStatus(ctx, runKey, fromStatus, toStatus, updatedBy, metadata)
 	if err != nil {
 		return nil, false, err
 	}

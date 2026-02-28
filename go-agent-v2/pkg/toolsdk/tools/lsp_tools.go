@@ -212,21 +212,20 @@ func RegisterLSPHandlers(dst map[string]LSPDynamicToolHandler, provider LSPHandl
 		return
 	}
 	for _, spec := range baseLSPToolSpecs() {
-		if spec.handler != nil {
-			dst[spec.schema.Name] = spec.handler(provider)
+		if spec.handler == nil {
+			continue
 		}
+		dst[spec.schema.Name] = spec.handler(provider)
 	}
 }
 
 func LSPTools() []agentcore.DynamicTool {
 	specs := baseLSPToolSpecs()
-	tools := make([]agentcore.DynamicTool, 0, len(specs))
-	for _, spec := range specs {
-		tools = append(tools, spec.schema)
+	tools := make([]agentcore.DynamicTool, len(specs))
+	for i := range specs {
+		tools[i] = specs[i].schema
 	}
 	return tools
 }
 
-func LSPAddonTools() []agentcore.DynamicTool {
-	return nil
-}
+func LSPAddonTools() []agentcore.DynamicTool { return nil }

@@ -57,7 +57,7 @@ type threadForkParams struct {
 }
 
 func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, error) {
-	result, err := s.codexAdapter.ThreadFork(p.ThreadID)
+	result, err := s.codexAdapter.ThreadFork(strings.TrimSpace(p.ThreadID))
 	if err != nil {
 		return nil, err
 	}

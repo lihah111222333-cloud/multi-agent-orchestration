@@ -189,9 +189,9 @@ func (m *RuntimeManager) applyErrorOverlayLocked(rt *threadRuntime, threadID str
 }
 
 func clearTerminalWaitOverlay(rt *threadRuntime) { rt.terminalWaitOverlay, rt.terminalWaitLabel = false, "" }
-func clearMCPStartupOverlay(rt *threadRuntime)   { rt.mcpStartupOverlay, rt.mcpStartupLabel = false, "" }
-func clearBackgroundOverlay(rt *threadRuntime)   { rt.backgroundOverlay, rt.backgroundLabel, rt.backgroundDetails = false, "", "" }
-func clearStreamErrorOverlay(rt *threadRuntime)  { rt.streamErrorText, rt.streamErrorDetails = "", "" }
+func clearMCPStartupOverlay(rt *threadRuntime) { rt.mcpStartupOverlay, rt.mcpStartupLabel = false, "" }
+func clearBackgroundOverlay(rt *threadRuntime) { rt.backgroundOverlay, rt.backgroundLabel, rt.backgroundDetails = false, "", "" }
+func clearStreamErrorOverlay(rt *threadRuntime) { rt.streamErrorText, rt.streamErrorDetails = "", "" }
 
 func applyOverlays(rt *threadRuntime, eventType, method string, payload map[string]any) {
 	if isTerminalInteractionEvent(eventType, method) {
@@ -202,11 +202,11 @@ func applyOverlays(rt *threadRuntime, eventType, method string, payload map[stri
 			clearTerminalWaitOverlay(rt)
 		}
 	}
-	if isMCPStartupUpdateEvent(eventType, method) {
+	if isMCPStartupEvent(eventType, method, "update") {
 		rt.mcpStartupOverlay = true
 		rt.mcpStartupLabel = deriveMCPStartupLabel(payload)
 	}
-	if isMCPStartupCompleteEvent(eventType, method) {
+	if isMCPStartupEvent(eventType, method, "complete") {
 		clearMCPStartupOverlay(rt)
 	}
 	if isBackgroundEvent(eventType, method) {
@@ -661,9 +661,6 @@ func isTerminalInteractionEvent(eventType, method string) bool {
 	return eventType == "exec_terminal_interaction" || eventType == "item/commandexecution/terminalinteraction" || strings.EqualFold(method, "item/commandExecution/terminalInteraction")
 }
 
-func isMCPStartupUpdateEvent(eventType, method string) bool   { return isMCPStartupEvent(eventType, method, "update") }
-func isMCPStartupCompleteEvent(eventType, method string) bool { return isMCPStartupEvent(eventType, method, "complete") }
-
 func isMCPStartupEvent(eventType, method, kind string) bool {
 	base := "mcp_startup_" + kind
 	codex := "codex/event/" + base
@@ -999,8 +996,6 @@ func handleErrorEvent(m *RuntimeManager, threadID string, fields resolvedFields,
 		Text: text,
 	}, ts)
 }
-
-func sanitizeUserMessageText(text string) string { return sanitizeUserMessageTextWithMode(text, true) }
 
 func sanitizeUserMessageTextWithMode(text string, trimInjected bool) string {
 	text = util.StripLeadingSystemNoise(text)

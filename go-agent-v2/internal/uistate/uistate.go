@@ -53,29 +53,29 @@ func NewPreferenceManager(s *store.UIPreferenceStore) *PreferenceManager {
 }
 
 func (m *PreferenceManager) Get(ctx context.Context, key string) (any, error) {
-	if m.store == nil {
-		v, _ := m.fallback.Load(key)
-		return v, nil
+	if store := m.store; store != nil {
+		return store.Get(ctx, key)
 	}
-	return m.store.Get(ctx, key)
+	v, _ := m.fallback.Load(key)
+	return v, nil
 }
 
 func (m *PreferenceManager) Set(ctx context.Context, key string, value any) error {
-	if m.store == nil {
-		m.fallback.Store(key, value)
-		return nil
+	if store := m.store; store != nil {
+		return store.Set(ctx, key, value)
 	}
-	return m.store.Set(ctx, key, value)
+	m.fallback.Store(key, value)
+	return nil
 }
 
 func (m *PreferenceManager) GetAll(ctx context.Context) (map[string]any, error) {
-	if m.store == nil {
-		result := make(map[string]any)
-		m.fallback.Range(func(k, v any) bool {
-			result[k.(string)] = v
-			return true
-		})
-		return result, nil
+	if store := m.store; store != nil {
+		return store.GetAll(ctx)
 	}
-	return m.store.GetAll(ctx)
+	result := make(map[string]any)
+	m.fallback.Range(func(k, v any) bool {
+		result[k.(string)] = v
+		return true
+	})
+	return result, nil
 }

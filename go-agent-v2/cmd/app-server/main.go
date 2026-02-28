@@ -36,8 +36,6 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	lspMgr := lsp.NewManager(nil)
-
 	if cfg.PostgresConnStr == "" {
 		logger.Fatal("POSTGRES_CONNECTION_STRING is required")
 	}
@@ -64,7 +62,7 @@ func main() {
 
 	srv := apiserver.New(apiserver.Deps{
 		Manager: mgr,
-		LSP:     lspMgr,
+		LSP:     lsp.NewManager(nil),
 		Config:  cfg,
 		DB:      dbPool,
 	})

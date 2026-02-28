@@ -158,15 +158,7 @@ func defaultSkillsCacheDir() string {
 		return ensureSkillsCacheDir(localFallback)
 	}
 
-	appRootDir := filepath.Join(homeDir, ".multi-agent")
-	if err := os.MkdirAll(appRootDir, 0o755); err != nil {
-		logger.Warn("skills directory: ensure app root failed, fallback to local path",
-			logger.FieldError, err,
-			logger.FieldPath, appRootDir,
-		)
-		return ensureSkillsCacheDir(localFallback)
-	}
-	cacheDir := filepath.Join(appRootDir, "skills-cache")
+	cacheDir := filepath.Join(homeDir, ".multi-agent", "skills-cache")
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		logger.Warn("skills directory: ensure cache dir failed, fallback to local path",
 			logger.FieldError, err,

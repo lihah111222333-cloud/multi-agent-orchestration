@@ -9,10 +9,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-func dashCtx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 10*time.Second)
-}
-
 func clampLimit(v, defaultVal int) int {
 	if v <= 0 || v > 2000 {
 		return defaultVal
@@ -38,7 +34,7 @@ func listHandler[P any](provider DashboardProvider, logKey, responseKey string, 
 			return map[string]any{responseKey: []any{}}, nil
 		}
 
-		ctx, cancel := dashCtx()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		list, ok, err := query(ctx, provider, p)
@@ -113,7 +109,6 @@ type dashBusLogParams struct {
 	Limit    int    `json:"limit"`
 }
 
-// Register registers all dashboard/* methods via callback injection.
 func Register(register RegisterFn, provider DashboardProvider, _ MethodCaller) {
 	if register == nil {
 		return
@@ -202,7 +197,7 @@ func dagDetailHandler(provider DashboardProvider) MethodHandler {
 			return nil, apperrors.New("Server.dashDAGDetail", "dagKey is required")
 		}
 
-		ctx, cancel := dashCtx()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		dag, nodes, ok, err := provider.GetDAGDetail(ctx, p.DAGKey)
 		if !ok {

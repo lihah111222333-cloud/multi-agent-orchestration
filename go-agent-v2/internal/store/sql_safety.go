@@ -17,10 +17,6 @@ var (
 	reSemicolon      = regexp.MustCompile(`;\s*$`)
 )
 
-func stripSQLLiterals(sql string) string {
-	return reLiteral.ReplaceAllString(sql, "''")
-}
-
 func validateSingleStatement(sql string) error {
 	if strings.Contains(reSemicolon.ReplaceAllString(strings.TrimSpace(sql), ""), ";") {
 		return ErrMultiStatement
@@ -28,18 +24,11 @@ func validateSingleStatement(sql string) error {
 	return nil
 }
 
-func firstSQLKeyword(sql string) string {
-	if m := reFirstKeyword.FindStringSubmatch(sql); len(m) >= 2 {
-		return strings.ToUpper(m[1])
-	}
-	return ""
-}
-
 func ValidateReadOnlyQuery(sql string) error {
 	if err := validateSingleStatement(sql); err != nil {
 		return err
 	}
-	stripped := stripSQLLiterals(sql)
+	stripped := reLiteral.ReplaceAllString(sql, "''")
 	if reWriteKeywords.MatchString(stripped) {
 		return ErrReadOnlyViolation
 	}
@@ -53,7 +42,11 @@ func ValidateExecuteQuery(sql string) error {
 	if err := validateSingleStatement(sql); err != nil {
 		return err
 	}
-	if !executeWhitelist[firstSQLKeyword(sql)] || reDangerousExec.MatchString(stripSQLLiterals(sql)) {
+	keyword := ""
+	if m := reFirstKeyword.FindStringSubmatch(sql); len(m) >= 2 {
+		keyword = strings.ToUpper(m[1])
+	}
+	if !executeWhitelist[keyword] || reDangerousExec.MatchString(reLiteral.ReplaceAllString(sql, "''")) {
 		return ErrDangerousSQL
 	}
 	return nil

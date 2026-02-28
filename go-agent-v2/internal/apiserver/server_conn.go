@@ -289,19 +289,7 @@ func validIncomingJSONRPCVersion(version string) bool {
 func parseIntID(raw json.RawMessage) (int64, bool) {
 	if len(raw) == 0 || string(raw) == "null" { return 0, false }
 	var n int64
-	neg := false
-	i := 0
-	if raw[0] == '-' {
-		neg = true
-		i = 1
-	}
-	if i >= len(raw) { return 0, false }
-	for ; i < len(raw); i++ {
-		c := raw[i]
-		if c < '0' || c > '9' { return 0, false }
-		n = n*10 + int64(c-'0')
-	}
-	if neg { n = -n }
+	if err := json.Unmarshal(raw, &n); err != nil { return 0, false }
 	return n, true
 }
 

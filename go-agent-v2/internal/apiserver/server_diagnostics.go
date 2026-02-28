@@ -30,28 +30,23 @@ func setDiagnostics(s *Server, uri string, diagnostics []lsp.Diagnostic) {
 	if s == nil {
 		return
 	}
-	normalized := strings.TrimSpace(uri)
-	if normalized == "" {
+	if uri = strings.TrimSpace(uri); uri == "" {
 		return
 	}
-	setDiagnosticsCacheState(s, normalized, diagnostics)
+	setDiagnosticsCacheState(s, uri, diagnostics)
 }
 
 func getDiagnostics(s *Server, uri string) []lsp.Diagnostic {
 	if s == nil {
 		return nil
 	}
-	normalized := strings.TrimSpace(uri)
-	if normalized == "" {
+	if uri = strings.TrimSpace(uri); uri == "" {
 		return nil
 	}
-	return getDiagnosticsCacheState(s, normalized)
+	return getDiagnosticsCacheState(s, uri)
 }
 
 func getAllDiagnostics(s *Server) map[string][]lsp.Diagnostic {
-	if s == nil {
-		return map[string][]lsp.Diagnostic{}
-	}
 	return allDiagnosticsCacheState(s)
 }
 

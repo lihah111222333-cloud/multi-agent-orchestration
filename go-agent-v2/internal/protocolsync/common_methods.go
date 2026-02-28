@@ -53,13 +53,12 @@ func FindProtocolCommonPath() (string, error) {
 	}
 	moduleRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
 
-	var candidates []string
-	candidates = append(candidates,
+	candidates := []string{
 		filepath.Join(moduleRoot, "..", "codex-rs", rel),
 		filepath.Join(moduleRoot, "..", "codex", "codex-rs", rel),
 		filepath.Join(moduleRoot, "..", "..", "codex", "codex-rs", rel),
 		filepath.Join(moduleRoot, "..", "..", "..", "codex", "codex-rs", rel),
-	)
+	}
 
 	for _, candidate := range candidates {
 		candidate = filepath.Clean(candidate)
@@ -185,29 +184,25 @@ func toLowerCamel(value string) string {
 		return value
 	}
 
-	if strings.Contains(value, "_") {
-		parts := strings.Split(value, "_")
-		var builder strings.Builder
-		for index, part := range parts {
-			if part == "" {
-				continue
-			}
-			if index == 0 {
-				builder.WriteString(strings.ToLower(part[:1]))
-				if len(part) > 1 {
-					builder.WriteString(part[1:])
-				}
-				continue
-			}
-			builder.WriteString(strings.ToUpper(part[:1]))
-			if len(part) > 1 {
-				builder.WriteString(part[1:])
-			}
-		}
-		return builder.String()
+	if !strings.Contains(value, "_") {
+		return strings.ToLower(value[:1]) + value[1:]
 	}
 
-	return strings.ToLower(value[:1]) + value[1:]
+	parts := strings.Split(value, "_")
+	var builder strings.Builder
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		part = strings.ToLower(part)
+		if builder.Len() == 0 {
+			builder.WriteString(part)
+			continue
+		}
+		builder.WriteString(strings.ToUpper(part[:1]))
+		builder.WriteString(part[1:])
+	}
+	return builder.String()
 }
 
 func sortedKeys(values map[string]struct{}) []string {

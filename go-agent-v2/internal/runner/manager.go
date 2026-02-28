@@ -133,6 +133,10 @@ func (m *AgentManager) SetOnEvent(fn EventHandler) {
 }
 
 func (m *AgentManager) SetOnOutput(fn func(agentID string, data []byte)) {
+	if fn == nil {
+		m.SetOnEvent(nil)
+		return
+	}
 	m.SetOnEvent(func(agentID string, event agentcore.Event) {
 		if event.Type == agentcore.EventAgentMessageDelta || event.Type == agentcore.EventExecCommandOutputDelta {
 			fn(agentID, event.Data)
@@ -534,10 +538,10 @@ func (m *AgentManager) List() []AgentInfo {
 	for _, proc := range snapshot {
 		proc.mu.Lock()
 		info := AgentInfo{
-			ID:         proc.ID,
-			Name:       proc.Name,
+			ID:         strings.TrimSpace(proc.ID),
+			Name:       strings.TrimSpace(proc.Name),
 			Port:       proc.Client.GetPort(),
-			ThreadID:   proc.Client.GetThreadID(),
+			ThreadID:   strings.TrimSpace(proc.Client.GetThreadID()),
 			State:      proc.State,
 			LastReport: proc.LastReport,
 		}
@@ -545,17 +549,13 @@ func (m *AgentManager) List() []AgentInfo {
 		infos = append(infos, info)
 	}
 	sort.SliceStable(infos, func(i, j int) bool {
-		leftID := strings.TrimSpace(infos[i].ID)
-		rightID := strings.TrimSpace(infos[j].ID)
-		if leftID != rightID {
-			return leftID > rightID
+		if infos[i].ID != infos[j].ID {
+			return infos[i].ID < infos[j].ID
 		}
-		leftName := strings.TrimSpace(infos[i].Name)
-		rightName := strings.TrimSpace(infos[j].Name)
-		if leftName != rightName {
-			return leftName > rightName
+		if infos[i].Name != infos[j].Name {
+			return infos[i].Name < infos[j].Name
 		}
-		return infos[i].Port > infos[j].Port
+		return infos[i].Port < infos[j].Port
 	})
 	return infos
 }

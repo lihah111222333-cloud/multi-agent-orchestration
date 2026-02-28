@@ -53,8 +53,7 @@ func waitInterruptOutcome(
 	if waitTrackedTurnTerminal != nil {
 		if terminalStatus, ok := waitTrackedTurnTerminal(id, timeout); ok {
 			afterState := normalizeInterruptState(terminalStatus)
-			confirmed := strings.EqualFold(terminalStatus, "interrupted")
-			return confirmed, afterState, time.Since(start).Milliseconds(), true
+			return strings.EqualFold(terminalStatus, "interrupted"), afterState, time.Since(start).Milliseconds(), true
 		}
 	}
 	if readThreadRuntimeState == nil {
@@ -67,10 +66,7 @@ func waitInterruptOutcome(
 	}
 	for {
 		if !isInterruptActiveState(lastState) {
-			if !observedActive {
-				return false, lastState, time.Since(start).Milliseconds(), false
-			}
-			return true, lastState, time.Since(start).Milliseconds(), true
+			return observedActive, lastState, time.Since(start).Milliseconds(), observedActive
 		}
 		observedActive = true
 		if time.Now().After(deadline) {
@@ -85,14 +81,13 @@ func sendInterruptCommand(proc any, sendCommand func(any, string, string) error)
 	if sendCommand == nil {
 		return false, apperrors.New("Server.turnInterrupt", "interrupt sender is not initialized")
 	}
-	err := sendCommand(proc, "/interrupt", "")
-	if err == nil {
-		return false, nil
+	if err := sendCommand(proc, "/interrupt", ""); err != nil {
+		if isInterruptNoActiveTurnError(err) {
+			return true, nil
+		}
+		return false, err
 	}
-	if isInterruptNoActiveTurnError(err) {
-		return true, nil
-	}
-	return false, err
+	return false, nil
 }
 
 func notifyTurnCompleted(
@@ -210,8 +205,7 @@ func turnInterrupt(
 		}
 		mode := interruptSettleMode(confirmed, afterState)
 		if !observedActive {
-			confirmed = false
-			mode = "no_active_turn"
+			confirmed, mode = false, "no_active_turn"
 		}
 		logger.Info("turn/interrupt: settle", fields(
 			"confirmed", confirmed,

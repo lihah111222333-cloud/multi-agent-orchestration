@@ -5,10 +5,8 @@ import (
 	"time"
 )
 
-var ErrInvalidPath = errors.New("invalid file path")
-var ErrReadOnlyViolation = errors.New("read-only SQL violation: write keywords detected")
-var ErrMultiStatement = errors.New("only single SQL statement allowed")
-var ErrDangerousSQL = errors.New("dangerous SQL operation blocked")
+var ErrInvalidPath, ErrReadOnlyViolation = errors.New("invalid file path"), errors.New("read-only SQL violation: write keywords detected")
+var ErrMultiStatement, ErrDangerousSQL = errors.New("only single SQL statement allowed"), errors.New("dangerous SQL operation blocked")
 
 type Interaction struct {
 	ID             int        `db:"id" json:"id"`

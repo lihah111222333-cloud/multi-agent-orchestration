@@ -1,4 +1,3 @@
-// server_dynamic_tools.go — LSP 动态工具: 注册、构建、调用 & 回传。
 package apiserver
 
 import (
@@ -28,7 +27,6 @@ func toolAdapterProviders(s *Server) tooladapter.Providers {
 	}
 }
 
-// registerDynamicTools 注册所有动态工具处理函数。
 func registerDynamicTools(s *Server) {
 	if s == nil {
 		return
@@ -40,7 +38,6 @@ func registerDynamicTools(s *Server) {
 	tooladapter.Register(s, toolAdapterProviders(s))
 }
 
-// SetupLSP 初始化 LSP 事件转发: 诊断缓存 + 广播。
 func SetupLSP(s *Server, rootDir string) {
 	if s == nil || s.lsp == nil {
 		return
@@ -51,7 +48,6 @@ func SetupLSP(s *Server, rootDir string) {
 	s.lsp.SetDiagnosticHandler(func(uri string, diagnostics []lsp.Diagnostic) {
 		setDiagnostics(s, uri, diagnostics)
 
-		// 广播诊断通知给前端
 		items := make([]map[string]any, 0, len(diagnostics))
 		for _, d := range diagnostics {
 			items = append(items, map[string]any{
@@ -80,16 +76,13 @@ func resolveDynamicToolThreadIDs(agentID, rawThreadID string) (threadID, codexTh
 	return threadID, codexThreadID
 }
 
-// handleDynamicToolCall 处理 codex 发回的动态工具调用 — 调 LSP 并回传结果。
 func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 	if s == nil {
 		return
 	}
-	// 心跳: 防止 stall 检测在等待 tool 执行期间误杀。
 	stopHeartbeat := s.codexAdapter.StartDynamicToolStallHeartbeat(agentID)
 	defer stopHeartbeat()
 
-	// 先查找 proc — 后续的所有错误路径都需要通过 codexAdapter 回传错误。
 	proc := s.mgr.Get(agentID)
 	if proc == nil {
 		logger.Error("app-server: dynamic_tool_call dropped — agent gone", logger.FieldAgentID, agentID)
@@ -102,8 +95,6 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 		return
 	}
 
-	// codex 事件信封: {"id": "...", "msg": {DynamicToolCallParams}, "conversationId": "..."}
-	// 先提取 msg 字段, 再解析工具调用参数。
 	var envelope struct {
 		Msg json.RawMessage `json:"msg"`
 	}
@@ -117,7 +108,6 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 		errMsg := "bad dynamic_tool_call data: " + err.Error()
 		logger.Warn("app-server: bad dynamic_tool_call data", logger.FieldAgentID, agentID, logger.FieldError, err,
 			"raw", string(event.Data))
-		// 必须回复 error response，否则 codex turn 永挂。
 		if event.RespondFunc != nil {
 			if respErr := event.RespondFunc(-32602, errMsg); respErr != nil {
 				logger.Warn("app-server: respond error failed", logger.FieldAgentID, agentID, logger.FieldError, respErr)
@@ -168,12 +158,10 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 		"success", success,
 	)
 
-	// 递增活动统计 (lsp_ 前缀工具会自动累加到 lspCalls)
 	if s.uiRuntime != nil {
 		s.uiRuntime.IncrActivityStat(threadID, "toolCall", call.Tool)
 	}
 
-	// 广播到前端 — 让 UI 可以显示 LSP 调用
 	notifyPayload := buildToolNotifyPayload(threadID, agentID, call, argMap, filePath, success, totalCalls, elapsed, result)
 	if codexThreadID != "" {
 		notifyPayload["codexThreadId"] = codexThreadID
@@ -184,7 +172,6 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 		maybeEmitDynamicToolDiffUpdate(s, threadID, codexThreadID, call.Tool, diffTracker)
 	}
 
-	// 回传结果: 优先使用 event 绑定的响应回调，兼容 string/int 两种 JSON-RPC id。
 	if event.RespondResultFunc != nil {
 		if err := event.RespondResultFunc(dynamicToolCallResultPayload(result)); err != nil {
 			logger.Warn("app-server: send tool result failed", logger.FieldAgentID, agentID, logger.FieldToolName, call.Tool, logger.FieldError, err)
@@ -220,10 +207,11 @@ func buildToolNotifyPayload(
 		"resultLen":  len(result),
 	}
 	if result != "" {
-		if len(result) > 500 {
-			result = result[:500]
+		n := len(result)
+		if n > 500 {
+			n = 500
 		}
-		payload["resultPreview"] = result
+		payload["resultPreview"] = result[:n]
 	}
 	return payload
 }

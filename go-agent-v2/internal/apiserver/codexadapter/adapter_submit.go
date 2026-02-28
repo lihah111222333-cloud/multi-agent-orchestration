@@ -147,12 +147,7 @@ func (a *Adapter) runtimeServiceAdapter() runtimesvc.RuntimeAdapter {
 		GetThreadID: func(proc agentcore.Process) string {
 			return a.GetThreadID(coreProcess(proc))
 		},
-		BindingStore: func() agentcore.BindingStore {
-			if bindingStore := a.bindingStore(); bindingStore != nil {
-				return bindingStore
-			}
-			return nil
-		},
+		BindingStore: func() agentcore.BindingStore { return a.bindingStore() },
 		ResumeThread: func(proc agentcore.Process, req runtimesvc.ResumeThreadRequest) error {
 			return a.ResumeThread(coreProcess(proc), codexsdk.ResumeThreadRequest{ThreadID: req.ThreadID, Cwd: req.Cwd})
 		},
@@ -160,15 +155,12 @@ func (a *Adapter) runtimeServiceAdapter() runtimesvc.RuntimeAdapter {
 			return a.Submit(coreProcess(proc), prompt, images, files, outputSchema)
 		},
 		ResolveClientActiveTurnID: func(proc agentcore.Process) string {
-			typed := coreProcess(proc)
-			if typed == nil || typed.Client == nil {
-				return ""
+			if typed := coreProcess(proc); typed != nil && typed.Client != nil {
+				if reader, ok := typed.Client.(interface{ GetActiveTurnID() string }); ok {
+					return strings.TrimSpace(reader.GetActiveTurnID())
+				}
 			}
-			reader, ok := typed.Client.(interface{ GetActiveTurnID() string })
-			if !ok {
-				return ""
-			}
-			return strings.TrimSpace(reader.GetActiveTurnID())
+			return ""
 		},
 	}
 	if manager := a.manager(); manager != nil {

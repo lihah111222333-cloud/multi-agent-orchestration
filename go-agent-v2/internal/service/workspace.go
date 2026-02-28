@@ -208,11 +208,10 @@ func (m *WorkspaceManager) CreateRun(ctx context.Context, req WorkspaceCreateReq
 		return nil, err
 	}
 
-	meta := mergeMetadata(req.Metadata, map[string]any{
+	saved.Metadata = mergeMetadata(req.Metadata, map[string]any{
 		"bootstrap_files": copied,
 		"bootstrap_bytes": copiedBytes,
 	})
-	saved.Metadata = meta
 	saved.UpdatedBy = req.CreatedBy
 	saved, err = m.runs.SaveRun(ctx, saved)
 	if err != nil {

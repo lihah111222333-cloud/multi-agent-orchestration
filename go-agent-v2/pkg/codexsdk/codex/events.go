@@ -28,33 +28,30 @@ type (
 	ForkThreadResponse      = agentcore.ForkThreadResponse
 )
 
-type DynamicToolCallResponse struct {
-	ContentItems []DynamicToolContentItem `json:"contentItems"`
-	Success      bool                     `json:"success"`
-}
-
-type DynamicToolContentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type MCPToolCallData struct {
-	ToolName string          `json:"tool_name,omitempty"`
-	Args     json.RawMessage `json:"args,omitempty"`
-}
-
-type MCPTool struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-}
-
-type MCPListToolsResponseData struct {
-	Tools []MCPTool `json:"tools,omitempty"`
-}
-
-type ListSkillsResponseData struct {
-	Skills []string `json:"skills,omitempty"`
-}
+type (
+	DynamicToolCallResponse struct {
+		ContentItems []DynamicToolContentItem `json:"contentItems"`
+		Success      bool                     `json:"success"`
+	}
+	DynamicToolContentItem struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	MCPToolCallData struct {
+		ToolName string          `json:"tool_name,omitempty"`
+		Args     json.RawMessage `json:"args,omitempty"`
+	}
+	MCPTool struct {
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+	}
+	MCPListToolsResponseData struct {
+		Tools []MCPTool `json:"tools,omitempty"`
+	}
+	ListSkillsResponseData struct {
+		Skills []string `json:"skills,omitempty"`
+	}
+)
 
 const (
 	EventSessionConfigured           = agentcore.EventSessionConfigured
@@ -107,55 +104,51 @@ const (
 	EventConnectionDead              = agentcore.EventConnectionDead
 )
 
-type SubmitMessage struct {
-	Type     string   `json:"type"`
-	Prompt   string   `json:"prompt"`
-	Images   []string `json:"images,omitempty"`
-	Files    []string `json:"files,omitempty"`
-	Skills   []Skill  `json:"skills,omitempty"`
-	Mentions []any    `json:"mentions,omitempty"`
-}
-
-type Skill struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-}
-
-type CommandMessage struct {
-	Type    string `json:"type"`
-	Command string `json:"command"`
-	Args    string `json:"args"`
-}
-
-type DynamicToolResultMessage struct {
-	Type       string `json:"type"`
-	ToolCallID string `json:"tool_call_id"`
-	Output     string `json:"output"`
-}
-
-type CreateThreadRequest struct {
-	Prompt         string        `json:"prompt"`
-	Model          string        `json:"model,omitempty"`
-	Profile        string        `json:"profile,omitempty"`
-	Cwd            string        `json:"cwd,omitempty"`
-	ApprovalPolicy string        `json:"approval_policy,omitempty"`
-	Sandbox        string        `json:"sandbox,omitempty"`
-	Images         []string      `json:"images,omitempty"`
-	Files          []string      `json:"files,omitempty"`
-	Skills         []Skill       `json:"skills,omitempty"`
-	DynamicTools   []DynamicTool `json:"dynamic_tools,omitempty"`
-}
-
-type CreateThreadResponse struct {
-	ThreadID string `json:"thread_id"`
-	Port     int    `json:"port,omitempty"`
-}
-
-type HealthResponse struct {
-	Status string `json:"status"`
-	Port   int    `json:"port"`
-	PID    int    `json:"pid"`
-}
+type (
+	SubmitMessage struct {
+		Type     string   `json:"type"`
+		Prompt   string   `json:"prompt"`
+		Images   []string `json:"images,omitempty"`
+		Files    []string `json:"files,omitempty"`
+		Skills   []Skill  `json:"skills,omitempty"`
+		Mentions []any    `json:"mentions,omitempty"`
+	}
+	Skill struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	CommandMessage struct {
+		Type    string `json:"type"`
+		Command string `json:"command"`
+		Args    string `json:"args"`
+	}
+	DynamicToolResultMessage struct {
+		Type       string `json:"type"`
+		ToolCallID string `json:"tool_call_id"`
+		Output     string `json:"output"`
+	}
+	CreateThreadRequest struct {
+		Prompt         string        `json:"prompt"`
+		Model          string        `json:"model,omitempty"`
+		Profile        string        `json:"profile,omitempty"`
+		Cwd            string        `json:"cwd,omitempty"`
+		ApprovalPolicy string        `json:"approval_policy,omitempty"`
+		Sandbox        string        `json:"sandbox,omitempty"`
+		Images         []string      `json:"images,omitempty"`
+		Files          []string      `json:"files,omitempty"`
+		Skills         []Skill       `json:"skills,omitempty"`
+		DynamicTools   []DynamicTool `json:"dynamic_tools,omitempty"`
+	}
+	CreateThreadResponse struct {
+		ThreadID string `json:"thread_id"`
+		Port     int    `json:"port,omitempty"`
+	}
+	HealthResponse struct {
+		Status string `json:"status"`
+		Port   int    `json:"port"`
+		PID    int    `json:"pid"`
+	}
+)
 
 const (
 	CmdCompact, CmdInterrupt       = "/compact", "/interrupt"

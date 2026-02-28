@@ -23,24 +23,21 @@ var validStatuses = map[string]bool{"idle": true, "running": true, "stagnant": t
 const asCols = "agent_id, agent_name, session_id, status, stagnant_sec, error, output_tail, created_at, updated_at"
 
 func validateAgentID(id string) error {
-	if id = strings.TrimSpace(id); id == "" || !agentIDRe.MatchString(id) {
-		return apperrors.Newf("validateAgentID", "agent_id 格式非法: %q", id)
+	if id = strings.TrimSpace(id); id != "" && agentIDRe.MatchString(id) {
+		return nil
 	}
-	return nil
+	return apperrors.Newf("validateAgentID", "agent_id 格式非法: %q", id)
 }
 
 func normalizeOutputTail(tail any) any {
-	switch lines := tail.(type) {
-	case nil:
+	if tail == nil {
 		return []string{}
-	case []string:
-		if len(lines) <= 50 {
-			return lines
-		}
-		return lines[len(lines)-50:]
-	default:
+	}
+	lines, ok := tail.([]string)
+	if !ok || len(lines) <= 50 {
 		return tail
 	}
+	return lines[len(lines)-50:]
 }
 
 func (s *AgentStatusStore) Upsert(ctx context.Context, a *AgentStatus) (*AgentStatus, error) {

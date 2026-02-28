@@ -13,20 +13,16 @@ func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server not ready", http.StatusServiceUnavailable)
 		return
 	}
-	if r.Method == http.MethodOptions {
+	switch r.Method {
+	case http.MethodOptions:
 		w.WriteHeader(http.StatusOK)
 		return
-	}
-	if r.Method != http.MethodPost {
+	case http.MethodPost:
+	default:
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      any             `json:"id"`
-		Method  string          `json:"method"`
-		Params  json.RawMessage `json:"params"`
-	}
+	var req Request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONRPCError(w, nil, CodeParseError, "parse error: "+err.Error())
 		return
@@ -53,7 +49,7 @@ func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": jsonrpcVersion, "id": req.ID, "result": resp.Result}); err != nil {
+	if err := json.NewEncoder(w).Encode(newResult(req.ID, resp.Result)); err != nil {
 		logger.Warn("http-rpc: encode response failed", logger.FieldError, err)
 	}
 }
@@ -61,7 +57,7 @@ func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 func writeJSONRPCError(w http.ResponseWriter, id any, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": jsonrpcVersion, "id": id, "error": map[string]any{"code": code, "message": message}}); err != nil {
+	if err := json.NewEncoder(w).Encode(newError(id, code, message)); err != nil {
 		logger.Warn("http-rpc: encode error response failed", logger.FieldError, err)
 	}
 }

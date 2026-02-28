@@ -21,7 +21,6 @@ const (
 func bindRaw(s *Server, fn func(*Server, context.Context, json.RawMessage) (any, error)) Handler {
 	return func(ctx context.Context, params json.RawMessage) (any, error) { return fn(s, ctx, params) }
 }
-
 func bindTyped[P any](s *Server, fn func(*Server, context.Context, P) (any, error)) Handler {
 	return typedHandler(func(ctx context.Context, p P) (any, error) { return fn(s, ctx, p) })
 }

@@ -14,15 +14,11 @@ var captureWorkingTreeFileSnapshots = difftracker.CaptureWorkingTreeFileSnapshot
 var buildIncrementalDiffText = difftracker.BuildIncrementalDiffText
 
 func resolveDynamicToolDiffRepoRoot(s *Server, agentID string, args map[string]any) string {
-	return difftracker.ResolveDynamicToolDiffRepoRoot(agentID, args, func(id string) string {
-		return getAgentWorkDirState(s, id)
-	})
+	return difftracker.ResolveDynamicToolDiffRepoRoot(agentID, args, func(id string) string { return getAgentWorkDirState(s, id) })
 }
 
 func beginDynamicToolDiffTracker(s *Server, agentID, tool string, args map[string]any) dynamicToolDiffTracker {
-	return difftracker.BeginTracker(agentID, tool, args, func(id string) string {
-		return getAgentWorkDirState(s, id)
-	})
+	return difftracker.BeginTracker(agentID, tool, args, func(id string) string { return getAgentWorkDirState(s, id) })
 }
 
 func maybeEmitDynamicToolDiffUpdate(s *Server, threadID, codexThreadID, tool string, tracker dynamicToolDiffTracker) {

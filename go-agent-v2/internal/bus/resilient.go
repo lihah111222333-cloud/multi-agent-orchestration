@@ -58,17 +58,9 @@ func (rp *ResilientPublisher) Publish(msg Message) {
 	rp.saveToDB(msg)
 }
 
-func (rp *ResilientPublisher) SetHealthy(healthy bool) {
-	rp.healthy.Store(healthy)
-}
-
-func (rp *ResilientPublisher) Healthy() bool {
-	return rp.healthy.Load()
-}
-
-func (rp *ResilientPublisher) Bus() *MessageBus {
-	return rp.bus
-}
+func (rp *ResilientPublisher) SetHealthy(healthy bool) { rp.healthy.Store(healthy) }
+func (rp *ResilientPublisher) Healthy() bool           { return rp.healthy.Load() }
+func (rp *ResilientPublisher) Bus() *MessageBus        { return rp.bus }
 
 func (rp *ResilientPublisher) tryPublish(msg Message) (ok bool) {
 	if rp.bus == nil {
@@ -152,7 +144,6 @@ func (rp *ResilientPublisher) recoverPending(ctx context.Context) {
 func (rp *ResilientPublisher) PublishTo(topicPrefix, id, msgType string, payload any) {
 	rp.publishInternal(topicPrefix, id, "system", msgType, payload)
 }
-
 func (rp *ResilientPublisher) PublishFrom(topicPrefix, id, from, msgType string, payload any) {
 	rp.publishInternal(topicPrefix, id, from, msgType, payload)
 }

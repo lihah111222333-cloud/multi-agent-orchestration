@@ -71,6 +71,9 @@ func StreamRemainingHistory(
 	}
 
 	pageNum := 1
+	if len(first) == 0 {
+		pageNum = 0
+	}
 	loaded := len(first)
 	for loaded < limit {
 		batchLimit := min(pageSize, limit-loaded)

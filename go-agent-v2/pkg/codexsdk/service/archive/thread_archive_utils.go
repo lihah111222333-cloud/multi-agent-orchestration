@@ -22,6 +22,9 @@ func NormalizeThreadArchiveMap(value any) map[string]int64 {
 		}
 	}
 	loadDecoded := func(raw []byte) {
+		if len(raw) == 0 {
+			return
+		}
 		decoded := map[string]any{}
 		if err := json.Unmarshal(raw, &decoded); err == nil {
 			addEntries(decoded)
@@ -60,7 +63,6 @@ func SanitizeArchiveName(raw string) string {
 	return strings.Trim(b.String(), "._")
 }
 
-// SanitizeArchiveNameStrict validates sanitized archive names.
 func SanitizeArchiveNameStrict(raw string) (string, error) {
 	sanitized := SanitizeArchiveName(raw)
 	if sanitized == "" {
@@ -69,13 +71,17 @@ func SanitizeArchiveNameStrict(raw string) (string, error) {
 	return sanitized, nil
 }
 
-// PathWithinRoot returns whether path is inside root (or equal root).
 func PathWithinRoot(root string, path string) (bool, error) {
-	rootAbs, err := pathutil.Abs(strings.TrimSpace(root))
+	root = strings.TrimSpace(root)
+	path = strings.TrimSpace(path)
+	if root == "" || path == "" {
+		return false, apperrors.New("PathWithinRoot", "root and path are required")
+	}
+	rootAbs, err := pathutil.Abs(root)
 	if err != nil {
 		return false, err
 	}
-	pathAbs, err := pathutil.Abs(strings.TrimSpace(path))
+	pathAbs, err := pathutil.Abs(path)
 	if err != nil {
 		return false, err
 	}
@@ -117,7 +123,6 @@ func normalizeThreadArchiveTimestamp(rawAt any) int64 {
 	return 0
 }
 
-// inferThreadArtifactKind infers the artifact kind from filename.
 func inferThreadArtifactKind(filename string) string {
 	lower := strings.ToLower(strings.TrimSpace(filename))
 	switch {

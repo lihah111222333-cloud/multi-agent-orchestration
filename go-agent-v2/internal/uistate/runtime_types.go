@@ -5,127 +5,114 @@ import (
 	"time"
 )
 
-type ThreadSnapshot struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	State string `json:"state"`
-}
-
-type TimelineAttachment struct {
-	Kind       string `json:"kind,omitempty"`
-	Name       string `json:"name,omitempty"`
-	Path       string `json:"path,omitempty"`
-	PreviewURL string `json:"previewUrl,omitempty"`
-}
-
-type TimelineItem struct {
-	ID          string               `json:"id"`
-	Ts          string               `json:"ts"`
-	Kind        string               `json:"kind"`
-	Text        string               `json:"text,omitempty"`
-	Attachments []TimelineAttachment `json:"attachments,omitempty"`
-	Done        bool                 `json:"done,omitempty"`
-	Command     string               `json:"command,omitempty"`
-	Output      string               `json:"output,omitempty"`
-	Status      string               `json:"status,omitempty"`
-	RequestID   int64                `json:"requestId,omitempty"`
-	ExitCode    *int                 `json:"exitCode,omitempty"`
-	File        string               `json:"file,omitempty"`
-	Tool        string               `json:"tool,omitempty"`
-	Preview     string               `json:"preview,omitempty"`
-	ElapsedMS   *int                 `json:"elapsedMs,omitempty"`
-}
-
-type AgentMeta struct {
-	Alias        string `json:"alias,omitempty"`
-	LastActiveAt string `json:"lastActiveAt,omitempty"`
-	IsMain       bool   `json:"isMain,omitempty"`
-}
-
-type TokenUsageSnapshot struct {
-	UsedTokens          int     `json:"usedTokens"`
-	ContextWindowTokens int     `json:"contextWindowTokens,omitempty"`
-	UsedPercent         float64 `json:"usedPercent,omitempty"`
-	LeftPercent         float64 `json:"leftPercent,omitempty"`
-	UpdatedAt           string  `json:"updatedAt,omitempty"`
-}
-
-type ActivityStats struct {
-	LSPCalls  int64            `json:"lspCalls"`
-	Commands  int64            `json:"commands"`
-	FileEdits int64            `json:"fileEdits"`
-	ToolCalls map[string]int64 `json:"toolCalls"`
-}
-
-type AlertEntry struct {
-	ID      string `json:"id"`
-	Time    string `json:"time"`
-	Level   string `json:"level"` // "error" | "warning" | "stall"
-	Message string `json:"message"`
-}
-
-type RuntimeSnapshot struct {
-	Threads                 []ThreadSnapshot              `json:"threads"`
-	Statuses                map[string]string             `json:"statuses"`
-	InterruptibleByThread   map[string]bool               `json:"interruptibleByThread"`
-	StatusHeadersByThread   map[string]string             `json:"statusHeadersByThread"`
-	StatusDetailsByThread   map[string]string             `json:"statusDetailsByThread"`
-	TimelinesByThread       map[string][]TimelineItem     `json:"timelinesByThread"`
-	DiffTextByThread        map[string]string             `json:"diffTextByThread"`
-	TokenUsageByThread      map[string]TokenUsageSnapshot `json:"tokenUsageByThread"`
-	WorkspaceRunsByKey      map[string]map[string]any     `json:"workspaceRunsByKey"`
-	WorkspaceFeatureEnabled *bool                         `json:"workspaceFeatureEnabled"`
-	WorkspaceLastError      string                        `json:"workspaceLastError"`
-	AgentMetaByID           map[string]AgentMeta          `json:"agentMetaById"`
-	ActivityStatsByThread   map[string]ActivityStats      `json:"activityStatsByThread"`
-	AlertsByThread          map[string][]AlertEntry       `json:"alertsByThread"`
-}
-
-type HistoryRecord struct {
-	ID        int64
-	Role      string
-	EventType string
-	Method    string
-	Content   string
-	Metadata  json.RawMessage
-	CreatedAt time.Time
-}
-
-type threadRuntime struct {
-	thinkingIndex  int
-	assistantIndex int
-	commandIndex   int
-	planIndex      int
-	editingFiles   map[string]struct{}
-
-	turnDepth      int
-	approvalDepth  int
-	userInputDepth int
-	commandDepth   int
-	fileEditDepth  int
-	toolCallDepth  int
-	collabDepth    int
-
-	terminalWaitOverlay bool
-	terminalWaitLabel   string
-	mcpStartupOverlay   bool
-	mcpStartupLabel     string
-	backgroundOverlay   bool
-	backgroundLabel     string
-	backgroundDetails   string
-	streamErrorText     string
-	streamErrorDetails  string
-	statusHeader        string
-	reasoningHeaderBuf  string
-	hasDerivedState     bool
-
-	lastEventAt     time.Time
-	approvalContext string
-
-	// pendingHydration 暂存在流式期间被跳过的 hydration records。
-	// completeTurnLocked 时会检测并重放。
-	pendingHydration []HistoryRecord
-}
+type (
+	ThreadSnapshot struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		State string `json:"state"`
+	}
+	TimelineAttachment struct {
+		Kind       string `json:"kind,omitempty"`
+		Name       string `json:"name,omitempty"`
+		Path       string `json:"path,omitempty"`
+		PreviewURL string `json:"previewUrl,omitempty"`
+	}
+	TimelineItem struct {
+		ID          string               `json:"id"`
+		Ts          string               `json:"ts"`
+		Kind        string               `json:"kind"`
+		Text        string               `json:"text,omitempty"`
+		Attachments []TimelineAttachment `json:"attachments,omitempty"`
+		Done        bool                 `json:"done,omitempty"`
+		Command     string               `json:"command,omitempty"`
+		Output      string               `json:"output,omitempty"`
+		Status      string               `json:"status,omitempty"`
+		RequestID   int64                `json:"requestId,omitempty"`
+		ExitCode    *int                 `json:"exitCode,omitempty"`
+		File        string               `json:"file,omitempty"`
+		Tool        string               `json:"tool,omitempty"`
+		Preview     string               `json:"preview,omitempty"`
+		ElapsedMS   *int                 `json:"elapsedMs,omitempty"`
+	}
+	AgentMeta struct {
+		Alias        string `json:"alias,omitempty"`
+		LastActiveAt string `json:"lastActiveAt,omitempty"`
+		IsMain       bool   `json:"isMain,omitempty"`
+	}
+	TokenUsageSnapshot struct {
+		UsedTokens          int     `json:"usedTokens"`
+		ContextWindowTokens int     `json:"contextWindowTokens,omitempty"`
+		UsedPercent         float64 `json:"usedPercent,omitempty"`
+		LeftPercent         float64 `json:"leftPercent,omitempty"`
+		UpdatedAt           string  `json:"updatedAt,omitempty"`
+	}
+	ActivityStats struct {
+		LSPCalls  int64            `json:"lspCalls"`
+		Commands  int64            `json:"commands"`
+		FileEdits int64            `json:"fileEdits"`
+		ToolCalls map[string]int64 `json:"toolCalls"`
+	}
+	AlertEntry struct {
+		ID      string `json:"id"`
+		Time    string `json:"time"`
+		Level   string `json:"level"` // "error" | "warning" | "stall"
+		Message string `json:"message"`
+	}
+	RuntimeSnapshot struct {
+		Threads                 []ThreadSnapshot              `json:"threads"`
+		Statuses                map[string]string             `json:"statuses"`
+		InterruptibleByThread   map[string]bool               `json:"interruptibleByThread"`
+		StatusHeadersByThread   map[string]string             `json:"statusHeadersByThread"`
+		StatusDetailsByThread   map[string]string             `json:"statusDetailsByThread"`
+		TimelinesByThread       map[string][]TimelineItem     `json:"timelinesByThread"`
+		DiffTextByThread        map[string]string             `json:"diffTextByThread"`
+		TokenUsageByThread      map[string]TokenUsageSnapshot `json:"tokenUsageByThread"`
+		WorkspaceRunsByKey      map[string]map[string]any     `json:"workspaceRunsByKey"`
+		WorkspaceFeatureEnabled *bool                         `json:"workspaceFeatureEnabled"`
+		WorkspaceLastError      string                        `json:"workspaceLastError"`
+		AgentMetaByID           map[string]AgentMeta          `json:"agentMetaById"`
+		ActivityStatsByThread   map[string]ActivityStats      `json:"activityStatsByThread"`
+		AlertsByThread          map[string][]AlertEntry       `json:"alertsByThread"`
+	}
+	HistoryRecord struct {
+		ID        int64
+		Role      string
+		EventType string
+		Method    string
+		Content   string
+		Metadata  json.RawMessage
+		CreatedAt time.Time
+	}
+	threadRuntime struct {
+		thinkingIndex       int
+		assistantIndex      int
+		commandIndex        int
+		planIndex           int
+		editingFiles        map[string]struct{}
+		turnDepth           int
+		approvalDepth       int
+		userInputDepth      int
+		commandDepth        int
+		fileEditDepth       int
+		toolCallDepth       int
+		collabDepth         int
+		terminalWaitOverlay bool
+		terminalWaitLabel   string
+		mcpStartupOverlay   bool
+		mcpStartupLabel     string
+		backgroundOverlay   bool
+		backgroundLabel     string
+		backgroundDetails   string
+		streamErrorText     string
+		streamErrorDetails  string
+		statusHeader        string
+		reasoningHeaderBuf  string
+		hasDerivedState     bool
+		lastEventAt         time.Time
+		approvalContext     string
+		pendingHydration    []HistoryRecord
+	}
+)
 
 func newThreadRuntime() *threadRuntime {
 	return &threadRuntime{

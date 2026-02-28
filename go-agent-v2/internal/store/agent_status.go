@@ -24,8 +24,7 @@ var validStatuses = map[string]bool{"idle": true, "running": true, "stagnant": t
 const asCols = "agent_id, agent_name, session_id, status, stagnant_sec, error, output_tail, created_at, updated_at"
 
 func validateAgentID(id string) error {
-	id = strings.TrimSpace(id)
-	if id == "" || !agentIDRe.MatchString(id) {
+	if id = strings.TrimSpace(id); id == "" || !agentIDRe.MatchString(id) {
 		return apperrors.Newf("validateAgentID", "agent_id 格式非法: %q", id)
 	}
 	return nil
@@ -36,10 +35,10 @@ func normalizeOutputTail(tail any) any {
 	case nil:
 		return []string{}
 	case []string:
-		if len(lines) > 50 {
-			return lines[len(lines)-50:]
+		if len(lines) <= 50 {
+			return lines
 		}
-		return lines
+		return lines[len(lines)-50:]
 	default:
 		return tail
 	}
@@ -89,8 +88,7 @@ func (s *AgentStatusStore) Get(ctx context.Context, agentID string) (*AgentStatu
 
 func (s *AgentStatusStore) List(ctx context.Context, status string) ([]AgentStatus, error) {
 	status = strings.ToLower(strings.TrimSpace(status))
-	q := NewQueryBuilder().Eq("status", status)
-	sql, params := q.Build("SELECT "+asCols+" FROM agent_status", "updated_at DESC", 500)
+	sql, params := NewQueryBuilder().Eq("status", status).Build("SELECT "+asCols+" FROM agent_status", "updated_at DESC", 500)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err

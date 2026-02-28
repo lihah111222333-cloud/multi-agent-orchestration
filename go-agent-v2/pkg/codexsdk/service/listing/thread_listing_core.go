@@ -17,24 +17,13 @@ const PrefThreadAliases = "threads.aliases"
 
 type ThreadListItem = agentcore.ThreadListItem
 
-type AgentInfo struct {
-	ID    string
-	Name  string
-	State string
-}
+type AgentInfo struct{ ID, Name, State string }
 
 type AgentCodexBinding struct{ AgentID string }
 
-type AgentStatus struct {
-	AgentID   string
-	AgentName string
-}
+type AgentStatus struct{ AgentID, AgentName string }
 
-type ThreadSnapshot struct {
-	ID    string
-	Name  string
-	State string
-}
+type ThreadSnapshot struct{ ID, Name, State string }
 
 func PaginateLoadedThreadIDs(ids []string, cursor *string, limit *uint32) ([]string, *string) {
 	if len(ids) == 0 {
@@ -303,9 +292,8 @@ func StringValue(value any) string {
 		return v
 	case fmt.Stringer:
 		return v.String()
-	default:
-		return ""
 	}
+	return ""
 }
 
 func LoadedThreadIDsFromAgents(agents []AgentInfo) []string {

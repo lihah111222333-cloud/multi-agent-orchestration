@@ -34,37 +34,41 @@ func BuildResumeCandidates(threadID string, resolved []string, normalize func(st
 // TryResumeCandidates attempts each candidate in order and returns first success.
 func TryResumeCandidates(candidates []string, fallbackID string, resumeFn func(string) error, isCandidateError func(error) bool) (string, error) {
 	if len(candidates) == 0 {
-		logger.Warn("thread/resume: no resume candidates available",
-			append(common.ThreadLogFields(fallbackID), "reason", "no codex thread ID resolved from history")...,
-		)
+		logger.Warn("thread/resume: no resume candidates available", append(common.ThreadLogFields(fallbackID), "reason", "no codex thread ID resolved from history")...)
 		return "", apperrors.Newf("tryResumeCandidates", "no resume candidates available for thread %s", fallbackID)
+	}
+	if resumeFn == nil {
+		return "", apperrors.New("tryResumeCandidates", "resume handler is not initialized")
 	}
 	if isCandidateError == nil {
 		isCandidateError = IsHistoricalResumeCandidateError
 	}
-
 	var lastErr error
-	for _, id := range candidates {
+	attemptCount := 0
+	for _, rawID := range candidates {
+		id := strings.TrimSpace(rawID)
+		if id == "" {
+			continue
+		}
+		attemptCount++
 		if err := resumeFn(id); err != nil {
 			if !isCandidateError(err) {
 				return "", err
 			}
 			lastErr = err
-			logger.Warn("thread/resume: candidate unavailable, trying next",
-				append(common.ThreadLogFields(fallbackID), "resume_thread_id", id, logger.FieldError, err)...,
-			)
+			logger.Warn("thread/resume: candidate unavailable, trying next", append(common.ThreadLogFields(fallbackID), "resume_thread_id", id, logger.FieldError, err)...)
 			continue
 		}
 		return id, nil
 	}
-
-	logger.Warn("thread/resume: all resume candidates exhausted",
-		append(common.ThreadLogFields(fallbackID), "candidate_count", len(candidates), "last_error", lastErr, "reason", "all historical rollouts unavailable")...,
-	)
-	if lastErr != nil {
-		return "", apperrors.Wrapf(lastErr, "tryResumeCandidates", "all resume candidates unavailable for thread %s after %d attempts", fallbackID, len(candidates))
+	if attemptCount == 0 {
+		return "", apperrors.Newf("tryResumeCandidates", "no valid resume candidates available for thread %s", fallbackID)
 	}
-	return "", apperrors.Newf("tryResumeCandidates", "all resume candidates unavailable for thread %s after %d attempts", fallbackID, len(candidates))
+	logger.Warn("thread/resume: all resume candidates exhausted", append(common.ThreadLogFields(fallbackID), "candidate_count", attemptCount, "last_error", lastErr, "reason", "all historical rollouts unavailable")...)
+	if lastErr != nil {
+		return "", apperrors.Wrapf(lastErr, "tryResumeCandidates", "all resume candidates unavailable for thread %s after %d attempts", fallbackID, attemptCount)
+	}
+	return "", apperrors.Newf("tryResumeCandidates", "all resume candidates unavailable for thread %s after %d attempts", fallbackID, attemptCount)
 }
 
 // IsHistoricalResumeCandidateError determines whether error means a candidate can be skipped.

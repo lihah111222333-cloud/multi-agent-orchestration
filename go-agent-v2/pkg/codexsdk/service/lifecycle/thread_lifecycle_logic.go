@@ -16,9 +16,8 @@ import (
 )
 
 type AgentInfo struct {
-	ID, Name, State string
-	Port            int
-	ThreadID        string
+	ID, Name, State, ThreadID string
+	Port                      int
 }
 
 type ThreadSnapshot struct{ ID string }
@@ -259,17 +258,19 @@ func FirstResolvedCodexThreadIDFromCandidates(
 	if resolveCandidates == nil {
 		return ""
 	}
-	candidates := resolveCandidates(ctx, threadID, common.AppendUniqueThreadIDFallback, PreviewResumeCandidates)
-	if len(candidates) == 0 {
-		return ""
+	if candidates := resolveCandidates(ctx, threadID, common.AppendUniqueThreadIDFallback, PreviewResumeCandidates); len(candidates) > 0 {
+		return strings.TrimSpace(candidates[0])
 	}
-	return strings.TrimSpace(candidates[0])
+	return ""
 }
 
 func ResolveRunningThreadIdentityFromAgents(threadID string, agents []AgentInfo) (state string, port int, codexThreadID string, found bool) {
 	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return "", 0, "", false
+	}
 	for _, info := range agents {
-		if id != "" && strings.TrimSpace(info.ID) == id {
+		if strings.TrimSpace(info.ID) == id || strings.TrimSpace(info.ThreadID) == id {
 			return strings.TrimSpace(info.State), info.Port, strings.TrimSpace(info.ThreadID), true
 		}
 	}
@@ -278,8 +279,11 @@ func ResolveRunningThreadIdentityFromAgents(threadID string, agents []AgentInfo)
 
 func ThreadExistsInRuntimeSnapshots(threadID string, snapshots []ThreadSnapshot) bool {
 	id := strings.TrimSpace(threadID)
+	if id == "" {
+		return false
+	}
 	for _, item := range snapshots {
-		if id != "" && strings.TrimSpace(item.ID) == id {
+		if strings.TrimSpace(item.ID) == id {
 			return true
 		}
 	}
@@ -290,10 +294,10 @@ var codexThreadIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]
 
 func NormalizeCodexThreadID(raw string) string {
 	id := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(raw)), "urn:uuid:")
-	if !codexThreadIDPattern.MatchString(id) {
-		return ""
+	if codexThreadIDPattern.MatchString(id) {
+		return id
 	}
-	return id
+	return ""
 }
 
 func IsLikelyCodexThreadID(raw string) bool {

@@ -15,9 +15,8 @@ func (m *Manager) CodeAction(
 	if err != nil {
 		return nil, err
 	}
-	resolvedOnly := normalizeCodeActionOnlyKinds(only)
 	return withBootstrappedResult(m, filePath, func(client *Client, uri string) ([]CodeActionResult, error) {
-		return client.CodeAction(m.ctx, uri, line, character, resolvedEndLine, resolvedEndCharacter, resolvedOnly)
+		return client.CodeAction(m.ctx, uri, line, character, resolvedEndLine, resolvedEndCharacter, normalizeCodeActionOnlyKinds(only))
 	})
 }
 
@@ -53,14 +52,11 @@ func normalizeCodeActionOnlyKinds(only []string) []string {
 	if len(only) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(only))
+	var out []string
 	for _, item := range only {
 		if kind := strings.TrimSpace(item); kind != "" {
 			out = append(out, kind)
 		}
-	}
-	if len(out) == 0 {
-		return nil
 	}
 	return out
 }

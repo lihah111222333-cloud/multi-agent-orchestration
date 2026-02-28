@@ -9,28 +9,22 @@ import (
 type EventHandler func(event Event)
 
 // Client is the CLI-agnostic client contract used by runner/apiserver.
-// Phase 1 keeps full compatibility with existing Codex client signatures.
 type Client interface {
 	GetPort() int
 	GetThreadID() string
-
 	SetEventHandler(h EventHandler)
 	SpawnAndConnect(ctx context.Context, prompt, cwd, model, instructions string, dynamicTools []DynamicTool) error
-
 	Submit(prompt string, images, files []string, outputSchema json.RawMessage) error
 	SendCommand(cmd, args string) error
 	SendDynamicToolResult(callID, output string, requestID *int64) error
 	RespondError(id int64, code int, message string) error
-
 	ListThreads() ([]ThreadInfo, error)
 	ResumeThread(req ResumeThreadRequest) error
 	ForkThread(req ForkThreadRequest) (*ForkThreadResponse, error)
-
 	Shutdown() error
 	Kill() error
 	Running() bool
 }
 
 // ClientFactory creates a client by port and agent ID.
-// Keep this shape in Phase 1 for incremental migration.
 type ClientFactory func(port int, agentID string) Client

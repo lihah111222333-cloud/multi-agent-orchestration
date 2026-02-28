@@ -1,16 +1,12 @@
-// system_log.go — 系统日志 CRUD (对应 Python system_log.py)。
 package store
 
 import (
 	"context"
-
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// SystemLogStore 系统日志存储。
 type SystemLogStore struct{ BaseStore }
 
-// NewSystemLogStore 创建系统日志存储。
 func NewSystemLogStore(pool *pgxpool.Pool) *SystemLogStore {
 	return &SystemLogStore{NewBaseStore(pool)}
 }
@@ -41,19 +37,12 @@ type ListParams struct {
 	Limit     int
 }
 
-// List 查询系统日志 (v1 兼容: level + logger + keyword)。
 func (s *SystemLogStore) List(ctx context.Context, level, loggerName, keyword string, limit int) ([]SystemLog, error) {
-	return s.ListV2(ctx, ListParams{
-		Level:   level,
-		Logger:  loggerName,
-		Keyword: keyword,
-		Limit:   limit,
-	})
+	return s.ListV2(ctx, ListParams{Level: level, Logger: loggerName, Keyword: keyword, Limit: limit})
 }
 
-// ListV2 查询系统日志 (v2: 支持全部字段过滤)。
 func (s *SystemLogStore) ListV2(ctx context.Context, p ListParams) ([]SystemLog, error) {
-	q := NewQueryBuilder().
+	sql, params := NewQueryBuilder().
 		Eq("level", p.Level).
 		Eq("logger", p.Logger).
 		Eq("source", p.Source).
@@ -62,8 +51,8 @@ func (s *SystemLogStore) ListV2(ctx context.Context, p ListParams) ([]SystemLog,
 		Eq("thread_id", p.ThreadID).
 		Eq("event_type", p.EventType).
 		Eq("tool_name", p.ToolName).
-		KeywordLike(p.Keyword, "level", "logger", "message", "raw", "source", "component")
-	sql, params := q.Build("SELECT "+sysLogCols+" FROM system_logs", "ts DESC, id DESC", p.Limit)
+		KeywordLike(p.Keyword, "level", "logger", "message", "raw", "source", "component").
+		Build("SELECT "+sysLogCols+" FROM system_logs", "ts DESC, id DESC", p.Limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err

@@ -1,17 +1,12 @@
-// task_dag.go — 任务 DAG CRUD (表 task_dags + task_dag_nodes)。
-// Python: agent_ops_store.py save_task_dag / save_dag_node / list_task_dags / update_dag_node_status / delete_task_dags
 package store
 
 import (
 	"context"
-
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// TaskDAGStore 任务 DAG 存储。
 type TaskDAGStore struct{ BaseStore }
 
-// NewTaskDAGStore 创建。
 func NewTaskDAGStore(pool *pgxpool.Pool) *TaskDAGStore { return &TaskDAGStore{NewBaseStore(pool)} }
 
 const dagCols = `id, dag_key, title, description, status, created_by,
@@ -21,10 +16,6 @@ const nodeCols = `id, dag_key, node_key, title, node_type, assigned_to,
 	depends_on, status, command_ref, config, result,
 	started_at, finished_at, created_at, updated_at`
 
-// DAG 默认状态。
-const defaultDAGStatus = "draft"
-
-// SaveDAG 创建或更新 DAG 主表 (对应 Python save_task_dag)。
 func (s *TaskDAGStore) SaveDAG(ctx context.Context, d *TaskDAG) (*TaskDAG, error) {
 	metaJSON := mustMarshalJSON(d.Metadata)
 	rows, err := s.pool.Query(ctx,
@@ -34,19 +25,18 @@ func (s *TaskDAGStore) SaveDAG(ctx context.Context, d *TaskDAG) (*TaskDAG, error
 		   title=EXCLUDED.title, description=EXCLUDED.description, status=EXCLUDED.status,
 		   created_by=EXCLUDED.created_by, metadata=EXCLUDED.metadata, updated_at=NOW()
 		 RETURNING `+dagCols,
-		d.DagKey, d.Title, d.Description, defaultStr(d.Status, defaultDAGStatus), d.CreatedBy, string(metaJSON))
+		d.DagKey, d.Title, d.Description, defaultStr(d.Status, "draft"), d.CreatedBy, string(metaJSON))
 	if err != nil {
 		return nil, err
 	}
 	return collectOne[TaskDAG](rows)
 }
 
-// ListDAGs 列表查询 (对应 Python list_task_dags)。
 func (s *TaskDAGStore) ListDAGs(ctx context.Context, keyword, status string, limit int) ([]TaskDAG, error) {
-	q := NewQueryBuilder().
+	sql, params := NewQueryBuilder().
 		Eq("status", status).
-		KeywordLike(keyword, "dag_key", "title", "description")
-	sql, params := q.Build("SELECT "+dagCols+" FROM task_dags", "updated_at DESC, id DESC", limit)
+		KeywordLike(keyword, "dag_key", "title", "description").
+		Build("SELECT "+dagCols+" FROM task_dags", "updated_at DESC, id DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err
@@ -54,7 +44,6 @@ func (s *TaskDAGStore) ListDAGs(ctx context.Context, keyword, status string, lim
 	return collectRows[TaskDAG](rows)
 }
 
-// GetDAGDetail 获取 DAG + 所有节点 (对应 Python get_task_dag_detail)。
 func (s *TaskDAGStore) GetDAGDetail(ctx context.Context, dagKey string) (*TaskDAG, []TaskDAGNode, error) {
 	dagRows, err := s.pool.Query(ctx, "SELECT "+dagCols+" FROM task_dags WHERE dag_key = $1", dagKey)
 	if err != nil {
@@ -68,10 +57,8 @@ func (s *TaskDAGStore) GetDAGDetail(ctx context.Context, dagKey string) (*TaskDA
 	return dag, nodes, err
 }
 
-// SaveNode 创建或更新节点 (对应 Python save_dag_node)。
 func (s *TaskDAGStore) SaveNode(ctx context.Context, n *TaskDAGNode) (*TaskDAGNode, error) {
-	depsJSON := mustMarshalJSON(n.DependsOn)
-	cfgJSON := mustMarshalJSON(n.Config)
+	depsJSON, cfgJSON := mustMarshalJSON(n.DependsOn), mustMarshalJSON(n.Config)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO task_dag_nodes (dag_key, node_key, title, node_type, assigned_to,
 		   depends_on, command_ref, config)
@@ -89,7 +76,6 @@ func (s *TaskDAGStore) SaveNode(ctx context.Context, n *TaskDAGNode) (*TaskDAGNo
 	return collectOne[TaskDAGNode](rows)
 }
 
-// UpdateNodeStatus 更新节点状态 (对应 Python update_dag_node_status)。
 func (s *TaskDAGStore) UpdateNodeStatus(ctx context.Context, dagKey, nodeKey, status string, result any) (*TaskDAGNode, error) {
 	resJSON := mustMarshalJSON(result)
 	rows, err := s.pool.Query(ctx,
@@ -102,7 +88,6 @@ func (s *TaskDAGStore) UpdateNodeStatus(ctx context.Context, dagKey, nodeKey, st
 	return collectOne[TaskDAGNode](rows)
 }
 
-// Deprecated: ListNodes 无外部调用者 (仅 GetDAGDetail 内部调用)。
 func (s *TaskDAGStore) ListNodes(ctx context.Context, dagKey string) ([]TaskDAGNode, error) {
 	rows, err := s.pool.Query(ctx,
 		"SELECT "+nodeCols+" FROM task_dag_nodes WHERE dag_key = $1 ORDER BY created_at", dagKey)

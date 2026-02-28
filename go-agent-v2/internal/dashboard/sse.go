@@ -33,13 +33,10 @@ func (b *EventBus) Publish(event Event) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	for _, ch := range b.subscribers {
-		func() {
-			defer func() { recover() }() // Unsubscribe 关闭 channel 后的竞态保护
-			select {
-			case ch <- event:
-			default:
-			}
-		}()
+		select {
+		case ch <- event:
+		default:
+		}
 	}
 }
 
@@ -49,7 +46,7 @@ func (b *EventBus) PublishAgentStatus(snapshot map[string]any) {
 }
 
 // Subscribe 订阅。
-func (b *EventBus) Subscribe(id string) chan Event {
+func (b *EventBus) Subscribe(id string) <-chan Event {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	ch := make(chan Event, 32)
@@ -83,8 +80,6 @@ func (s *Server) sseHandler(c *gin.Context) {
 	logger.Info("dashboard: SSE client connected", "client_id", clientID)
 
 	c.Stream(func(io.Writer) bool {
-		keepalive := time.NewTimer(30 * time.Second)
-		defer keepalive.Stop()
 		select {
 		case evt, ok := <-ch:
 			if !ok {
@@ -92,7 +87,7 @@ func (s *Server) sseHandler(c *gin.Context) {
 			}
 			c.SSEvent(evt.Type, evt.Data)
 			return true
-		case <-keepalive.C:
+		case <-time.After(30 * time.Second):
 			c.SSEvent("ping", "keepalive")
 			return true
 		case <-c.Request.Context().Done():

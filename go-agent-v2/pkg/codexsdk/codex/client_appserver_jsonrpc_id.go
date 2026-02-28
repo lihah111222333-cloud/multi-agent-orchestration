@@ -48,26 +48,26 @@ func (id jsonRPCID) logValue() string {
 }
 
 func (id jsonRPCID) int64Ptr() *int64 {
-	value, ok := id.asInt64()
-	if !ok {
-		return nil
+	if value, ok := id.asInt64(); ok {
+		return &value
 	}
-	v := value
-	return &v
-}
-
-func (id jsonRPCID) unmarshal(dst any) bool {
-	return len(id.raw) > 0 && json.Unmarshal(id.raw, dst) == nil
+	return nil
 }
 
 func (id jsonRPCID) asInt64() (int64, bool) {
 	var value int64
-	return value, id.unmarshal(&value)
+	if len(id.raw) == 0 || json.Unmarshal(id.raw, &value) != nil {
+		return 0, false
+	}
+	return value, true
 }
 
 func (id jsonRPCID) asString() (string, bool) {
 	var value string
-	return value, id.unmarshal(&value)
+	if len(id.raw) == 0 || json.Unmarshal(id.raw, &value) != nil {
+		return "", false
+	}
+	return value, true
 }
 
 func (id jsonRPCID) MarshalJSON() ([]byte, error) {

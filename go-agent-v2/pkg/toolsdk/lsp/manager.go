@@ -143,12 +143,7 @@ func (m *Manager) SetRootURI(rootURI string) {
 		}
 	}
 
-	m.docMu.Lock()
-	for _, st := range m.docStates {
-		st.Open = false
-		st.Version = 0
-	}
-	m.docMu.Unlock()
+	m.resetDocumentStates()
 
 	if len(clientsToRestart) > 0 {
 		logger.Warn("lsp: rootURI changed, clients will restart on next request",
@@ -334,12 +329,7 @@ func (m *Manager) StopAll() {
 	// 重建 context — 与 Reload 保持一致，使 Manager 在 StopAll 后仍可复用
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 
-	m.docMu.Lock()
-	for _, st := range m.docStates {
-		st.Open = false
-		st.Version = 0
-	}
-	m.docMu.Unlock()
+	m.resetDocumentStates()
 }
 
 // Reload 重载所有语言服务器 (先关闭, 下次使用时自动重启)。
@@ -355,12 +345,7 @@ func (m *Manager) Reload() {
 	handler := m.onStatus
 	m.mu.Unlock()
 
-	m.docMu.Lock()
-	for _, st := range m.docStates {
-		st.Open = false
-		st.Version = 0
-	}
-	m.docMu.Unlock()
+	m.resetDocumentStates()
 
 	if handler != nil {
 		handler(m.Statuses())
@@ -432,6 +417,15 @@ func effectiveRootURI(rootURI, workspaceID string) string {
 		return workspace
 	}
 	return pathToURI(workspace)
+}
+
+func (m *Manager) resetDocumentStates() {
+	m.docMu.Lock()
+	defer m.docMu.Unlock()
+	for _, st := range m.docStates {
+		st.Open = false
+		st.Version = 0
+	}
 }
 
 // pathToURI 将文件路径转为 file:// URI。

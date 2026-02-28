@@ -16,8 +16,7 @@ func CollectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]st
 	}
 	toolNames := make(map[string]struct{}, len(dynamicTools))
 	for _, tool := range dynamicTools {
-		name := strings.TrimSpace(tool.Name)
-		if name != "" {
+		if name := strings.TrimSpace(tool.Name); name != "" {
 			toolNames[name] = struct{}{}
 		}
 	}
@@ -28,12 +27,16 @@ func LowerMatchedTerms(text string, candidates []string) []string {
 	if text == "" || len(candidates) == 0 {
 		return nil
 	}
+	text = strings.ToLower(text)
 	unique := common.CollectTrimmedUniqueValues(candidates, strings.ToLower)
 	var terms []string
 	for _, candidate := range unique {
 		if strings.Contains(text, strings.ToLower(candidate)) {
 			terms = append(terms, candidate)
 		}
+	}
+	if len(terms) == 0 {
+		return nil
 	}
 	return terms
 }
@@ -57,14 +60,14 @@ func ExplicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords 
 }
 
 func ClassifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
-	if forceTerms := LowerMatchedTerms(normalizedPrompt, forceWords); len(forceTerms) > 0 {
-		return "force", forceTerms
+	if terms := LowerMatchedTerms(normalizedPrompt, forceWords); len(terms) > 0 {
+		return "force", terms
 	}
-	if explicitTerms := ExplicitSkillMentionTerms(normalizedPrompt, skillName, triggerWords); len(explicitTerms) > 0 {
-		return "explicit", explicitTerms
+	if terms := ExplicitSkillMentionTerms(normalizedPrompt, skillName, triggerWords); len(terms) > 0 {
+		return "explicit", terms
 	}
-	if triggerTerms := LowerMatchedTerms(normalizedPrompt, triggerWords); len(triggerTerms) > 0 {
-		return "trigger", triggerTerms
+	if terms := LowerMatchedTerms(normalizedPrompt, triggerWords); len(terms) > 0 {
+		return "trigger", terms
 	}
 	return "", nil
 }
@@ -87,10 +90,11 @@ func CollectReferencedLSPToolNames(hint string) []string {
 	matches := inlineCodeTokenPattern.FindAllStringSubmatch(trimmed, -1)
 	names := make([]string, 0, len(matches))
 	for _, match := range matches {
-		if len(match) >= 2 {
-			if name := strings.TrimSpace(match[1]); strings.HasPrefix(name, "lsp_") {
-				names = append(names, name)
-			}
+		if len(match) < 2 {
+			continue
+		}
+		if name := strings.TrimSpace(match[1]); strings.HasPrefix(name, "lsp_") {
+			names = append(names, name)
 		}
 	}
 	names = common.CollectTrimmedUniqueValues(names, nil)

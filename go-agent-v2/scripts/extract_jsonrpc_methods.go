@@ -1,5 +1,3 @@
-//go:build ignore
-
 package main
 
 import (
@@ -29,30 +27,25 @@ func main() {
 	data := map[string]*rootData{}
 
 	for _, root := range roots {
-		st, err := os.Stat(root)
-		if err != nil || !st.IsDir() {
+		if st, err := os.Stat(root); err != nil || !st.IsDir() {
 			continue
 		}
 		rd := &rootData{consts: map[string]string{}}
-		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil || d.IsDir() {
 				return nil
 			}
 			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil
 			}
-			file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-			if err != nil {
-				return nil
+			if file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution); err == nil {
+				rd.files = append(rd.files, file)
+				collectStringConsts(file, rd.consts)
 			}
-			rd.files = append(rd.files, file)
-			collectStringConsts(file, rd.consts)
 			return nil
-		})
-		if err != nil {
-			continue
+		}); err == nil {
+			data[root] = rd
 		}
-		data[root] = rd
 	}
 
 	methods := map[string]struct{}{}

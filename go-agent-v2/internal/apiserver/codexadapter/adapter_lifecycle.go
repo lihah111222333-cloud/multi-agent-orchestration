@@ -47,9 +47,9 @@ func (a *Adapter) ThreadResume(ctx context.Context, threadID, path, cwd, model s
 }
 
 func (a *Adapter) ThreadFork(threadID string) (lifecyclesvc.ThreadForkResult, error) {
-	sourceThreadID := strings.TrimSpace(threadID)
-	return withProcess(a, "Server.threadFork", sourceThreadID, func(proc *codexsdk.AgentProcess) (lifecyclesvc.ThreadForkResult, error) {
-		return lifecyclesvc.RunThreadFork(sourceThreadID, proc, a.ForkThread, a.nowUnixMilli)
+	threadID = strings.TrimSpace(threadID)
+	return withProcess(a, "Server.threadFork", threadID, func(proc *codexsdk.AgentProcess) (lifecyclesvc.ThreadForkResult, error) {
+		return lifecyclesvc.RunThreadFork(threadID, proc, a.ForkThread, a.nowUnixMilli)
 	})
 }
 
@@ -104,9 +104,8 @@ func (a *Adapter) ThreadResolve(ctx context.Context, threadID string) (map[strin
 }
 
 func (a *Adapter) ResolveCodexThreadCandidates(ctx context.Context, agentID string, appendUniqueThreadID func(dst []string, seen map[string]struct{}, candidate string) []string, previewCandidates func([]string, int) []string) []string {
-	preview := previewCandidates
-	if preview == nil {
-		preview = lifecyclesvc.PreviewResumeCandidates
+	if previewCandidates == nil {
+		previewCandidates = lifecyclesvc.PreviewResumeCandidates
 	}
 	return historysvc.ResolveCodexThreadCandidates(
 		ctx,
@@ -127,7 +126,7 @@ func (a *Adapter) ResolveCodexThreadCandidates(ctx context.Context, agentID stri
 			}
 			return status.SessionID, nil
 		},
-		preview,
+		previewCandidates,
 	)
 }
 

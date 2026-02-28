@@ -57,7 +57,7 @@ type threadForkParams struct {
 }
 
 func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, error) {
-	result, err := s.codexAdapter.ThreadFork(strings.TrimSpace(p.ThreadID))
+	result, err := s.codexAdapter.ThreadFork(p.ThreadID)
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +72,7 @@ type threadResumeParams struct {
 }
 
 func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (any, error) {
-	threadID := strings.TrimSpace(strings.SplitN(p.ThreadID, ",", 2)[0])
-	result, err := s.codexAdapter.ThreadResume(ctx, threadID, p.Path, p.Cwd, p.Model)
+	result, err := s.codexAdapter.ThreadResume(ctx, strings.TrimSpace(strings.SplitN(p.ThreadID, ",", 2)[0]), p.Path, p.Cwd, p.Model)
 	if err != nil {
 		return nil, err
 	}

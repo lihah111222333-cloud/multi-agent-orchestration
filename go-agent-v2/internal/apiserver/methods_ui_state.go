@@ -103,7 +103,16 @@ func uiStateGet(s *Server, ctx context.Context, _ json.RawMessage) (any, error) 
 	threadPinsChat, hasThreadPinsChat := prefs["threadPins.chat"]
 	showInjected, hasShowInjected := prefs[prefKeyShowInjectedPromptInChat]
 
-	result := dashboard.BuildUIStateResult(dashboard.UIStateResultInput{
+	logger.Debug("ui/state/get: snapshot prepared",
+		"threads_count", len(snapshot.Threads),
+		"active_thread_id", resolvedActiveThreadID,
+		"active_cmd_thread_id", resolvedActiveCmdThreadID,
+		"timeline_threads", len(timelinesByThread),
+		"diff_threads", len(diffTextByThread),
+		"active_thread_diff_len", len(diffTextByThread[resolvedActiveThreadID]),
+		"active_cmd_thread_diff_len", len(diffTextByThread[resolvedActiveCmdThreadID]),
+	)
+	return dashboard.BuildUIStateResult(dashboard.UIStateResultInput{
 		Threads:                  snapshot.Threads,
 		Statuses:                 snapshot.Statuses,
 		InterruptibleByThread:    snapshot.InterruptibleByThread,
@@ -132,27 +141,16 @@ func uiStateGet(s *Server, ctx context.Context, _ json.RawMessage) (any, error) 
 		HasThreadArchives:        hasArchives,
 		ShowInjectedPrompt:       showInjected,
 		HasShowInjected:          hasShowInjected,
-	})
-
-	logger.Debug("ui/state/get: snapshot prepared",
-		"threads_count", len(snapshot.Threads),
-		"active_thread_id", resolvedActiveThreadID,
-		"active_cmd_thread_id", resolvedActiveCmdThreadID,
-		"timeline_threads", len(timelinesByThread),
-		"diff_threads", len(diffTextByThread),
-		"active_thread_diff_len", len(diffTextByThread[resolvedActiveThreadID]),
-		"active_cmd_thread_diff_len", len(diffTextByThread[resolvedActiveCmdThreadID]),
-	)
-	return result, nil
+	}), nil
 }
 
 func resolveThreadArchivesForState(s *Server, ctx context.Context, prefs map[string]any) (any, bool) {
 	if s != nil && s.codexAdapter != nil {
-		archivedMap, err := s.codexAdapter.ThreadArchiveMap(ctx)
-		if err == nil {
+		if archivedMap, err := s.codexAdapter.ThreadArchiveMap(ctx); err == nil {
 			return archivedMap, true
+		} else {
+			logger.Warn("ui/state/get: load thread archives failed", logger.FieldError, err)
 		}
-		logger.Warn("ui/state/get: load thread archives failed", logger.FieldError, err)
 	}
 	value, ok := prefs[dashboard.PrefThreadArchivesChat]
 	return value, ok
@@ -178,8 +176,7 @@ func applyThreadAliasesSnapshot(snapshot *uistate.RuntimeSnapshot, aliases map[s
 	for i := range snapshot.Threads {
 		id := strings.TrimSpace(snapshot.Threads[i].ID)
 		if id == "" { continue }
-		alias := strings.TrimSpace(aliases[id])
-		if alias == "" { continue }
+		alias := strings.TrimSpace(aliases[id]); if alias == "" { continue }
 		snapshot.Threads[i].Name = alias
 		meta := snapshot.AgentMetaByID[id]
 		meta.Alias = alias

@@ -31,51 +31,29 @@ func LoadAllThreadMessagesFromCodexRollout(
 	readRolloutMessagesWithTrim func(path string, trimInjected bool) ([]codex.RolloutMessage, error),
 	showInjectedPromptInChat bool,
 ) ([]ThreadHistoryMessage, error) {
+	empty := []ThreadHistoryMessage{}
 	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return []ThreadHistoryMessage{}, nil
-	}
-	resolve := resolveRolloutHistorySource
-	if resolve == nil {
-		return []ThreadHistoryMessage{}, nil
-	}
+	if threadID == "" || resolveRolloutHistorySource == nil { return empty, nil }
 	normalize := normalizeCodexThreadID
-	if normalize == nil {
-		normalize = strings.TrimSpace
-	}
-	codexThreadID, rolloutPath := resolve(ctx, threadID)
+	if normalize == nil { normalize = strings.TrimSpace }
+	codexThreadID, rolloutPath := resolveRolloutHistorySource(ctx, threadID)
 	codexThreadID = normalize(codexThreadID)
-	if codexThreadID == "" {
-		return []ThreadHistoryMessage{}, nil
-	}
+	if codexThreadID == "" { return empty, nil }
 	path := strings.TrimSpace(rolloutPath)
 	if path == "" {
-		if findRolloutPath == nil {
-			return []ThreadHistoryMessage{}, nil
-		}
+		if findRolloutPath == nil { return empty, nil }
 		resolvedPath, err := findRolloutPath(codexThreadID)
-		if err != nil {
-			return []ThreadHistoryMessage{}, nil
-		}
+		if err != nil { return empty, nil }
 		path = strings.TrimSpace(resolvedPath)
 	}
-	if path == "" {
-		return []ThreadHistoryMessage{}, nil
+	if path == "" || (rolloutPathExists != nil && !rolloutPathExists(path)) || readRolloutMessagesWithTrim == nil {
+		return empty, nil
 	}
-	if rolloutPathExists != nil && !rolloutPathExists(path) {
-		return []ThreadHistoryMessage{}, nil
-	}
-	if readRolloutMessagesWithTrim == nil {
-		return []ThreadHistoryMessage{}, nil
-	}
-	trimInjected := !showInjectedPromptInChat
-	rolloutMsgs, err := readRolloutMessagesWithTrim(path, trimInjected)
+	rolloutMsgs, err := readRolloutMessagesWithTrim(path, !showInjectedPromptInChat)
 	if err != nil {
 		return nil, err
 	}
-	if len(rolloutMsgs) == 0 {
-		return []ThreadHistoryMessage{}, nil
-	}
+	if len(rolloutMsgs) == 0 { return empty, nil }
 	all := make([]ThreadHistoryMessage, 0, len(rolloutMsgs))
 	for i, item := range rolloutMsgs {
 		message, ok := rolloutMessageToThreadHistory(threadID, i, item)
@@ -84,9 +62,7 @@ func LoadAllThreadMessagesFromCodexRollout(
 		}
 		all = append(all, message)
 	}
-	if len(all) == 0 {
-		return []ThreadHistoryMessage{}, nil
-	}
+	if len(all) == 0 { return empty, nil }
 	return all, nil
 }
 
@@ -150,12 +126,8 @@ func RunningCodexThreadIDFromManager(
 	getProcess func(string) any,
 	getThreadID func(any) string,
 ) string {
-	if getProcess == nil || getThreadID == nil {
-		return ""
-	}
-	if proc := getProcess(threadID); proc != nil {
-		return getThreadID(proc)
-	}
+	if getProcess == nil || getThreadID == nil { return "" }
+	if proc := getProcess(threadID); proc != nil { return getThreadID(proc) }
 	return ""
 }
 
@@ -168,39 +140,26 @@ func ResolveRolloutHistorySource(
 	normalizeCodexThreadID func(string) string,
 ) (codexThreadID string, rolloutPath string) {
 	id := strings.TrimSpace(threadID)
-	if id == "" {
-		return "", ""
-	}
+	if id == "" { return "", "" }
 	normalize := normalizeCodexThreadID
-	if normalize == nil {
-		normalize = strings.TrimSpace
-	}
+	if normalize == nil { normalize = strings.TrimSpace }
 	if getRunningCodexThreadID != nil {
 		candidate := normalize(getRunningCodexThreadID(id))
-		if candidate != "" {
-			return candidate, ""
-		}
+		if candidate != "" { return candidate, "" }
 	}
 	if findBinding != nil {
 		boundID, path, err := findBinding(ctx, id)
 		if err == nil {
 			candidate := normalize(boundID)
-			if candidate != "" {
-				return candidate, strings.TrimSpace(path)
-			}
+			if candidate != "" { return candidate, strings.TrimSpace(path) }
 		}
 	}
 	if findStatusSessionID != nil {
 		sessionID, err := findStatusSessionID(ctx, id)
 		if err == nil {
 			candidate := normalize(sessionID)
-			if candidate != "" {
-				return candidate, ""
-			}
+			if candidate != "" { return candidate, "" }
 		}
 	}
-	if candidate := normalize(id); candidate != "" {
-		return candidate, ""
-	}
-	return "", ""
+	return normalize(id), ""
 }

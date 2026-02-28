@@ -36,17 +36,12 @@ func NewAgentThreadStore(pool *pgxpool.Pool) *AgentThreadStore {
 }
 
 const atCols = "thread_id, prompt, model, cwd, status, port, pid, created_at, updated_at, finished_at, last_event_type, error_message"
-const atRunningCols = "thread_id, port, pid, status"
 
 // FindByPort 按端口查找运行中的线程。
 func (s *AgentThreadStore) FindByPort(ctx context.Context, port int) (*AgentThread, error) {
-	return s.findRunning(ctx, "port", port)
-}
-
-// findRunning 按指定列查找运行中的线程 (内部 DRY)。
-func (s *AgentThreadStore) findRunning(ctx context.Context, col string, val any) (*AgentThread, error) {
-	sql := "SELECT " + atCols + " FROM agent_threads WHERE " + col + " = $1 AND status = 'running' ORDER BY updated_at DESC LIMIT 1"
-	rows, err := s.pool.Query(ctx, sql, val)
+	rows, err := s.pool.Query(ctx,
+		"SELECT "+atCols+" FROM agent_threads WHERE port = $1 AND status = 'running' ORDER BY updated_at DESC LIMIT 1",
+		port)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +51,7 @@ func (s *AgentThreadStore) findRunning(ctx context.Context, col string, val any)
 // ListRunning 列出所有运行中的 Agent 端点（路由用最小字段集）。
 func (s *AgentThreadStore) ListRunning(ctx context.Context) ([]discovery.RunningAgent, error) {
 	rows, err := s.pool.Query(ctx,
-		"SELECT "+atRunningCols+" FROM agent_threads WHERE status = 'running' ORDER BY created_at DESC")
+		"SELECT thread_id, port, pid, status FROM agent_threads WHERE status = 'running' ORDER BY created_at DESC")
 	if err != nil {
 		return nil, err
 	}

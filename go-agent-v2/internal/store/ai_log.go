@@ -1,5 +1,4 @@
-// ai_log.go — AI 日志查询 (对应 Python ai_log.py, 12 字段, 3 regex)。
-// 基于 system_logs 派生，无独立表。
+// ai_log.go — AI 日志查询（基于 system_logs 派生）。
 package store
 
 import (
@@ -16,19 +15,12 @@ type AILogStore struct{ BaseStore }
 // NewAILogStore 创建 AI 日志存储。
 func NewAILogStore(pool *pgxpool.Pool) *AILogStore { return &AILogStore{NewBaseStore(pool)} }
 
-// Python ai_log.py 中 3 个核心 regex:
 var (
-	// POST https://api.openai.com/v1/chat/completions → method=POST, url=…
-	reHTTP = regexp.MustCompile(`(?i)(GET|POST|PUT|DELETE|PATCH|HEAD)\s+(https?://\S+)`)
-
-	// HTTP/1.1 200 OK → status_code=200, status_text=OK
+	reHTTP   = regexp.MustCompile(`(?i)(GET|POST|PUT|DELETE|PATCH|HEAD)\s+(https?://\S+)`)
 	reStatus = regexp.MustCompile(`(?i)HTTP/\d\.\d\s+(\d{3})\s*(\S*)`)
-
-	// model=gpt-4o / model: gpt-4o → model=…
-	reModel = regexp.MustCompile(`(?i)model[=:]\s*([^\s,;"'\]]+)`)
+	reModel  = regexp.MustCompile(`(?i)model[=:]\s*([^\s,;"'\]]+)`)
 )
 
-// classifyAILog 精细分类 (对应 Python _classify_row, 6 类别)。
 func classifyAILog(msg string) string {
 	lower := strings.ToLower(msg)
 	switch {
@@ -49,34 +41,29 @@ func classifyAILog(msg string) string {
 	}
 }
 
-// extractHTTP 从消息提取 HTTP method + url + endpoint (对应 Python _extract_endpoint)。
 func extractHTTP(msg string) (method, url, endpoint string) {
 	if m := reHTTP.FindStringSubmatch(msg); len(m) == 3 {
 		method = strings.ToUpper(m[1])
 		url = m[2]
-		// 提取路径部分作为 endpoint
-		if idx := strings.Index(url, "//"); idx >= 0 {
-			rest := url[idx+2:]
-			if slashIdx := strings.Index(rest, "/"); slashIdx >= 0 {
-				endpoint = rest[slashIdx:]
+		if _, rest, ok := strings.Cut(url, "//"); ok {
+			if slash := strings.IndexByte(rest, '/'); slash >= 0 {
+				endpoint = rest[slash:]
 			}
 		}
 	}
 	return
 }
 
-// extractStatus 提取 HTTP 状态码 (对应 Python _HTTPX_STATUS_RE)。
 func extractStatus(msg string) (code, text string) {
 	if m := reStatus.FindStringSubmatch(msg); len(m) >= 2 {
 		code = m[1]
-		if len(m) >= 3 {
+		if len(m) == 3 {
 			text = m[2]
 		}
 	}
 	return
 }
 
-// extractModel 提取模型名 (对应 Python _MODEL_RE)。
 func extractModel(msg string) string {
 	if m := reModel.FindStringSubmatch(msg); len(m) == 2 {
 		return m[1]
@@ -84,12 +71,18 @@ func extractModel(msg string) string {
 	return ""
 }
 
-// Query 查询 AI 日志 (从 system_logs 读取、分类、提取 12 字段)。
 func (s *AILogStore) Query(ctx context.Context, category, keyword string, limit int) ([]AILogRow, error) {
-	// 当指定 category 过滤时, SQL LIMIT 放大补偿 Go 侧后置过滤的数据损耗。
+	if limit < 1 {
+		limit = 1
+	} else if limit > 2000 {
+		limit = 2000
+	}
 	fetchLimit := limit
 	if category != "" {
-		fetchLimit = limit * 5
+		fetchLimit *= 5
+		if fetchLimit > 2000 {
+			fetchLimit = 2000
+		}
 	}
 	q := NewQueryBuilder().
 		KeywordLike(keyword, "message")
@@ -129,7 +122,7 @@ func (s *AILogStore) Query(ctx context.Context, category, keyword string, limit 
 			StatusText: statusText,
 			Model:      model,
 		})
-		if len(result) >= limit {
+		if len(result) == limit {
 			break
 		}
 	}

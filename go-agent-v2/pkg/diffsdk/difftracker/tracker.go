@@ -12,34 +12,30 @@ type Tracker struct {
 	beforeFileSnapshots map[string]FileContentSnapshot
 }
 
-func (t Tracker) Enabled() bool {
-	return t.enabled
-}
+func (t Tracker) Enabled() bool { return t.enabled }
 
 func BeginTracker(agentID, tool string, args map[string]any, resolveWorkDir WorkDirResolver) Tracker {
 	if !ShouldCaptureDynamicToolDiff(tool, args) {
 		return Tracker{}
 	}
-	repoRoot := ResolveDynamicToolDiffRepoRoot(agentID, args, resolveWorkDir)
-	if repoRoot == "" {
+	if repoRoot := ResolveDynamicToolDiffRepoRoot(agentID, args, resolveWorkDir); repoRoot == "" {
 		return Tracker{}
-	}
-
-	paths, err := ListRepoDirtyPaths(repoRoot)
-	if err != nil {
-		logger.Debug("dynamic-tool: capture pre-dispatch dirty paths failed",
-			logger.FieldAgentID, agentID,
-			logger.FieldToolName, tool,
-			logger.FieldPath, repoRoot,
-			logger.FieldError, err,
-		)
-		return Tracker{}
-	}
-
-	return Tracker{
-		enabled:             true,
-		repoRoot:            repoRoot,
-		beforeFileSnapshots: CaptureWorkingTreeFileSnapshots(repoRoot, paths),
+	} else {
+		paths, err := ListRepoDirtyPaths(repoRoot)
+		if err != nil {
+			logger.Debug("dynamic-tool: capture pre-dispatch dirty paths failed",
+				logger.FieldAgentID, agentID,
+				logger.FieldToolName, tool,
+				logger.FieldPath, repoRoot,
+				logger.FieldError, err,
+			)
+			return Tracker{}
+		}
+		return Tracker{
+			enabled:             true,
+			repoRoot:            repoRoot,
+			beforeFileSnapshots: CaptureWorkingTreeFileSnapshots(repoRoot, paths),
+		}
 	}
 }
 
@@ -48,8 +44,7 @@ func (t Tracker) EmitDiffUpdate(threadID, codexThreadID, tool string, emit DiffE
 		return
 	}
 
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
+	if threadID = strings.TrimSpace(threadID); threadID == "" {
 		return
 	}
 	logDebug := func(message string, err error) {
@@ -67,28 +62,23 @@ func (t Tracker) EmitDiffUpdate(threadID, codexThreadID, tool string, emit DiffE
 		return
 	}
 
-	incrementalDiff, err := BuildIncrementalDiffText(t.repoRoot, t.beforeFileSnapshots, afterPaths)
-	if err != nil {
+	if incrementalDiff, err := BuildIncrementalDiffText(t.repoRoot, t.beforeFileSnapshots, afterPaths); err != nil {
 		logDebug("dynamic-tool: build incremental diff failed", err)
 		return
+	} else if incrementalDiff != "" {
+		emit(DiffResult{
+			ThreadID:      threadID,
+			CodexThreadID: codexThreadID,
+			Tool:          tool,
+			DiffText:      incrementalDiff,
+		})
+		logger.Info("dynamic-tool: turn diff updated",
+			logger.FieldThreadID, threadID,
+			logger.FieldToolName, tool,
+			"repo_root", t.repoRoot,
+			"before_paths", len(t.beforeFileSnapshots),
+			"after_paths", len(afterPaths),
+			"new_len", len(incrementalDiff),
+		)
 	}
-	if incrementalDiff == "" {
-		return
-	}
-
-	emit(DiffResult{
-		ThreadID:      threadID,
-		CodexThreadID: codexThreadID,
-		Tool:          tool,
-		DiffText:      incrementalDiff,
-	})
-
-	logger.Info("dynamic-tool: turn diff updated",
-		logger.FieldThreadID, threadID,
-		logger.FieldToolName, tool,
-		"repo_root", t.repoRoot,
-		"before_paths", len(t.beforeFileSnapshots),
-		"after_paths", len(afterPaths),
-		"new_len", len(incrementalDiff),
-	)
 }

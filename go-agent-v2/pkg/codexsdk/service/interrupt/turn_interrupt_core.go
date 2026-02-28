@@ -10,25 +10,13 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-func normalizeInterruptState(raw string) string {
-	return support.NormalizeInterruptState(raw)
-}
-
-func isInterruptNoActiveTurnError(err error) bool {
-	return support.IsInterruptNoActiveTurnError(err)
-}
-
-func isInterruptTimeoutError(err error) bool {
-	return support.IsInterruptTimeoutError(err)
-}
-
-func isInterruptActiveState(state string) bool {
-	return support.IsInterruptActiveState(state)
-}
-
-func interruptSettleMode(confirmed bool, afterState string) string {
-	return support.InterruptSettleMode(confirmed, afterState)
-}
+var (
+	normalizeInterruptState      = support.NormalizeInterruptState
+	isInterruptNoActiveTurnError = support.IsInterruptNoActiveTurnError
+	isInterruptTimeoutError      = support.IsInterruptTimeoutError
+	isInterruptActiveState       = support.IsInterruptActiveState
+	interruptSettleMode          = support.InterruptSettleMode
+)
 
 func readThreadRuntimeStateByHooks(threadID string, readRuntimeStatus func(string) string, hasActiveTrackedTurn func(string) bool) string {
 	id := strings.TrimSpace(threadID)

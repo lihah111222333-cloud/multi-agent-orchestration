@@ -198,9 +198,7 @@ func copyFileAtomic(srcPath, targetPath string, overwrite bool) error {
 
 func CopyFile(srcPath, targetPath string) error { return copyFileAtomic(srcPath, targetPath, false) }
 
-func CopyFileOverwrite(srcPath, targetPath string) error {
-	return copyFileAtomic(srcPath, targetPath, true)
-}
+func CopyFileOverwrite(srcPath, targetPath string) error { return copyFileAtomic(srcPath, targetPath, true) }
 
 func FileSHA256(path string) (string, error) {
 	file, err := os.Open(path)
@@ -343,11 +341,9 @@ func RemoveEmptyCodexParentDirs(startDir string, codexRoot string) {
 }
 
 func LoadThreadArchiveMapFromDisk() (map[string]int64, error) {
-	if rootDir, err := ResolveThreadArchiveRootDir(); err != nil {
-		return nil, err
-	} else {
-		return collectThreadArchiveMapFromRoot(rootDir)
-	}
+	rootDir, err := ResolveThreadArchiveRootDir()
+	if err != nil { return nil, err }
+	return collectThreadArchiveMapFromRoot(rootDir)
 }
 
 func collectThreadArchiveMapFromRoot(rootDir string) (map[string]int64, error) {

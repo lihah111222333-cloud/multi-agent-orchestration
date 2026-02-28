@@ -26,15 +26,8 @@ const (
 	defaultTimeoutSec = 240
 	minTimeoutSec     = 1
 	maxTimeoutSec     = 3600
-	defaultOutputLim  = 20000
 	maxOutputLim      = 200000
 )
-
-// 需要人工审批的风险等级。
-var approvalRequiredRisks = map[string]bool{"high": true, "critical": true}
-
-// 允许自动审批的风险等级。
-var autoApproveAllowedRisks = map[string]bool{"low": true, "normal": true}
 
 // dangerousPatterns 危险命令正则 (编译时检查，对应 Python _DANGEROUS_COMMAND_PATTERNS)。
 var dangerousPatterns = []*regexp.Regexp{
@@ -110,7 +103,7 @@ func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, param
 		riskLevel = "normal"
 	}
 	dp := detectDangerous(rendered)
-	needsReview := approvalRequiredRisks[riskLevel] || dp != ""
+	needsReview := riskLevel == "high" || riskLevel == "critical" || dp != ""
 
 	status := RunStatusReady
 	if needsReview {
@@ -118,7 +111,12 @@ func (e *CommandCardExecutor) Prepare(ctx context.Context, cardKey string, param
 	}
 
 	// 写入 DB
-	paramsJSON := marshalJSON(params)
+	paramsJSON := "{}"
+	if b, err := json.Marshal(params); err == nil {
+		paramsJSON = string(b)
+	} else {
+		logger.Warn("executor: marshal params failed", logger.FieldError, err)
+	}
 	rows, err := e.pool.Query(ctx,
 		`INSERT INTO command_card_runs (card_key, requested_by, params, rendered_command,
 		    risk_level, status, requires_review, output, error)
@@ -389,7 +387,7 @@ func (e *CommandCardExecutor) RunOne(ctx context.Context, cardKey string, params
 				Message: "检测到危险命令模式，禁止自动审批，需人工审批"}, nil
 		}
 		// 高/严重风险禁止自动审批
-		if !autoApproveAllowedRisks[run.RiskLevel] {
+		if run.RiskLevel != "low" && run.RiskLevel != "normal" {
 			return &ExecResult{OK: true, Run: run, ExitCode: -1,
 				Message: "高风险命令禁止自动审批，需人工审批"}, nil
 		}
@@ -495,14 +493,4 @@ func detectDangerous(command string) string {
 		}
 	}
 	return ""
-}
-
-// marshalJSON 安全序列化 (DRY helper)。
-func marshalJSON(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		logger.Warn("executor: marshalJSON failed", logger.FieldError, err)
-		return "{}"
-	}
-	return string(b)
 }

@@ -9,30 +9,15 @@ import (
 type dynamicToolDiffTracker = difftracker.Tracker
 type fileContentSnapshot = difftracker.FileContentSnapshot
 
-func shouldCaptureDynamicToolDiff(tool string, args map[string]any) bool {
-	return difftracker.ShouldCaptureDynamicToolDiff(tool, args)
-}
+var shouldCaptureDynamicToolDiff = difftracker.ShouldCaptureDynamicToolDiff
+var listRepoDirtyPaths = difftracker.ListRepoDirtyPaths
+var captureWorkingTreeFileSnapshots = difftracker.CaptureWorkingTreeFileSnapshots
+var buildIncrementalDiffText = difftracker.BuildIncrementalDiffText
 
 func resolveDynamicToolDiffRepoRoot(s *Server, agentID string, args map[string]any) string {
 	return difftracker.ResolveDynamicToolDiffRepoRoot(agentID, args, func(id string) string {
 		return getAgentWorkDirState(s, id)
 	})
-}
-
-func listRepoDirtyPaths(repoRoot string) ([]string, error) {
-	return difftracker.ListRepoDirtyPaths(repoRoot)
-}
-
-func captureWorkingTreeFileSnapshots(repoRoot string, paths []string) map[string]fileContentSnapshot {
-	return difftracker.CaptureWorkingTreeFileSnapshots(repoRoot, paths)
-}
-
-func buildIncrementalDiffText(
-	repoRoot string,
-	beforeFileSnapshots map[string]fileContentSnapshot,
-	afterPaths []string,
-) (string, error) {
-	return difftracker.BuildIncrementalDiffText(repoRoot, beforeFileSnapshots, afterPaths)
 }
 
 func beginDynamicToolDiffTracker(s *Server, agentID, tool string, args map[string]any) dynamicToolDiffTracker {
@@ -45,7 +30,6 @@ func maybeEmitDynamicToolDiffUpdate(s *Server, threadID, codexThreadID, tool str
 	if s == nil {
 		return
 	}
-
 	tracker.EmitDiffUpdate(threadID, codexThreadID, tool, func(result difftracker.DiffResult) {
 		payload := map[string]any{
 			"diff":   result.DiffText,
@@ -55,7 +39,6 @@ func maybeEmitDynamicToolDiffUpdate(s *Server, threadID, codexThreadID, tool str
 		if result.CodexThreadID != "" {
 			payload["codexThreadId"] = result.CodexThreadID
 		}
-
 		files := result.Files
 		if len(files) == 0 {
 			files = parseFilesFromPatchDelta(result.DiffText)

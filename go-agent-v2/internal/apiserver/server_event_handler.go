@@ -121,10 +121,8 @@ func emitTurnStartDiffReset(s *Server, threadID string, payload map[string]any) 
 		"diff":     "",
 		"uiText":   "",
 	}
-	if payload != nil {
-		if codexThreadID, _ := payload["codexThreadId"].(string); strings.TrimSpace(codexThreadID) != "" {
-			resetPayload["codexThreadId"] = strings.TrimSpace(codexThreadID)
-		}
+	if codexThreadID := strings.TrimSpace(util.ExtractFirstString(payload, "codexThreadId")); codexThreadID != "" {
+		resetPayload["codexThreadId"] = codexThreadID
 	}
 
 	normalized := uistate.NormalizeEventFromPayload(agentcore.EventTurnDiff, "turn/diff/updated", resetPayload)
@@ -168,9 +166,6 @@ func extractCommandBaseName(payload map[string]any) string {
 		return ""
 	}
 	fields := strings.Fields(raw)
-	if len(fields) == 0 {
-		return ""
-	}
 	base := fields[0]
 	if idx := strings.LastIndexByte(base, '/'); idx >= 0 {
 		base = base[idx+1:]

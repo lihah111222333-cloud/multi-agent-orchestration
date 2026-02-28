@@ -69,14 +69,12 @@ func SetupLSP(s *Server, rootDir string) {
 }
 
 func resolveDynamicToolThreadIDs(agentID, rawThreadID string) (threadID, codexThreadID string) {
-	agentThreadID := strings.TrimSpace(agentID)
+	threadID = strings.TrimSpace(agentID)
 	codexThreadID = strings.TrimSpace(rawThreadID)
-	if agentThreadID != "" {
-		threadID = agentThreadID
-	} else {
+	if threadID == "" {
 		threadID = codexThreadID
 	}
-	if codexThreadID == "" || codexThreadID == threadID {
+	if codexThreadID == threadID {
 		codexThreadID = ""
 	}
 	return threadID, codexThreadID
@@ -94,8 +92,7 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 	// 先查找 proc — 后续的所有错误路径都需要通过 codexAdapter 回传错误。
 	proc := s.mgr.Get(agentID)
 	if proc == nil {
-		logger.Error("app-server: dynamic_tool_call dropped — agent gone",
-			logger.FieldAgentID, agentID)
+		logger.Error("app-server: dynamic_tool_call dropped — agent gone", logger.FieldAgentID, agentID)
 		if event.RespondFunc != nil {
 			if respondErr := event.RespondFunc(-32603, "agent not found: "+agentID); respondErr != nil {
 				logger.Warn("app-server: RespondFunc failed on agent-gone",

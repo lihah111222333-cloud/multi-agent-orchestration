@@ -116,11 +116,10 @@ func ParseRolloutTimestamp(raw string) time.Time {
 	if value == "" {
 		return time.Time{}
 	}
-	if ts, err := time.Parse(time.RFC3339Nano, value); err == nil {
-		return ts
-	}
-	if ts, err := time.Parse(time.RFC3339, value); err == nil {
-		return ts
+	for _, layout := range [...]string{time.RFC3339Nano, time.RFC3339} {
+		if ts, err := time.Parse(layout, value); err == nil {
+			return ts
+		}
 	}
 	return time.Time{}
 }
@@ -154,11 +153,10 @@ func RunningCodexThreadIDFromManager(
 	if getProcess == nil || getThreadID == nil {
 		return ""
 	}
-	proc := getProcess(threadID)
-	if proc == nil {
-		return ""
+	if proc := getProcess(threadID); proc != nil {
+		return getThreadID(proc)
 	}
-	return getThreadID(proc)
+	return ""
 }
 
 func ResolveRolloutHistorySource(

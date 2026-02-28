@@ -264,10 +264,7 @@ func ComposeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint string, s
 		return prompt
 	}
 	hint := strings.TrimSpace(injectedHint)
-	if hint == "" {
-		return submitPrompt
-	}
-	if strings.Contains(submitPrompt, hint) {
+	if hint == "" || strings.Contains(submitPrompt, hint) {
 		return submitPrompt
 	}
 	if mergePromptText != nil {

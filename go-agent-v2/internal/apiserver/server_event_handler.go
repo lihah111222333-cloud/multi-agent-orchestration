@@ -1,4 +1,3 @@
-// server_event_handler.go — Agent 事件转发与事件级 payload 增强。
 package apiserver
 
 import (
@@ -10,15 +9,10 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-// AgentEventHandler 返回一个 agentcore.EventHandler，将 Agent 事件转为 JSON-RPC 通知/请求。
-//
-// 普通事件: 广播为通知 (无需客户端回复)。
-// 审批事件: 发送 Server→Client 请求, 等待客户端回复, 回传 codex (§ 二)。
 func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 	return func(event agentcore.Event) {
 		method := mapEventToMethod(event.Type)
 
-		// 统一日志: 记录所有 codex 事件
 		threadID := ""
 		if proc := s.mgr.Get(agentID); proc != nil {
 			threadID = s.codexAdapter.GetThreadID(proc)
@@ -31,16 +25,12 @@ func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 			logger.FieldEventType, event.Type,
 		)
 
-		// 构建通知参数: threadId 始终在顶层以便前端路由
 		payload := map[string]any{
 			"threadId": agentID,
 		}
 
-		// 从 event.Data 提取前端常用字段到顶层 (含嵌套 msg/data/payload)。
 		mergePayloadFields(payload, event.Data)
 
-		// mergePayloadFields 可能用 Codex 原始 threadId (UUID) 覆盖了 agentID,
-		// 前端 ConversationManager 使用 Go agentID (thread-*) 作为 key, 必须还原。
 		if rawTID, _ := payload["threadId"].(string); rawTID != "" && rawTID != agentID {
 			payload["codexThreadId"] = rawTID
 		}
@@ -63,7 +53,6 @@ func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 			}
 		}
 
-		// Normalize event for UI
 		normalized := uistate.NormalizeEventFromPayload(event.Type, method, payload)
 		payload["uiType"] = string(normalized.UIType)
 		if normalized.Text != "" {
@@ -93,17 +82,16 @@ func AgentEventHandler(s *Server, agentID string) agentcore.EventHandler {
 			util.SafeGo(func() { handleDynamicToolCall(s, agentID, event) })
 			return
 		case agentcore.EventExecApprovalRequest, agentcore.EventFileChangeApprovalRequest, approvalMethodSkillRequest:
-			method := approvalMethodSkillRequest
+			approvalMethod := approvalMethodSkillRequest
 			if event.Type == agentcore.EventExecApprovalRequest {
-				method = approvalMethodCommandExecution
+				approvalMethod = approvalMethodCommandExecution
 			} else if event.Type == agentcore.EventFileChangeApprovalRequest {
-				method = approvalMethodFileChange
+				approvalMethod = approvalMethodFileChange
 			}
-			util.SafeGo(func() { handleApprovalRequest(s, agentID, method, payload, event) })
+			util.SafeGo(func() { handleApprovalRequest(s, agentID, approvalMethod, payload, event) })
 			return
 		}
 
-		// 普通事件: 广播通知
 		notify(s, method, payload)
 	}
 }
@@ -133,11 +121,6 @@ func emitTurnStartDiffReset(s *Server, threadID string, payload map[string]any) 
 	notify(s, "turn/diff/updated", resetPayload)
 }
 
-// enrichReadCommandPayload 检测 exec_command_begin 事件中的阅读类命令。
-//
-// 当 Agent 通过 Codex 内置 shell 执行 cat/grep/find 等命令时:
-//   - payload 追加 isReadCommand: true + lspHint 字段 (前端可展示警告)
-//   - 调用 IncrementToolCall("shell_read:<cmd>") 统计使用次数
 func enrichReadCommandPayload(s *Server, eventType string, payload map[string]any) {
 	if s == nil || payload == nil || eventType != agentcore.EventExecCommandBegin {
 		return
@@ -154,12 +137,6 @@ func enrichReadCommandPayload(s *Server, eventType string, payload map[string]an
 	)
 }
 
-// extractCommandBaseName 从 payload 的 command 字段提取基础命令名。
-//
-// Codex exec_command_begin payload 中 command 可能是:
-//   - "cat main.go"         → "cat"
-//   - "/usr/bin/grep foo"   → "grep"
-//   - "grep -rn 'pattern'"  → "grep"
 func extractCommandBaseName(payload map[string]any) string {
 	raw := strings.TrimSpace(util.ExtractFirstString(payload, "command", "displayCommand", "command_display", "cmd"))
 	if raw == "" {

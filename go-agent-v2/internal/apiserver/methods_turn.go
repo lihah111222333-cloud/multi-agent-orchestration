@@ -40,12 +40,10 @@ type turnInfo struct {
 	Status string `json:"status"`
 }
 
-type turnStartResponse struct {
-	Turn turnInfo `json:"turn"`
-}
-
 func toCodexTurnInputs(input []UserInput) []contracts.TurnInput {
-	if len(input) == 0 { return nil }
+	if len(input) == 0 {
+		return nil
+	}
 	return mapSlice(input, func(item UserInput) contracts.TurnInput { return contracts.TurnInput(item) })
 }
 
@@ -62,9 +60,7 @@ func (s *Server) turnStartTyped(ctx context.Context, p turnStartParams) (any, er
 		return nil, err
 	}
 
-	return turnStartResponse{
-		Turn: turnInfo{ID: startResult.TurnID, Status: "inProgress"},
-	}, nil
+	return map[string]any{"turn": turnInfo{ID: startResult.TurnID, Status: "inProgress"}}, nil
 }
 
 type turnSteerParams struct {
@@ -119,17 +115,6 @@ type reviewStartParams struct {
 	Delivery string       `json:"delivery,omitempty"`
 }
 
-type reviewStartTurn struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Items  []any  `json:"items"`
-}
-
-type reviewStartResponse struct {
-	Turn           reviewStartTurn `json:"turn"`
-	ReviewThreadID string          `json:"reviewThreadId"`
-}
-
 func buildReviewStartArgs(p reviewStartParams) (string, error) {
 	targetType := strings.TrimSpace(p.Target.Type)
 	if targetType == "" {
@@ -156,31 +141,34 @@ func buildReviewStartArgs(p reviewStartParams) (string, error) {
 }
 
 func validateReviewStartParams(p reviewStartParams) (string, error) {
-	if strings.TrimSpace(p.ThreadID) == "" { return "", pkgerr.New("Server.reviewStart", "threadId is required") }
+	if strings.TrimSpace(p.ThreadID) == "" {
+		return "", pkgerr.New("Server.reviewStart", "threadId is required")
+	}
 	return buildReviewStartArgs(p)
 }
 
-func normalizeReviewStartResponse(threadID string, result map[string]any) reviewStartResponse {
-	response := reviewStartResponse{
-		Turn: reviewStartTurn{
-			Status: "inProgress",
-			Items:  []any{},
-		},
-		ReviewThreadID: threadID,
+func normalizeReviewStartResponse(threadID string, result map[string]any) map[string]any {
+	turn := map[string]any{"status": "inProgress", "items": []any{}}
+	response := map[string]any{"turn": turn, "reviewThreadId": threadID}
+	if result == nil {
+		return response
 	}
-	if result == nil { return response }
 	if reviewThreadID, ok := result["reviewThreadId"].(string); ok {
 		if reviewThreadID = strings.TrimSpace(reviewThreadID); reviewThreadID != "" {
-			response.ReviewThreadID = reviewThreadID
+			response["reviewThreadId"] = reviewThreadID
 		}
 	}
 	if turnMap, ok := result["turn"].(map[string]any); ok {
 		if id, ok := turnMap["id"].(string); ok {
-			response.Turn.ID = id
+			turn["id"] = id
 		}
-			if status, ok := turnMap["status"].(string); ok && strings.TrimSpace(status) != "" { response.Turn.Status = strings.TrimSpace(status) }
+		if status, ok := turnMap["status"].(string); ok {
+			if status = strings.TrimSpace(status); status != "" {
+				turn["status"] = status
+			}
+		}
 		if items, ok := turnMap["items"].([]any); ok {
-			response.Turn.Items = items
+			turn["items"] = items
 		}
 	}
 	return response

@@ -26,14 +26,6 @@ type threadInfo struct {
 	ForkedFrom string `json:"forkedFrom,omitempty"`
 }
 
-type threadStartResponse struct {
-	Thread         threadInfo `json:"thread"`
-	Model          string     `json:"model"`
-	ModelProvider  string     `json:"modelProvider"`
-	Cwd            string     `json:"cwd"`
-	ApprovalPolicy string     `json:"approvalPolicy"`
-}
-
 func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any, error) {
 	result, err := s.codexAdapter.ThreadStart(
 		ctx,
@@ -46,30 +38,30 @@ func (s *Server) threadStartTyped(ctx context.Context, p threadStartParams) (any
 	if err != nil {
 		return nil, err
 	}
-	return threadStartResponse{
-		Thread:         threadInfo{ID: result.ThreadID, Status: result.Status},
-		Model:          result.Model,
-		ModelProvider:  result.ModelProvider,
-		Cwd:            result.Cwd,
-		ApprovalPolicy: result.ApprovalPolicy,
+	return map[string]any{
+		"thread":         threadInfo{ID: result.ThreadID, Status: result.Status},
+		"model":          result.Model,
+		"modelProvider":  result.ModelProvider,
+		"cwd":            result.Cwd,
+		"approvalPolicy": result.ApprovalPolicy,
 	}, nil
 }
 
-type threadIDParams struct{ ThreadID string `json:"threadId"` }
+type threadIDParams struct {
+	ThreadID string `json:"threadId"`
+}
 
 type threadForkParams struct {
 	ThreadID  string `json:"threadId"`
 	TurnIndex *int   `json:"turnIndex,omitempty"`
 }
 
-type threadForkResponse struct{ Thread threadInfo `json:"thread"` }
-
 func (s *Server) threadForkTyped(_ context.Context, p threadForkParams) (any, error) {
 	result, err := s.codexAdapter.ThreadFork(strings.TrimSpace(p.ThreadID))
 	if err != nil {
 		return nil, err
 	}
-	return threadForkResponse{Thread: threadInfo{ID: result.ThreadID, ForkedFrom: result.ForkedFrom}}, nil
+	return map[string]any{"thread": threadInfo{ID: result.ThreadID, ForkedFrom: result.ForkedFrom}}, nil
 }
 
 type threadResumeParams struct {
@@ -79,23 +71,13 @@ type threadResumeParams struct {
 	Model    string `json:"model,omitempty"`
 }
 
-type threadResumeResponse struct {
-	Thread threadInfo `json:"thread"`
-	Model  string     `json:"model"`
-}
-
 func (s *Server) threadResumeTyped(ctx context.Context, p threadResumeParams) (any, error) {
-	result, err := s.codexAdapter.ThreadResume(ctx, strings.TrimSpace(strings.SplitN(strings.TrimSpace(p.ThreadID), ",", 2)[0]), p.Path, p.Cwd, p.Model)
+	threadID := strings.TrimSpace(strings.SplitN(p.ThreadID, ",", 2)[0])
+	result, err := s.codexAdapter.ThreadResume(ctx, threadID, p.Path, p.Cwd, p.Model)
 	if err != nil {
 		return nil, err
 	}
-	return threadResumeResponse{Thread: threadInfo{ID: result.ThreadID, Status: result.Status}, Model: result.Model}, nil
-}
-
-type threadRecoverResponse struct {
-	Thread    threadInfo `json:"thread"`
-	Recovered bool       `json:"recovered"`
-	Mode      string     `json:"mode"`
+	return map[string]any{"thread": threadInfo{ID: result.ThreadID, Status: result.Status}, "model": result.Model}, nil
 }
 
 func (s *Server) threadRecoverTyped(ctx context.Context, p threadIDParams) (any, error) {
@@ -103,7 +85,11 @@ func (s *Server) threadRecoverTyped(ctx context.Context, p threadIDParams) (any,
 	if err != nil {
 		return nil, err
 	}
-	return threadRecoverResponse{Thread: threadInfo{ID: result.ThreadID, Status: result.Status}, Recovered: result.Recovered, Mode: result.Mode}, nil
+	return map[string]any{
+		"thread":    threadInfo{ID: result.ThreadID, Status: result.Status},
+		"recovered": result.Recovered,
+		"mode":      result.Mode,
+	}, nil
 }
 
 type threadNameSetParams struct {
@@ -136,21 +122,18 @@ type threadMessagesParams struct {
 	Before   int64  `json:"before,omitempty"`
 }
 
-type threadListResponse struct {
-	Data       []contracts.ThreadListItem `json:"data"`
-	NextCursor *string                    `json:"nextCursor"`
-}
-
 func (s *Server) threadList(ctx context.Context, params json.RawMessage) (any, error) {
 	threads, err := s.codexAdapter.ThreadList(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return threadListResponse{Data: filterThreadsByArchived(threads, params), NextCursor: nil}, nil
+	return map[string]any{"data": filterThreadsByArchived(threads, params), "nextCursor": nil}, nil
 }
 
 func filterThreadsByArchived(threads []contracts.ThreadListItem, params json.RawMessage) []contracts.ThreadListItem {
-	var p struct{ Archived *bool `json:"archived,omitempty"` }
+	var p struct {
+		Archived *bool `json:"archived,omitempty"`
+	}
 	_ = json.Unmarshal(params, &p)
 	if p.Archived == nil {
 		return threads
@@ -163,11 +146,6 @@ func filterThreadsByArchived(threads []contracts.ThreadListItem, params json.Raw
 		}
 	}
 	return filtered
-}
-
-type threadLoadedListResponse struct {
-	Data       []string `json:"data"`
-	NextCursor *string  `json:"nextCursor"`
 }
 
 type threadLoadedListParams struct {
@@ -184,5 +162,5 @@ func (s *Server) threadLoadedList(ctx context.Context, params json.RawMessage) (
 	if err != nil {
 		return nil, err
 	}
-	return threadLoadedListResponse{Data: data, NextCursor: nextCursor}, nil
+	return map[string]any{"data": data, "nextCursor": nextCursor}, nil
 }

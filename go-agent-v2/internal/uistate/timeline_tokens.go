@@ -44,9 +44,6 @@ func extractFirstIntByPaths(payload map[string]any, paths ...[]string) (int, boo
 		return 0, false
 	}
 	for _, path := range paths {
-		if len(path) == 0 {
-			continue
-		}
 		current := any(payload)
 		for _, key := range path {
 			nextMap, ok := current.(map[string]any)
@@ -55,9 +52,6 @@ func extractFirstIntByPaths(payload map[string]any, paths ...[]string) (int, boo
 				break
 			}
 			current = nextMap[key]
-			if current == nil {
-				break
-			}
 		}
 		if number, ok := extractIntValue(current); ok {
 			return number, true

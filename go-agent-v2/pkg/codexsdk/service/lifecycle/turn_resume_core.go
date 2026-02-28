@@ -45,9 +45,8 @@ func TryResumeCandidates(candidates []string, fallbackID string, resumeFn func(s
 	}
 	var lastErr error
 	attemptCount := 0
-	for _, rawID := range candidates {
-		id := strings.TrimSpace(rawID)
-		if id == "" {
+	for _, id := range candidates {
+		if id = strings.TrimSpace(id); id == "" {
 			continue
 		}
 		attemptCount++
@@ -94,8 +93,7 @@ func PreviewResumeCandidates(candidates []string, limit int) []string {
 	if limit <= 0 || len(candidates) <= limit {
 		return append([]string(nil), candidates...)
 	}
-	out := append([]string(nil), candidates[:limit]...)
-	return append(out, fmt.Sprintf("...+%d more", len(candidates)-limit))
+	return append(append([]string(nil), candidates[:limit]...), fmt.Sprintf("...+%d more", len(candidates)-limit))
 }
 
 func containsAnyMarker(msg string, markers []string) bool {

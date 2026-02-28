@@ -2,7 +2,6 @@ package codexadapter
 
 import (
 	"context"
-	"strings"
 
 	"github.com/multi-agent/go-agent-v2/pkg/codexsdk"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
@@ -20,23 +19,19 @@ type threadRecoverResult struct {
 	Mode      string
 }
 
-func (a *Adapter) RecoverConnection(proc *codexsdk.AgentProcess, reason string) error {
-	return withClient(proc, func(c codexsdk.Client) error {
-		recoverClient, ok := c.(recoverConnectionClient)
-		if !ok {
-			return apperrors.New("Server.threadRecover", "client does not support connection recovery")
-		}
-		return recoverClient.RecoverConnection(strings.TrimSpace(reason))
-	})
-}
-
 func (a *Adapter) ThreadRecover(_ context.Context, threadID string) (threadRecoverResult, error) {
 	id, err := requireThreadID("Server.threadRecover", threadID)
 	if err != nil {
 		return threadRecoverResult{}, err
 	}
 	return withProcess(a, "Server.threadRecover", id, func(proc *codexsdk.AgentProcess) (threadRecoverResult, error) {
-		if recoverErr := a.RecoverConnection(proc, "manual_ui_recover"); recoverErr != nil {
+		if recoverErr := withClient(proc, func(c codexsdk.Client) error {
+			recoverClient, ok := c.(recoverConnectionClient)
+			if !ok {
+				return apperrors.New("Server.threadRecover", "client does not support connection recovery")
+			}
+			return recoverClient.RecoverConnection("manual_ui_recover")
+		}); recoverErr != nil {
 			return threadRecoverResult{}, apperrors.Wrap(recoverErr, "Server.threadRecover", "recover connection")
 		}
 		logger.Info("thread/recover: manual recovery triggered", threadLogFields(id)...)

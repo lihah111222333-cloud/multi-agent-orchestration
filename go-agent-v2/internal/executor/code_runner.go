@@ -570,13 +570,6 @@ func (r *CodeRunner) validateWorkDir(dir string) error {
 	return nil
 }
 
-// DetectDangerous 检测命令中的危险模式 (复用 command_card.go 的 dangerousPatterns)。
-//
-// 返回匹配的危险模式字符串, 空串表示安全。
-func DetectDangerous(command string) string {
-	return detectDangerous(command)
-}
-
 // commandExists 检测命令是否在 PATH 中可用。
 func commandExists(name string) bool {
 	_, err := exec.LookPath(name)
@@ -612,6 +605,3 @@ func TruncateForAudit(s string, maxLen int) string {
 	}
 	return s[:maxLen] + "...[truncated]"
 }
-
-// MaxAuditPayloadSize 返回审计裁剪上限 (供外部判断是否截断)。
-func MaxAuditPayloadSize() int { return maxAuditPayload }

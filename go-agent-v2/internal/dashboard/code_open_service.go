@@ -329,7 +329,7 @@ func looksLikeBinaryContent(content []byte) bool {
 }
 
 func detectMediaType(path string, content []byte) string {
-	if byExt := mediaTypeByExtension(path); byExt != "" {
+	if byExt := mediaTypeByExt[strings.ToLower(strings.TrimSpace(filepath.Ext(path)))]; byExt != "" {
 		return byExt
 	}
 	if len(content) > 0 {
@@ -343,10 +343,6 @@ func detectMediaType(path string, content []byte) string {
 		}
 	}
 	return "application/octet-stream"
-}
-
-func mediaTypeByExtension(path string) string {
-	return mediaTypeByExt[strings.ToLower(strings.TrimSpace(filepath.Ext(path)))]
 }
 
 func isImagePreviewExtension(path string) bool {
@@ -385,11 +381,6 @@ func fileLanguageByPath(path string) string {
 		return language
 	}
 	return ext
-}
-
-func isMarkdownFilePath(path string) bool {
-	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
-	return ext == "md" || ext == "markdown"
 }
 
 func supportsLSPFileType(path string) bool {
@@ -542,7 +533,7 @@ func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 	if endLine > len(lines) {
 		endLine = len(lines)
 	}
-	if isMarkdownFilePath(resolvedPath) {
+	if ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(resolvedPath)), "."); ext == "md" || ext == "markdown" {
 		startLine = 1
 		endLine = len(lines)
 		contextLines = len(lines)

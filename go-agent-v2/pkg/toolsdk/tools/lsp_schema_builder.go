@@ -22,9 +22,6 @@ func lspRequired(fields ...string) []string {
 			out = append(out, field)
 		}
 	}
-	if len(out) == 0 {
-		return nil
-	}
 	return out
 }
 

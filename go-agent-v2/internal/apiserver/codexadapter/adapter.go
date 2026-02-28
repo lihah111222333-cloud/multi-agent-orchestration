@@ -135,11 +135,9 @@ func (a *Adapter) uiRuntime() *uistate.RuntimeManager          { return a.depsOr
 func (a *Adapter) allDynamicToolSchemas() []codexsdk.DynamicTool {
 	return a.depsOrDefault().AllSchemas()
 }
-
 func (a *Adapter) setAgentWorkDir(agentID string, cwd string) {
 	a.depsOrDefault().SetAgentWorkDir(agentID, cwd)
 }
-
 func (a *Adapter) cancelCodeRuns(agentID string) int {
 	return a.depsOrDefault().CancelCodeRuns(agentID)
 }
@@ -147,24 +145,24 @@ func (a *Adapter) cancelCodeRuns(agentID string) int {
 func (a *Adapter) nowUnixMilli() int64 { return a.depsOrDefault().NowUnixMilli() }
 
 func (a *Adapter) notify(method string, payload any) {
-	if strings.TrimSpace(method) == "" {
-		return
-	}
+	if strings.TrimSpace(method) == "" { return }
 	a.depsOrDefault().Notify(method, payload)
 }
 
 func (a *Adapter) findBindingByAgentID(ctx context.Context, agentID string) (*store.AgentCodexBinding, error) {
-	if bindingStore := a.bindingStore(); bindingStore != nil {
-		return bindingStore.FindByAgentID(ctx, agentID)
+	bindingStore := a.bindingStore()
+	if bindingStore == nil {
+		return nil, nil
 	}
-	return nil, nil
+	return bindingStore.FindByAgentID(ctx, agentID)
 }
 
 func (a *Adapter) findStatusByAgentID(ctx context.Context, agentID string) (*store.AgentStatus, error) {
-	if statusStore := a.statusStore(); statusStore != nil {
-		return statusStore.Get(ctx, agentID)
+	statusStore := a.statusStore()
+	if statusStore == nil {
+		return nil, nil
 	}
-	return nil, nil
+	return statusStore.Get(ctx, agentID)
 }
 
 func (a *Adapter) storeGetter() func(context.Context, string) (any, error) {

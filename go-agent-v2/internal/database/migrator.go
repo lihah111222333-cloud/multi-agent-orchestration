@@ -58,7 +58,12 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 	}
 
 	// 执行未应用的迁移
-	pending := countPendingMigrations(sqlFiles, applied)
+	pending := 0
+	for _, name := range sqlFiles {
+		if !applied[name] {
+			pending++
+		}
+	}
 	if pending > 0 {
 		logger.Info("migrate: applying pending migrations", logger.FieldCount, pending)
 	}
@@ -109,26 +114,16 @@ func applyOneMigration(ctx context.Context, pool *pgxpool.Pool, migrationsDir, n
 	if err != nil {
 		return apperrors.Wrapf(err, "Migrate", "begin tx for %s", name)
 	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	if _, err := tx.Exec(ctx, string(sqlBytes)); err != nil {
-		_ = tx.Rollback(ctx)
 		return apperrors.Wrapf(err, "Migrate", "exec migration %s", name)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO schema_version (version) VALUES ($1)`, name); err != nil {
-		_ = tx.Rollback(ctx)
 		return apperrors.Wrapf(err, "Migrate", "record migration %s", name)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return apperrors.Wrapf(err, "Migrate", "commit migration %s", name)
 	}
 	return nil
-}
-
-func countPendingMigrations(sqlFiles []string, applied map[string]bool) int {
-	pending := 0
-	for _, name := range sqlFiles {
-		if !applied[name] {
-			pending++
-		}
-	}
-	return pending
 }

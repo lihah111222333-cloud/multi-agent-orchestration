@@ -45,7 +45,6 @@ func RunSendSlashCommand(
 			return nil, apperrors.New(methodName, "command sender is not initialized")
 		}
 		if err := sendCommand(proc, command, args); err != nil {
-			wrapped := apperrors.Wrap(err, methodName, "send slash command")
 			if strings.Contains(strings.ToLower(err.Error()), "timeout") {
 				logger.Warn("slash command timeout",
 					logger.FieldThreadID, id,
@@ -53,7 +52,7 @@ func RunSendSlashCommand(
 					logger.FieldError, err,
 				)
 			}
-			return nil, wrapped
+			return nil, apperrors.Wrap(err, methodName, "send slash command")
 		}
 		return map[string]any{}, nil
 	})
@@ -98,10 +97,10 @@ func ThreadSkillsListResult(result map[string]any, err error) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if result == nil {
-		return map[string]any{}, nil
+	if result != nil {
+		return result, nil
 	}
-	return result, nil
+	return map[string]any{}, nil
 }
 
 func ParseSlashCommandArgParams(params json.RawMessage, argKey string, extractString func(map[string]any, ...string) string) (SlashCommandWithArgsParams, error) {
@@ -114,10 +113,10 @@ func ParseSlashCommandArgParams(params json.RawMessage, argKey string, extractSt
 		return parsed, apperrors.Wrap(err, "Server.parseSlashCommandWithArgsParams", "invalid params")
 	}
 	parsed.ThreadID = extractString(decoded, "threadId", "threadID", "thread_id")
-	if key := strings.TrimSpace(argKey); key == "" || strings.EqualFold(key, "args") {
-		parsed.Args = extractString(decoded, "args")
-	} else {
-		parsed.Args = extractString(decoded, key, "args")
+	key := strings.TrimSpace(argKey)
+	if key == "" || strings.EqualFold(key, "args") {
+		key = "args"
 	}
+	parsed.Args = extractString(decoded, key, "args")
 	return parsed, nil
 }

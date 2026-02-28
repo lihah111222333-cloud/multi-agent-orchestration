@@ -109,13 +109,10 @@ func limitSemanticTokenData(data []int, tokenLimit int) []int {
 	if tokenLimit <= 0 {
 		tokenLimit = SemanticTokenResultLimit
 	}
-
-	maxDataLen := tokenLimit * 5
-	if maxDataLen > len(data) {
-		maxDataLen = len(data)
+	if maxDataLen := tokenLimit * 5; maxDataLen < len(data) {
+		return append([]int(nil), data[:maxDataLen]...)
 	}
-
-	return append([]int(nil), data[:maxDataLen]...)
+	return append([]int(nil), data...)
 }
 
 // FoldingRange 获取可折叠区间，并执行边界过滤。
@@ -132,16 +129,16 @@ func (c *Client) FoldingRange(_ context.Context, uri string) ([]FoldingRange, er
 
 // Implementation 返回实现位置，兼容 Location/Location[]/LocationLink[]。
 func (c *Client) Implementation(_ context.Context, uri string, line, character int) ([]LocationResult, error) {
-	raw, err := c.callPositionRaw("textDocument/implementation", uri, line, character)
-	if err != nil {
-		return nil, err
-	}
-	return decodeLocationsLike(raw)
+	return c.positionLocationsLike("textDocument/implementation", uri, line, character)
 }
 
 // TypeDefinition 返回类型定义位置，兼容 Location/Location[]/LocationLink[]。
 func (c *Client) TypeDefinition(_ context.Context, uri string, line, character int) ([]LocationResult, error) {
-	raw, err := c.callPositionRaw("textDocument/typeDefinition", uri, line, character)
+	return c.positionLocationsLike("textDocument/typeDefinition", uri, line, character)
+}
+
+func (c *Client) positionLocationsLike(method, uri string, line, character int) ([]LocationResult, error) {
+	raw, err := c.callPositionRaw(method, uri, line, character)
 	if err != nil {
 		return nil, err
 	}

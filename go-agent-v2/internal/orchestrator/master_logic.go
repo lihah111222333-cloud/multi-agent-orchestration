@@ -1,4 +1,3 @@
-// master_logic.go — Master 编排器纯逻辑函数。
 package orchestrator
 
 import (
@@ -34,10 +33,6 @@ func trimTaskText(task string, maxChars int) string {
 	}
 	return string([]rune(text)[:maxChars]) + "\n...(任务文本已截断)"
 }
-
-// ========================================
-// extractJSON (对应 Python _extract_json)
-// ========================================
 
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func extractJSON(text string) map[string]any {
@@ -110,11 +105,6 @@ func extractJSON(text string) map[string]any {
 	return nil
 }
 
-// ========================================
-// sanitizeTopology (对应 Python _sanitize_topology)
-// ========================================
-
-// sanitizeTopology 清洗 LLM 返回的拓扑提案。
 func sanitizeTopology(raw map[string]any) map[string]any {
 	if raw == nil {
 		return nil
@@ -253,10 +243,6 @@ func normalizeOptionalText(v any) string {
 	return text
 }
 
-// ========================================
-// scoreOutputQuality (对应 Python _score_output_quality)
-// ========================================
-
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func scoreOutputQuality(text string) int {
 	value := strings.TrimSpace(text)
@@ -361,10 +347,6 @@ func normalizeWhitespace(s string) string {
 	return strings.Join(fields, " ")
 }
 
-// ========================================
-// normalizeAssignmentLine (对应 Python _normalize_assignment_line)
-// ========================================
-
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func normalizeAssignmentLine(line string) string {
 	text := strings.TrimSpace(line)
@@ -387,10 +369,6 @@ func normalizeAssignmentLine(line string) string {
 
 	return text
 }
-
-// ========================================
-// parseAssignments (对应 Python _parse_assignments)
-// ========================================
 
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func parseAssignments(text string, gateways map[string]bool) map[string]string {
@@ -416,10 +394,6 @@ func parseAssignments(text string, gateways map[string]bool) map[string]string {
 	return assignments
 }
 
-// ========================================
-// truncateSummaryText (对应 Python _truncate_summary_text)
-// ========================================
-
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func truncateSummaryText(text string, maxUnits int) string {
 	normalized := strings.TrimSpace(text)
@@ -437,18 +411,10 @@ func truncateSummaryText(text string, maxUnits int) string {
 	return fmt.Sprintf("%s\n...(内容已截断，已限制在 %d 字/词以内)", clipped, maxUnits)
 }
 
-// ========================================
-// degradedTask (对应 Python _degraded_task)
-// ========================================
-
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func degradedTask(task string) string {
 	return task + "\n\n[降级模式] Dispatcher 失败，请尽量给出互补信息并避免重复结论。"
 }
-
-// ========================================
-// fallbackAssignments (对应 Python _fallback_assignments)
-// ========================================
 
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func fallbackAssignments(task string, gateways map[string]bool) map[string]string {
@@ -458,10 +424,6 @@ func fallbackAssignments(task string, gateways map[string]bool) map[string]strin
 	}
 	return assignments
 }
-
-// ========================================
-// gatewayPromptBrief (对应 Python _gateway_prompt_brief)
-// ========================================
 
 //nolint:unused // DELETE_CANDIDATE[2026-02-22]: 预留给 Master 编排器调度逻辑
 func gatewayPromptBrief(gwID string, gw map[string]any) string {

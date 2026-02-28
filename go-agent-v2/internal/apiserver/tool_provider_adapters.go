@@ -20,7 +20,7 @@ func adaptCodeExecRunner(runner *executor.CodeRunner) tools.CodeExecRunner {
 	if runner == nil {
 		return nil
 	}
-	return codeExecRunnerAdapter{runner: runner}
+	return codeExecRunnerAdapter{runner}
 }
 
 func (a codeExecRunnerAdapter) Run(ctx context.Context, req tools.CodeRunRequest) (*tools.CodeRunResult, error) {
@@ -38,11 +38,8 @@ func (a codeExecRunnerAdapter) Run(ctx context.Context, req tools.CodeRunRequest
 		WorkDir:  req.WorkDir,
 		Timeout:  req.Timeout,
 	})
-	if err != nil {
+	if err != nil || result == nil {
 		return nil, err
-	}
-	if result == nil {
-		return nil, nil
 	}
 	return &tools.CodeRunResult{
 		Success:   result.Success,
@@ -63,7 +60,7 @@ func adaptAuditLogger(s *store.AuditLogStore) tools.AuditLogger {
 	if s == nil {
 		return nil
 	}
-	return auditLoggerAdapter{store: s}
+	return auditLoggerAdapter{s}
 }
 
 func (a auditLoggerAdapter) Append(ctx context.Context, e *tools.AuditEvent) error {
@@ -91,7 +88,7 @@ func adaptDAGManager(s *store.TaskDAGStore) tools.DAGManager {
 	if s == nil {
 		return nil
 	}
-	return dagManagerAdapter{store: s}
+	return dagManagerAdapter{s}
 }
 
 func (a dagManagerAdapter) SaveDAG(ctx context.Context, d *tools.TaskDAG) (*tools.TaskDAG, error) {
@@ -156,7 +153,7 @@ func adaptCardStore(s *store.CommandCardStore) tools.CardStore {
 	if s == nil {
 		return nil
 	}
-	return cardStoreAdapter{store: s}
+	return cardStoreAdapter{s}
 }
 
 func (a cardStoreAdapter) Save(ctx context.Context, c any) (any, error) {
@@ -184,7 +181,7 @@ func adaptTemplateStore(s *store.PromptTemplateStore) tools.TemplateStore {
 	if s == nil {
 		return nil
 	}
-	return templateStoreAdapter{store: s}
+	return templateStoreAdapter{s}
 }
 
 func (a templateStoreAdapter) Save(ctx context.Context, t any) (any, error) {
@@ -212,7 +209,7 @@ func adaptFileStore(s *store.SharedFileStore) tools.FileStore {
 	if s == nil {
 		return nil
 	}
-	return fileStoreAdapter{store: s}
+	return fileStoreAdapter{s}
 }
 
 func (a fileStoreAdapter) Write(ctx context.Context, path, content, actor string) (any, error) {
@@ -221,8 +218,12 @@ func (a fileStoreAdapter) Write(ctx context.Context, path, content, actor string
 func (a fileStoreAdapter) Read(ctx context.Context, path string) (any, error) {
 	return a.store.Read(ctx, path)
 }
-func (a fileStoreAdapter) List(ctx context.Context, prefix string, limit int) (any, error) { return a.store.List(ctx, prefix, limit) }
-func (a fileStoreAdapter) Delete(ctx context.Context, path, actor string) (bool, error)     { return a.store.Delete(ctx, path, actor) }
+func (a fileStoreAdapter) List(ctx context.Context, prefix string, limit int) (any, error) {
+	return a.store.List(ctx, prefix, limit)
+}
+func (a fileStoreAdapter) Delete(ctx context.Context, path, actor string) (bool, error) {
+	return a.store.Delete(ctx, path, actor)
+}
 
 type workspaceOpsAdapter struct {
 	manager *service.WorkspaceManager
@@ -232,7 +233,7 @@ func adaptWorkspaceOps(mgr *service.WorkspaceManager) tools.WorkspaceOps {
 	if mgr == nil {
 		return nil
 	}
-	return workspaceOpsAdapter{manager: mgr}
+	return workspaceOpsAdapter{mgr}
 }
 
 func (a workspaceOpsAdapter) CreateRun(ctx context.Context, req tools.WorkspaceCreateRunRequest) (any, error) {
@@ -276,7 +277,7 @@ func adaptAgentLauncher(mgr *runner.AgentManager) tools.AgentLauncher {
 	if mgr == nil {
 		return nil
 	}
-	return agentLauncherAdapter{manager: mgr}
+	return agentLauncherAdapter{mgr}
 }
 
 func (a agentLauncherAdapter) Launch(ctx context.Context, id, name, prompt, cwd, instructions string, dynamicTools []agentcore.DynamicTool) error {
@@ -311,8 +312,8 @@ func mapSlice[S any, D any](src []S, mapFn func(S) D) []D {
 		return nil
 	}
 	out := make([]D, len(src))
-	for i, item := range src {
-		out[i] = mapFn(item)
+	for i := range src {
+		out[i] = mapFn(src[i])
 	}
 	return out
 }

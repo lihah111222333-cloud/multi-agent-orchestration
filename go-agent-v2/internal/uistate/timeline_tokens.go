@@ -1,4 +1,3 @@
-// timeline_tokens.go — token 用量提取、计算与更新。
 package uistate
 
 import (
@@ -15,17 +14,8 @@ func extractFirstInt(payload map[string]any, keys ...string) (int, bool) {
 		if !ok {
 			continue
 		}
-		if number, ok := extractExitCode(value); ok {
+		if number, ok := extractIntValue(value); ok {
 			return number, true
-		}
-		if text, ok := value.(string); ok {
-			text = strings.TrimSpace(text)
-			if text == "" {
-				continue
-			}
-			if number, err := json.Number(text).Int64(); err == nil {
-				return int(number), true
-			}
 		}
 	}
 	return 0, false
@@ -126,7 +116,6 @@ func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[str
 	next.UpdatedAt = ts.UTC().Format(time.RFC3339)
 	m.snapshot.TokenUsageByThread[threadID] = next
 
-	// ── compact 链路可观测日志 ──
 	if allowInfoTotal {
 		logger.Info("uistate: token update [compact]",
 			logger.FieldThreadID, threadID,
@@ -156,7 +145,6 @@ func (m *RuntimeManager) updateTokenUsageLocked(threadID string, payload map[str
 	}
 }
 
-// extractContextWindow looks up the context window size from structured or flat payload keys.
 func extractContextWindow(payload map[string]any) (int, bool) {
 	if limit, ok := extractFirstIntByPaths(payload,
 		[]string{"tokenUsage", "modelContextWindow"},
@@ -172,15 +160,7 @@ func extractContextWindow(payload map[string]any) (int, bool) {
 	return 0, false
 }
 
-// extractTotalUsedTokens resolves used-token count with a 6-level priority chain:
-//  1. tokenUsage.last / usage.last → totalTokens
-//  2. tokenUsage.total / usage.total → totalTokens
-//  3. info.last_token_usage → total_tokens
-//  4. [only if allowInfoTotal] info.total_token_usage → total_tokens
-//  5. [only if !allowInfoTotal] flat deep search for total_tokens/usedTokens
-//  6. [fallback] input + output tokens summed
 func extractTotalUsedTokens(payload map[string]any, allowInfoTotal bool) (int, bool) {
-	// Priority 1: structured last usage
 	if total, ok := extractFirstIntByPaths(payload,
 		[]string{"tokenUsage", "last", "totalTokens"},
 		[]string{"tokenUsage", "last", "total_tokens"},
@@ -189,7 +169,6 @@ func extractTotalUsedTokens(payload map[string]any, allowInfoTotal bool) (int, b
 	); ok {
 		return max(0, total), true
 	}
-	// Priority 2: structured total usage
 	if total, ok := extractFirstIntByPaths(payload,
 		[]string{"tokenUsage", "total", "totalTokens"},
 		[]string{"tokenUsage", "total", "total_tokens"},
@@ -198,14 +177,12 @@ func extractTotalUsedTokens(payload map[string]any, allowInfoTotal bool) (int, b
 	); ok {
 		return max(0, total), true
 	}
-	// Priority 3: info.last_token_usage
 	if total, ok := extractFirstIntByPaths(payload,
 		[]string{"info", "last_token_usage", "total_tokens"},
 		[]string{"info", "lastTokenUsage", "totalTokens"},
 	); ok {
 		return max(0, total), true
 	}
-	// Priority 4/5: conditional gate
 	if allowInfoTotal {
 		if total, ok := extractFirstIntByPaths(payload,
 			[]string{"info", "total_token_usage", "total_tokens"},
@@ -216,11 +193,9 @@ func extractTotalUsedTokens(payload map[string]any, allowInfoTotal bool) (int, b
 	} else if total, ok := extractFirstIntDeep(payload, "total_tokens", "totalTokens", "used_tokens", "usedTokens"); ok {
 		return max(0, total), true
 	}
-	// Priority 6: input + output fallback
 	return extractInputOutputTokens(payload, allowInfoTotal)
 }
 
-// extractInputOutputTokens sums input and output tokens as a last-resort fallback.
 func extractInputOutputTokens(payload map[string]any, allowInfoTotal bool) (int, bool) {
 	input, hasInput := extractFirstIntByPaths(payload,
 		[]string{"tokenUsage", "last", "inputTokens"},
@@ -280,7 +255,6 @@ func extractInputOutputTokens(payload map[string]any, allowInfoTotal bool) (int,
 	return 0, false
 }
 
-// computeTokenPercent calculates used/left percentages, clamped to [0, 100].
 func computeTokenPercent(usedTokens, contextWindowTokens int) (usedPct, leftPct float64) {
 	if contextWindowTokens <= 0 {
 		return 0, 0

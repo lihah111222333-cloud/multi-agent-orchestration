@@ -281,9 +281,7 @@ type rpcEnvelope struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-func validIncomingJSONRPCVersion(version string) bool {
-	return strings.TrimSpace(version) == jsonrpcVersion
-}
+func validIncomingJSONRPCVersion(version string) bool { return strings.TrimSpace(version) == jsonrpcVersion }
 
 func parseIntID(raw json.RawMessage) (int64, bool) {
 	if len(raw) == 0 || string(raw) == "null" { return 0, false }

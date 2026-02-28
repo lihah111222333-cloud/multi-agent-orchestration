@@ -29,18 +29,13 @@ type Stores struct {
 }
 
 // NewServer 创建 MCP 服务器。
-func NewServer(stores *Stores) *Server {
-	return &Server{stores: stores}
-}
+func NewServer(stores *Stores) *Server { return &Server{stores: stores} }
 
 // Start 启动 MCP 服务器 (stdio transport)。
 // 待集成 mcp-go SDK — 目前使用简易 JSON-RPC over stdin/stdout。
 func (s *Server) Start(ctx context.Context) error {
 	logger.Info("MCP server starting (stdio)")
-	// TODO: 集成 github.com/mark3labs/mcp-go
-	// 以下为工具注册占位
-	tools := s.toolRegistry()
-	logger.Info("MCP tools registered", logger.FieldCount, len(tools))
+	logger.Info("MCP tools registered", logger.FieldCount, len(s.toolRegistry()))
 	<-ctx.Done()
 	return nil
 }
@@ -86,46 +81,36 @@ func (s *Server) toolRegistry() []Tool {
 // HandleTool 处理工具调用 (对应 Python all_in_one.py 10 个 @mcp.tool)。
 func (s *Server) HandleTool(ctx context.Context, name string, args json.RawMessage) (any, error) {
 	p := parseToolParams(args)
-	handlers := map[string]func(context.Context) (any, error){
-		"interaction": func(ctx context.Context) (any, error) {
-			return s.stores.Interaction.List(ctx, p.ThreadID, p.Keyword, p.Limit)
-		},
-		"task_trace": func(ctx context.Context) (any, error) {
-			return s.stores.TaskTrace.List(ctx, p.AgentID, p.Keyword, nil, p.Limit)
-		},
-		"prompt_template": func(ctx context.Context) (any, error) {
-			return s.stores.PromptTemplate.List(ctx, "", p.Keyword, p.Limit)
-		},
-		"command_card": func(ctx context.Context) (any, error) {
-			return s.stores.CommandCard.List(ctx, p.Keyword, p.Limit)
-		},
-		"shared_file": func(ctx context.Context) (any, error) {
-			if p.Path != "" && p.Content != "" {
-				return s.stores.SharedFile.Write(ctx, p.Path, p.Content, p.Actor)
-			}
-			return s.stores.SharedFile.List(ctx, p.Prefix, p.Limit)
-		},
-		"audit_log": func(ctx context.Context) (any, error) {
-			return s.stores.AuditLog.List(ctx, p.EventType, p.Action, p.Actor, p.Keyword, p.Limit)
-		},
-		"agent_status": func(ctx context.Context) (any, error) {
-			return s.stores.AgentStatus.List(ctx, p.Status)
-		},
-		"topology_approval": func(ctx context.Context) (any, error) {
-			return s.stores.TopologyApproval.GetPending(ctx)
-		},
-		"db_query": func(ctx context.Context) (any, error) {
-			if p.SQL == "" {
-				return nil, apperrors.New("MCP.HandleTool", "db_query: sql is required")
-			}
-			return s.stores.DBQuery.Query(ctx, p.SQL, p.Limit)
-		},
-	}
-	handler, ok := handlers[name]
-	if !ok {
+	switch name {
+	case "interaction":
+		return s.stores.Interaction.List(ctx, p.ThreadID, p.Keyword, p.Limit)
+	case "task_trace":
+		return s.stores.TaskTrace.List(ctx, p.AgentID, p.Keyword, nil, p.Limit)
+	case "prompt_template":
+		return s.stores.PromptTemplate.List(ctx, "", p.Keyword, p.Limit)
+	case "command_card":
+		return s.stores.CommandCard.List(ctx, p.Keyword, p.Limit)
+	case "shared_file":
+		if p.Path != "" && p.Content != "" {
+			return s.stores.SharedFile.Write(ctx, p.Path, p.Content, p.Actor)
+		}
+		return s.stores.SharedFile.List(ctx, p.Prefix, p.Limit)
+	case "audit_log":
+		return s.stores.AuditLog.List(ctx, p.EventType, p.Action, p.Actor, p.Keyword, p.Limit)
+	case "agent_status":
+		return s.stores.AgentStatus.List(ctx, p.Status)
+	case "topology_approval":
+		return s.stores.TopologyApproval.GetPending(ctx)
+	case "db_query":
+		if p.SQL == "" {
+			return nil, apperrors.New("MCP.HandleTool", "db_query: sql is required")
+		}
+		return s.stores.DBQuery.Query(ctx, p.SQL, p.Limit)
+	case "config_manage":
+		return nil, apperrors.New("MCP.HandleTool", "config_manage: not implemented")
+	default:
 		return nil, apperrors.Newf("MCP.HandleTool", "unknown tool: %s", name)
 	}
-	return handler(ctx)
 }
 
 func parseToolParams(args json.RawMessage) toolParams {

@@ -1,6 +1,4 @@
-// Package orchestrator 提供主编排器 (对应 Python master.py)。
-//
-// 使用 Go for-select 状态机替代 LangGraph StateGraph。
+// Package orchestrator 提供主编排器。
 package orchestrator
 
 import (
@@ -45,7 +43,7 @@ func NewMaster(traces *store.TaskTraceStore, dag *store.TaskDAGStore, ack *store
 // AddGateway 添加 Gateway。
 func (m *Master) AddGateway(gw *Gateway) { m.gateways = append(m.gateways, gw) }
 
-// Run 执行编排循环 (for-select 状态机)。
+// Run 执行编排循环。
 func (m *Master) Run(ctx context.Context) error {
 	logger.Info("orchestrator started", "gateways", len(m.gateways))
 
@@ -59,7 +57,7 @@ func (m *Master) Run(ctx context.Context) error {
 			logger.Info("orchestrator shutdown completed", "gateways", len(m.gateways))
 			return nil
 		case <-ticker.C:
-			if err := m.tick(ctx); err != nil {
+			if err := m.tick(); err != nil {
 				logger.Error("orchestrator tick error", logger.FieldStatus, m.state, logger.FieldError, err, logger.FieldDecision, "transition_to_error")
 				m.state = StateError
 			}
@@ -68,33 +66,13 @@ func (m *Master) Run(ctx context.Context) error {
 }
 
 // tick 单次状态转换。
-func (m *Master) tick(ctx context.Context) error {
+func (m *Master) tick() error {
 	switch m.state {
-	case StateIdle:
-		// 检查是否有新任务
-		return nil
-	case StateDispatching:
-		// 向 Gateway 分发任务
-		return nil
-	case StateWaiting:
-		// 等待 Agent ACK
-		return nil
-	case StateCollecting:
-		// 收集执行结果
-		return nil
-	case StateCompleted:
+	case StateCompleted, StateError:
 		m.state = StateIdle
-		return nil
-	case StateError:
-		m.state = StateIdle
-		return nil
 	}
 	return nil
 }
-
-// ========================================
-// Gateway — 单个 Gateway 执行器 (原 gateway.go)
-// ========================================
 
 // Gateway 单个 Gateway 执行器。
 type Gateway struct {

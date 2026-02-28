@@ -1,11 +1,9 @@
-// Package monitor 提供 Agent 巡检 (对应 Python agent_monitor.py 392 行)。
-//
-// Go 优势: goroutine + ticker 替代 Python while+sleep、
-// strings.Contains 替代关键词检测、sync.Map 替代 dict。
+// Package monitor 提供 Agent 巡检。
 package monitor
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -14,10 +12,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
-
-// ========================================
-// 常量 (对应 Python 模块级常量)
-// ========================================
 
 var (
 	errorKeywords        = []string{"traceback", "error", "exception"}
@@ -32,10 +26,6 @@ const (
 
 // StatusNames 有效状态名。
 var StatusNames = []string{"running", "idle", "stuck", "error", "disconnected", "unknown"}
-
-// ========================================
-// Patrol 巡检器
-// ========================================
 
 // Patrol Agent 巡检器。
 type Patrol struct {
@@ -65,10 +55,6 @@ func NewPatrol(as *store.AgentStatusStore, bus EventPublisher) *Patrol {
 	}
 }
 
-// ========================================
-// ClassifyStatus — 状态分类 (对应 Python classify_status)
-// ========================================
-
 // ClassifyStatus 根据输出片段分类 Agent 状态。
 func ClassifyStatus(lines []string, hasSession bool, stagnantSec int) string {
 	if !hasSession {
@@ -93,10 +79,6 @@ func ClassifyStatus(lines []string, hasSession bool, stagnantSec int) string {
 	}
 	return "running"
 }
-
-// ========================================
-// RunOnce — 单次巡检 (对应 Python patrol_agents_once)
-// ========================================
 
 // AgentSnapshot 单个 Agent 巡检快照。
 type AgentSnapshot struct {
@@ -129,10 +111,7 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 
 	var snapshots []AgentSnapshot
 	for _, a := range agents {
-		// 解析一次，重用结果 (避免 3 次重复 parseOutputTail)
 		lines := parseOutputTail(a.OutputTail)
-
-		// 计算 stagnation
 		stagnant := p.computeStagnantFromLines(a.AgentID, lines, now)
 		status := ClassifyStatus(lines, a.SessionID != "", stagnant)
 		if status != "error" && status != "disconnected" && a.Error != "" {
@@ -150,7 +129,6 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 		}
 		snapshots = append(snapshots, snap)
 
-		// 持久化更新后的状态
 		a.Status = status
 		a.StagnantSec = stagnant
 		if _, err := p.agentStore.Upsert(ctx, &a); err != nil {
@@ -165,7 +143,6 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 		Agents:  snapshots,
 	}
 
-	// 清理已下线 Agent 的指纹缓存, 防止 memory map 无限增长。
 	activeIDs := make(map[string]struct{}, len(agents))
 	for _, a := range agents {
 		activeIDs[a.AgentID] = struct{}{}
@@ -183,7 +160,6 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 		"unhealthy", result.Summary["unhealthy"],
 	)
 
-	// SSE 推送
 	if p.eventBus != nil {
 		p.eventBus.PublishAgentStatus(map[string]any{
 			"ok":      result.OK,
@@ -195,10 +171,6 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 
 	return result
 }
-
-// ========================================
-// Start — 定期巡检 (对应 Python patrol_agents_loop)
-// ========================================
 
 // Start 启动定期巡检 (goroutine + ticker)。
 func (p *Patrol) Start(ctx context.Context) {
@@ -219,12 +191,7 @@ func (p *Patrol) Start(ctx context.Context) {
 	logger.Info("patrol started", "interval_sec", defaultIntervalSec)
 }
 
-// ========================================
-// 内部工具 (DRY: 共享逻辑)
-// ========================================
-
-// computeStagnantFromLines 计算输出停滞时间 (指纹对比)。
-// 接受已解析的 lines，避免重复调用 parseOutputTail。
+// computeStagnantFromLines 计算输出停滞时间。
 func (p *Patrol) computeStagnantFromLines(agentID string, lines []string, now time.Time) int {
 	hash := hashLines(lines)
 
@@ -284,14 +251,7 @@ func isPromptOnly(lines []string) bool {
 		return true
 	}
 	for _, l := range lines {
-		found := false
-		for _, m := range promptMarkers {
-			if l == m {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(promptMarkers, l) {
 			return false
 		}
 	}
@@ -318,10 +278,9 @@ func emptySummary() map[string]int {
 func summarize(agents []AgentSnapshot) map[string]int {
 	s := emptySummary()
 	for _, a := range agents {
-		status := a.Status
-		s[status]++
-		s["total"]++
+		s[a.Status]++
 	}
+	s["total"] = len(agents)
 	s["healthy"] = s["running"] + s["idle"]
 	s["unhealthy"] = s["total"] - s["healthy"]
 	return s

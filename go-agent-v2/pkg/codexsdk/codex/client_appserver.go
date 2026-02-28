@@ -62,49 +62,47 @@ func (p *pendingCall) resolve(result json.RawMessage, err error) {
 }
 
 type AppServerClient struct {
-	Port           int
-	Cmd            *exec.Cmd
-	ThreadID       string
-	AgentID        string
-	ApprovalPolicy string
-	ws              *websocket.Conn
-	wsMu            sync.Mutex
-	wsDone          chan struct{}
-	handler         EventHandler
-	handlerMu       sync.RWMutex
-	stopped         atomic.Bool
-	ctx             context.Context
-	cancel          context.CancelFunc
-	stderrCollector *logger.StderrCollector
-	nextID           atomic.Int64
-	pending          sync.Map
-	activeTurnID     atomic.Value
+	Port                                         int
+	Cmd                                          *exec.Cmd
+	ThreadID                                     string
+	AgentID                                      string
+	ApprovalPolicy                               string
+	ws                                           *websocket.Conn
+	wsMu                                         sync.Mutex
+	wsDone                                       chan struct{}
+	handler                                      EventHandler
+	handlerMu                                    sync.RWMutex
+	stopped                                      atomic.Bool
+	ctx                                          context.Context
+	cancel                                       context.CancelFunc
+	stderrCollector                              *logger.StderrCollector
+	nextID                                       atomic.Int64
+	pending                                      sync.Map
+	activeTurnID                                 atomic.Value
 	listenerEnsureNeeded, listenerEnsureInFlight atomic.Bool
-	legacyMirrorDropCount  atomic.Int64
-	healthMu               sync.Mutex
-	health                 appServerConnectionHealth
-	respawnRecoverInFlight, readLoopRunning atomic.Bool
-	streamErrorRecoveryMu    sync.Mutex
-	streamErrorRecoveryTimer *time.Timer
+	legacyMirrorDropCount                        atomic.Int64
+	healthMu                                     sync.Mutex
+	health                                       appServerConnectionHealth
+	respawnRecoverInFlight, readLoopRunning      atomic.Bool
+	streamErrorRecoveryMu                        sync.Mutex
+	streamErrorRecoveryTimer                     *time.Timer
 }
 
 const (
-	appServerStartupProbeTimeout     = 30 * time.Second
-	appServerWriteTimeout            = 10 * time.Second
-	appServerPingInterval            = 25 * time.Second
-	appServerInterruptTimeout        = 30 * time.Second
-	appServerListenerEnsureTimeout   = 10 * time.Second
-	appServerReconnectBaseDelay      = 300 * time.Millisecond
-	appServerReconnectMaxDelay       = 3 * time.Second
-	defaultAppServerReadIdleTimeout  = 600 * time.Second
-	defaultAppServerStreamMaxRetries = 5
-	streamErrorRecoveryTimeout       = 60 * time.Second
-	maxAppServerStreamMaxRetries     = 100
-
-	appServerCircuitBreakerWindow    = 30 * time.Second
-	appServerCircuitBreakerCooldown  = 8 * time.Second
-	appServerCircuitBreakerThreshold = 4
-
+	appServerStartupProbeTimeout        = 30 * time.Second
+	appServerWriteTimeout               = 10 * time.Second
+	appServerPingInterval               = 25 * time.Second
+	appServerInterruptTimeout           = 30 * time.Second
+	appServerListenerEnsureTimeout      = 10 * time.Second
+	appServerReconnectBaseDelay         = 300 * time.Millisecond
+	appServerReconnectMaxDelay          = 3 * time.Second
+	defaultAppServerReadIdleTimeout     = 600 * time.Second
+	defaultAppServerStreamMaxRetries    = 5
+	streamErrorRecoveryTimeout          = 60 * time.Second
+	maxAppServerStreamMaxRetries        = 100
+	appServerCircuitBreakerWindow       = 30 * time.Second
+	appServerCircuitBreakerCooldown     = 8 * time.Second
+	appServerCircuitBreakerThreshold    = 4
 	appServerRespawnEscalationWindow    = 20 * time.Second
 	appServerRespawnEscalationThreshold = 3
 )
@@ -133,16 +131,22 @@ func appServerReadIdleTimeoutFromEnv() time.Duration {
 
 func currentAppServerReadIdleTimeout() time.Duration {
 	ms := appServerReadIdleTimeoutMs.Load()
-	if ms <= 0 { return defaultAppServerReadIdleTimeout }
+	if ms <= 0 {
+		return defaultAppServerReadIdleTimeout
+	}
 	return time.Duration(ms) * time.Millisecond
 }
 
 func setAppServerReadIdleTimeout(timeout time.Duration) {
-	if timeout > 0 { appServerReadIdleTimeoutMs.Store(timeout.Milliseconds()) }
+	if timeout > 0 {
+		appServerReadIdleTimeoutMs.Store(timeout.Milliseconds())
+	}
 }
 
 func SetAppServerReadIdleTimeout(timeout time.Duration) {
-	if timeout <= 0 { return }
+	if timeout <= 0 {
+		return
+	}
 	setAppServerReadIdleTimeout(timeout)
 	logger.Info("codex: stream read idle timeout updated",
 		"timeout_ms", timeout.Milliseconds(),

@@ -481,11 +481,7 @@ func (c *AppServerClient) call(method string, params any, timeout time.Duration)
 }
 
 func (c *AppServerClient) notify(method string, params any) error {
-	return c.asWriteJSON(jsonRPCNotification{
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  params,
-	})
+	return c.asWriteJSON(jsonRPCNotification{JSONRPC: "2.0", Method: method, Params: params})
 }
 
 func (c *AppServerClient) respondWithID(id jsonRPCID, result any) error {
@@ -497,9 +493,5 @@ func (c *AppServerClient) RespondError(id int64, code int, message string) error
 }
 
 func (c *AppServerClient) respondErrorWithID(id jsonRPCID, code int, message string) error {
-	return c.asWriteJSON(jsonRPCResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Error:   &jsonRPCError{Code: code, Message: message},
-	})
+	return c.asWriteJSON(jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &jsonRPCError{Code: code, Message: message}})
 }

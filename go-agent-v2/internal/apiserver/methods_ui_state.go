@@ -168,11 +168,11 @@ func uiStateGet(s *Server, ctx context.Context, _ json.RawMessage) (any, error) 
 
 func resolveThreadArchivesForState(s *Server, ctx context.Context, prefs map[string]any) (any, bool) {
 	if s != nil && s.codexAdapter != nil {
-		if archivedMap, err := s.codexAdapter.ThreadArchiveMap(ctx); err == nil {
+		archivedMap, err := s.codexAdapter.ThreadArchiveMap(ctx)
+		if err == nil {
 			return archivedMap, true
-		} else {
-			logger.Warn("ui/state/get: load thread archives failed", logger.FieldError, err)
 		}
+		logger.Warn("ui/state/get: load thread archives failed", logger.FieldError, err)
 	}
 	value, ok := prefs[dashboard.PrefThreadArchivesChat]
 	return value, ok

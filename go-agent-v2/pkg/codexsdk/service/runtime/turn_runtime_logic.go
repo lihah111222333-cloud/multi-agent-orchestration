@@ -446,7 +446,6 @@ func ResolveProcess(a RuntimeAdapter, caller, threadID string) (Process, error) 
 }
 
 func WithProcess[T any](a RuntimeAdapter, caller string, threadID string, fn func(Process) (T, error)) (T, error) {
-	a = normalizeRuntimeAdapter(a)
 	var zero T
 	proc, err := ResolveProcess(a, caller, threadID)
 	if err != nil {

@@ -302,9 +302,6 @@ func (s *SkillService) UpdateSkillSummary(name, summary string) (skillPath strin
 		return "", "", err
 	}
 	resolvedName = skillDisplayName(record.StoredName, record.Meta, record.ID)
-	if resolvedName == "" {
-		resolvedName = strings.TrimSpace(name)
-	}
 	return record.SkillPath, resolvedName, nil
 }
 
@@ -317,9 +314,6 @@ func (s *SkillService) DeleteSkill(name string) (resolvedName string, dir string
 		return "", "", err
 	}
 	resolvedName = skillDisplayName(record.StoredName, record.Meta, record.ID)
-	if resolvedName == "" {
-		resolvedName = strings.TrimSpace(name)
-	}
 	return resolvedName, record.DirPath, nil
 }
 

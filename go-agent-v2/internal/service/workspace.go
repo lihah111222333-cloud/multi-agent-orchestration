@@ -164,7 +164,11 @@ func (m *WorkspaceManager) CreateRun(ctx context.Context, req WorkspaceCreateReq
 		return nil, apperrors.Newf("WorkspaceManager.CreateRun", "invalid runKey %q", runKey)
 	}
 
-	sourceRoot, err := filepath.Abs(strings.TrimSpace(req.SourceRoot))
+	sourceRootInput := strings.TrimSpace(req.SourceRoot)
+	if sourceRootInput == "" {
+		return nil, apperrors.New("WorkspaceManager.CreateRun", "sourceRoot is required")
+	}
+	sourceRoot, err := filepath.Abs(sourceRootInput)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "WorkspaceManager.CreateRun", "invalid sourceRoot")
 	}
@@ -221,7 +225,9 @@ func (m *WorkspaceManager) CreateRun(ctx context.Context, req WorkspaceCreateReq
 	return saved, nil
 }
 
-func (m *WorkspaceManager) GetRun(ctx context.Context, runKey string) (*store.WorkspaceRun, error) { return m.runs.GetRun(ctx, strings.TrimSpace(runKey)) }
+func (m *WorkspaceManager) GetRun(ctx context.Context, runKey string) (*store.WorkspaceRun, error) {
+	return m.runs.GetRun(ctx, strings.TrimSpace(runKey))
+}
 
 func (m *WorkspaceManager) ListRuns(ctx context.Context, status, dagKey string, limit int) ([]store.WorkspaceRun, error) {
 	return m.runs.ListRuns(ctx, strings.TrimSpace(status), strings.TrimSpace(dagKey), limit)
@@ -398,16 +404,14 @@ func recordMergeResult(result *WorkspaceMergeResult, counter *int, path, action,
 	result.Files = append(result.Files, WorkspaceMergeFileResult{Path: path, Action: action, Reason: reason})
 }
 
-func recordMergeError(result *WorkspaceMergeResult, path, reason string) { recordMergeResult(result, &result.Errors, path, "error", reason) }
+func recordMergeError(result *WorkspaceMergeResult, path, reason string) {
+	recordMergeResult(result, &result.Errors, path, "error", reason)
+}
 
 type mergeCandidate struct {
-	rel          string
-	wsPath       string
-	sourcePath   string
-	wsInfo       os.FileInfo
-	wsHash       string
-	sourceBefore string
-	baseline     string
+	rel, wsPath, sourcePath        string
+	wsInfo                         os.FileInfo
+	wsHash, sourceBefore, baseline string
 }
 
 func (c *mergeCandidate) toRunFile(runKey, state, sourceAfter, lastError string) *store.WorkspaceRunFile {

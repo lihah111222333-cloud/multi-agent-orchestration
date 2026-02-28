@@ -18,9 +18,7 @@ const prefKeyShowInjectedPromptInChat = "settings.showInjectedPromptInChat"
 
 func (a *Adapter) ThreadMessages(ctx context.Context, threadID string, limit int, before int64) (map[string]any, error) {
 	id, err := requireThreadID("Server.threadMessages", threadID)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -78,14 +76,9 @@ func (a *Adapter) ThreadMessages(ctx context.Context, threadID string, limit int
 
 func (a *Adapter) showInjectedPromptInChat(ctx context.Context) bool {
 	store := a.store()
-	if store == nil {
-		return false
-	}
+	if store == nil { return false }
 	value, err := store.Get(ctx, prefKeyShowInjectedPromptInChat)
-	if err != nil {
-		logger.Warn("ui preferences: load injected prompt visibility failed", logger.FieldError, err)
-		return false
-	}
+	if err != nil { logger.Warn("ui preferences: load injected prompt visibility failed", logger.FieldError, err); return false }
 	return messagessvc.ParsePreferenceBool(value, false)
 }
 
@@ -101,16 +94,12 @@ func (a *Adapter) resolveRolloutHistorySource(ctx context.Context, threadID stri
 		},
 		func(ctx context.Context, agentID string) (string, string, error) {
 			binding, err := a.findBindingByAgentID(ctx, agentID)
-			if err != nil || binding == nil {
-				return "", "", err
-			}
+			if err != nil || binding == nil { return "", "", err }
 			return binding.CodexThreadID, binding.RolloutPath, nil
 		},
 		func(ctx context.Context, agentID string) (string, error) {
 			status, err := a.findStatusByAgentID(ctx, agentID)
-			if err != nil || status == nil {
-				return "", err
-			}
+			if err != nil || status == nil { return "", err }
 			return status.SessionID, nil
 		},
 		lifecyclesvc.NormalizeCodexThreadID,
@@ -119,14 +108,6 @@ func (a *Adapter) resolveRolloutHistorySource(ctx context.Context, threadID stri
 
 func toHistoryRecords(msgs []messagessvc.ThreadHistoryMessage) []uistate.HistoryRecord {
 	return mapSlice(msgs, func(msg messagessvc.ThreadHistoryMessage) uistate.HistoryRecord {
-		return uistate.HistoryRecord{
-			ID:        msg.ID,
-			Role:      msg.Role,
-			EventType: msg.EventType,
-			Method:    msg.Method,
-			Content:   msg.Content,
-			Metadata:  msg.Metadata,
-			CreatedAt: msg.CreatedAt,
-		}
+		return uistate.HistoryRecord{ID: msg.ID, Role: msg.Role, EventType: msg.EventType, Method: msg.Method, Content: msg.Content, Metadata: msg.Metadata, CreatedAt: msg.CreatedAt}
 	})
 }

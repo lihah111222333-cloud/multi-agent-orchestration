@@ -1,4 +1,3 @@
-// Package monitor 提供 Agent 巡检。
 package monitor
 
 import (
@@ -24,19 +23,16 @@ const (
 	defaultIntervalSec = 5
 )
 
-// StatusNames 有效状态名。
 var StatusNames = []string{"running", "idle", "stuck", "error", "disconnected", "unknown"}
 
-// Patrol Agent 巡检器。
 type Patrol struct {
 	agentStore *store.AgentStatusStore
 	eventBus   EventPublisher
 
-	mu     sync.Mutex              // 保护 memory (输出指纹缓存)
-	memory map[string]*fingerprint // 输出指纹缓存
+	mu     sync.Mutex
+	memory map[string]*fingerprint
 }
 
-// EventPublisher 事件发布接口 (DRY: 解耦 SSE 总线)。
 type EventPublisher interface {
 	PublishAgentStatus(snapshot map[string]any)
 }
@@ -46,7 +42,6 @@ type fingerprint struct {
 	lastChangeAt time.Time
 }
 
-// NewPatrol 创建巡检器。
 func NewPatrol(as *store.AgentStatusStore, bus EventPublisher) *Patrol {
 	return &Patrol{
 		agentStore: as,
@@ -55,7 +50,6 @@ func NewPatrol(as *store.AgentStatusStore, bus EventPublisher) *Patrol {
 	}
 }
 
-// ClassifyStatus 根据输出片段分类 Agent 状态。
 func ClassifyStatus(lines []string, hasSession bool, stagnantSec int) string {
 	if !hasSession {
 		return "unknown"
@@ -80,7 +74,6 @@ func ClassifyStatus(lines []string, hasSession bool, stagnantSec int) string {
 	return "running"
 }
 
-// AgentSnapshot 单个 Agent 巡检快照。
 type AgentSnapshot struct {
 	AgentID     string   `json:"agent_id"`
 	AgentName   string   `json:"agent_name"`
@@ -91,7 +84,6 @@ type AgentSnapshot struct {
 	OutputTail  []string `json:"output_tail"`
 }
 
-// PatrolResult 巡检结果。
 type PatrolResult struct {
 	OK      bool            `json:"ok"`
 	Ts      time.Time       `json:"ts"`
@@ -100,7 +92,6 @@ type PatrolResult struct {
 	Error   string          `json:"error,omitempty"`
 }
 
-// RunOnce 执行一次巡检周期 + 持久化 + SSE 推送。
 func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 	now := time.Now()
 	agents, err := p.agentStore.List(ctx, "")
@@ -118,7 +109,7 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 			status = "disconnected"
 		}
 
-		snap := AgentSnapshot{
+		snapshots = append(snapshots, AgentSnapshot{
 			AgentID:     a.AgentID,
 			AgentName:   a.AgentName,
 			SessionID:   a.SessionID,
@@ -126,8 +117,7 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 			StagnantSec: stagnant,
 			Error:       a.Error,
 			OutputTail:  lines,
-		}
-		snapshots = append(snapshots, snap)
+		})
 
 		a.Status = status
 		a.StagnantSec = stagnant
@@ -172,10 +162,9 @@ func (p *Patrol) RunOnce(ctx context.Context) *PatrolResult {
 	return result
 }
 
-// Start 启动定期巡检 (goroutine + ticker)。
 func (p *Patrol) Start(ctx context.Context) {
 	util.SafeGo(func() {
-		ticker := time.NewTicker(time.Duration(defaultIntervalSec) * time.Second)
+		ticker := time.NewTicker(defaultIntervalSec * time.Second)
 		defer ticker.Stop()
 
 		for {
@@ -191,7 +180,6 @@ func (p *Patrol) Start(ctx context.Context) {
 	logger.Info("patrol started", "interval_sec", defaultIntervalSec)
 }
 
-// computeStagnantFromLines 计算输出停滞时间。
 func (p *Patrol) computeStagnantFromLines(agentID string, lines []string, now time.Time) int {
 	hash := hashLines(lines)
 

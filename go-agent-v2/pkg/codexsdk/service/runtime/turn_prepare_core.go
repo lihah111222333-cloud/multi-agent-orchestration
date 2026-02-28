@@ -107,8 +107,7 @@ func ThreadTimelineAlreadyShowsInjectedPrompt(a PrepareAdapter, threadID string)
 }
 
 func CollectAutoMatchedSkillMatchesForThread(a PrepareAdapter, threadID string, prompt string, input []TurnInput, options AutoSkillMatchOptions) []AutoMatchedSkillMatch {
-	a = normalizePrepareAdapter(a)
-	return collectAutoMatchedSkillMatches(a, threadID, prompt, input, options)
+	return collectAutoMatchedSkillMatches(normalizePrepareAdapter(a), threadID, prompt, input, options)
 }
 
 func prepareTurnSubmissionCommon(a PrepareAdapter, threadID string, input []TurnInput, selectedSkills []string, manualSkillSelection bool) PreparedSubmissionCommon {
@@ -127,7 +126,7 @@ func buildForcedOrExplicitMatchedSkillPrompt(a PrepareAdapter, agentID, prompt s
 	if len(matches) == 0 {
 		return "", 0
 	}
-	filtered := make([]AutoMatchedSkillMatch, 0, len(matches))
+	filtered := matches[:0]
 	for _, match := range matches {
 		if match.MatchedBy == "force" || match.MatchedBy == "explicit" {
 			filtered = append(filtered, match)
@@ -167,8 +166,7 @@ func ParseTurnInputs(inputs []TurnInput, fileContentInputText func(string, strin
 	for _, inp := range inputs {
 		switch strings.ToLower(strings.TrimSpace(inp.Type)) {
 		case "text":
-			text := util.StripLeadingSystemNoise(inp.Text)
-			if strings.TrimSpace(text) != "" {
+			if text := util.StripLeadingSystemNoise(inp.Text); strings.TrimSpace(text) != "" {
 				texts = append(texts, text)
 			}
 		case "image":
@@ -228,7 +226,6 @@ func ParseTurnInputs(inputs []TurnInput, fileContentInputText func(string, strin
 			files = append(files, path)
 			attachments = appendFileTimelineAttachment(attachments, buildAttachmentName(path), path)
 		case "skill":
-			// Skill injection is handled by selectedSkills.
 		}
 	}
 

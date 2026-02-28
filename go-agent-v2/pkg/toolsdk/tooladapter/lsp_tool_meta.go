@@ -42,33 +42,25 @@ func withLSPToolCallMeta(args json.RawMessage, callCtx tools.ToolCallContext) js
 }
 
 func decodeJSONMap(args json.RawMessage) (map[string]any, bool) {
-	trimmed := strings.TrimSpace(string(args))
-	if trimmed == "" {
+	if strings.TrimSpace(string(args)) == "" {
 		return nil, false
 	}
 	var payload map[string]any
-	if err := json.Unmarshal(args, &payload); err != nil || payload == nil {
-		return nil, false
-	}
-	return payload, true
+	ok := json.Unmarshal(args, &payload) == nil && payload != nil
+	return payload, ok
 }
 
 func extractThreadIDFromToolArgs(payload map[string]any) string {
-	if payload == nil {
-		return ""
-	}
 	for _, key := range []string{"thread_id", "threadId"} {
 		if value := strings.TrimSpace(fmt.Sprint(payload[key])); value != "" && value != "<nil>" {
 			return value
 		}
 	}
 	for _, key := range []string{"payload", "data", "msg", "context"} {
-		nested, ok := payload[key].(map[string]any)
-		if !ok {
-			continue
-		}
-		if value := extractThreadIDFromToolArgs(nested); value != "" {
-			return value
+		if nested, _ := payload[key].(map[string]any); nested != nil {
+			if value := extractThreadIDFromToolArgs(nested); value != "" {
+				return value
+			}
 		}
 	}
 	return ""

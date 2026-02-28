@@ -10,7 +10,7 @@ import (
 )
 
 func (c *AppServerClient) Initialize() error {
-	_, err := c.call("initialize", map[string]any{
+	if _, err := c.call("initialize", map[string]any{
 		"clientInfo": map[string]any{
 			"name":    "go-agent-v2",
 			"version": "1.0",
@@ -18,8 +18,7 @@ func (c *AppServerClient) Initialize() error {
 		"capabilities": map[string]any{
 			"experimentalApi": true,
 		},
-	}, 10*time.Second)
-	if err != nil {
+	}, 10*time.Second); err != nil {
 		logger.Error("codex: Initialize() FAILED", logger.FieldAgentID, c.AgentID, logger.FieldPort, c.Port, logger.FieldError, err)
 		return err
 	}
@@ -89,10 +88,7 @@ func (c *AppServerClient) ensureListenerIfNeeded(
 	if rpcCall == nil { rpcCall = c.call }
 	resolvedID, _, err := ensureListenerWithAutoInitialize(threadID, rpcCall, c.Initialize)
 	if err != nil {
-		if isMethodNotFoundRPCError(err) || isInvalidParamsRPCError(err) {
-			c.listenerEnsureNeeded.Store(false)
-			return
-		}
+		if isMethodNotFoundRPCError(err) || isInvalidParamsRPCError(err) { c.listenerEnsureNeeded.Store(false) }
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(c.ThreadID), threadID) { c.ThreadID = resolvedID }
@@ -111,9 +107,11 @@ func (c *AppServerClient) Submit(prompt string, images, files []string, outputSc
 
 func (c *AppServerClient) SendCommand(cmd, args string) error {
 	if strings.TrimSpace(cmd) == CmdInterrupt {
-		if handled, err := c.tryInterruptCommand(); err != nil {
+		handled, err := c.tryInterruptCommand()
+		if err != nil {
 			return err
-		} else if handled {
+		}
+		if handled {
 			return nil
 		}
 	}
@@ -186,9 +184,7 @@ func (c *AppServerClient) ResumeThread(req ResumeThreadRequest) error {
 		Path:     strings.TrimSpace(req.Path),
 		Cwd:      strings.TrimSpace(req.Cwd),
 	}, 30*time.Second)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	c.ThreadID = resolvedID
 	c.listenerEnsureNeeded.Store(false)
 	return nil

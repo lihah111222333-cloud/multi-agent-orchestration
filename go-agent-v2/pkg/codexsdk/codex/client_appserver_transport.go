@@ -62,9 +62,7 @@ func (c *AppServerClient) Spawn(ctx context.Context) error {
 
 func (c *AppServerClient) connectWS() error {
 	conn, err := c.dialWS(c.ctx)
-	if err != nil {
-		return apperrors.Wrap(err, "AppServerClient.connectWS", "ws connect")
-	}
+	if err != nil { return apperrors.Wrap(err, "AppServerClient.connectWS", "ws connect") }
 	c.replaceWSConnAndStartLoops(conn, false)
 	return nil
 }
@@ -77,12 +75,8 @@ func (c *AppServerClient) dialWS(ctx context.Context) (*websocket.Conn, error) {
 	}
 
 	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	if conn == nil {
-		return nil, apperrors.New("AppServerClient.dialWS", "dial returned nil websocket connection")
-	}
+	if err != nil { return nil, err }
+	if conn == nil { return nil, apperrors.New("AppServerClient.dialWS", "dial returned nil websocket connection") }
 	_ = conn.SetReadDeadline(time.Now().Add(currentAppServerReadIdleTimeout()))
 	conn.SetPongHandler(func(string) error {
 		_ = conn.SetReadDeadline(time.Now().Add(currentAppServerReadIdleTimeout()))
@@ -110,9 +104,7 @@ func (c *AppServerClient) replaceWSConn(conn *websocket.Conn) {
 
 func (c *AppServerClient) replaceWSConnAndStartLoops(conn *websocket.Conn, resetReadLoopSignal bool) {
 	c.replaceWSConn(conn)
-	if resetReadLoopSignal {
-		c.wsDone = make(chan struct{})
-	}
+	if resetReadLoopSignal { c.wsDone = make(chan struct{}) }
 	util.SafeGo(func() { c.readLoop() })
 	util.SafeGo(func() { c.pingLoop(conn) })
 }
@@ -179,9 +171,7 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 			"read_failure_streak", health.ReadFailureStreak,
 			"read_errors_window", health.ReadErrorsWindow,
 		)
-		if !c.sleepWithContext(remaining) {
-			return false
-		}
+		if !c.sleepWithContext(remaining) { return false }
 	}
 	if c.shouldPreferRespawn(time.Now()) && c.recoverByRespawn(trigger, activeTurnID, "read_error_burst", lastErr) {
 		return true
@@ -302,13 +292,9 @@ func (c *AppServerClient) restartProcessAndReconnect() error {
 
 	spawnCtx, cancel := context.WithTimeout(c.ctx, appServerStartupProbeTimeout)
 	defer cancel()
-	if err := c.Spawn(spawnCtx); err != nil {
-		return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "spawn")
-	}
+	if err := c.Spawn(spawnCtx); err != nil { return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "spawn") }
 	conn, err := c.dialWS(c.ctx)
-	if err != nil {
-		return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "dial ws")
-	}
+	if err != nil { return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "dial ws") }
 	c.replaceWSConnAndStartLoops(conn, true)
 	return nil
 }
@@ -411,9 +397,7 @@ func (c *AppServerClient) RecoverConnection(reason string) error {
 		return apperrors.New("AppServerClient.RecoverConnection", "recovery already in progress")
 	}
 	recoveryReason := strings.TrimSpace(reason)
-	if recoveryReason == "" {
-		recoveryReason = "manual_recover"
-	}
+	if recoveryReason == "" { recoveryReason = "manual_recover" }
 	if !c.recoverByRespawn("manual", c.getActiveTurnID(), recoveryReason, nil) {
 		return apperrors.New("AppServerClient.RecoverConnection", "manual recovery failed")
 	}

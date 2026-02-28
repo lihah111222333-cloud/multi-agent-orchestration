@@ -64,7 +64,7 @@ type WorkspaceMergeRequest struct {
 
 type WorkspaceMergeFileResult struct {
 	Path   string `json:"path"`
-	Action string `json:"action"` // merged|would_merge|deleted|would_delete|conflict|error|unchanged
+	Action string `json:"action"`
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -106,10 +106,10 @@ func NewWorkspaceManager(
 		maxFiles = 5000
 	}
 	if maxFileBytes <= 0 {
-		maxFileBytes = 8 << 20 // 8MB
+		maxFileBytes = 8 << 20
 	}
 	if maxTotalBytes <= 0 {
-		maxTotalBytes = 256 << 20 // 256MB
+		maxTotalBytes = 256 << 20
 	}
 
 	return &WorkspaceManager{

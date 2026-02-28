@@ -48,22 +48,16 @@ func extractFirstIntByPaths(payload map[string]any, paths ...[]string) (int, boo
 			continue
 		}
 		current := any(payload)
-		ok := true
 		for _, key := range path {
-			nextMap, isMap := current.(map[string]any)
-			if !isMap {
-				ok = false
+			nextMap, ok := current.(map[string]any)
+			if !ok {
+				current = nil
 				break
 			}
-			next, exists := nextMap[key]
-			if !exists {
-				ok = false
+			current = nextMap[key]
+			if current == nil {
 				break
 			}
-			current = next
-		}
-		if !ok {
-			continue
 		}
 		if number, ok := extractIntValue(current); ok {
 			return number, true
@@ -80,12 +74,10 @@ func extractFirstIntDeep(payload map[string]any, keys ...string) (int, bool) {
 		return number, true
 	}
 	for _, key := range []string{"msg", "data", "payload"} {
-		nested, ok := payload[key].(map[string]any)
-		if !ok {
-			continue
-		}
-		if number, ok := extractFirstInt(nested, keys...); ok {
-			return number, true
+		if nested, ok := payload[key].(map[string]any); ok {
+			if number, ok := extractFirstInt(nested, keys...); ok {
+				return number, true
+			}
 		}
 	}
 	return 0, false

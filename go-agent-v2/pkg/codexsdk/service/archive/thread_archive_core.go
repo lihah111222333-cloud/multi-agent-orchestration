@@ -175,17 +175,6 @@ func ParseArchiveTimestamp(raw string) int64 {
 	return at
 }
 
-func resolveArchivedPath(archiveDir string, archivedPath string) string {
-	resolved, baseDir := strings.TrimSpace(archivedPath), strings.TrimSpace(archiveDir)
-	if resolved == "" {
-		return ""
-	}
-	if baseDir == "" || pathutil.IsAbs(resolved) {
-		return resolved
-	}
-	return pathutil.Join(baseDir, resolved)
-}
-
 func validateOptionalChecksum(fileSHA256 func(path string) (string, error), path, checksum, computeReason, mismatchReason string) (string, error) {
 	checksum = strings.TrimSpace(checksum)
 	if checksum == "" {
@@ -210,12 +199,16 @@ func validateArchivedArtifact(
 	checkSize bool,
 	emptyPathReason string,
 ) (archivedPath string, reason string, err error) {
-	archivedPath = resolveArchivedPath(archiveDir, meta.ArchivedPath)
+	archivedPath = strings.TrimSpace(meta.ArchivedPath)
 	if archivedPath == "" {
 		return "", emptyPathReason, nil
 	}
-	if strings.TrimSpace(archiveDir) != "" {
-		withinArchive, err := pathWithinRoot(archiveDir, archivedPath)
+	archiveRoot := strings.TrimSpace(archiveDir)
+	if archiveRoot != "" && !pathutil.IsAbs(archivedPath) {
+		archivedPath = pathutil.Join(archiveRoot, archivedPath)
+	}
+	if archiveRoot != "" {
+		withinArchive, err := pathWithinRoot(archiveRoot, archivedPath)
 		if err != nil {
 			return archivedPath, "validate archived path scope", err
 		}
@@ -297,21 +290,33 @@ func PruneArchivedCodexSourceFiles(
 	archiveRoot, seen, deleted := strings.TrimSpace(archiveDir), make(map[string]struct{}, len(files)), 0
 	for _, meta := range files {
 		srcPath := strings.TrimSpace(meta.SourcePath)
-		if srcPath == "" { continue }
-		if _, ok := seen[srcPath]; ok { continue }
+		if srcPath == "" {
+			continue
+		}
+		if _, ok := seen[srcPath]; ok {
+			continue
+		}
 		seen[srcPath] = struct{}{}
-		if withinCodex, err := pathWithinRoot(codexRoot, srcPath); err != nil || !withinCodex { continue }
+		if withinCodex, err := pathWithinRoot(codexRoot, srcPath); err != nil || !withinCodex {
+			continue
+		}
 		if archiveRoot != "" {
-			if withinArchive, err := pathWithinRoot(archiveRoot, srcPath); err == nil && withinArchive { continue }
+			if withinArchive, err := pathWithinRoot(archiveRoot, srcPath); err == nil && withinArchive {
+				continue
+			}
 		}
 		state, err := fileState(srcPath)
 		if err != nil {
 			logger.Error("thread/archive: stat source artifact failed", logger.FieldThreadID, threadID, "source_path", srcPath, logger.FieldError, err)
 			continue
 		}
-		if !state.Exists || state.IsDir { continue }
+		if !state.Exists || state.IsDir {
+			continue
+		}
 		expectedSHA256 := strings.TrimSpace(meta.SHA256)
-		if expectedSHA256 == "" { continue }
+		if expectedSHA256 == "" {
+			continue
+		}
 		sourceSHA256, err := fileSHA256(srcPath)
 		if err != nil {
 			logger.Error("thread/archive: source artifact checksum failed", logger.FieldThreadID, threadID, "source_path", srcPath, logger.FieldError, err)
@@ -326,9 +331,13 @@ func PruneArchivedCodexSourceFiles(
 			continue
 		}
 		deleted++
-		if removeEmptyCodexParentDir != nil { removeEmptyCodexParentDir(pathutil.Dir(srcPath), codexRoot) }
+		if removeEmptyCodexParentDir != nil {
+			removeEmptyCodexParentDir(pathutil.Dir(srcPath), codexRoot)
+		}
 	}
-	if deleted > 0 { logger.Info("thread/archive: pruned codex source artifacts", logger.FieldThreadID, threadID, "deleted_count", deleted) }
+	if deleted > 0 {
+		logger.Info("thread/archive: pruned codex source artifacts", logger.FieldThreadID, threadID, "deleted_count", deleted)
+	}
 }
 
 func appendRestoreSkippedSource(

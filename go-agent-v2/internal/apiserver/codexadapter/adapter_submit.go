@@ -36,7 +36,10 @@ func (a uiRuntimeAdapter) ThreadTimeline(threadID string) []agentcore.TimelineIt
 	})
 }
 
-func coreProcess(proc agentcore.Process) *codexsdk.AgentProcess { typed, _ := proc.(*codexsdk.AgentProcess); return typed }
+func coreProcess(proc agentcore.Process) *codexsdk.AgentProcess {
+	typed, _ := proc.(*codexsdk.AgentProcess)
+	return typed
+}
 
 func (a *Adapter) resolveThreadFromSlashCommand(ctx context.Context, threadID string, requireThreadID bool) (string, error) {
 	return commandsvc.ResolveThreadForSlashCommandLogic(ctx, threadID, requireThreadID, a.ThreadList)
@@ -60,7 +63,9 @@ func (a *Adapter) SendCommand(proc *codexsdk.AgentProcess, command string, args 
 }
 
 func (a *Adapter) GetThreadID(proc *codexsdk.AgentProcess) string {
-	if proc == nil || proc.Client == nil { return "" }
+	if proc == nil || proc.Client == nil {
+		return ""
+	}
 	return strings.TrimSpace(proc.Client.GetThreadID())
 }
 
@@ -158,7 +163,9 @@ func (a *Adapter) runtimeServiceAdapter() runtimesvc.RuntimeAdapter {
 			return ""
 		},
 	}
-	if manager := a.manager(); manager != nil { adapter.Manager = func() agentcore.Manager { return manager } }
+	if manager := a.manager(); manager != nil {
+		adapter.Manager = func() agentcore.Manager { return manager }
+	}
 	return adapter
 }
 
@@ -195,7 +202,9 @@ func (a *Adapter) TurnSteerFromInputAligned(req contracts.TurnSteerRequest) (map
 
 func (a *Adapter) sendSlashCommandWithParams(ctx context.Context, params json.RawMessage, command, argKey string, requireThreadID bool) (any, error) {
 	parsed, err := commandsvc.ParseSlashCommandArgParams(params, argKey, trackersvc.ExtractTrackedString)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return a.sendSlashCommand(ctx, "Server.sendSlashCommand", parsed.ThreadID, command, parsed.Args, requireThreadID)
 }
 

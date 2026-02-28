@@ -8,6 +8,18 @@ import (
 	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 
+const workspaceManagerNotInitialized = "workspace manager not initialized"
+
+func workspaceManager(s *Server) (*service.WorkspaceManager, error) {
+	if s.workspaceMgr != nil {
+		return s.workspaceMgr, nil
+	}
+	if s.uiRuntime != nil {
+		s.uiRuntime.SetWorkspaceUnavailable(workspaceManagerNotInitialized)
+	}
+	return nil, pkgerr.New("WorkspaceRun", workspaceManagerNotInitialized)
+}
+
 func asMap(value any) map[string]any {
 	if value == nil {
 		return map[string]any{}
@@ -27,11 +39,9 @@ func asMap(value any) map[string]any {
 }
 
 func workspaceRunCreate(s *Server, ctx context.Context, params json.RawMessage) (any, error) {
-	if s.workspaceMgr == nil {
-		if s.uiRuntime != nil {
-			s.uiRuntime.SetWorkspaceUnavailable("workspace manager not initialized")
-		}
-		return nil, pkgerr.New("WorkspaceRun", "workspace manager not initialized")
+	mgr, err := workspaceManager(s)
+	if err != nil {
+		return nil, err
 	}
 	var p struct {
 		RunKey     string   `json:"runKey"`
@@ -47,7 +57,7 @@ func workspaceRunCreate(s *Server, ctx context.Context, params json.RawMessage) 
 	if p.SourceRoot == "" {
 		p.SourceRoot = "."
 	}
-	run, err := s.workspaceMgr.CreateRun(ctx, service.WorkspaceCreateRequest{
+	run, err := mgr.CreateRun(ctx, service.WorkspaceCreateRequest{
 		RunKey:     p.RunKey,
 		DagKey:     p.DagKey,
 		SourceRoot: p.SourceRoot,
@@ -69,11 +79,9 @@ func workspaceRunCreate(s *Server, ctx context.Context, params json.RawMessage) 
 }
 
 func workspaceRunGet(s *Server, ctx context.Context, params json.RawMessage) (any, error) {
-	if s.workspaceMgr == nil {
-		if s.uiRuntime != nil {
-			s.uiRuntime.SetWorkspaceUnavailable("workspace manager not initialized")
-		}
-		return nil, pkgerr.New("WorkspaceRun", "workspace manager not initialized")
+	mgr, err := workspaceManager(s)
+	if err != nil {
+		return nil, err
 	}
 	var p struct {
 		RunKey string `json:"runKey"`
@@ -84,7 +92,7 @@ func workspaceRunGet(s *Server, ctx context.Context, params json.RawMessage) (an
 	if p.RunKey == "" {
 		return nil, pkgerr.New("WorkspaceRun", "runKey is required")
 	}
-	run, err := s.workspaceMgr.GetRun(ctx, p.RunKey)
+	run, err := mgr.GetRun(ctx, p.RunKey)
 	if err != nil {
 		return nil, pkgerr.Wrap(err, "WorkspaceRun.Get", "get run")
 	}
@@ -95,11 +103,9 @@ func workspaceRunGet(s *Server, ctx context.Context, params json.RawMessage) (an
 }
 
 func workspaceRunList(s *Server, ctx context.Context, params json.RawMessage) (any, error) {
-	if s.workspaceMgr == nil {
-		if s.uiRuntime != nil {
-			s.uiRuntime.SetWorkspaceUnavailable("workspace manager not initialized")
-		}
-		return nil, pkgerr.New("WorkspaceRun", "workspace manager not initialized")
+	mgr, err := workspaceManager(s)
+	if err != nil {
+		return nil, err
 	}
 	var p struct {
 		Status string `json:"status"`
@@ -112,7 +118,7 @@ func workspaceRunList(s *Server, ctx context.Context, params json.RawMessage) (a
 	if p.Limit <= 0 || p.Limit > 5000 {
 		p.Limit = 200
 	}
-	runs, err := s.workspaceMgr.ListRuns(ctx, p.Status, p.DagKey, p.Limit)
+	runs, err := mgr.ListRuns(ctx, p.Status, p.DagKey, p.Limit)
 	if err != nil {
 		return nil, pkgerr.Wrap(err, "WorkspaceRun.List", "list runs")
 	}
@@ -127,11 +133,9 @@ func workspaceRunList(s *Server, ctx context.Context, params json.RawMessage) (a
 }
 
 func workspaceRunMerge(s *Server, ctx context.Context, params json.RawMessage) (any, error) {
-	if s.workspaceMgr == nil {
-		if s.uiRuntime != nil {
-			s.uiRuntime.SetWorkspaceUnavailable("workspace manager not initialized")
-		}
-		return nil, pkgerr.New("WorkspaceRun", "workspace manager not initialized")
+	mgr, err := workspaceManager(s)
+	if err != nil {
+		return nil, err
 	}
 	var p struct {
 		RunKey        string `json:"runKey"`
@@ -145,7 +149,7 @@ func workspaceRunMerge(s *Server, ctx context.Context, params json.RawMessage) (
 	if p.RunKey == "" {
 		return nil, pkgerr.New("WorkspaceRun", "runKey is required")
 	}
-	result, err := s.workspaceMgr.MergeRun(ctx, service.WorkspaceMergeRequest{
+	result, err := mgr.MergeRun(ctx, service.WorkspaceMergeRequest{
 		RunKey:        p.RunKey,
 		UpdatedBy:     p.UpdatedBy,
 		DryRun:        p.DryRun,
@@ -165,11 +169,9 @@ func workspaceRunMerge(s *Server, ctx context.Context, params json.RawMessage) (
 }
 
 func workspaceRunAbort(s *Server, ctx context.Context, params json.RawMessage) (any, error) {
-	if s.workspaceMgr == nil {
-		if s.uiRuntime != nil {
-			s.uiRuntime.SetWorkspaceUnavailable("workspace manager not initialized")
-		}
-		return nil, pkgerr.New("WorkspaceRun", "workspace manager not initialized")
+	mgr, err := workspaceManager(s)
+	if err != nil {
+		return nil, err
 	}
 	var p struct {
 		RunKey    string `json:"runKey"`
@@ -182,7 +184,7 @@ func workspaceRunAbort(s *Server, ctx context.Context, params json.RawMessage) (
 	if p.RunKey == "" {
 		return nil, pkgerr.New("WorkspaceRun", "runKey is required")
 	}
-	run, err := s.workspaceMgr.AbortRun(ctx, p.RunKey, p.UpdatedBy, p.Reason)
+	run, err := mgr.AbortRun(ctx, p.RunKey, p.UpdatedBy, p.Reason)
 	if err != nil {
 		return nil, pkgerr.Wrap(err, "WorkspaceRun.Abort", "abort run")
 	}

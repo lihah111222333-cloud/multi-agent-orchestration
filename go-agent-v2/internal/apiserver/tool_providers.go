@@ -173,11 +173,19 @@ func lookupRuntimeTool(s *Server, name string) (tooladapter.RuntimeToolHandler, 
 	return tooladapter.GetRuntimeTool(s.dynTools, name)
 }
 
-// codeRunApprovalNonce 用于生成审批 ID (code_run 执行审批)。
 var codeRunApprovalNonce atomic.Int64
 
 type approvalProvider struct {
 	s *Server
+}
+
+func extractApproval(result any) (bool, bool) {
+	m, ok := result.(map[string]any)
+	if !ok {
+		return false, false
+	}
+	approved, ok := m["approved"].(bool)
+	return approved, ok
 }
 
 func (p approvalProvider) AwaitApproval(agentID, callID, mode, command string, isDangerous bool) bool {
@@ -213,16 +221,13 @@ func (p approvalProvider) AwaitApproval(agentID, callID, mode, command string, i
 
 func (p approvalProvider) waitForFrontendDecision(agentID, method string, payload map[string]any) bool {
 	resp, wsErr := sendRequestToAll(p.s, method, payload)
-	if wsErr == nil && resp != nil && resp.Result != nil {
-		if m, ok := resp.Result.(map[string]any); ok {
-			if approved, ok := m["approved"].(bool); ok {
-				return approved
-			}
+	if wsErr == nil && resp != nil {
+		if approved, ok := extractApproval(resp.Result); ok {
+			return approved
 		}
 	}
 
-	hasHook := hasNotifyHookState(p.s)
-	if !hasHook {
+	if !hasNotifyHookState(p.s) {
 		logger.Warn("code-run: approval auto-denied — no frontend", "method", method)
 		return false
 	}
@@ -234,7 +239,6 @@ func (p approvalProvider) waitForFrontendDecision(agentID, method string, payloa
 	}
 	payload["requestId"] = reqID
 
-	// 回灌到 uiRuntime，确保 timeline 审批卡拿到 requestId 可交互。
 	if p.s.uiRuntime != nil {
 		threadID := strings.TrimSpace(agentID)
 		if threadID != "" {
@@ -254,11 +258,9 @@ func (p approvalProvider) waitForFrontendDecision(agentID, method string, payloa
 
 	select {
 	case wailsResp := <-ch:
-		if wailsResp != nil && wailsResp.Result != nil {
-			if m, ok := wailsResp.Result.(map[string]any); ok {
-				if approved, ok := m["approved"].(bool); ok {
-					return approved
-				}
+		if wailsResp != nil {
+			if approved, ok := extractApproval(wailsResp.Result); ok {
+				return approved
 			}
 		}
 	case <-timer.C:

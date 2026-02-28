@@ -29,7 +29,6 @@ func (s *PromptTemplateStore) Save(ctx context.Context, t *PromptTemplate) (*Pro
 			logger.Warn("store: save prompt version failed", "prompt_key", existing.PromptKey, logger.FieldError, err)
 		}
 	}
-
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO prompt_templates (prompt_key, title, agent_key, tool_name, prompt_text,
 		   variables, tags, description, enabled, created_by, updated_by, updated_at)

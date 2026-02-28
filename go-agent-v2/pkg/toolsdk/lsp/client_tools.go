@@ -146,11 +146,7 @@ func (c *Client) positionLocationsLike(method, uri string, line, character int) 
 }
 
 // CallHierarchy 查询调用层级。
-func (c *Client) CallHierarchy(ctx context.Context, uri string, line, character int, direction string) ([]CallHierarchyResult, error) {
-	if err := c.ensureRunning(); err != nil {
-		return nil, err
-	}
-
+func (c *Client) CallHierarchy(_ context.Context, uri string, line, character int, direction string) ([]CallHierarchyResult, error) {
 	items, err := prepareHierarchyItems(c, "textDocument/prepareCallHierarchy", uri, line, character, decodePrepareCallHierarchyItems)
 	if err != nil {
 		return nil, err
@@ -183,11 +179,7 @@ func (c *Client) CallHierarchy(ctx context.Context, uri string, line, character 
 }
 
 // TypeHierarchy 查询类型层级。
-func (c *Client) TypeHierarchy(ctx context.Context, uri string, line, character int, direction string) ([]TypeHierarchyResult, error) {
-	if err := c.ensureRunning(); err != nil {
-		return nil, err
-	}
-
+func (c *Client) TypeHierarchy(_ context.Context, uri string, line, character int, direction string) ([]TypeHierarchyResult, error) {
 	items, err := prepareHierarchyItems(c, "textDocument/prepareTypeHierarchy", uri, line, character, decodePrepareTypeHierarchyItems)
 	if err != nil {
 		return nil, err

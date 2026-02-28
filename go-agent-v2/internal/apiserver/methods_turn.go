@@ -120,8 +120,8 @@ func buildReviewStartArgs(p reviewStartParams) (string, error) {
 	if targetType == "" {
 		return "", pkgerr.New("Server.reviewStart", "target.type is required")
 	}
-	raw := ""
-	field := ""
+
+	var raw, field string
 	switch targetType {
 	case "custom":
 		raw, field = p.Target.Instructions, "instructions"

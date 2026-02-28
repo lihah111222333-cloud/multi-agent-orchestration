@@ -80,14 +80,11 @@ func prependLSPAvailabilityWarning(
 		missing = append(missing, name)
 	}
 	if len(missing) == 0 { return hint, nil }
-	warning := "注意：当前会话未注入以下 LSP 工具（无可用 language server）：" +
-		strings.Join(missing, ", ") +
-		"。不要调用这些工具，请改用当前可用工具完成任务。"
-	merge := mergePromptText
-	if merge == nil {
+	warning := "注意：当前会话未注入以下 LSP 工具（无可用 language server）：" + strings.Join(missing, ", ") + "。不要调用这些工具，请改用当前可用工具完成任务。"
+	if mergePromptText == nil {
 		return warning + "\n" + hint, missing
 	}
-	return merge(warning, hint), missing
+	return mergePromptText(warning, hint), missing
 }
 
 type AutoMatchInput = agentcore.AutoMatchInput
@@ -159,7 +156,6 @@ func renderAutoMatchedSkillPrompt(
 	skillInputText func(name, content string) string,
 ) (string, int) {
 	if len(matches) == 0 || readSkillContent == nil || skillInputText == nil { return "", 0 }
-
 	texts := make([]string, 0, len(matches))
 	for _, match := range matches {
 		skillName := strings.TrimSpace(match.Name)

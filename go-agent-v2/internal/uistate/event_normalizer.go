@@ -213,14 +213,6 @@ func classifyEventWithMethodAndPayload(codexType, method string, payload map[str
 	return UITypeSystem
 }
 
-func classifyEventWithMethod(codexType, method string) UIType {
-	return classifyEventWithMethodAndPayload(codexType, method, nil)
-}
-
-func classifyEvent(codexType string) UIType {
-	return classifyEventWithMethodAndPayload(codexType, "", nil)
-}
-
 func extractText(payload map[string]any) string {
 	for _, key := range []string{"delta", "text", "content", "output", "message"} {
 		if v, ok := payload[key].(string); ok {

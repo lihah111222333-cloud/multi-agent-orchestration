@@ -240,19 +240,20 @@ func sanitizeAgent(raw any, gwID string, idx int, seen map[string]bool) (map[str
 
 // extractStringSlice 安全提取 []string。
 func extractStringSlice(v any) []string {
-	arr, ok := v.([]any)
-	if !ok {
-		return []string{}
-	}
-	var out []string
-	for _, item := range arr {
-		s := strings.TrimSpace(fmt.Sprint(item))
-		if s != "" && s != "<nil>" {
-			out = append(out, s)
+	out := []string{}
+	switch arr := v.(type) {
+	case []string:
+		for _, item := range arr {
+			if item = strings.TrimSpace(item); item != "" {
+				out = append(out, item)
+			}
 		}
-	}
-	if out == nil {
-		return []string{}
+	case []any:
+		for _, item := range arr {
+			if s := strings.TrimSpace(fmt.Sprint(item)); s != "" && s != "<nil>" {
+				out = append(out, s)
+			}
+		}
 	}
 	return out
 }

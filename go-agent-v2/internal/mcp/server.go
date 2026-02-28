@@ -31,7 +31,8 @@ func NewServer(stores *Stores) *Server { return &Server{stores: stores} }
 func (s *Server) Start(ctx context.Context) error {
 	logger.Info("MCP server starting (stdio)")
 	logger.Info("MCP tools registered", logger.FieldCount, len(s.toolRegistry()))
-	<-ctx.Done(); return nil
+	<-ctx.Done()
+	return nil
 }
 
 type Tool struct {
@@ -71,6 +72,9 @@ func (s *Server) toolRegistry() []Tool {
 }
 
 func (s *Server) HandleTool(ctx context.Context, name string, args json.RawMessage) (any, error) {
+	if s == nil || s.stores == nil {
+		return nil, apperrors.New("MCP.HandleTool", "stores is required")
+	}
 	p := parseToolParams(args)
 	switch name {
 	case "interaction":
@@ -82,7 +86,9 @@ func (s *Server) HandleTool(ctx context.Context, name string, args json.RawMessa
 	case "command_card":
 		return s.stores.CommandCard.List(ctx, p.Keyword, p.Limit)
 	case "shared_file":
-		if p.Path != "" && p.Content != "" { return s.stores.SharedFile.Write(ctx, p.Path, p.Content, p.Actor) }
+		if p.Path != "" && p.Content != "" {
+			return s.stores.SharedFile.Write(ctx, p.Path, p.Content, p.Actor)
+		}
 		return s.stores.SharedFile.List(ctx, p.Prefix, p.Limit)
 	case "audit_log":
 		return s.stores.AuditLog.List(ctx, p.EventType, p.Action, p.Actor, p.Keyword, p.Limit)
@@ -104,11 +110,18 @@ func (s *Server) HandleTool(ctx context.Context, name string, args json.RawMessa
 
 func parseToolParams(args json.RawMessage) toolParams {
 	var params toolParams
-	if len(args) > 0 { if err := json.Unmarshal(args, &params); err != nil { logger.Debug("mcp: unmarshal tool args", logger.FieldError, err) } }
-	params.Limit = normalizeToolLimit(params.Limit); return params
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &params); err != nil {
+			logger.Debug("mcp: unmarshal tool args", logger.FieldError, err)
+		}
+	}
+	params.Limit = normalizeToolLimit(params.Limit)
+	return params
 }
 
 func normalizeToolLimit(limit int) int {
-	if limit <= 0 || limit > 500 { return 100 }
+	if limit <= 0 || limit > 500 {
+		return 100
+	}
 	return limit
 }

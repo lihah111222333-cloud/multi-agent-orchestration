@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"encoding/json"
-
 	"errors"
 
 	"github.com/jackc/pgx/v5"
@@ -19,8 +18,7 @@ func NewUIPreferenceStore(pool *pgxpool.Pool) *UIPreferenceStore {
 
 func (s *UIPreferenceStore) Get(ctx context.Context, key string) (any, error) {
 	var val json.RawMessage
-	err := s.pool.QueryRow(ctx, "SELECT value FROM ui_preferences WHERE key = $1", key).Scan(&val)
-	if err != nil {
+	if err := s.pool.QueryRow(ctx, "SELECT value FROM ui_preferences WHERE key = $1", key).Scan(&val); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}

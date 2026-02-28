@@ -18,14 +18,14 @@ const taskTraceCols = `id, trace_id, span_id, parent_span_id, span_name, compone
 	started_at, finished_at, duration_ms`
 
 func (s *TaskTraceStore) Create(ctx context.Context, t *TaskTrace) (*TaskTrace, error) {
-	inJSON, outJSON, metaJSON := mustMarshalJSON(t.Input), mustMarshalJSON(t.Output), mustMarshalJSON(t.Metadata)
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO task_traces (trace_id, span_id, parent_span_id, span_name, component,
 		   input_payload, output_payload, status, error_text, duration_ms, metadata, started_at, finished_at)
 		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11::jsonb, NOW(), NULL)
 		 RETURNING `+taskTraceCols,
 		t.TraceID, t.SpanID, t.ParentSpanID, t.SpanName, t.Component,
-		string(inJSON), string(outJSON), t.Status, t.ErrorText, t.DurationMS, string(metaJSON))
+		string(mustMarshalJSON(t.Input)), string(mustMarshalJSON(t.Output)),
+		t.Status, t.ErrorText, t.DurationMS, string(mustMarshalJSON(t.Metadata)))
 	if err != nil {
 		return nil, err
 	}

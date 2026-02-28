@@ -3,9 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
-
 	"github.com/jackc/pgx/v5/pgxpool"
-
 	pkgerr "github.com/multi-agent/go-agent-v2/pkg/errors"
 )
 

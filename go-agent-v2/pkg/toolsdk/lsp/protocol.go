@@ -51,45 +51,78 @@ type (
 	}
 )
 
-type InitializeParams struct {
-	ProcessID    int                `json:"processId"`
-	RootURI      string             `json:"rootUri"`
-	Capabilities ClientCapabilities `json:"capabilities"`
-}
-
-type ClientCapabilities struct {
-	TextDocument *TextDocumentClientCapabilities `json:"textDocument,omitempty"`
-}
-
-type DynamicRegistrationCapability struct {
-	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
-}
-
-type TextDocumentClientCapabilities struct {
-	PublishDiagnostics *PublishDiagnosticsCapability `json:"publishDiagnostics,omitempty"`
-	Hover              *HoverCapability              `json:"hover,omitempty"`
-	Completion         *CompletionClientCapability   `json:"completion,omitempty"`
-	Rename             *RenameClientCapability       `json:"rename,omitempty"`
-	CallHierarchy      *CallHierarchyCapability      `json:"callHierarchy,omitempty"`
-	TypeHierarchy      *TypeHierarchyCapability      `json:"typeHierarchy,omitempty"`
-	CodeAction         *CodeActionCapability         `json:"codeAction,omitempty"`
-	SignatureHelp      *SignatureHelpCapability      `json:"signatureHelp,omitempty"`
-	Formatting         *FormattingCapability         `json:"formatting,omitempty"`
-	FoldingRange       *FoldingRangeCapability       `json:"foldingRange,omitempty"`
-	SemanticTokens     *SemanticTokensCapability     `json:"semanticTokens,omitempty"`
-}
-
-type PublishDiagnosticsCapability struct {
-	RelatedInformation bool `json:"relatedInformation,omitempty"`
-}
-
-type HoverCapability struct {
-	ContentFormat []string `json:"contentFormat,omitempty"`
-}
-
-type RenameClientCapability struct {
-	PrepareSupport bool `json:"prepareSupport,omitempty"`
-}
+type (
+	InitializeParams struct {
+		ProcessID    int                `json:"processId"`
+		RootURI      string             `json:"rootUri"`
+		Capabilities ClientCapabilities `json:"capabilities"`
+	}
+	ClientCapabilities struct {
+		TextDocument *TextDocumentClientCapabilities `json:"textDocument,omitempty"`
+	}
+	DynamicRegistrationCapability struct {
+		DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+	}
+	TextDocumentClientCapabilities struct {
+		PublishDiagnostics *PublishDiagnosticsCapability `json:"publishDiagnostics,omitempty"`
+		Hover              *HoverCapability              `json:"hover,omitempty"`
+		Completion         *CompletionClientCapability   `json:"completion,omitempty"`
+		Rename             *RenameClientCapability       `json:"rename,omitempty"`
+		CallHierarchy      *CallHierarchyCapability      `json:"callHierarchy,omitempty"`
+		TypeHierarchy      *TypeHierarchyCapability      `json:"typeHierarchy,omitempty"`
+		CodeAction         *CodeActionCapability         `json:"codeAction,omitempty"`
+		SignatureHelp      *SignatureHelpCapability      `json:"signatureHelp,omitempty"`
+		Formatting         *FormattingCapability         `json:"formatting,omitempty"`
+		FoldingRange       *FoldingRangeCapability       `json:"foldingRange,omitempty"`
+		SemanticTokens     *SemanticTokensCapability     `json:"semanticTokens,omitempty"`
+	}
+	PublishDiagnosticsCapability struct {
+		RelatedInformation bool `json:"relatedInformation,omitempty"`
+	}
+	HoverCapability struct {
+		ContentFormat []string `json:"contentFormat,omitempty"`
+	}
+	RenameClientCapability struct {
+		PrepareSupport bool `json:"prepareSupport,omitempty"`
+	}
+	SemanticTokensCapability struct {
+		DynamicRegistration bool                              `json:"dynamicRegistration,omitempty"`
+		Requests            *SemanticTokensRequestsCapability `json:"requests,omitempty"`
+		TokenTypes          []string                          `json:"tokenTypes,omitempty"`
+		TokenModifiers      []string                          `json:"tokenModifiers,omitempty"`
+		Formats             []string                          `json:"formats,omitempty"`
+	}
+	SemanticTokensRequestsCapability struct {
+		Range any `json:"range,omitempty"` // bool | object
+		Full  any `json:"full,omitempty"`  // bool | object
+	}
+	SemanticTokensFullRequestsCapability struct {
+		Delta bool `json:"delta,omitempty"`
+	}
+	InitializeResult struct {
+		Capabilities ServerCapabilities `json:"capabilities"`
+	}
+	ServerCapabilities struct {
+		TextDocumentSync           any `json:"textDocumentSync,omitempty"`
+		HoverProvider              any `json:"hoverProvider,omitempty"`
+		DefinitionProvider         any `json:"definitionProvider,omitempty"`
+		ReferencesProvider         any `json:"referencesProvider,omitempty"`
+		DocumentSymbolProvider     any `json:"documentSymbolProvider,omitempty"`
+		RenameProvider             any `json:"renameProvider,omitempty"` // bool 或 RenameOptions
+		DiagnosticProvider         any `json:"diagnosticProvider,omitempty"`
+		CompletionProvider         any `json:"completionProvider,omitempty"`
+		WorkspaceSymbolProvider    any `json:"workspaceSymbolProvider,omitempty"`
+		ImplementationProvider     any `json:"implementationProvider,omitempty"`
+		TypeDefinitionProvider     any `json:"typeDefinitionProvider,omitempty"`
+		CallHierarchyProvider      any `json:"callHierarchyProvider,omitempty"`
+		TypeHierarchyProvider      any `json:"typeHierarchyProvider,omitempty"`
+		CodeActionProvider         any `json:"codeActionProvider,omitempty"`
+		SignatureHelpProvider      any `json:"signatureHelpProvider,omitempty"`
+		DocumentFormattingProvider any `json:"documentFormattingProvider,omitempty"`
+		FoldingRangeProvider       any `json:"foldingRangeProvider,omitempty"`
+		SemanticTokensProvider     any `json:"semanticTokensProvider,omitempty"`
+	}
+)
 
 type (
 	CompletionClientCapability = DynamicRegistrationCapability
@@ -100,48 +133,6 @@ type (
 	FormattingCapability       = DynamicRegistrationCapability
 	FoldingRangeCapability     = DynamicRegistrationCapability
 )
-
-type SemanticTokensCapability struct {
-	DynamicRegistration bool                              `json:"dynamicRegistration,omitempty"`
-	Requests            *SemanticTokensRequestsCapability `json:"requests,omitempty"`
-	TokenTypes          []string                          `json:"tokenTypes,omitempty"`
-	TokenModifiers      []string                          `json:"tokenModifiers,omitempty"`
-	Formats             []string                          `json:"formats,omitempty"`
-}
-
-type SemanticTokensRequestsCapability struct {
-	Range any `json:"range,omitempty"` // bool | object
-	Full  any `json:"full,omitempty"`  // bool | object
-}
-
-type SemanticTokensFullRequestsCapability struct {
-	Delta bool `json:"delta,omitempty"`
-}
-
-type InitializeResult struct {
-	Capabilities ServerCapabilities `json:"capabilities"`
-}
-
-type ServerCapabilities struct {
-	TextDocumentSync           any `json:"textDocumentSync,omitempty"`
-	HoverProvider              any `json:"hoverProvider,omitempty"`
-	DefinitionProvider         any `json:"definitionProvider,omitempty"`
-	ReferencesProvider         any `json:"referencesProvider,omitempty"`
-	DocumentSymbolProvider     any `json:"documentSymbolProvider,omitempty"`
-	RenameProvider             any `json:"renameProvider,omitempty"` // bool 或 RenameOptions
-	DiagnosticProvider         any `json:"diagnosticProvider,omitempty"`
-	CompletionProvider         any `json:"completionProvider,omitempty"`
-	WorkspaceSymbolProvider    any `json:"workspaceSymbolProvider,omitempty"`
-	ImplementationProvider     any `json:"implementationProvider,omitempty"`
-	TypeDefinitionProvider     any `json:"typeDefinitionProvider,omitempty"`
-	CallHierarchyProvider      any `json:"callHierarchyProvider,omitempty"`
-	TypeHierarchyProvider      any `json:"typeHierarchyProvider,omitempty"`
-	CodeActionProvider         any `json:"codeActionProvider,omitempty"`
-	SignatureHelpProvider      any `json:"signatureHelpProvider,omitempty"`
-	DocumentFormattingProvider any `json:"documentFormattingProvider,omitempty"`
-	FoldingRangeProvider       any `json:"foldingRangeProvider,omitempty"`
-	SemanticTokensProvider     any `json:"semanticTokensProvider,omitempty"`
-}
 
 type (
 	DidOpenTextDocumentParams struct {

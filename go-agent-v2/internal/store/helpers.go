@@ -38,17 +38,13 @@ type BaseStore struct{ pool *pgxpool.Pool }
 
 func NewBaseStore(pool *pgxpool.Pool) BaseStore { return BaseStore{pool: pool} }
 
-func sanitizeCol(col string) string {
-	return pgx.Identifier{col}.Sanitize()
-}
+func sanitizeCol(col string) string { return pgx.Identifier{col}.Sanitize() }
 
 type QueryBuilder struct {
 	where sq.And
 }
 
-func NewQueryBuilder() *QueryBuilder {
-	return &QueryBuilder{}
-}
+func NewQueryBuilder() *QueryBuilder { return &QueryBuilder{} }
 
 func (q *QueryBuilder) Eq(col, val string) *QueryBuilder {
 	if val == "" {
@@ -131,13 +127,9 @@ func collectOne[T any](rows pgx.Rows) (*T, error) {
 	return &items[0], nil
 }
 
-func CollectOneExported[T any](rows pgx.Rows) (*T, error) {
-	return collectOne[T](rows)
-}
+func CollectOneExported[T any](rows pgx.Rows) (*T, error) { return collectOne[T](rows) }
 
-func CollectRowsExported[T any](rows pgx.Rows) ([]T, error) {
-	return collectRows[T](rows)
-}
+func CollectRowsExported[T any](rows pgx.Rows) ([]T, error) { return collectRows[T](rows) }
 
 func DistinctValues(ctx context.Context, pool *pgxpool.Pool, table, column string) ([]string, error) {
 	safeTable := pgx.Identifier{table}.Sanitize()
@@ -165,12 +157,11 @@ func DistinctValues(ctx context.Context, pool *pgxpool.Pool, table, column strin
 
 func DistinctMap(ctx context.Context, pool *pgxpool.Pool, table string, columns ...string) (map[string][]string, error) {
 	result := make(map[string][]string, len(columns))
+	var err error
 	for _, col := range columns {
-		vals, err := DistinctValues(ctx, pool, table, col)
-		if err != nil {
+		if result[col], err = DistinctValues(ctx, pool, table, col); err != nil {
 			return nil, err
 		}
-		result[col] = vals
 	}
 	return result, nil
 }

@@ -3,7 +3,10 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
+
+	"github.com/multi-agent/go-agent-v2/internal/dashboard"
 )
 
 const (
@@ -48,15 +51,6 @@ func isASCIILetter(ch byte) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
 }
 
-func containsProject(projects []string, target string) bool {
-	for _, item := range projects {
-		if item == target {
-			return true
-		}
-	}
-	return false
-}
-
 func appendUniqueNormalizedProject(projects *[]string, path string) {
 	if projects == nil {
 		return
@@ -65,7 +59,7 @@ func appendUniqueNormalizedProject(projects *[]string, path string) {
 	if normalized == "" || normalized == "." {
 		return
 	}
-	if containsProject(*projects, normalized) {
+	if slices.Contains(*projects, normalized) {
 		return
 	}
 	*projects = append(*projects, normalized)
@@ -81,7 +75,7 @@ func parseProjectsList(value any) []string {
 		}
 	case []any:
 		for _, item := range list {
-			appendUniqueNormalizedProject(&projects, asString(item))
+			appendUniqueNormalizedProject(&projects, dashboard.AsString(item))
 		}
 	}
 
@@ -98,11 +92,11 @@ func readProjectsState(s *Server, ctx context.Context) ([]string, string, error)
 		return nil, "", err
 	}
 	projects := parseProjectsList(prefs[prefProjectsList])
-	active := normalizeProjectPath(asString(prefs[prefProjectsActive]))
+	active := normalizeProjectPath(dashboard.AsString(prefs[prefProjectsActive]))
 	if active == "" {
 		active = "."
 	}
-	if active != "." && !containsProject(projects, active) {
+	if active != "." && !slices.Contains(projects, active) {
 		active = "."
 	}
 	return projects, active, nil
@@ -118,7 +112,7 @@ func writeProjectsState(s *Server, ctx context.Context, projects []string, activ
 	if normalizedActive == "" {
 		normalizedActive = "."
 	}
-	if normalizedActive != "." && !containsProject(normalizedProjects, normalizedActive) {
+	if normalizedActive != "." && !slices.Contains(normalizedProjects, normalizedActive) {
 		normalizedActive = "."
 	}
 
@@ -154,7 +148,7 @@ func uiProjectsAdd(s *Server, ctx context.Context, p uiProjectsAddParams) (any, 
 			"active":   ".",
 		}, nil
 	}
-	if !containsProject(projects, next) {
+	if !slices.Contains(projects, next) {
 		projects = append(projects, next)
 	}
 	if err := writeProjectsState(s, ctx, projects, next); err != nil {
@@ -197,7 +191,7 @@ func uiProjectsSetActive(s *Server, ctx context.Context, p uiProjectsSetActivePa
 		return nil, err
 	}
 	next := normalizeProjectPath(p.Path)
-	if next == "" || (next != "." && !containsProject(projects, next)) {
+	if next == "" || (next != "." && !slices.Contains(projects, next)) {
 		next = "."
 	}
 	if err := writeProjectsState(s, ctx, projects, next); err != nil {

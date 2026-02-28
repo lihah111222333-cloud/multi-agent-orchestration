@@ -54,6 +54,13 @@ func NewServer(stores *Stores, cfg *config.Config) *Server {
 	return s
 }
 
+func (s *Server) PublishAgentStatus(snapshot map[string]any) {
+	if s == nil || s.bus == nil {
+		return
+	}
+	s.bus.PublishAgentStatus(snapshot)
+}
+
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	srv := &http.Server{
 		Addr:              addr,

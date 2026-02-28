@@ -22,13 +22,11 @@ import (
 
 type Handler func(ctx context.Context, params json.RawMessage) (any, error)
 
-const (
-	maxConnections    = 100
-	maxMessageSize    = 4 << 20
-	connOutboxSize    = 256
-	connBacklogCut    = connOutboxSize - 16
-	uiStateThrottleMs = 500
-)
+const maxConnections = 100
+const maxMessageSize = 4 << 20
+const connOutboxSize = 256
+const connBacklogCut = connOutboxSize - 16
+const uiStateThrottleMs = 500
 
 type Server struct {
 	mgr                      *runner.AgentManager

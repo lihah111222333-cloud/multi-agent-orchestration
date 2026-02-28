@@ -1,4 +1,3 @@
-// cmd/server — Dashboard + 编排器主入口。
 package main
 
 import (
@@ -50,12 +49,10 @@ func main() {
 
 	srv := dashboard.NewServer(stores, cfg)
 
-	// 启动巡检
 	patrol := monitor.NewPatrol(stores.AgentStatus, srv.Bus())
 	patrol.Start(ctx)
 
-	port := ":8080"
-	if err := srv.ListenAndServe(ctx, port); err != nil {
+	if err := srv.ListenAndServe(ctx, ":8080"); err != nil {
 		logger.Fatal("server failed", logger.FieldError, err)
 	}
 }

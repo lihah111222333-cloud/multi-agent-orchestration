@@ -14,14 +14,10 @@ import (
 )
 
 func NewPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
-	if cfg.PostgresConnStr == "" {
-		return nil, apperrors.New("NewPool", "POSTGRES_CONNECTION_STRING is required")
-	}
+	if cfg.PostgresConnStr == "" { return nil, apperrors.New("NewPool", "POSTGRES_CONNECTION_STRING is required") }
 
 	poolCfg, err := pgxpool.ParseConfig(cfg.PostgresConnStr)
-	if err != nil {
-		return nil, apperrors.Wrap(err, "NewPool", "parse postgres config")
-	}
+	if err != nil { return nil, apperrors.Wrap(err, "NewPool", "parse postgres config") }
 
 	poolCfg.MinConns = safeInt32(cfg.PostgresPoolMinSize, "PostgresPoolMinSize")
 	poolCfg.MaxConns = safeInt32(cfg.PostgresPoolMaxSize, "PostgresPoolMaxSize")
@@ -35,9 +31,7 @@ func NewPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
-	if err != nil {
-		return nil, apperrors.Wrap(err, "NewPool", "create pool")
-	}
+	if err != nil { return nil, apperrors.Wrap(err, "NewPool", "create pool") }
 
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
@@ -57,9 +51,6 @@ func safeInt32(v int, name string) int32 {
 		logger.Warn("pool config overflow, clamped to MaxInt32", "field", name, "value", v)
 		return math.MaxInt32
 	}
-	if v < 0 {
-		logger.Warn("pool config negative, clamped to 0", "field", name, "value", v)
-		return 0
-	}
+	if v < 0 { logger.Warn("pool config negative, clamped to 0", "field", name, "value", v); return 0 }
 	return int32(v)
 }

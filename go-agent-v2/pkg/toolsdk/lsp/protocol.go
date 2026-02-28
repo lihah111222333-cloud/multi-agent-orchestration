@@ -2,61 +2,54 @@ package lsp
 
 import "encoding/json"
 
-type Request struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      int             `json:"id"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
-}
-
-type Response struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      *int            `json:"id,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *ResponseError  `json:"error,omitempty"`
-}
-
-type ResponseError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-type Notification struct {
-	JSONRPC string          `json:"jsonrpc"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
-}
-
-type Position struct {
-	Line      int `json:"line"`
-	Character int `json:"character"`
-}
-
-type Range struct {
-	Start Position `json:"start"`
-	End   Position `json:"end"`
-}
-
-type Location struct {
-	URI   string `json:"uri"`
-	Range Range  `json:"range"`
-}
-
-type TextDocumentIdentifier struct {
-	URI string `json:"uri"`
-}
-
-type TextDocumentItem struct {
-	URI        string `json:"uri"`
-	LanguageID string `json:"languageId"`
-	Version    int    `json:"version"`
-	Text       string `json:"text"`
-}
-
-type TextDocumentPositionParams struct {
-	TextDocument TextDocumentIdentifier `json:"textDocument"`
-	Position     Position               `json:"position"`
-}
+type (
+	Request struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      int             `json:"id"`
+		Method  string          `json:"method"`
+		Params  json.RawMessage `json:"params,omitempty"`
+	}
+	Response struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      *int            `json:"id,omitempty"`
+		Result  json.RawMessage `json:"result,omitempty"`
+		Error   *ResponseError  `json:"error,omitempty"`
+	}
+	ResponseError struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	Notification struct {
+		JSONRPC string          `json:"jsonrpc"`
+		Method  string          `json:"method"`
+		Params  json.RawMessage `json:"params,omitempty"`
+	}
+	Position struct {
+		Line      int `json:"line"`
+		Character int `json:"character"`
+	}
+	Range struct {
+		Start Position `json:"start"`
+		End   Position `json:"end"`
+	}
+	Location struct {
+		URI   string `json:"uri"`
+		Range Range  `json:"range"`
+	}
+	TextDocumentIdentifier struct {
+		URI string `json:"uri"`
+	}
+	TextDocumentItem struct {
+		URI        string `json:"uri"`
+		LanguageID string `json:"languageId"`
+		Version    int    `json:"version"`
+		Text       string `json:"text"`
+	}
+	TextDocumentPositionParams struct {
+		TextDocument TextDocumentIdentifier `json:"textDocument"`
+		Position     Position               `json:"position"`
+	}
+)
 
 type InitializeParams struct {
 	ProcessID    int                `json:"processId"`
@@ -150,27 +143,25 @@ type ServerCapabilities struct {
 	SemanticTokensProvider     any `json:"semanticTokensProvider,omitempty"`
 }
 
-type DidOpenTextDocumentParams struct {
-	TextDocument TextDocumentItem `json:"textDocument"`
-}
-
-type DidCloseTextDocumentParams struct {
-	TextDocument TextDocumentIdentifier `json:"textDocument"`
-}
-
-type DidChangeTextDocumentParams struct {
-	TextDocument   VersionedTextDocumentIdentifier  `json:"textDocument"`
-	ContentChanges []TextDocumentContentChangeEvent `json:"contentChanges"`
-}
-
-type VersionedTextDocumentIdentifier struct {
-	URI     string `json:"uri"`
-	Version int    `json:"version"`
-}
-
-type TextDocumentContentChangeEvent struct {
-	Text string `json:"text"` // 全量替换
-}
+type (
+	DidOpenTextDocumentParams struct {
+		TextDocument TextDocumentItem `json:"textDocument"`
+	}
+	DidCloseTextDocumentParams struct {
+		TextDocument TextDocumentIdentifier `json:"textDocument"`
+	}
+	DidChangeTextDocumentParams struct {
+		TextDocument   VersionedTextDocumentIdentifier  `json:"textDocument"`
+		ContentChanges []TextDocumentContentChangeEvent `json:"contentChanges"`
+	}
+	VersionedTextDocumentIdentifier struct {
+		URI     string `json:"uri"`
+		Version int    `json:"version"`
+	}
+	TextDocumentContentChangeEvent struct {
+		Text string `json:"text"` // 全量替换
+	}
+)
 
 type DiagnosticSeverity int
 

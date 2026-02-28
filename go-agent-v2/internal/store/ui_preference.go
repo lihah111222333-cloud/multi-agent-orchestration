@@ -12,19 +12,14 @@ import (
 
 type UIPreferenceStore struct{ BaseStore }
 
-func NewUIPreferenceStore(pool *pgxpool.Pool) *UIPreferenceStore {
-	return &UIPreferenceStore{NewBaseStore(pool)}
-}
+func NewUIPreferenceStore(pool *pgxpool.Pool) *UIPreferenceStore { return &UIPreferenceStore{NewBaseStore(pool)} }
 
 func (s *UIPreferenceStore) Get(ctx context.Context, key string) (any, error) {
 	var val json.RawMessage
 	if err := s.pool.QueryRow(ctx, "SELECT value FROM ui_preferences WHERE key = $1", key).Scan(&val); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
+		if errors.Is(err, pgx.ErrNoRows) { return nil, nil }
 		return nil, apperrors.Wrap(err, "UIPreferenceStore.Get", "query preference")
 	}
-
 	var result any
 	if err := json.Unmarshal(val, &result); err != nil {
 		return nil, apperrors.Wrap(err, "UIPreferenceStore.Get", "unmarshal preference")
@@ -56,8 +51,7 @@ func (s *UIPreferenceStore) GetAll(ctx context.Context) (map[string]any, error) 
 		return nil, apperrors.Wrap(err, "UIPreferenceStore.GetAll", "query preferences")
 	}
 	defer rows.Close()
-
-	result := map[string]any{}
+	result := make(map[string]any)
 	for rows.Next() {
 		var key string
 		var raw json.RawMessage
@@ -69,7 +63,6 @@ func (s *UIPreferenceStore) GetAll(ctx context.Context) (map[string]any, error) 
 			result[key] = val
 		}
 	}
-
 	if err := rows.Err(); err != nil {
 		return nil, apperrors.Wrap(err, "UIPreferenceStore.GetAll", "iterate preferences")
 	}

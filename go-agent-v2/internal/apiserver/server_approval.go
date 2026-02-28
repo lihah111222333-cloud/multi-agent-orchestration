@@ -34,9 +34,7 @@ func extractBoolFromPayload(payload map[string]any, keys ...string) (bool, bool)
 	}
 	for _, key := range keys {
 		value, ok := payload[key]
-		if !ok {
-			continue
-		}
+		if !ok { continue }
 		switch typed := value.(type) {
 		case bool:
 			return typed, true
@@ -301,9 +299,7 @@ func handleApprovalRequest(s *Server, agentID, method string, payload map[string
 
 		reqID, ch, cleanup := allocPendingRequest(s)
 		defer cleanup()
-		if payload == nil {
-			payload = make(map[string]any)
-		}
+		if payload == nil { payload = make(map[string]any) }
 		payload["requestId"] = reqID
 		if s.uiRuntime != nil {
 			threadID := strings.TrimSpace(agentID)
@@ -352,31 +348,19 @@ func approvalRespondStatus(ok bool, status string) map[string]any {
 
 func approvalRespondResultPayload(p approvalRespondParams) (map[string]any, bool) {
 	result := map[string]any{}
-	if p.Decision != nil {
-		result["decision"] = p.Decision
-	}
-	if p.Approved != nil {
-		result["approved"] = *p.Approved
-	}
+	if p.Decision != nil { result["decision"] = p.Decision }
+	if p.Approved != nil { result["approved"] = *p.Approved }
 	return result, len(result) > 0
 }
 
 func approvalRespondTyped(s *Server, _ context.Context, p approvalRespondParams) (any, error) {
-	if s == nil {
-		return approvalRespondStatus(false, "server_not_ready"), nil
-	}
-	if p.RequestID <= 0 {
-		return approvalRespondStatus(false, "invalid_request_id"), nil
-	}
+	if s == nil { return approvalRespondStatus(false, "server_not_ready"), nil }
+	if p.RequestID <= 0 { return approvalRespondStatus(false, "invalid_request_id"), nil }
 
 	result, ok := approvalRespondResultPayload(p)
-	if !ok {
-		return approvalRespondStatus(false, "decision_or_approved_required"), nil
-	}
+	if !ok { return approvalRespondStatus(false, "decision_or_approved_required"), nil }
 
-	if !ResolvePendingRequest(s, p.RequestID, result) {
-		return approvalRespondStatus(false, "not_pending"), nil
-	}
+	if !ResolvePendingRequest(s, p.RequestID, result) { return approvalRespondStatus(false, "not_pending"), nil }
 
 	return approvalRespondStatus(true, "resolved"), nil
 }

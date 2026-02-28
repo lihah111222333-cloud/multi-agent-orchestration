@@ -1,4 +1,3 @@
-// cmd/mcp-server — MCP 服务器入口。
 package main
 
 import (
@@ -26,7 +25,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	stores := &mcp.Stores{
+	if err := mcp.NewServer(&mcp.Stores{
 		Interaction:      store.NewInteractionStore(pool),
 		TaskTrace:        store.NewTaskTraceStore(pool),
 		PromptTemplate:   store.NewPromptTemplateStore(pool),
@@ -36,10 +35,7 @@ func main() {
 		AgentStatus:      store.NewAgentStatusStore(pool),
 		TopologyApproval: store.NewTopologyApprovalStore(pool),
 		DBQuery:          store.NewDBQueryStore(pool),
-	}
-
-	s := mcp.NewServer(stores)
-	if err := s.Start(ctx); err != nil {
+	}).Start(ctx); err != nil {
 		logger.Fatal("MCP server failed", logger.FieldError, err)
 	}
 }

@@ -45,13 +45,11 @@ func main() {
 			os.Exit(1)
 		}
 
-		_, err = conn.Exec(ctx, string(content))
-		if err != nil {
+		if _, err = conn.Exec(ctx, string(content)); err != nil {
 			fmt.Fprintf(os.Stderr, "Error applying %s: %v\n", file, err)
 			os.Exit(1)
-		} else {
-			fmt.Printf("Applied %s\n", file)
 		}
+		fmt.Printf("Applied %s\n", file)
 	}
 	fmt.Println("Migration complete.")
 }

@@ -1,8 +1,3 @@
-// cmd/app-server — JSON-RPC over WebSocket 服务入口。
-//
-// 启动:
-//
-//	codex app-server --listen ws://127.0.0.1:4500
 package main
 
 import (
@@ -13,21 +8,20 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
 	"github.com/multi-agent/go-agent-v2/internal/apiserver"
-	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/codex"
 	"github.com/multi-agent/go-agent-v2/internal/config"
 	"github.com/multi-agent/go-agent-v2/internal/database"
-	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/agentcore"
+	"github.com/multi-agent/go-agent-v2/pkg/codexsdk/codex"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 )
 
 func main() {
 	cfg := config.Load()
 	logger.Init(cfg.LogLevel)
 
-	// Runner (Agent 进程管理)
 	mgr, err := runner.NewAgentManager(
 		func(port int, id string) agentcore.Client { return codex.NewAppServerClient(port, id) },
 		func(port int, id string) agentcore.Client { return codex.NewClient(port, id) },
@@ -42,10 +36,8 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// LSP Manager (延迟启动)
 	lspMgr := lsp.NewManager(nil)
 
-	// PostgreSQL (消息持久化, 必需)
 	if cfg.PostgresConnStr == "" {
 		logger.Fatal("POSTGRES_CONNECTION_STRING is required")
 	}
@@ -55,7 +47,6 @@ func main() {
 	}
 	defer dbPool.Close()
 
-	// 自动迁移
 	migrationsDir := cfg.MigrationsDir
 	if migrationsDir == "" {
 		migrationsDir = filepath.Join(filepath.Dir(os.Args[0]), "..", "..", "migrations")
@@ -71,7 +62,6 @@ func main() {
 		}
 	}
 
-	// JSON-RPC Server
 	srv := apiserver.New(apiserver.Deps{
 		Manager: mgr,
 		LSP:     lspMgr,
@@ -79,13 +69,10 @@ func main() {
 		DB:      dbPool,
 	})
 
-	// 注册 Agent 事件 → JSON-RPC Notification 转发
 	mgr.SetOnEvent(func(agentID string, event agentcore.Event) {
-		handler := apiserver.AgentEventHandler(srv, agentID)
-		handler(event)
+		apiserver.AgentEventHandler(srv, agentID)(event)
 	})
 
-	// LSP 初始化: 诊断缓存 + 广播
 	cwd, _ := os.Getwd()
 	apiserver.SetupLSP(srv, cwd)
 

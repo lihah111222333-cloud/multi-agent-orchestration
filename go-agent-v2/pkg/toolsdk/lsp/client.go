@@ -136,7 +136,7 @@ func (c *Client) Start(ctx context.Context, command string, args []string, rootU
 	}
 
 	var initResult InitializeResult
-	if err := c.call("initialize", initParams, &initResult); err != nil {
+	if err := c.callWithTimeout("initialize", initParams, &initResult, 30*time.Second); err != nil {
 		return c.stopAfterStartFailure("initialize", err)
 	}
 
@@ -192,11 +192,12 @@ func (c *Client) callWhenRunning(method string, params any, result any) error {
 	if err := c.ensureRunning(); err != nil {
 		return err
 	}
-	return c.call(method, params, result)
+	return c.callWithTimeout(method, params, result, 30*time.Second)
 }
 
-func (c *Client) callRawWhenRunning(method string, params any) (raw json.RawMessage, err error) {
-	err = c.callWhenRunning(method, params, &raw)
+func (c *Client) callRawWhenRunning(method string, params any) (json.RawMessage, error) {
+	var raw json.RawMessage
+	err := c.callWhenRunning(method, params, &raw)
 	return raw, err
 }
 
@@ -409,10 +410,6 @@ func (c *Client) clearPending() {
 		close(ch)
 	}
 	c.pending = map[int]chan *Response{}
-}
-
-func (c *Client) call(method string, params any, result any) error {
-	return c.callWithTimeout(method, params, result, 30*time.Second)
 }
 
 func (c *Client) callWithTimeout(method string, params any, result any, timeout time.Duration) error {

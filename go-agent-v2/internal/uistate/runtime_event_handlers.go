@@ -248,11 +248,9 @@ var uiTypeDepthHandlers = map[UIType]uiTypeDepthHandler{
 }
 
 func (m *RuntimeManager) applyUITypeDepthsLocked(threadID string, rt *threadRuntime, uiType UIType, eventType, method, text string, payload map[string]any) {
-	handler, ok := uiTypeDepthHandlers[uiType]
-	if !ok {
-		return
+	if handler, ok := uiTypeDepthHandlers[uiType]; ok {
+		handler(m, threadID, rt, eventType, method, text, payload)
 	}
-	handler(m, threadID, rt, eventType, method, text, payload)
 }
 
 func handleTurnStartedDepth(m *RuntimeManager, threadID string, rt *threadRuntime, _, _, _ string, _ map[string]any) {
@@ -458,17 +456,8 @@ func (m *RuntimeManager) incrActivityStatLocked(threadID, kind, toolName string)
 	m.snapshot.ActivityStatsByThread[threadID] = stats
 }
 
-func (m *RuntimeManager) IncrActivityStat(threadID, kind, toolName string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.incrActivityStatLocked(threadID, kind, toolName)
-}
-
-func (m *RuntimeManager) PushAlert(threadID, level, message string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.pushAlertLocked(threadID, level, message)
-}
+func (m *RuntimeManager) IncrActivityStat(threadID, kind, toolName string) { m.mu.Lock(); defer m.mu.Unlock(); m.incrActivityStatLocked(threadID, kind, toolName) }
+func (m *RuntimeManager) PushAlert(threadID, level, message string)         { m.mu.Lock(); defer m.mu.Unlock(); m.pushAlertLocked(threadID, level, message) }
 
 func (m *RuntimeManager) pushAlertLocked(threadID, level, message string) {
 	alerts := m.snapshot.AlertsByThread[threadID]
@@ -982,11 +971,7 @@ func handleApprovalRequestEvent(m *RuntimeManager, threadID string, fields resol
 
 func handlePlanDeltaEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
 	if fields.planSet {
-		planDone := false
-		if fields.planDone != nil {
-			planDone = *fields.planDone
-		}
-		m.setPlanLocked(threadID, fields.text, planDone, ts)
+		m.setPlanLocked(threadID, fields.text, fields.planDone != nil && *fields.planDone, ts)
 		return
 	}
 	m.appendPlanLocked(threadID, fields.text, ts)
@@ -1007,11 +992,9 @@ func handleDiffUpdateEvent(m *RuntimeManager, threadID string, _ resolvedFields,
 }
 
 func handleUserMessageEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {
-	text := sanitizeUserMessageTextWithMode(fields.text, m.sanitizeInjectedUserMessage)
-	if strings.TrimSpace(text) == "" {
-		return
+	if text := sanitizeUserMessageTextWithMode(fields.text, m.sanitizeInjectedUserMessage); strings.TrimSpace(text) != "" {
+		m.appendUserLocked(threadID, text, nil, ts)
 	}
-	m.appendUserLocked(threadID, text, nil, ts)
 }
 
 func handleErrorEvent(m *RuntimeManager, threadID string, fields resolvedFields, _ map[string]any, ts time.Time) {

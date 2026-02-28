@@ -26,18 +26,14 @@ func (m *RuntimeManager) setThreadStateLocked(threadID, state string) {
 
 func (m *RuntimeManager) markAgentActiveLocked(threadID string, ts time.Time) {
 	meta := m.snapshot.AgentMetaByID[threadID]
-	if ts.IsZero() {
-		ts = time.Now()
-	}
+	if ts.IsZero() { ts = time.Now() }
 	meta.LastActiveAt = ts.UTC().Format(time.RFC3339)
 	m.snapshot.AgentMetaByID[threadID] = meta
 }
 
 func (m *RuntimeManager) nextItemIDLocked(kind string) string {
 	m.seq++
-	if kind == "" {
-		kind = "item"
-	}
+	if kind == "" { kind = "item" }
 	return fmt.Sprintf("%s-%d-%d", kind, time.Now().UnixMilli(), m.seq)
 }
 
@@ -79,9 +75,7 @@ func (m *RuntimeManager) appendUserLocked(threadID, text string, attachments []T
 
 func (m *RuntimeManager) startThinkingLocked(threadID string, ts time.Time) {
 	rt := m.runtime[threadID]
-	if rt.thinkingIndex >= 0 {
-		return
-	}
+	if rt.thinkingIndex >= 0 { return }
 	rt.thinkingIndex = m.pushTimelineItemLocked(threadID, TimelineItem{
 		Kind: "thinking",
 		Text: "",
@@ -443,9 +437,7 @@ type planEntry struct {
 
 func extractPlanSnapshot(payload map[string]any) (string, bool, bool) {
 	entries, explanation := extractPlanEntries(payload)
-	if len(entries) == 0 {
-		return "", false, false
-	}
+	if len(entries) == 0 { return "", false, false }
 	if text, done := formatPlanSnapshot(entries, explanation); strings.TrimSpace(text) != "" {
 		return text, done, true
 	}
@@ -587,8 +579,12 @@ func normalizeThreadState(state string) string {
 }
 
 func isInterruptibleThreadState(state string) bool {
-	s := normalizeThreadState(state)
-	return s == "starting" || s == "thinking" || s == "responding" || s == "running" || s == "editing" || s == "waiting" || s == "syncing"
+	switch normalizeThreadState(state) {
+	case "starting", "thinking", "responding", "running", "editing", "waiting", "syncing":
+		return true
+	default:
+		return false
+	}
 }
 
 func extractNestedFirstString(payload map[string]any, paths ...[]string) string {

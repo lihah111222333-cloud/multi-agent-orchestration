@@ -5,15 +5,9 @@ import (
 	"encoding/json"
 )
 
-// ────────────────────────────────────────────────────
-// Shared DTO types (canonical definitions)
-// Used by contracts, service/*, and consumer/*
-// ────────────────────────────────────────────────────
-
 // AutoMatchInput carries user input metadata used for skill auto-match.
 type AutoMatchInput struct {
-	Type string
-	Name string
+	Type, Name string
 }
 
 // SkillMatchCandidate describes one skill candidate for auto-match classification.
@@ -25,9 +19,8 @@ type SkillMatchCandidate struct {
 
 // AutoMatchedSkillMatch stores one matched skill classification result.
 type AutoMatchedSkillMatch struct {
-	Name         string
-	MatchedBy    string
-	MatchedTerms []string
+	Name, MatchedBy string
+	MatchedTerms    []string
 }
 
 // AutoSkillMatchOptions controls how configured skills participate in auto-match.
@@ -38,18 +31,12 @@ type AutoSkillMatchOptions struct {
 
 // TurnInput is a protocol-level user input item for turn/start and turn/steer.
 type TurnInput struct {
-	Type    string
-	Text    string
-	URL     string
-	Path    string
-	Name    string
-	Content string
+	Type, Text, URL, Path, Name, Content string
 }
 
 // TurnStartRequest carries protocol params for turn/start.
 type TurnStartRequest struct {
-	ThreadID             string
-	Cwd                  string
+	ThreadID, Cwd        string
 	Input                []TurnInput
 	SelectedSkills       []string
 	ManualSkillSelection bool
@@ -58,26 +45,21 @@ type TurnStartRequest struct {
 
 // TurnSteerRequest carries protocol params for turn/steer.
 type TurnSteerRequest struct {
-	ThreadID             string
-	ExpectedTurnID       string
-	Input                []TurnInput
-	SelectedSkills       []string
-	ManualSkillSelection bool
+	ThreadID, ExpectedTurnID string
+	Input                    []TurnInput
+	SelectedSkills           []string
+	ManualSkillSelection     bool
 }
 
 // TurnAppendUserTimelineOptions configures turn/start user timeline rendering.
 type TurnAppendUserTimelineOptions struct {
-	ThreadID     string
-	Prompt       string
-	SubmitPrompt string
-	Images       []string
-	Files        []string
+	ThreadID, Prompt, SubmitPrompt string
+	Images, Files                  []string
 }
 
 // TurnStartEntryPrepareResult contains prepared submit payload for turn/start.
 type TurnStartEntryPrepareResult struct {
-	Prompt                string
-	SubmitPrompt          string
+	Prompt, SubmitPrompt  string
 	Images                []string
 	Files                 []string
 	SelectedSkillCount    int
@@ -98,10 +80,7 @@ type TurnStartEntryResult struct {
 
 // TimelineAttachment is a lightweight timeline attachment reference.
 type TimelineAttachment struct {
-	Kind       string
-	Name       string
-	Path       string
-	PreviewURL string
+	Kind, Name, Path, PreviewURL string
 }
 
 // TimelineItem is the minimal thread timeline item view needed by runtime logic.
@@ -122,10 +101,6 @@ type ThreadListItem struct {
 	State    string `json:"state"`
 	Archived bool   `json:"archived,omitempty"`
 }
-
-// ────────────────────────────────────────────────────
-// Shared interfaces
-// ────────────────────────────────────────────────────
 
 // TimelineRuntime abstracts UI runtime timeline operations.
 type TimelineRuntime interface {
@@ -154,12 +129,10 @@ type BindingStore interface {
 
 // Event is the CLI-agnostic event envelope.
 type Event struct {
-	Type         string          `json:"type"`
-	Data         json.RawMessage `json:"data,omitempty"`
-	RequestID    *int64          `json:"-"`
-	RequestIDRaw json.RawMessage `json:"-"`
-
-	// Keep callback signatures unchanged in Phase 1.
+	Type              string                               `json:"type"`
+	Data              json.RawMessage                      `json:"data,omitempty"`
+	RequestID         *int64                               `json:"-"`
+	RequestIDRaw      json.RawMessage                      `json:"-"`
 	RespondFunc       func(code int, message string) error `json:"-"`
 	RespondResultFunc func(result any) error               `json:"-"`
 	DenyFunc          func() error                         `json:"-"`
@@ -239,7 +212,6 @@ type DynamicTool struct {
 }
 
 // DynamicToolCallData is the dynamic tool call server request payload.
-// Keep camelCase tags unchanged for wire compatibility in Phase 1.
 type DynamicToolCallData struct {
 	ThreadID  string          `json:"threadId"`
 	TurnID    string          `json:"turnId"`

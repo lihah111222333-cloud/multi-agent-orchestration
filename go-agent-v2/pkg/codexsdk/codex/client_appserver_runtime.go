@@ -86,9 +86,7 @@ func (c *AppServerClient) SpawnAndConnect(ctx context.Context, prompt, cwd, mode
 }
 
 func (c *AppServerClient) Shutdown() error {
-	if c.stopped.Swap(true) {
-		return nil
-	}
+	if c.stopped.Swap(true) { return nil }
 	c.cancel()
 	c.cancelStreamErrorRecoveryTimer()
 	if err := c.notify("shutdown", nil); err != nil {
@@ -109,13 +107,9 @@ func (c *AppServerClient) Shutdown() error {
 	case <-time.After(3 * time.Second):
 	}
 
-	if err := c.Kill(); err != nil {
-		return err
-	}
+	if err := c.Kill(); err != nil { return err }
 
-	if c.stderrCollector != nil {
-		_ = c.stderrCollector.Close()
-	}
+	if c.stderrCollector != nil { _ = c.stderrCollector.Close() }
 	return nil
 }
 
@@ -123,27 +117,17 @@ func (c *AppServerClient) Kill() error {
 	if c.Cmd == nil || c.Cmd.Process == nil { return nil }
 	pid := c.Cmd.Process.Pid
 	killErr := syscall.Kill(-pid, syscall.SIGKILL)
-	if killErr != nil {
-		killErr = c.Cmd.Process.Kill()
-	}
-	if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
-		return killErr
-	}
+	if killErr != nil { killErr = c.Cmd.Process.Kill() }
+	if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) { return killErr }
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- c.Cmd.Wait() }()
 	select {
 	case waitErr := <-waitDone:
-		if waitErr == nil {
-			return nil
-		}
+		if waitErr == nil { return nil }
 		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) {
-			return nil
-		}
+		if errors.As(waitErr, &exitErr) { return nil }
 		waitMsg := waitErr.Error()
-		if strings.Contains(waitMsg, "Wait was already called") || strings.Contains(waitMsg, "no child processes") {
-			return nil
-		}
+		if strings.Contains(waitMsg, "Wait was already called") || strings.Contains(waitMsg, "no child processes") { return nil }
 		return waitErr
 	case <-time.After(5 * time.Second):
 		logger.Warn("codex: Kill() Cmd.Wait timed out after 5s, abandoning",

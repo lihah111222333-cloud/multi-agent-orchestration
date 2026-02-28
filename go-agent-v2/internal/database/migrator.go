@@ -13,15 +13,10 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-// Migrate 执行 migrations 目录下的 SQL 迁移脚本 (按文件名排序)。
-// 使用 schema_version 表追踪已执行版本。
-// 对应 Python db/migrator.py。
 func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) error {
 	if pool == nil {
 		return apperrors.New("Migrate", "pool is required")
 	}
-
-	// 确保 schema_version 表存在
 	_, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_version (
 			version TEXT PRIMARY KEY,
@@ -32,8 +27,6 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 		logger.Error("migrate: create schema_version table failed", logger.FieldError, err)
 		return apperrors.Wrap(err, "Migrate", "create schema_version table")
 	}
-
-	// 读取迁移文件
 	entries, err := os.ReadDir(migrationsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -42,8 +35,6 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 		}
 		return apperrors.Wrap(err, "Migrate", "read migrations dir")
 	}
-
-	// 过滤并排序 .sql 文件
 	var sqlFiles []string
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
@@ -56,21 +47,16 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 	if err != nil {
 		return err
 	}
-
-	// 执行未应用的迁移
-	pending := 0
+	var pending []string
 	for _, name := range sqlFiles {
 		if !applied[name] {
-			pending++
+			pending = append(pending, name)
 		}
 	}
-	if pending > 0 {
-		logger.Info("migrate: applying pending migrations", logger.FieldCount, pending)
+	if len(pending) > 0 {
+		logger.Info("migrate: applying pending migrations", logger.FieldCount, len(pending))
 	}
-	for _, name := range sqlFiles {
-		if applied[name] {
-			continue
-		}
+	for _, name := range pending {
 		if err := applyOneMigration(ctx, pool, migrationsDir, name); err != nil {
 			return err
 		}

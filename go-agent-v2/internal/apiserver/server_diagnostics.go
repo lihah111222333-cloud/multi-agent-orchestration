@@ -19,7 +19,7 @@ func (a serverDiagnosticsAccessor) GetDiagnostics(uri string) []lsp.Diagnostic {
 }
 
 func (a serverDiagnosticsAccessor) GetAllDiagnostics() map[string][]lsp.Diagnostic {
-	return getAllDiagnostics(a.s)
+	return allDiagnosticsCacheState(a.s)
 }
 
 func diagnosticsAccessor(s *Server) lsp.DiagnosticsAccessor {
@@ -30,29 +30,20 @@ func setDiagnostics(s *Server, uri string, diagnostics []lsp.Diagnostic) {
 	if s == nil {
 		return
 	}
-	normalized := strings.TrimSpace(uri)
-	if normalized == "" {
+	if uri = strings.TrimSpace(uri); uri == "" {
 		return
 	}
-	setDiagnosticsCacheState(s, normalized, diagnostics)
+	setDiagnosticsCacheState(s, uri, diagnostics)
 }
 
 func getDiagnostics(s *Server, uri string) []lsp.Diagnostic {
 	if s == nil {
 		return nil
 	}
-	normalized := strings.TrimSpace(uri)
-	if normalized == "" {
+	if uri = strings.TrimSpace(uri); uri == "" {
 		return nil
 	}
-	return getDiagnosticsCacheState(s, normalized)
-}
-
-func getAllDiagnostics(s *Server) map[string][]lsp.Diagnostic {
-	if s == nil {
-		return map[string][]lsp.Diagnostic{}
-	}
-	return allDiagnosticsCacheState(s)
+	return getDiagnosticsCacheState(s, uri)
 }
 
 func cloneDiagnostics(in []lsp.Diagnostic) []lsp.Diagnostic {

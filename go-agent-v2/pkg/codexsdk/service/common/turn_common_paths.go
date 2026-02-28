@@ -47,10 +47,7 @@ func RequireThreadID(caller, threadID string) (string, error) {
 
 func ThreadLogFields(threadID string) []any {
 	id := strings.TrimSpace(threadID)
-	return []any{
-		logger.FieldAgentID, id,
-		logger.FieldThreadID, id,
-	}
+	return []any{logger.FieldAgentID, id, logger.FieldThreadID, id}
 }
 
 func AppendUniqueThreadIDFallback(dst []string, seen map[string]struct{}, candidate string) []string {

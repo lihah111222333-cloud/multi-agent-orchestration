@@ -25,10 +25,6 @@ func NormalizeHistoryTimeout(timeout time.Duration) time.Duration {
 	return timeout
 }
 
-func AppendUniqueThreadIDFallback(dst []string, seen map[string]struct{}, candidate string) []string {
-	return common.AppendUniqueThreadIDFallback(dst, seen, candidate)
-}
-
 func lookupWithTimeout[T any](ctx context.Context, timeout time.Duration, lookup func(context.Context) (T, error)) (T, error) {
 	var zero T
 	if lookup == nil {
@@ -63,7 +59,7 @@ func ResolveCodexThreadCandidates(
 	timeout = NormalizeHistoryTimeout(timeout)
 	appendUnique := appendUniqueThreadID
 	if appendUnique == nil {
-		appendUnique = AppendUniqueThreadIDFallback
+		appendUnique = common.AppendUniqueThreadIDFallback
 	}
 	preview := previewCandidates
 	if preview == nil {

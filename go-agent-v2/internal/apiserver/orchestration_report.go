@@ -6,14 +6,12 @@ import (
 	"time"
 
 	trackersvc "github.com/multi-agent/go-agent-v2/pkg/codexsdk/service/tracker"
-	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 	apperrors "github.com/multi-agent/go-agent-v2/pkg/errors"
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
 )
 
-const (
-	defaultOrchestrationReportTTL = tools.DefaultOrchestrationReportTTL
-)
+const defaultOrchestrationReportTTL = tools.DefaultOrchestrationReportTTL
 
 func submitPrompt(s *Server, agentID, prompt string, images, files []string) error {
 	if s == nil {
@@ -38,9 +36,7 @@ func rememberReportRequest(s *Server, senderID, workerID string) {
 		return
 	}
 
-	now := time.Now()
-
-	waiterCount := rememberReportRequesterState(s, target, requester, now)
+	waiterCount := rememberReportRequesterState(s, target, requester, time.Now())
 	if waiterCount == 0 {
 		return
 	}
@@ -65,10 +61,15 @@ func maybeAutoReportOrchestrationCompletion(s *Server, agentID, eventType, metho
 		return
 	}
 
-	requesters := takeOrchestrationReportRequesters(s, workerID)
+	requesters := takeReportRequestersState(s, workerID, time.Now())
 	if len(requesters) == 0 {
 		return
 	}
+	sort.Strings(requesters)
+	logger.Info("orchestration: report waiters drained",
+		"worker", workerID,
+		"requester_count", len(requesters),
+	)
 
 	summary := strings.TrimSpace(trackersvc.TrackedTurnSummaryFromPayload(payload))
 	if summary == "" {
@@ -87,25 +88,4 @@ func maybeAutoReportOrchestrationCompletion(s *Server, agentID, eventType, metho
 		}
 		logger.Info("orchestration: auto report delivered", "from", workerID, "to", requesterID, logger.FieldStatus, status)
 	}
-}
-
-func takeOrchestrationReportRequesters(s *Server, workerID string) []string {
-	if s == nil {
-		return nil
-	}
-	target := strings.TrimSpace(workerID)
-	if target == "" {
-		return nil
-	}
-
-	requesters := takeReportRequestersState(s, target, time.Now())
-	if len(requesters) == 0 {
-		return nil
-	}
-	sort.Strings(requesters)
-	logger.Info("orchestration: report waiters drained",
-		"worker", target,
-		"requester_count", len(requesters),
-	)
-	return requesters
 }

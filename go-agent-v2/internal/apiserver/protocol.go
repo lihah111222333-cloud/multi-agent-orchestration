@@ -1,11 +1,3 @@
-// protocol.go — JSON-RPC 2.0 协议类型定义。
-//
-// 规范: https://www.jsonrpc.org/specification
-//
-//	Request:      {"jsonrpc":"2.0", "id":1, "method":"...", "params":{...}}
-//	Response:     {"jsonrpc":"2.0", "id":1, "result":{...}}
-//	Error:        {"jsonrpc":"2.0", "id":1, "error":{"code":..., "message":"..."}}
-//	Notification: {"jsonrpc":"2.0", "method":"...", "params":{...}}
 package apiserver
 
 import (
@@ -66,67 +58,44 @@ func newResult(id any, result any) *Response {
 }
 
 func normalizeInternalErrorCode(code int, msg string) int {
-	if code != CodeInternalError {
-		return code
-	}
-	text := strings.ToLower(strings.TrimSpace(msg))
-	if strings.Contains(text, "invalid params") {
-		return CodeInvalidParams
-	}
-	if isLikelyInvalidParamsMessage(text) {
-		return CodeInvalidParams
+	if code == CodeInternalError {
+		text := strings.ToLower(strings.TrimSpace(msg))
+		if strings.Contains(text, "invalid params") || isLikelyInvalidParamsMessage(text) {
+			return CodeInvalidParams
+		}
 	}
 	return code
+}
+
+var invalidParamsMarkers = [...]string{
+	" is required",
+	"must not be empty",
+	"invalid cursor",
+	"invalid thread id",
+	"input must not be empty",
+	"no active turn",
+	"expectedturnid mismatch",
+	"expected active turn id",
+	"turn not found",
+	"unknown turn",
+	"invalid_request_id",
 }
 
 func isLikelyInvalidParamsMessage(text string) bool {
 	if text == "" {
 		return false
 	}
-	if strings.Contains(text, " is required") {
-		return true
+	for _, marker := range invalidParamsMarkers {
+		if strings.Contains(text, marker) {
+			return true
+		}
 	}
-	if strings.Contains(text, "must not be empty") {
-		return true
-	}
-	if strings.Contains(text, "invalid cursor") {
-		return true
-	}
-	if strings.Contains(text, "invalid thread id") {
-		return true
-	}
-	if strings.Contains(text, "input must not be empty") {
-		return true
-	}
-	if strings.Contains(text, "no active turn") {
-		return true
-	}
-	if strings.Contains(text, "expectedturnid mismatch") {
-		return true
-	}
-	if strings.Contains(text, "expected active turn id") {
-		return true
-	}
-	if strings.Contains(text, "turn not found") {
-		return true
-	}
-	if strings.Contains(text, "unknown turn") {
-		return true
-	}
-	if strings.Contains(text, "thread ") && strings.Contains(text, " not found") {
-		return true
-	}
-	if strings.Contains(text, "invalid_request_id") {
-		return true
-	}
-	return false
+	return strings.Contains(text, "thread ") && strings.Contains(text, " not found")
 }
 
 // newError 错误响应。
 func newError(id any, code int, msg string) *Response {
-	normalizedMessage := strings.TrimSpace(msg)
-	normalizedCode := normalizeInternalErrorCode(code, normalizedMessage)
-	return &Response{JSONRPC: jsonrpcVersion, ID: id, Error: &RPCError{Code: normalizedCode, Message: normalizedMessage}}
+	return newErrorData(id, code, msg, nil)
 }
 
 // newErrorData 带 data 的错误响应。

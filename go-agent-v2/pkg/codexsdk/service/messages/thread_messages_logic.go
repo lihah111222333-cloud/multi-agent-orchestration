@@ -112,9 +112,7 @@ func HandleThreadMessagesHydration(
 		page,
 		before,
 		calculateHydrationLoadLimit,
-		func(records []ThreadHistoryMessage) bool {
-			return hydrateHistory(threadID, records)
-		},
+		func(records []ThreadHistoryMessage) bool { return hydrateHistory(threadID, records) },
 		adaptedStream,
 		asyncGo,
 		func(firstPageCount int, total int, hydrated bool) {

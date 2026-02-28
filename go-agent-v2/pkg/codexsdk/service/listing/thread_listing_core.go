@@ -103,9 +103,6 @@ func AppendHistoryFromStatusStore(ctx context.Context, threads []ThreadListItem,
 }
 
 func AppendHistoryFromArchiveState(ctx context.Context, threads []ThreadListItem, seen map[string]struct{}, methodName string, loadThreadArchiveMap func(context.Context) (map[string]int64, error)) []ThreadListItem {
-	if loadThreadArchiveMap == nil {
-		return threads
-	}
 	archivedMap, err := loadWithTimeout(ctx, 3*time.Second, loadThreadArchiveMap)
 	if err != nil {
 		logger.Warn(methodName+": load history threads from threadArchives.chat failed", logger.FieldError, err)
@@ -115,9 +112,6 @@ func AppendHistoryFromArchiveState(ctx context.Context, threads []ThreadListItem
 }
 
 func appendHistoryFromStore[T any](ctx context.Context, threads []ThreadListItem, seen map[string]struct{}, methodName, source string, timeout time.Duration, load func(context.Context) ([]T, error)) []ThreadListItem {
-	if load == nil {
-		return threads
-	}
 	items, err := loadWithTimeout(ctx, timeout, load)
 	if err != nil {
 		logger.Warn(methodName+": load history threads from "+source+" failed", logger.FieldError, err)
@@ -247,12 +241,17 @@ func ApplyThreadAliases(threads []ThreadListItem, aliases map[string]string) {
 
 func LoadThreadAliases(ctx context.Context, getPref func(context.Context, string) (any, error)) map[string]string {
 	aliases, err := loadThreadAliases(ctx, getPref)
-	if err != nil { logger.Warn("thread aliases: load preference failed", logger.FieldError, err); return map[string]string{} }
+	if err != nil {
+		logger.Warn("thread aliases: load preference failed", logger.FieldError, err)
+		return map[string]string{}
+	}
 	return aliases
 }
 
 func loadThreadAliases(ctx context.Context, getPref func(context.Context, string) (any, error)) (map[string]string, error) {
-	if getPref == nil { return map[string]string{}, nil }
+	if getPref == nil {
+		return map[string]string{}, nil
+	}
 	value, err := getPref(ctx, PrefThreadAliases)
 	if err != nil {
 		return nil, err
@@ -261,9 +260,10 @@ func loadThreadAliases(ctx context.Context, getPref func(context.Context, string
 }
 
 func PersistThreadAlias(ctx context.Context, threadID string, alias string, getPref func(context.Context, string) (any, error), setPref func(context.Context, string, any) error) error {
-	if getPref == nil || setPref == nil { return nil }
 	id := strings.TrimSpace(threadID)
-	if id == "" { return nil }
+	if getPref == nil || setPref == nil || id == "" {
+		return nil
+	}
 	aliases, err := loadThreadAliases(ctx, getPref)
 	if err != nil {
 		return err

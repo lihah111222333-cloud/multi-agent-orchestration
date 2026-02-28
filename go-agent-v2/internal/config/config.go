@@ -98,37 +98,25 @@ func Load() *Config {
 
 // clampMinimums 对 int/float64 字段应用最小值约束（envconfig 不支持 min tag）。
 func clampMinimums(c *Config) {
-	clampInt(&c.LLMTimeout, 1)
-	clampInt(&c.LLMMaxRetries, 0)
-	clampFloat(&c.LLMTemperature, 0)
-	clampFloat(&c.DynToolRouterConfidenceThreshold, 0)
-	clampInt(&c.DynToolRouterTimeoutSec, 1)
-	clampInt(&c.GatewayTimeout, 1)
-	clampInt(&c.GatewayMaxAttempts, 1)
-	clampInt(&c.CommandCardTimeoutSec, 1)
-	clampInt(&c.GatewayMinQualityScore, 0)
-	clampInt(&c.PostgresPoolMinSize, 1)
-	clampInt(&c.PostgresPoolMaxSize, 1)
-	clampInt(&c.PostgresPoolTimeoutSec, 1)
-	clampInt(&c.DashboardSSESyncSec, 1)
-	clampInt(&c.AuditLogLimit, 1)
-	clampInt(&c.SystemLogLimit, 1)
-	clampInt(&c.TopologyApprovalTTLSec, 1)
-	clampInt(&c.StallThresholdSec, 30)
-	clampInt(&c.StallHeartbeatSec, 10)
-	clampInt(&c.OrchestrationWorkspaceMaxFiles, 1)
-	clampInt(&c.OrchestrationWorkspaceMaxFileBytes, 1024)
-	clampInt(&c.OrchestrationWorkspaceMaxTotalBytes, 10240)
-}
-
-func clampInt(v *int, min int) {
-	if *v < min {
-		*v = min
-	}
-}
-
-func clampFloat(v *float64, min float64) {
-	if *v < min {
-		*v = min
-	}
+	c.LLMTimeout = max(c.LLMTimeout, 1)
+	c.LLMMaxRetries = max(c.LLMMaxRetries, 0)
+	c.LLMTemperature = max(c.LLMTemperature, 0.0)
+	c.DynToolRouterConfidenceThreshold = max(c.DynToolRouterConfidenceThreshold, 0.0)
+	c.DynToolRouterTimeoutSec = max(c.DynToolRouterTimeoutSec, 1)
+	c.GatewayTimeout = max(c.GatewayTimeout, 1)
+	c.GatewayMaxAttempts = max(c.GatewayMaxAttempts, 1)
+	c.CommandCardTimeoutSec = max(c.CommandCardTimeoutSec, 1)
+	c.GatewayMinQualityScore = max(c.GatewayMinQualityScore, 0)
+	c.PostgresPoolMinSize = max(c.PostgresPoolMinSize, 1)
+	c.PostgresPoolMaxSize = max(c.PostgresPoolMaxSize, 1)
+	c.PostgresPoolTimeoutSec = max(c.PostgresPoolTimeoutSec, 1)
+	c.DashboardSSESyncSec = max(c.DashboardSSESyncSec, 1)
+	c.AuditLogLimit = max(c.AuditLogLimit, 1)
+	c.SystemLogLimit = max(c.SystemLogLimit, 1)
+	c.TopologyApprovalTTLSec = max(c.TopologyApprovalTTLSec, 1)
+	c.StallThresholdSec = max(c.StallThresholdSec, 30)
+	c.StallHeartbeatSec = max(c.StallHeartbeatSec, 10)
+	c.OrchestrationWorkspaceMaxFiles = max(c.OrchestrationWorkspaceMaxFiles, 1)
+	c.OrchestrationWorkspaceMaxFileBytes = max(c.OrchestrationWorkspaceMaxFileBytes, 1024)
+	c.OrchestrationWorkspaceMaxTotalBytes = max(c.OrchestrationWorkspaceMaxTotalBytes, 10240)
 }

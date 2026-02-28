@@ -12,8 +12,6 @@ type AgentClient interface {
 	Running() bool
 }
 
-// AgentClientFactory creates one client for threadID + port.
 type AgentClientFactory func(threadID string, port int) AgentClient
 
-// AgentEvent is the normalized agent event envelope.
 type AgentEvent = agentcore.Event

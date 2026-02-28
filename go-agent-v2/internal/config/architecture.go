@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -91,9 +90,6 @@ func LoadArchitectureSnapshot(configPath string) (*ArchitectureSnapshot, error) 
 
 	normalized, _ := json.Marshal(raw)
 	hash := fmt.Sprintf("sha256:%x", sha256.Sum256(normalized))
-
-	dir := filepath.Dir(configPath)
-	_ = dir // 备份目录预留
 
 	return &ArchitectureSnapshot{
 		Raw:       raw,

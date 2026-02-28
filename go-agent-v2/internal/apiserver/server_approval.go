@@ -2,7 +2,6 @@ package apiserver
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -21,7 +20,7 @@ func approvalStringValue(value any) string {
 	switch typed := value.(type) {
 	case string:
 		return typed
-	case fmt.Stringer:
+	case interface{ String() string }:
 		return typed.String()
 	default:
 		return ""
@@ -221,7 +220,7 @@ func approvalDecisionAllowsSubmit(method string, payload map[string]any) bool {
 func denyApprovalSafely(event agentcore.Event, agentID string) {
 	if event.DenyFunc != nil {
 		if denyErr := event.DenyFunc(); denyErr != nil {
-		logger.Warn("app-server: deny callback failed", logger.FieldAgentID, agentID, logger.FieldError, denyErr)
+			logger.Warn("app-server: deny callback failed", logger.FieldAgentID, agentID, logger.FieldError, denyErr)
 		}
 	}
 }

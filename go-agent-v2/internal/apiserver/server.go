@@ -1,15 +1,3 @@
-// server.go — JSON-RPC over WebSocket 服务器（核心结构体与启动）。
-//
-// 架构:
-//
-//	WebSocket 连接 → JSON-RPC 2.0 消息解析 → 方法分发 → 响应
-//	Agent 事件 → Notification 广播给所有连接
-//
-// 拆分说明:
-//   - server_conn.go / server_transport.go: 连接管理与 WS/HTTP/SSE 传输
-//   - server_event_handler.go / server_payload*.go: 事件转发与 payload 增强
-//   - server_bootstrap_*.go: stores/skills/runtime 初始化装配
-//   - server_lifecycle.go: 服务启动与运行时清理
 package apiserver
 
 import (
@@ -23,13 +11,13 @@ import (
 	"github.com/multi-agent/go-agent-v2/internal/apiserver/codexadapter"
 	"github.com/multi-agent/go-agent-v2/internal/config"
 	"github.com/multi-agent/go-agent-v2/internal/executor"
-	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 	"github.com/multi-agent/go-agent-v2/internal/runner"
 	"github.com/multi-agent/go-agent-v2/internal/service"
 	skillsruntime "github.com/multi-agent/go-agent-v2/internal/skills"
+	"github.com/multi-agent/go-agent-v2/internal/uistate"
+	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tooladapter"
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/tools"
-	"github.com/multi-agent/go-agent-v2/internal/uistate"
 )
 
 // Handler JSON-RPC 方法处理器。
@@ -45,22 +33,6 @@ const (
 
 // Server JSON-RPC WebSocket 服务器。
 type Server struct {
-	// ========================================
-	// 状态分组说明
-	// ========================================
-	// Server 保留核心依赖与入口, 可变共享状态按职责分组嵌入:
-	// connManagerState:      WebSocket 连接 + Server->Client pending 请求
-	// diagnosticsCacheState: LSP diagnostics 缓存
-	// codeRunState:          code_run 取消句柄 + agent workdir
-	// turnTrackingState:     thread 序号 + 文件变更 + 自动回报跟踪
-	// uiThrottleState:       ui/state/changed 节流
-	// storeBundle:           资源/仪表盘/绑定存储依赖
-	// toolCallState:         动态工具调用计数
-	// sseState:              SSE 客户端集合
-	// notifyHookState:       通知钩子
-	// runtimeGuardState:     审批去重 + 一次性清理
-	// threadAliasState:      thread alias 串行化锁
-	// ========================================
 	mgr        *runner.AgentManager
 	lsp        *lsp.Manager
 	lspTools   tools.LSPProvider

@@ -42,34 +42,33 @@ func (s *AgentCodexBindingStore) Bind(ctx context.Context, agentID, codexThreadI
 	if err != nil {
 		return err
 	}
-	if existing != nil {
-		if existingThreadID := strings.TrimSpace(existing.CodexThreadID); existingThreadID != codexThreadID {
-			return fmt.Errorf("immutable binding violation: agent %q already bound to %q, cannot bind to %q",
-				agentID, existingThreadID, codexThreadID)
-		}
-		if rolloutPath == "" || rolloutPath == strings.TrimSpace(existing.RolloutPath) {
-			return nil
-		}
+	if existing == nil {
+		now := time.Now().Unix()
 		_, err = s.pool.Exec(ctx,
-			`UPDATE agent_codex_binding
-			 SET rollout_path = $1, updated_at = $2
-			 WHERE agent_id = $3 AND codex_thread_id = $4`,
-			rolloutPath, time.Now().Unix(), agentID, codexThreadID)
+			`INSERT INTO agent_codex_binding (agent_id, codex_thread_id, rollout_path, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			agentID, codexThreadID, rolloutPath, now, now)
 		return err
 	}
-
-	now := time.Now().Unix()
+	existingThreadID := strings.TrimSpace(existing.CodexThreadID)
+	if existingThreadID != codexThreadID {
+		return fmt.Errorf("immutable binding violation: agent %q already bound to %q, cannot bind to %q",
+			agentID, existingThreadID, codexThreadID)
+	}
+	if rolloutPath == "" || rolloutPath == strings.TrimSpace(existing.RolloutPath) {
+		return nil
+	}
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO agent_codex_binding (agent_id, codex_thread_id, rollout_path, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		agentID, codexThreadID, rolloutPath, now, now)
+		`UPDATE agent_codex_binding
+		 SET rollout_path = $1, updated_at = $2
+		 WHERE agent_id = $3 AND codex_thread_id = $4`,
+		rolloutPath, time.Now().Unix(), agentID, codexThreadID)
 	return err
 }
 
 func (s *AgentCodexBindingStore) Unbind(ctx context.Context, agentID string) error {
 	agentID = strings.TrimSpace(agentID)
-	_, err := s.pool.Exec(ctx,
-		"DELETE FROM agent_codex_binding WHERE agent_id = $1", agentID)
+	_, err := s.pool.Exec(ctx, "DELETE FROM agent_codex_binding WHERE agent_id = $1", agentID)
 	return err
 }
 
@@ -87,7 +86,7 @@ func (s *AgentCodexBindingStore) FindByAgentID(ctx context.Context, agentID stri
 // FindBindingByAgentID returns the lightweight binding contract used by runtime services.
 func (s *AgentCodexBindingStore) FindBindingByAgentID(ctx context.Context, agentID string) (*agentcore.Binding, error) {
 	binding, err := s.FindByAgentID(ctx, agentID)
-	if binding == nil || err != nil {
+	if err != nil || binding == nil {
 		return nil, err
 	}
 	return &agentcore.Binding{CodexThreadID: strings.TrimSpace(binding.CodexThreadID)}, nil

@@ -1,3 +1,5 @@
+//go:build ignore
+
 package main
 
 import (
@@ -6,7 +8,6 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -27,9 +28,6 @@ func main() {
 	data := map[string]*rootData{}
 
 	for _, root := range roots {
-		if st, err := os.Stat(root); err != nil || !st.IsDir() {
-			continue
-		}
 		rd := &rootData{consts: map[string]string{}}
 		if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil || d.IsDir() {
@@ -49,6 +47,11 @@ func main() {
 	}
 
 	methods := map[string]struct{}{}
+	addMethod := func(name string, ok bool) {
+		if ok && validMethod(name) {
+			methods[name] = struct{}{}
+		}
+	}
 	for _, root := range roots {
 		rd := data[root]
 		if rd == nil {
@@ -58,14 +61,10 @@ func main() {
 			ast.Inspect(file, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.IndexExpr:
-					if name, ok := methodFromMethodsIndex(x, rd.consts); ok && validMethod(name) {
-						methods[name] = struct{}{}
-					}
+					addMethod(methodFromMethodsIndex(x, rd.consts))
 				case *ast.CallExpr:
 					if isRegisterCall(x) && len(x.Args) > 0 {
-						if name, ok := methodFromExpr(x.Args[0], rd.consts); ok && validMethod(name) {
-							methods[name] = struct{}{}
-						}
+						addMethod(methodFromExpr(x.Args[0], rd.consts))
 					}
 				}
 				return true

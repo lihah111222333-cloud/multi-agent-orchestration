@@ -2,6 +2,7 @@ package uistate
 
 import (
 	"encoding/json"
+	"maps"
 	"net/url"
 	"path/filepath"
 	"sort"
@@ -87,15 +88,7 @@ func (m *RuntimeManager) ThreadDiff(threadID string) string {
 func (m *RuntimeManager) AllTimelinesAndDiffs() (map[string][]TimelineItem, map[string]string) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	timelines := make(map[string][]TimelineItem, len(m.snapshot.TimelinesByThread))
-	for k, v := range m.snapshot.TimelinesByThread {
-		timelines[k] = v
-	}
-	diffs := make(map[string]string, len(m.snapshot.DiffTextByThread))
-	for k, v := range m.snapshot.DiffTextByThread {
-		diffs[k] = v
-	}
-	return timelines, diffs
+	return maps.Clone(m.snapshot.TimelinesByThread), maps.Clone(m.snapshot.DiffTextByThread)
 }
 
 func (m *RuntimeManager) ReplaceThreads(threads []ThreadSnapshot) {
@@ -142,6 +135,10 @@ func (m *RuntimeManager) SetThreadName(threadID, name string) {
 		return
 	}
 	alias := strings.TrimSpace(name)
+	resolvedName := id
+	if alias != "" {
+		resolvedName = alias
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -151,11 +148,7 @@ func (m *RuntimeManager) SetThreadName(threadID, name string) {
 		if m.snapshot.Threads[i].ID != id {
 			continue
 		}
-		if alias != "" {
-			m.snapshot.Threads[i].Name = alias
-		} else {
-			m.snapshot.Threads[i].Name = id
-		}
+		m.snapshot.Threads[i].Name = resolvedName
 		break
 	}
 	meta := m.snapshot.AgentMetaByID[id]
@@ -359,16 +352,7 @@ func (m *RuntimeManager) HydrateHistory(threadID string, records []HistoryRecord
 	m.snapshot.DiffTextByThread[id] = ""
 	m.runtime[id] = newThreadRuntime()
 	m.applyHistoryRecordsLocked(id, records)
-
-	if rt := m.runtime[id]; rt != nil {
-		rt.mcpStartupOverlay = false
-		rt.mcpStartupLabel = ""
-		rt.terminalWaitOverlay = false
-		rt.terminalWaitLabel = ""
-		rt.backgroundOverlay = false
-		rt.backgroundLabel = ""
-		rt.backgroundDetails = ""
-	}
+	resetTransientOverlaysLocked(m.runtime[id])
 	return true
 }
 
@@ -379,17 +363,20 @@ func (m *RuntimeManager) replayPendingHydrationLocked(threadID string, records [
 	m.snapshot.DiffTextByThread[threadID] = ""
 	m.runtime[threadID] = newThreadRuntime()
 	m.applyHistoryRecordsLocked(threadID, records)
+	resetTransientOverlaysLocked(m.runtime[threadID])
+}
 
-	// 清理瞬态 overlay
-	if rt := m.runtime[threadID]; rt != nil {
-		rt.mcpStartupOverlay = false
-		rt.mcpStartupLabel = ""
-		rt.terminalWaitOverlay = false
-		rt.terminalWaitLabel = ""
-		rt.backgroundOverlay = false
-		rt.backgroundLabel = ""
-		rt.backgroundDetails = ""
+func resetTransientOverlaysLocked(rt *threadRuntime) {
+	if rt == nil {
+		return
 	}
+	rt.mcpStartupOverlay = false
+	rt.mcpStartupLabel = ""
+	rt.terminalWaitOverlay = false
+	rt.terminalWaitLabel = ""
+	rt.backgroundOverlay = false
+	rt.backgroundLabel = ""
+	rt.backgroundDetails = ""
 }
 
 func (m *RuntimeManager) AppendHistory(threadID string, records []HistoryRecord) {

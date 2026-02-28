@@ -139,8 +139,7 @@ func decodeArrayLike[T any](
 		return nil, nil
 	}
 	var arr []json.RawMessage
-	arrErr := json.Unmarshal(raw, &arr)
-	if arrErr == nil {
+	if err := json.Unmarshal(raw, &arr); err == nil {
 		out := make([]T, 0, len(arr))
 		for _, item := range arr {
 			decoded, err := decodeOne(item)
@@ -150,10 +149,8 @@ func decodeArrayLike[T any](
 			out = append(out, decoded)
 		}
 		return out, nil
-	}
-	err := fmt.Errorf("%s: %w", errPrefix, arrErr)
-	if !allowSingle {
-		return nil, err
+	} else if !allowSingle {
+		return nil, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 	one, err := decodeOne(raw)
 	if err != nil {
@@ -210,10 +207,6 @@ func decodeLocationLikeOne(raw json.RawMessage) (LocationResult, error) {
 	}
 
 	return LocationResult{}, fmt.Errorf("decode location-like: unsupported payload")
-}
-
-func decodeWorkspaceSymbols(raw json.RawMessage) ([]WorkspaceSymbolResult, error) {
-	return decodeArrayLike(raw, "decode workspace symbols", false, decodeWorkspaceSymbolOne)
 }
 
 func decodeWorkspaceSymbolOne(item json.RawMessage) (WorkspaceSymbolResult, error) {
@@ -299,10 +292,6 @@ func decodeCompletionItems(raw json.RawMessage) ([]CompletionItem, error) {
 	}
 
 	return nil, fmt.Errorf("decode completion: unsupported payload")
-}
-
-func decodeDocumentSymbols(raw json.RawMessage) ([]DocumentSymbol, error) {
-	return decodeArrayLike(raw, "decode document symbols", false, decodeDocumentSymbolOne)
 }
 
 func decodeDocumentSymbolOne(item json.RawMessage) (DocumentSymbol, error) {

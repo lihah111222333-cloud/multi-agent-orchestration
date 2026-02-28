@@ -14,7 +14,6 @@ type ForkThreadRequest = agentcore.ForkThreadRequest
 type ForkThreadResponse = agentcore.ForkThreadResponse
 type Client = agentcore.Client
 type ClientFactory = agentcore.ClientFactory
-
 type AgentState = runner.AgentState
 type AgentInfo = runner.AgentInfo
 type AgentProcess = runner.AgentProcess

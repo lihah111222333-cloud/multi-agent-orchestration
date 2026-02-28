@@ -1,4 +1,3 @@
-// agent_status.go stores agent runtime status records.
 package store
 
 import (

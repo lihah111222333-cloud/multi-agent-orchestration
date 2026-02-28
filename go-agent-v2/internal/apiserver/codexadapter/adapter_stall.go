@@ -71,7 +71,7 @@ func (a *Adapter) StartDynamicToolStallHeartbeat(threadID string) func() {
 	})
 }
 
-func (a *Adapter) checkTurnStall(threadID string, turnID string) {
+func (a *Adapter) checkTurnStall(threadID, turnID string) {
 	trackersvc.CheckTurnStallCore(a.trackerState(), threadID, turnID, a.handleStallGracePeriod, a.executeStallAutoInterrupt, a.checkTurnStall)
 }
 
@@ -79,7 +79,7 @@ func (a *Adapter) handleStallGracePeriod(threadID, turnID string, silent, thresh
 	trackersvc.HandleStallGracePeriodCore(a.trackerState(), threadID, turnID, silent, threshold, trackersvc.TrackerRuntimePushAlert(a.uiRuntime()), a.checkTurnStall)
 }
 
-func (a *Adapter) executeStallAutoInterrupt(threadID string, turnID string, silent time.Duration, threshold time.Duration) {
+func (a *Adapter) executeStallAutoInterrupt(threadID, turnID string, silent, threshold time.Duration) {
 	_, notify := a.trackerStateAndNotify()
 	trackersvc.ExecuteStallAutoInterruptCore(
 		threadID,

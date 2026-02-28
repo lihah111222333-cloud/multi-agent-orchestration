@@ -67,27 +67,22 @@ func ResolveCodexThreadCandidates(
 	}
 	ids := make([]string, 0, 2)
 	seen := map[string]struct{}{}
+	resolveCandidate := func(lookup func(context.Context, string) (string, error), warnMsg string) {
+		if lookup == nil {
+			return
+		}
+		resolvedID, err := lookupWithTimeout(ctx, timeout, func(dbCtx context.Context) (string, error) {
+			return lookup(dbCtx, id)
+		})
+		if err != nil {
+			warnHistoryLookup(id, warnMsg, err)
+			return
+		}
+		ids = appendUnique(ids, seen, resolvedID)
+	}
 	ids = appendUnique(ids, seen, id)
-	if findBindingCodexThreadID != nil {
-		boundID, err := lookupWithTimeout(ctx, timeout, func(dbCtx context.Context) (string, error) {
-			return findBindingCodexThreadID(dbCtx, id)
-		})
-		if err != nil {
-			warnHistoryLookup(id, "turn/start: resolve codex thread id from binding failed", err)
-		} else if boundID != "" {
-			ids = appendUnique(ids, seen, boundID)
-		}
-	}
-	if findStatusSessionID != nil {
-		sessionID, err := lookupWithTimeout(ctx, timeout, func(dbCtx context.Context) (string, error) {
-			return findStatusSessionID(dbCtx, id)
-		})
-		if err != nil {
-			warnHistoryLookup(id, "turn/start: resolve codex thread id from agent_status failed", err)
-		} else if sessionID != "" {
-			ids = appendUnique(ids, seen, sessionID)
-		}
-	}
+	resolveCandidate(findBindingCodexThreadID, "turn/start: resolve codex thread id from binding failed")
+	resolveCandidate(findStatusSessionID, "turn/start: resolve codex thread id from agent_status failed")
 	logger.Info("turn/start: historical resume candidates",
 		append(common.ThreadLogFields(id),
 			"candidate_count", len(ids),
@@ -115,20 +110,23 @@ func ThreadExistsInHistory(
 	}
 	ctx = EnsureContext(ctx)
 	timeout = NormalizeHistoryTimeout(timeout)
-	checkExists := func(message string, lookup func(context.Context, string) (bool, error)) bool {
+	checkExists := func(lookup func(context.Context, string) (bool, error), warnMsg string) bool {
+		if lookup == nil {
+			return false
+		}
 		found, err := lookupWithTimeout(ctx, timeout, func(dbCtx context.Context) (bool, error) {
 			return lookup(dbCtx, id)
 		})
 		if err != nil {
-			warnHistoryLookup(id, message, err)
+			warnHistoryLookup(id, warnMsg, err)
 			return false
 		}
 		return found
 	}
-	if findBindingByAgentID != nil && checkExists("turn/start: check thread history from agent_codex_binding failed", findBindingByAgentID) {
+	if checkExists(findBindingByAgentID, "turn/start: check thread history from agent_codex_binding failed") {
 		return true
 	}
-	if getAgentStatusByID != nil && checkExists("turn/start: check thread history from agent_status failed", getAgentStatusByID) {
+	if checkExists(getAgentStatusByID, "turn/start: check thread history from agent_status failed") {
 		return true
 	}
 	if loadThreadArchiveMap != nil {

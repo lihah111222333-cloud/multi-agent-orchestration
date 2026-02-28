@@ -53,7 +53,6 @@ func LoadAllThreadMessagesFromCodexRollout(
 	if err != nil {
 		return nil, err
 	}
-	if len(rolloutMsgs) == 0 { return empty, nil }
 	all := make([]ThreadHistoryMessage, 0, len(rolloutMsgs))
 	for i, item := range rolloutMsgs {
 		message, ok := rolloutMessageToThreadHistory(threadID, i, item)
@@ -62,7 +61,6 @@ func LoadAllThreadMessagesFromCodexRollout(
 		}
 		all = append(all, message)
 	}
-	if len(all) == 0 { return empty, nil }
 	return all, nil
 }
 
@@ -80,9 +78,7 @@ func rolloutMessageToThreadHistory(threadID string, index int, item codex.Rollou
 		AgentID:   threadID,
 		Role:      role,
 		EventType: eventType,
-		Method:    "",
 		Content:   item.Content,
-		Metadata:  nil,
 		CreatedAt: ParseRolloutTimestamp(item.Timestamp),
 	}, true
 }

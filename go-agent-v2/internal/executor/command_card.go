@@ -257,12 +257,7 @@ func (e *CommandCardExecutor) Execute(ctx context.Context, runID int, actor stri
 
 	logger.Info("executor: executing command",
 		logger.FieldRunID, runID,
-		logger.FieldCommand, func() string {
-			if len(command) > 200 {
-				return command[:200] + "..."
-			}
-			return command
-		}(),
+		logger.FieldCommand, TruncateForAudit(command, 200),
 		"timeout_sec", timeoutSec,
 		"actor", actor,
 	)
@@ -464,9 +459,6 @@ func renderTemplate(tmpl string, params map[string]string) (string, error) {
 	result := tmpl
 	for k, v := range params {
 		placeholder := "{" + k + "}"
-		if !strings.Contains(result, placeholder) {
-			continue
-		}
 		escaped := shellQuote(v)
 		result = strings.ReplaceAll(result, placeholder, escaped)
 	}

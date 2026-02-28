@@ -110,13 +110,9 @@ func typedHandler[P any](fn func(ctx context.Context, p P) (any, error)) Handler
 }
 
 func noopHandler() Handler {
-	return func(_ context.Context, _ json.RawMessage) (any, error) {
-		return map[string]any{}, nil
-	}
+	return func(_ context.Context, _ json.RawMessage) (any, error) { return map[string]any{}, nil }
 }
 
 func stubHandler(result any) Handler {
-	return func(_ context.Context, _ json.RawMessage) (any, error) {
-		return result, nil
-	}
+	return func(_ context.Context, _ json.RawMessage) (any, error) { return result, nil }
 }

@@ -169,8 +169,8 @@ func (a cardStoreAdapter) Get(ctx context.Context, cardKey string) (any, error) 
 func (a cardStoreAdapter) List(ctx context.Context, keyword string, limit int) (any, error) {
 	return a.store.List(ctx, keyword, limit)
 }
-func (a cardStoreAdapter) SetEnabled(ctx context.Context, cardKey string, enabled bool, updatedBy string) error {
-	return a.store.SetEnabled(ctx, cardKey, enabled, updatedBy)
+func (a cardStoreAdapter) SetEnabled(ctx context.Context, key string, enabled bool, by string) error {
+	return a.store.SetEnabled(ctx, key, enabled, by)
 }
 func (a cardStoreAdapter) Delete(ctx context.Context, cardKey string) error {
 	return a.store.Delete(ctx, cardKey)
@@ -197,8 +197,8 @@ func (a templateStoreAdapter) Get(ctx context.Context, promptKey string) (any, e
 func (a templateStoreAdapter) List(ctx context.Context, agentKey, keyword string, limit int) (any, error) {
 	return a.store.List(ctx, agentKey, keyword, limit)
 }
-func (a templateStoreAdapter) SetEnabled(ctx context.Context, promptKey string, enabled bool, updatedBy string) error {
-	return a.store.SetEnabled(ctx, promptKey, enabled, updatedBy)
+func (a templateStoreAdapter) SetEnabled(ctx context.Context, key string, enabled bool, by string) error {
+	return a.store.SetEnabled(ctx, key, enabled, by)
 }
 func (a templateStoreAdapter) Delete(ctx context.Context, promptKey string) error {
 	return a.store.Delete(ctx, promptKey)
@@ -221,12 +221,8 @@ func (a fileStoreAdapter) Write(ctx context.Context, path, content, actor string
 func (a fileStoreAdapter) Read(ctx context.Context, path string) (any, error) {
 	return a.store.Read(ctx, path)
 }
-func (a fileStoreAdapter) List(ctx context.Context, prefix string, limit int) (any, error) {
-	return a.store.List(ctx, prefix, limit)
-}
-func (a fileStoreAdapter) Delete(ctx context.Context, path, actor string) (bool, error) {
-	return a.store.Delete(ctx, path, actor)
-}
+func (a fileStoreAdapter) List(ctx context.Context, prefix string, limit int) (any, error) { return a.store.List(ctx, prefix, limit) }
+func (a fileStoreAdapter) Delete(ctx context.Context, path, actor string) (bool, error)     { return a.store.Delete(ctx, path, actor) }
 
 type workspaceOpsAdapter struct {
 	manager *service.WorkspaceManager
@@ -304,8 +300,7 @@ func saveStoreValue[T any](
 	case *T:
 		return save(ctx, v)
 	case T:
-		vv := v
-		return save(ctx, &vv)
+		return save(ctx, &v)
 	default:
 		return nil, errors.New(unsupportedMsg)
 	}

@@ -29,13 +29,11 @@ type SkillsLocalDeleteParams struct {
 	Name string `json:"name"`
 }
 
-// SkillsConfigWriteParams skills/config/write 请求参数。
 type SkillsConfigWriteParams struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`
 }
 
-// SkillsSummaryWriteParams skills/summary/write 请求参数。
 type SkillsSummaryWriteParams struct {
 	Name    string `json:"name"`
 	Summary string `json:"summary"`
@@ -67,18 +65,15 @@ type SkillsConfigReadParams struct {
 	AgentID string `json:"agent_id"`
 }
 
-// SkillsRemoteReadParams skills/remote/read 请求参数。
 type SkillsRemoteReadParams struct {
 	URL string `json:"url"`
 }
 
-// SkillsRemoteWriteParams skills/remote/write 请求参数。
 type SkillsRemoteWriteParams struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`
 }
 
-// SkillsList handles skills/list.
 func (m *Manager) SkillsList(_ context.Context) (any, error) {
 	skillSvc := m.skillService()
 	if skillSvc == nil {
@@ -102,7 +97,6 @@ func (m *Manager) SkillsList(_ context.Context) (any, error) {
 	return map[string]any{"skills": skills}, nil
 }
 
-// AppList handles app/list.
 func (m *Manager) AppList(_ context.Context) (any, error) {
 	return map[string]any{"apps": []any{}}, nil
 }
@@ -137,7 +131,6 @@ func (m *Manager) importSingleSkillDirectory(sourceDir, name string) (skillImpor
 	}, nil
 }
 
-// SkillsLocalRead handles skills/local/read.
 func (m *Manager) SkillsLocalRead(_ context.Context, p SkillsLocalReadParams) (any, error) {
 	path := strings.TrimSpace(p.Path)
 	if path == "" {
@@ -169,7 +162,6 @@ func (m *Manager) SkillsLocalRead(_ context.Context, p SkillsLocalReadParams) (a
 	}, nil
 }
 
-// SkillsLocalImportDir handles skills/local/importDir.
 func (m *Manager) SkillsLocalImportDir(_ context.Context, p SkillsLocalImportDirParams) (any, error) {
 	requestedSources := collectSkillImportSources(p.Path, p.Paths)
 	if len(requestedSources) == 0 {
@@ -236,7 +228,6 @@ func (m *Manager) SkillsLocalImportDir(_ context.Context, p SkillsLocalImportDir
 	return skillImportResponse(len(sources), results, failures), nil
 }
 
-// SkillsLocalDelete handles skills/local/delete.
 func (m *Manager) SkillsLocalDelete(_ context.Context, p SkillsLocalDeleteParams) (any, error) {
 	skillSvc := m.skillService()
 	if skillSvc == nil {
@@ -267,7 +258,6 @@ func (m *Manager) SkillsLocalDelete(_ context.Context, p SkillsLocalDeleteParams
 	}, nil
 }
 
-// SkillsMatchPreview handles skills/match/preview.
 func (m *Manager) SkillsMatchPreview(_ context.Context, p SkillsMatchPreviewParams) (any, error) {
 	threadID := resolveSkillMatchPreviewThreadID(p)
 	var matches []AutoMatchedSkillMatch
@@ -283,14 +273,11 @@ func (m *Manager) SkillsMatchPreview(_ context.Context, p SkillsMatchPreviewPara
 		if name == "" {
 			continue
 		}
-		item := skillsMatchPreviewItem{
-			Name:      name,
-			MatchedBy: match.MatchedBy,
-		}
-		if len(match.MatchedTerms) > 0 {
-			item.MatchedTerms = append([]string(nil), match.MatchedTerms...)
-		}
-		items = append(items, item)
+		items = append(items, skillsMatchPreviewItem{
+			Name:         name,
+			MatchedBy:    match.MatchedBy,
+			MatchedTerms: append([]string(nil), match.MatchedTerms...),
+		})
 	}
 	return map[string]any{
 		"thread_id": threadID,
@@ -298,7 +285,6 @@ func (m *Manager) SkillsMatchPreview(_ context.Context, p SkillsMatchPreviewPara
 	}, nil
 }
 
-// SkillsConfigRead handles skills/config/read.
 func (m *Manager) SkillsConfigRead(_ context.Context, p SkillsConfigReadParams) (any, error) {
 	agentID := strings.TrimSpace(p.AgentID)
 	if agentID == "" {
@@ -311,20 +297,26 @@ func (m *Manager) SkillsConfigRead(_ context.Context, p SkillsConfigReadParams) 
 	}, nil
 }
 
-// SkillsConfigWrite handles skills/config/write.
 func (m *Manager) SkillsConfigWrite(_ context.Context, p SkillsConfigWriteParams) (any, error) {
 	skillSvc := m.skillService()
-	if skillSvc == nil { return nil, apperrors.New("Server.skillsConfigWrite", "skill service unavailable") }
-	if strings.TrimSpace(p.Name) == "" { return nil, apperrors.New("Server.skillsConfigWrite", "name is required") }
+	if skillSvc == nil {
+		return nil, apperrors.New("Server.skillsConfigWrite", "skill service unavailable")
+	}
+	if strings.TrimSpace(p.Name) == "" {
+		return nil, apperrors.New("Server.skillsConfigWrite", "name is required")
+	}
 	skillName, err := skillutil.NormalizeName(p.Name)
-	if err != nil { return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "normalize skill name") }
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "normalize skill name")
+	}
 	path, err := skillSvc.WriteSkillContent(skillName, p.Content)
-	if err != nil { return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "write skill content") }
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsConfigWrite", "write skill content")
+	}
 	logger.Info("skills/config/write: saved", logger.FieldSkill, skillName, logger.FieldBytes, len(p.Content))
 	return map[string]any{"ok": true, "path": path}, nil
 }
 
-// SkillsSummaryWrite handles skills/summary/write.
 func (m *Manager) SkillsSummaryWrite(_ context.Context, p SkillsSummaryWriteParams) (any, error) {
 	skillSvc := m.skillService()
 	if skillSvc == nil {
@@ -351,7 +343,6 @@ func (m *Manager) SkillsSummaryWrite(_ context.Context, p SkillsSummaryWritePara
 	}, nil
 }
 
-// SkillsRemoteRead handles skills/remote/read.
 func (m *Manager) SkillsRemoteRead(_ context.Context, p SkillsRemoteReadParams) (any, error) {
 	logger.Info("skills/remote/read: fetching", logger.FieldURL, p.URL)
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -379,13 +370,18 @@ func (m *Manager) SkillsRemoteRead(_ context.Context, p SkillsRemoteReadParams) 
 	}, nil
 }
 
-// SkillsRemoteWrite handles skills/remote/write.
 func (m *Manager) SkillsRemoteWrite(_ context.Context, p SkillsRemoteWriteParams) (any, error) {
 	skillSvc := m.skillService()
-	if skillSvc == nil { return nil, apperrors.New("Server.skillsRemoteWrite", "skill service unavailable") }
+	if skillSvc == nil {
+		return nil, apperrors.New("Server.skillsRemoteWrite", "skill service unavailable")
+	}
 	skillName, err := skillutil.NormalizeName(p.Name)
-	if err != nil { return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "normalize skill name") }
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "normalize skill name")
+	}
 	path, err := skillSvc.WriteSkillContent(skillName, p.Content)
-	if err != nil { return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "write skill content") }
+	if err != nil {
+		return nil, apperrors.Wrap(err, "Server.skillsRemoteWrite", "write skill content")
+	}
 	return map[string]any{"ok": true, "path": path}, nil
 }

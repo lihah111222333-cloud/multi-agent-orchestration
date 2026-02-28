@@ -18,35 +18,22 @@ func (s *Server) GetAllDiagnostics() map[string][]lsp.Diagnostic {
 	return allDiagnosticsCacheState(s)
 }
 
-func diagnosticsAccessor(s *Server) lsp.DiagnosticsAccessor {
-	return s
-}
+var diagnosticsAccessor = func(s *Server) lsp.DiagnosticsAccessor { return s }
 
 func setDiagnostics(s *Server, uri string, diagnostics []lsp.Diagnostic) {
-	if s == nil {
-		return
-	}
-	if uri = strings.TrimSpace(uri); uri == "" {
+	if uri = strings.TrimSpace(uri); s == nil || uri == "" {
 		return
 	}
 	setDiagnosticsCacheState(s, uri, diagnostics)
 }
 
 func getDiagnostics(s *Server, uri string) []lsp.Diagnostic {
-	if s == nil {
-		return nil
-	}
-	if uri = strings.TrimSpace(uri); uri == "" {
+	if uri = strings.TrimSpace(uri); s == nil || uri == "" {
 		return nil
 	}
 	return getDiagnosticsCacheState(s, uri)
 }
 
 func cloneDiagnostics(in []lsp.Diagnostic) []lsp.Diagnostic {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]lsp.Diagnostic, len(in))
-	copy(out, in)
-	return out
+	return append([]lsp.Diagnostic(nil), in...)
 }

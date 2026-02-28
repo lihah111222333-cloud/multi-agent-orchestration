@@ -30,11 +30,10 @@ type AgentRouter struct {
 
 // NewAgentRouter creates a router with optional client factory injection.
 func NewAgentRouter(bus *MessageBus, discover AgentDiscoverer, factories ...AgentClientFactory) *AgentRouter {
-	factory := AgentClientFactory(nil)
+	var factory AgentClientFactory
 	if len(factories) > 0 {
 		factory = factories[0]
 	}
-
 	return &AgentRouter{
 		bus:       bus,
 		discover:  discover,
@@ -65,20 +64,19 @@ func (r *AgentRouter) DelegateTask(ctx context.Context, fromID, toThreadID, prom
 		}
 		// 发射 user_message 事件使 UI 可见委托消息
 		r.publishUserMessageEvent(fromID, toThreadID, prompt)
-		if r.bus == nil {
-			return nil
+		if r.bus != nil {
+			data, err := json.Marshal(delegatePayload{Prompt: prompt, Images: images, Files: files})
+			if err != nil {
+				return apperrors.Wrap(err, "AgentRouter.DelegateTask", "marshal delegate payload")
+			}
+			r.bus.Publish(Message{
+				Topic:   fmt.Sprintf("agent.%s.input", toThreadID),
+				From:    fromID,
+				To:      toThreadID,
+				Type:    MsgTaskDelegate,
+				Payload: data,
+			})
 		}
-		data, err := json.Marshal(delegatePayload{Prompt: prompt, Images: images, Files: files})
-		if err != nil {
-			return apperrors.Wrap(err, "AgentRouter.DelegateTask", "marshal delegate payload")
-		}
-		r.bus.Publish(Message{
-			Topic:   fmt.Sprintf("agent.%s.input", toThreadID),
-			From:    fromID,
-			To:      toThreadID,
-			Type:    MsgTaskDelegate,
-			Payload: data,
-		})
 		return nil
 	}
 	return apperrors.Newf("AgentRouter.DelegateTask", "agent %s not found or not running", toThreadID)
@@ -189,15 +187,15 @@ func (r *AgentRouter) ListAgents(ctx context.Context) ([]AgentEndpoint, error) {
 // getOrCreateClient returns a running cached client or creates a new one via factory.
 func (r *AgentRouter) getOrCreateClient(threadID string, port int) (AgentClient, error) {
 	r.mu.RLock()
-	c := r.clients[threadID]
-	r.mu.RUnlock()
-	if c != nil && c.Running() {
+	if c := r.clients[threadID]; c != nil && c.Running() {
+		r.mu.RUnlock()
 		return c, nil
 	}
+	r.mu.RUnlock()
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if c = r.clients[threadID]; c != nil && c.Running() {
+	if c := r.clients[threadID]; c != nil && c.Running() {
 		return c, nil
 	}
 

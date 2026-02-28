@@ -169,6 +169,9 @@ func (b *MessageBus) Publish(msg Message) {
 }
 
 func (b *MessageBus) Subscribe(id, filter string) *Subscriber {
+	if filter = strings.TrimSpace(filter); filter == "" {
+		filter = TopicAll
+	}
 	sub := &Subscriber{
 		ID:     id,
 		Filter: filter,
@@ -182,10 +185,10 @@ func (b *MessageBus) Subscribe(id, filter string) *Subscriber {
 
 func (b *MessageBus) Unsubscribe(id string) {
 	b.mu.Lock()
-	sub, ok := b.subscribers[id]
+	sub := b.subscribers[id]
 	delete(b.subscribers, id)
 	b.mu.Unlock()
-	if ok && sub != nil {
+	if sub != nil {
 		close(sub.Ch)
 	}
 }

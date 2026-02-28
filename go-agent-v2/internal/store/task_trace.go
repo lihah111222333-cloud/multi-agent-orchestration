@@ -13,9 +13,7 @@ func NewTaskTraceStore(pool *pgxpool.Pool) *TaskTraceStore {
 	return &TaskTraceStore{NewBaseStore(pool)}
 }
 
-const taskTraceCols = `id, trace_id, span_id, parent_span_id, span_name, component,
-	status, input_payload, output_payload, error_text, metadata,
-	started_at, finished_at, duration_ms`
+const taskTraceCols = `id, trace_id, span_id, parent_span_id, span_name, component, status, input_payload, output_payload, error_text, metadata, started_at, finished_at, duration_ms`
 
 func (s *TaskTraceStore) Create(ctx context.Context, t *TaskTrace) (*TaskTrace, error) {
 	rows, err := s.pool.Query(ctx,
@@ -37,8 +35,7 @@ func (s *TaskTraceStore) List(ctx context.Context, agentID, keyword string, sinc
 	if since != nil {
 		q.Gte("started_at", *since)
 	}
-	q.KeywordLike(keyword, "span_name", "status")
-	sql, params := q.Build("SELECT "+taskTraceCols+" FROM task_traces", "started_at DESC", limit)
+	sql, params := q.KeywordLike(keyword, "span_name", "status").Build("SELECT "+taskTraceCols+" FROM task_traces", "started_at DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err

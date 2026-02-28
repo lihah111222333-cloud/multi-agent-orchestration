@@ -49,7 +49,7 @@ func main() {
 
 	srv := dashboard.NewServer(stores, cfg)
 
-	patrol := monitor.NewPatrol(stores.AgentStatus, srv.Bus())
+	patrol := monitor.NewPatrol(stores.AgentStatus, srv)
 	patrol.Start(ctx)
 
 	if err := srv.ListenAndServe(ctx, ":8080"); err != nil {

@@ -7,9 +7,7 @@ import (
 
 type SystemLogStore struct{ BaseStore }
 
-func NewSystemLogStore(pool *pgxpool.Pool) *SystemLogStore {
-	return &SystemLogStore{NewBaseStore(pool)}
-}
+func NewSystemLogStore(pool *pgxpool.Pool) *SystemLogStore { return &SystemLogStore{NewBaseStore(pool)} }
 
 const sysLogCols = `id, ts, level, logger, message, raw,
 	source, component, agent_id, thread_id, trace_id,
@@ -23,21 +21,12 @@ func (s *SystemLogStore) Append(ctx context.Context, level, loggerName, message,
 }
 
 type ListParams struct {
-	Level     string
-	Logger    string
-	Source    string
-	Component string
-	AgentID   string
-	ThreadID  string
-	EventType string
-	ToolName  string
-	Keyword   string
-	Limit     int
+	Level, Logger, Source, Component string
+	AgentID, ThreadID, EventType, ToolName, Keyword string
+	Limit int
 }
 
-func (s *SystemLogStore) List(ctx context.Context, level, loggerName, keyword string, limit int) ([]SystemLog, error) {
-	return s.ListV2(ctx, ListParams{Level: level, Logger: loggerName, Keyword: keyword, Limit: limit})
-}
+func (s *SystemLogStore) List(ctx context.Context, level, loggerName, keyword string, limit int) ([]SystemLog, error) { return s.ListV2(ctx, ListParams{Level: level, Logger: loggerName, Keyword: keyword, Limit: limit}) }
 
 func (s *SystemLogStore) ListV2(ctx context.Context, p ListParams) ([]SystemLog, error) {
 	sql, params := NewQueryBuilder().
@@ -58,6 +47,4 @@ func (s *SystemLogStore) ListV2(ctx context.Context, p ListParams) ([]SystemLog,
 	return collectRows[SystemLog](rows)
 }
 
-func (s *SystemLogStore) ListFilterValues(ctx context.Context) (map[string][]string, error) {
-	return DistinctMap(ctx, s.pool, "system_logs", "level", "logger", "source", "component", "event_type", "tool_name")
-}
+func (s *SystemLogStore) ListFilterValues(ctx context.Context) (map[string][]string, error) { return DistinctMap(ctx, s.pool, "system_logs", "level", "logger", "source", "component", "event_type", "tool_name") }

@@ -23,68 +23,70 @@ type ToolCallContext struct {
 }
 
 func Schemas(list []Tool) []DynamicTool {
-	var out []DynamicTool
-	for _, tool := range list {
-		out = append(out, tool.Schema)
+	out := make([]DynamicTool, 0, len(list))
+	for i := range list {
+		out = append(out, list[i].Schema)
 	}
 	return out
 }
 
 func FindTool(list []Tool, name string) (Tool, bool) {
-	for _, tool := range list {
-		if tool.Schema.Name == name {
-			return tool, true
+	for i := range list {
+		if list[i].Schema.Name == name {
+			return list[i], true
 		}
 	}
 	return Tool{}, false
 }
 
-type CodeRunProvider interface {
-	CodeRunner() CodeExecRunner
-	AuditLogger() AuditLogger
-}
+type (
+	CodeRunProvider interface {
+		CodeRunner() CodeExecRunner
+		AuditLogger() AuditLogger
+	}
 
-type ApprovalProvider interface {
-	AwaitApproval(agentID, callID, mode, command string, isDangerous bool) bool
-}
+	ApprovalProvider interface {
+		AwaitApproval(agentID, callID, mode, command string, isDangerous bool) bool
+	}
 
-type ResourceProvider interface {
-	DAGManager() DAGManager
-	CommandCardStore() CardStore
-	PromptTemplateStore() TemplateStore
-	SharedFileStore() FileStore
-	WorkspaceOps() WorkspaceOps
-	NotifyEvent(method string, params any)
-}
+	ResourceProvider interface {
+		DAGManager() DAGManager
+		CommandCardStore() CardStore
+		PromptTemplateStore() TemplateStore
+		SharedFileStore() FileStore
+		WorkspaceOps() WorkspaceOps
+		NotifyEvent(method string, params any)
+	}
 
-type OrchestrationProvider interface {
-	AgentLauncher() AgentLauncher
-	WorkspaceOps() WorkspaceOps
-	SubmitPrompt(agentID, prompt string, images, files []string) error
-	RememberReportRequest(senderID, workerID string)
-	NextThreadSeq() int64
-	SaveSubAgent(id, name, cwd string)
-	DeleteSubAgent(id string)
-}
+	OrchestrationProvider interface {
+		AgentLauncher() AgentLauncher
+		WorkspaceOps() WorkspaceOps
+		SubmitPrompt(agentID, prompt string, images, files []string) error
+		RememberReportRequest(senderID, workerID string)
+		NextThreadSeq() int64
+		SaveSubAgent(id, name, cwd string)
+		DeleteSubAgent(id string)
+	}
 
-type AgentRuntimeProvider interface {
-	CancelCodeRuns(agentID string) int
-	SetAgentWorkDir(agentID, cwd string)
-	ClearAgentWorkDir(agentID string)
-	GetAgentWorkDir(agentID string) string
-}
+	AgentRuntimeProvider interface {
+		CancelCodeRuns(agentID string) int
+		SetAgentWorkDir(agentID, cwd string)
+		ClearAgentWorkDir(agentID string)
+		GetAgentWorkDir(agentID string) string
+	}
 
-type SchemaProvider interface {
-	AllSchemas() []DynamicTool
-}
+	SchemaProvider interface {
+		AllSchemas() []DynamicTool
+	}
 
-type CodeExecRunner interface {
-	Run(ctx context.Context, req CodeRunRequest) (*CodeRunResult, error)
-}
+	CodeExecRunner interface {
+		Run(ctx context.Context, req CodeRunRequest) (*CodeRunResult, error)
+	}
 
-type AuditLogger interface {
-	Append(ctx context.Context, e *AuditEvent) error
-}
+	AuditLogger interface {
+		Append(ctx context.Context, e *AuditEvent) error
+	}
+)
 
 type TaskDAG struct {
 	ID          int        `json:"id"`

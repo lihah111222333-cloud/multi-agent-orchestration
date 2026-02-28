@@ -62,12 +62,12 @@ func TurnSteerFromInputAligned(req agentcore.TurnSteerRequest, resolve func(agen
 	if err != nil {
 		return nil, err
 	}
-	if turnSteerFromInput == nil {
-		return EnsureTurnSteerResultTurnID(nil, activeTurnID), nil
-	}
-	result, err := turnSteerFromInput(req)
-	if err != nil {
-		return nil, err
+	var result map[string]any
+	if turnSteerFromInput != nil {
+		result, err = turnSteerFromInput(req)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return EnsureTurnSteerResultTurnID(result, activeTurnID), nil
 }
@@ -143,11 +143,10 @@ func collectAutoMatchedSkillMatches(a PrepareAdapter, agentID, prompt string, in
 		return nil
 	}
 	candidates, err := a.ListSkillMatchCandidates()
-	if err != nil {
-		logger.Warn("skills/auto-match: list skills failed", logger.FieldError, err, "agent_id", agentID)
-		return nil
-	}
-	if len(candidates) == 0 {
+	if err != nil || len(candidates) == 0 {
+		if err != nil {
+			logger.Warn("skills/auto-match: list skills failed", logger.FieldError, err, "agent_id", agentID)
+		}
 		return nil
 	}
 	return a.CollectAutoMatchedSkillMatches(prompt, buildAutoMatchInputs(input), a.ListAgentSkills(agentID), candidates, options)
@@ -274,10 +273,7 @@ func ComposeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint string, s
 }
 
 func buildAutoMatchInputs(input []TurnInput) []AutoMatchInput {
-	if len(input) == 0 {
-		return nil
-	}
-	out := make([]AutoMatchInput, 0, len(input))
+	var out []AutoMatchInput
 	for _, item := range input {
 		out = append(out, AutoMatchInput{Type: item.Type, Name: item.Name})
 	}
@@ -286,10 +282,10 @@ func buildAutoMatchInputs(input []TurnInput) []AutoMatchInput {
 
 func normalizeAttachmentBuilders(buildAttachmentName func(string) string, buildAttachmentPreviewURL func(string) string) (func(string) string, func(string) string) {
 	if buildAttachmentName == nil {
-		buildAttachmentName = func(path string) string { return strings.TrimSpace(path) }
+		buildAttachmentName = strings.TrimSpace
 	}
 	if buildAttachmentPreviewURL == nil {
-		buildAttachmentPreviewURL = func(path string) string { return strings.TrimSpace(path) }
+		buildAttachmentPreviewURL = strings.TrimSpace
 	}
 	return buildAttachmentName, buildAttachmentPreviewURL
 }

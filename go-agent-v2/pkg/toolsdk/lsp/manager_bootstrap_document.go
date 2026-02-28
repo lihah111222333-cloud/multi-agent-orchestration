@@ -89,10 +89,7 @@ func (m *Manager) bootstrapDocumentLocked(filePath, uri string) (*Client, *Serve
 		return client, cfg, state, nil
 	}
 
-	nextVersion := state.Version + 1
-	if nextVersion <= 0 {
-		nextVersion = 1
-	}
+	nextVersion := nextDocumentVersion(state.Version)
 	if err := client.DidChange(uri, nextVersion, content); err == nil {
 		m.applyDocumentState(filePath, uri, state, nextVersion, hash, content, cfg.Language, true)
 		return client, cfg, state, nil
@@ -137,10 +134,7 @@ func (m *Manager) bootstrapDocumentWithoutClientLocked(filePath, uri, language s
 		return state, nil
 	}
 
-	nextVersion := state.Version + 1
-	if nextVersion <= 0 {
-		nextVersion = 1
-	}
+	nextVersion := nextDocumentVersion(state.Version)
 	m.applyDocumentState(filePath, uri, state, nextVersion, hash, content, language, true)
 	return state, nil
 }
@@ -167,10 +161,7 @@ func (m *Manager) openDocument(filePath, content string) error {
 	defer lock.Unlock()
 
 	state := m.documentState(uri)
-	openVersion := state.Version + 1
-	if openVersion <= 0 {
-		openVersion = 1
-	}
+	openVersion := nextDocumentVersion(state.Version)
 
 	if err := client.DidOpenVersioned(uri, cfg.Language, openVersion, content); err != nil {
 		return err
@@ -188,10 +179,7 @@ func (m *Manager) openDocumentWithoutClient(filePath, content, language string) 
 	defer lock.Unlock()
 
 	state := m.documentState(uri)
-	openVersion := state.Version + 1
-	if openVersion <= 0 {
-		openVersion = 1
-	}
+	openVersion := nextDocumentVersion(state.Version)
 
 	hash := hashBytes([]byte(content))
 	m.applyDocumentState(filePath, uri, state, openVersion, hash, content, language, true)
@@ -262,12 +250,7 @@ func (m *Manager) changeDocument(filePath string, version int, newContent string
 
 	hash := hashBytes([]byte(newContent))
 
-	if version <= state.Version {
-		version = state.Version + 1
-	}
-	if version <= 0 {
-		version = 1
-	}
+	version = resolvedDocumentVersion(version, state.Version)
 
 	if err := client.DidChange(uri, version, newContent); err != nil {
 		if reopenErr := m.reopenDocument(client, cfg, uri, version, newContent); reopenErr == nil {
@@ -299,12 +282,7 @@ func (m *Manager) changeDocumentWithoutClient(filePath string, version int, newC
 	m.restoreDocumentStateFromCache(filePath, uri, language, state)
 
 	hash := hashBytes([]byte(newContent))
-	if version <= state.Version {
-		version = state.Version + 1
-	}
-	if version <= 0 {
-		version = 1
-	}
+	version = resolvedDocumentVersion(version, state.Version)
 
 	m.applyDocumentState(filePath, uri, state, version, hash, newContent, language, false)
 	return nil
@@ -317,10 +295,7 @@ func (m *Manager) syncNonDiskBackedStateFromDisk(filePath, uri, language string,
 		return false
 	}
 	if content, stat, hash, readErr := loadDocumentSnapshot(filePath); readErr == nil && hash == state.ContentHash {
-		version := state.Version
-		if version <= 0 {
-			version = 1
-		}
+		version := atLeastOneVersion(state.Version)
 		state.openWith(version, stat.ModTime().UnixNano(), stat.Size(), hash, content, language, true)
 		m.upsertDocumentStateCache(filePath, uri, state)
 	}
@@ -447,9 +422,7 @@ func (s *documentSyncState) openWith(
 	hash, content, language string,
 	diskBacked bool,
 ) {
-	if version <= 0 {
-		version = 1
-	}
+	version = atLeastOneVersion(version)
 	s.Version = version
 	s.MtimeNS = mtimeNS
 	s.Size = size
@@ -468,6 +441,24 @@ func nextOpenVersionFromBaseline(state *documentSyncState, diskMtimeNS, diskSize
 		return state.Version + 1
 	}
 	return state.Version
+}
+
+func atLeastOneVersion(version int) int {
+	if version <= 0 {
+		return 1
+	}
+	return version
+}
+
+func nextDocumentVersion(current int) int {
+	return atLeastOneVersion(current + 1)
+}
+
+func resolvedDocumentVersion(requested, current int) int {
+	if requested <= current {
+		return nextDocumentVersion(current)
+	}
+	return atLeastOneVersion(requested)
 }
 
 func hashBytes(data []byte) string {

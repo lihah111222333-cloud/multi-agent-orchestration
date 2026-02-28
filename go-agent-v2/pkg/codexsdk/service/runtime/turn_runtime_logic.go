@@ -143,8 +143,7 @@ var defaultPrepareAdapter = PrepareAdapter{
 		if trimmedExtra == "" {
 			return prompt
 		}
-		trimmedPrompt := strings.TrimSpace(prompt)
-		if trimmedPrompt == "" {
+		if strings.TrimSpace(prompt) == "" {
 			return extra
 		}
 		return prompt + "\n" + extra
@@ -154,11 +153,10 @@ var defaultPrepareAdapter = PrepareAdapter{
 		if trimmedContent == "" {
 			return ""
 		}
-		trimmedName := strings.TrimSpace(name)
-		if trimmedName == "" {
+		if strings.TrimSpace(name) == "" {
 			return trimmedContent
 		}
-		return "[file:" + trimmedName + "]\n" + trimmedContent
+		return "[file:" + strings.TrimSpace(name) + "]\n" + trimmedContent
 	},
 	BuildAttachmentName:          func(path string) string { return strings.TrimSpace(path) },
 	BuildAttachmentPreviewURL:    func(path string) string { return strings.TrimSpace(path) },

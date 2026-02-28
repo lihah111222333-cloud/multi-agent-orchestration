@@ -132,11 +132,10 @@ func (c *AppServerClient) noteReadFailure(now time.Time) (appServerHealthSnapsho
 
 	recentForCircuit := countRecentTimes(c.health.readFailureTimes, now, appServerCircuitBreakerWindow)
 	recentForRespawn := countRecentTimes(c.health.readFailureTimes, now, appServerRespawnEscalationWindow)
-	openedCircuit := false
-	if recentForCircuit >= appServerCircuitBreakerThreshold && now.After(c.health.circuitOpenUntil) {
+	openedCircuit := recentForCircuit >= appServerCircuitBreakerThreshold && now.After(c.health.circuitOpenUntil)
+	if openedCircuit {
 		c.health.circuitOpenUntil = now.Add(appServerCircuitBreakerCooldown)
 		c.health.totalCircuitTrips++
-		openedCircuit = true
 	}
 	return c.healthSnapshotLocked(now), recentForRespawn >= appServerRespawnEscalationThreshold, openedCircuit
 }
@@ -178,11 +177,8 @@ func (c *AppServerClient) noteRespawnResult(now time.Time, success bool) appServ
 func (c *AppServerClient) circuitRemaining(now time.Time) (time.Duration, appServerHealthSnapshot) {
 	c.healthMu.Lock()
 	defer c.healthMu.Unlock()
-	remaining := c.health.circuitOpenUntil.Sub(now)
-	if remaining < 0 {
-		remaining = 0
-	}
-	return remaining, c.healthSnapshotLocked(now)
+	snapshot := c.healthSnapshotLocked(now)
+	return time.Duration(snapshot.CircuitRemainingMs) * time.Millisecond, snapshot
 }
 
 func (c *AppServerClient) shouldPreferRespawn(now time.Time) bool {

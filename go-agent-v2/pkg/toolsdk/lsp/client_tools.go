@@ -109,8 +109,8 @@ func limitSemanticTokenData(data []int, tokenLimit int) []int {
 	if tokenLimit <= 0 {
 		tokenLimit = SemanticTokenResultLimit
 	}
-	if maxDataLen := tokenLimit * 5; maxDataLen < len(data) {
-		return append([]int(nil), data[:maxDataLen]...)
+	if maxDataLen := tokenLimit * 5; len(data) > maxDataLen {
+		data = data[:maxDataLen]
 	}
 	return append([]int(nil), data...)
 }

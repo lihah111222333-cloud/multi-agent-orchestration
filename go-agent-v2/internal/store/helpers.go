@@ -117,12 +117,9 @@ func collectRows[T any](rows pgx.Rows) ([]T, error) {
 }
 
 func collectOne[T any](rows pgx.Rows) (*T, error) {
-	items, err := pgx.CollectRows(rows, pgx.RowToStructByNameLax[T])
-	if err != nil {
+	items, err := collectRows[T](rows)
+	if err != nil || len(items) == 0 {
 		return nil, err
-	}
-	if len(items) == 0 {
-		return nil, nil
 	}
 	return &items[0], nil
 }
@@ -134,10 +131,7 @@ func CollectRowsExported[T any](rows pgx.Rows) ([]T, error) { return collectRows
 func DistinctValues(ctx context.Context, pool *pgxpool.Pool, table, column string) ([]string, error) {
 	safeTable := pgx.Identifier{table}.Sanitize()
 	safeCol := pgx.Identifier{column}.Sanitize()
-	sql := fmt.Sprintf(
-		"SELECT DISTINCT %s AS value FROM %s WHERE %s <> '' ORDER BY value",
-		safeCol, safeTable, safeCol,
-	)
+	sql := fmt.Sprintf("SELECT DISTINCT %s AS value FROM %s WHERE %s <> '' ORDER BY value", safeCol, safeTable, safeCol)
 	rows, err := pool.Query(ctx, sql)
 	if err != nil {
 		return nil, err

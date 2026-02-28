@@ -11,13 +11,13 @@ import (
 const workspaceManagerNotInitialized = "workspace manager not initialized"
 
 func workspaceManager(s *Server) (*service.WorkspaceManager, error) {
-	if s.workspaceMgr == nil {
-		if s.uiRuntime != nil {
-			s.uiRuntime.SetWorkspaceUnavailable(workspaceManagerNotInitialized)
-		}
-		return nil, pkgerr.New("WorkspaceRun", workspaceManagerNotInitialized)
+	if s.workspaceMgr != nil {
+		return s.workspaceMgr, nil
 	}
-	return s.workspaceMgr, nil
+	if s.uiRuntime != nil {
+		s.uiRuntime.SetWorkspaceUnavailable(workspaceManagerNotInitialized)
+	}
+	return nil, pkgerr.New("WorkspaceRun", workspaceManagerNotInitialized)
 }
 
 func asMap(value any) map[string]any {

@@ -199,7 +199,13 @@ func orchestrationLaunchAgent(provider OrchestrationProvider, runtime AgentRunti
 	if list, err := decodeAgentList(provider.AgentLauncher().List()); err == nil && len(list) >= maxAgents {
 		return ToolError(apperrors.Newf("orchestrationLaunchAgent", "max agents (%d) reached", maxAgents))
 	}
-	id := fmt.Sprintf("agent-%d-%d", time.Now().UnixMilli(), nextThreadSeq(provider))
+	seq := time.Now().UnixNano()
+	if provider != nil {
+		if next := provider.NextThreadSeq(); next > 0 {
+			seq = next
+		}
+	}
+	id := fmt.Sprintf("agent-%d-%d", time.Now().UnixMilli(), seq)
 	baseCtx := callCtx.Ctx
 	if baseCtx == nil {
 		baseCtx = context.Background()
@@ -287,13 +293,4 @@ func decodeAgentList(v any) ([]map[string]any, error) {
 		return nil, err
 	}
 	return out, nil
-}
-
-func nextThreadSeq(provider OrchestrationProvider) int64 {
-	if provider != nil {
-		if seq := provider.NextThreadSeq(); seq > 0 {
-			return seq
-		}
-	}
-	return time.Now().UnixNano()
 }

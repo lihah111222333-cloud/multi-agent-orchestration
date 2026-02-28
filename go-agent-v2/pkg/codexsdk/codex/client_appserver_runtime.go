@@ -75,7 +75,6 @@ func (c *AppServerClient) SpawnAndConnect(ctx context.Context, prompt, cwd, mode
 	if err := c.Initialize(); err != nil { _ = c.Kill(); return apperrors.Wrap(err, "AppServerClient.SpawnAndConnect", "initialize") }
 	threadID, err := c.ThreadStart(cwd, model, instructions, dynamicTools)
 	if err != nil { _ = c.Kill(); return err }
-
 	logger.Info("codex: app-server thread started",
 		logger.FieldAgentID, c.AgentID,
 		logger.FieldPort, c.Port,

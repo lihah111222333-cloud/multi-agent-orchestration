@@ -277,7 +277,7 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 			"total_reconnect_successes": health.TotalReconnectSuccess,
 		}),
 	)
-	c.emitReconnectResolved()
+	c.emitBackgroundEvent("Reconnected", "completed", false, true, map[string]any{"resolved": true})
 	logger.Info("codex: ws reconnected",
 		logger.FieldAgentID, c.AgentID,
 		"trigger", trigger,
@@ -423,22 +423,6 @@ func (c *AppServerClient) RecoverConnection(reason string) error {
 		return apperrors.New("AppServerClient.RecoverConnection", "manual recovery failed")
 	}
 	return nil
-}
-
-func (c *AppServerClient) emitReconnectResolved() {
-	c.handlerMu.RLock()
-	handler := c.handler
-	c.handlerMu.RUnlock()
-	if handler == nil {
-		return
-	}
-	payload, _ := json.Marshal(map[string]any{
-		"message":  "Reconnected",
-		"resolved": true,
-		"done":     true,
-		"active":   false,
-	})
-	handler(Event{Type: EventBackgroundEvent, Data: payload})
 }
 
 func (c *AppServerClient) handleReconnectExhausted(trigger, activeTurnID string, maxRetries int, lastErr error) {

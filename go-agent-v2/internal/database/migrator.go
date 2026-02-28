@@ -67,9 +67,6 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 }
 
 func loadAppliedVersions(ctx context.Context, pool *pgxpool.Pool) (map[string]bool, error) {
-	if pool == nil {
-		return nil, apperrors.New("Migrate", "pool is required")
-	}
 	rows, err := pool.Query(ctx, `SELECT version FROM schema_version`)
 	if err != nil {
 		return nil, apperrors.Wrap(err, "Migrate", "query schema_version")
@@ -84,13 +81,13 @@ func loadAppliedVersions(ctx context.Context, pool *pgxpool.Pool) (map[string]bo
 		}
 		applied[version] = true
 	}
+	if err := rows.Err(); err != nil {
+		return nil, apperrors.Wrap(err, "Migrate", "iterate schema_version")
+	}
 	return applied, nil
 }
 
 func applyOneMigration(ctx context.Context, pool *pgxpool.Pool, migrationsDir, name string) error {
-	if pool == nil {
-		return apperrors.New("Migrate", "pool is required")
-	}
 	sqlBytes, err := os.ReadFile(filepath.Join(migrationsDir, name))
 	if err != nil {
 		return apperrors.Wrapf(err, "Migrate", "read migration %s", name)

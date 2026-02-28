@@ -81,14 +81,9 @@ func (s *connManagerState) allocPendingRequest() (reqID int64, ch <-chan *Respon
 	return id, respCh, cleanup
 }
 
-func (s *connManagerState) pendingResponseChannel(reqID int64) (chan *Response, bool) {
-	if s == nil { return nil, false }
-	s.pendingMu.Lock(); ch, ok := s.pending[reqID]; s.pendingMu.Unlock()
-	return ch, ok
-}
-
 func (s *connManagerState) deliverPendingResponse(reqID int64, resp *Response) (found bool, delivered bool) {
-	ch, ok := s.pendingResponseChannel(reqID)
+	if s == nil { return false, false }
+	s.pendingMu.Lock(); ch, ok := s.pending[reqID]; s.pendingMu.Unlock()
 	if !ok {
 		return false, false
 	}
@@ -218,25 +213,22 @@ type turnTrackingState struct {
 	orchestrationReportTTL      time.Duration
 }
 
-func (s *turnTrackingState) normalizeThreadID(threadID string) string {
-	if s == nil { return "" }
-	return strings.TrimSpace(threadID)
-}
-
 func (s *turnTrackingState) nextThreadSeq() int64 {
 	if s == nil { return 0 }
 	return s.threadSeq.Add(1)
 }
 
 func (s *turnTrackingState) rememberFileChanges(threadID string, files []string) {
-	id := s.normalizeThreadID(threadID)
-	if id == "" || len(files) == 0 { return }
+	if s == nil || len(files) == 0 { return }
+	id := strings.TrimSpace(threadID)
+	if id == "" { return }
 	copied := append([]string(nil), files...)
 	s.fileChangeMu.Lock(); if s.fileChangeByThread == nil { s.fileChangeByThread = make(map[string][]string) }; s.fileChangeByThread[id] = copied; s.fileChangeMu.Unlock()
 }
 
 func (s *turnTrackingState) consumeFileChanges(threadID string) []string {
-	id := s.normalizeThreadID(threadID)
+	if s == nil { return nil }
+	id := strings.TrimSpace(threadID)
 	if id == "" { return nil }
 	s.fileChangeMu.Lock(); files := s.fileChangeByThread[id]; delete(s.fileChangeByThread, id); s.fileChangeMu.Unlock()
 	return append([]string(nil), files...)

@@ -113,27 +113,18 @@ func parseMacroMethods(content, macroName string) (map[string]struct{}, error) {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "//") {
 			continue
-		}
-
-		if match := serdeRenamePattern.FindStringSubmatch(line); len(match) == 2 {
+		} else if match := serdeRenamePattern.FindStringSubmatch(line); len(match) == 2 {
 			pendingRename = match[1]
-			continue
-		}
-
-		if match := arrowPattern.FindStringSubmatch(line); len(match) == 3 {
+		} else if match := arrowPattern.FindStringSubmatch(line); len(match) == 3 {
 			methods[match[2]] = struct{}{}
 			pendingRename = ""
-			continue
-		}
-
-		if match := variantPattern.FindStringSubmatch(line); len(match) == 3 {
+		} else if match := variantPattern.FindStringSubmatch(line); len(match) == 3 {
 			if pendingRename != "" {
 				methods[pendingRename] = struct{}{}
 				pendingRename = ""
-				continue
+			} else {
+				methods[toLowerCamel(match[1])] = struct{}{}
 			}
-			methods[toLowerCamel(match[1])] = struct{}{}
-			continue
 		}
 	}
 	if err := scanner.Err(); err != nil {

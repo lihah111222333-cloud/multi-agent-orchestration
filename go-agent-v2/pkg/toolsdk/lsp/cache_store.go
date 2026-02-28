@@ -261,7 +261,8 @@ func (s *lspCacheStore) cleanupPersistent(now time.Time) error {
 			return err
 		}
 		var record documentCacheRecord
-		if err := json.Unmarshal(data, &record); err != nil || record.expired(now, s.config.ttl) {
+		removeRecord := json.Unmarshal(data, &record) != nil || record.expired(now, s.config.ttl)
+		if removeRecord {
 			if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
 				return rmErr
 			}
@@ -311,8 +312,7 @@ func (s *lspCacheStore) fallbackToMemory(action string, err error) {
 	}
 
 	s.mu.Lock()
-	alreadyWarned := s.fallbackWarned
-	dir := s.config.dir
+	alreadyWarned, dir := s.fallbackWarned, s.config.dir
 	s.persistent = false
 	s.persistentReady = false
 	s.fallbackWarned = true

@@ -1,4 +1,3 @@
-// methods_ui_state.go — UI 偏好/状态管理 JSON-RPC 方法 (preferences, state, thread aliases)。
 package apiserver
 
 import (
@@ -13,10 +12,14 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/util"
 )
 
-type uiPrefGetParams struct{ Key string `json:"key"` }
+type uiPrefGetParams struct {
+	Key string `json:"key"`
+}
 
 func uiPreferencesGet(s *Server, ctx context.Context, p uiPrefGetParams) (any, error) {
-	if s == nil || s.prefManager == nil { return nil, nil }
+	if s == nil || s.prefManager == nil {
+		return nil, nil
+	}
 	return s.prefManager.Get(ctx, p.Key)
 }
 
@@ -26,20 +29,30 @@ type uiPrefSetParams struct {
 }
 
 func uiPreferencesSet(s *Server, ctx context.Context, p uiPrefSetParams) (any, error) {
-	if s == nil || s.prefManager == nil { return nil, nil }
-	if err := s.prefManager.Set(ctx, p.Key, p.Value); err != nil { return nil, err }
+	if s == nil || s.prefManager == nil {
+		return nil, nil
+	}
+	if err := s.prefManager.Set(ctx, p.Key, p.Value); err != nil {
+		return nil, err
+	}
 
 	effects := dashboard.ResolvePreferenceSideEffects(p.Key, p.Value)
-	if s.uiRuntime != nil && effects.MainAgentID != "" { s.uiRuntime.SetMainAgent(effects.MainAgentID) }
+	adapter := s.codexAdapter
+	if s.uiRuntime != nil && effects.MainAgentID != "" {
+		s.uiRuntime.SetMainAgent(effects.MainAgentID)
+	}
 	if sec := effects.StallThresholdSec; sec > 0 {
-		if s.codexAdapter != nil {
-			s.codexAdapter.SetStallThreshold(time.Duration(sec) * time.Second)
-			s.codexAdapter.SetStreamReadIdleTimeout(time.Duration(sec) * time.Second)
+		d := time.Duration(sec) * time.Second
+		if adapter != nil {
+			adapter.SetStallThreshold(d)
+			adapter.SetStreamReadIdleTimeout(d)
 		}
 		logger.Info("stall threshold updated via ui/preferences/set", "seconds", sec)
 	}
 	if sec := effects.StallHeartbeatSec; sec > 0 {
-		if s.codexAdapter != nil { s.codexAdapter.SetStallHeartbeat(time.Duration(sec) * time.Second) }
+		if adapter != nil {
+			adapter.SetStallHeartbeat(time.Duration(sec) * time.Second)
+		}
 		logger.Info("stall heartbeat updated via ui/preferences/set", "seconds", sec)
 	}
 	if show := effects.ShowInjectedPromptInChat; show != nil && s.uiRuntime != nil {
@@ -50,13 +63,16 @@ func uiPreferencesSet(s *Server, ctx context.Context, p uiPrefSetParams) (any, e
 }
 
 func uiPreferencesGetAll(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
-	if s == nil || s.prefManager == nil { return map[string]any{}, nil }
+	if s == nil || s.prefManager == nil {
+		return map[string]any{}, nil
+	}
 	return s.prefManager.GetAll(ctx)
 }
 
 func uiStateGet(s *Server, ctx context.Context, _ json.RawMessage) (any, error) {
-	if s == nil || s.uiRuntime == nil { return map[string]any{}, nil }
-
+	if s == nil || s.uiRuntime == nil {
+		return map[string]any{}, nil
+	}
 	snapshot := s.uiRuntime.SnapshotLight()
 	prefs := map[string]any{}
 	if s.prefManager != nil {
@@ -77,16 +93,22 @@ func uiStateGet(s *Server, ctx context.Context, _ json.RawMessage) (any, error) 
 		resolution = dashboard.ResolveState(buildStateResolutionInput(snapshot, prefs))
 		applyThreadAliasesSnapshot(&snapshot, resolution.Aliases)
 		pm, prev := s.prefManager, prefs[dashboard.PrefMainAgentID]
-		util.SafeGo(func() { persistResolvedUIPreference(context.Background(), pm, dashboard.PrefMainAgentID, resolvedMain, prev) })
+		util.SafeGo(func() {
+			persistResolvedUIPreference(context.Background(), pm, dashboard.PrefMainAgentID, resolvedMain, prev)
+		})
 		prefs[dashboard.PrefMainAgentID] = resolvedMain
 	}
 
 	resolvedActiveThreadID, prevActive := resolution.ResolvedActiveThreadID, prefs[dashboard.PrefActiveThreadID]
-	util.SafeGo(func() { persistResolvedUIPreference(context.Background(), s.prefManager, dashboard.PrefActiveThreadID, resolvedActiveThreadID, prevActive) })
+	util.SafeGo(func() {
+		persistResolvedUIPreference(context.Background(), s.prefManager, dashboard.PrefActiveThreadID, resolvedActiveThreadID, prevActive)
+	})
 	prefs[dashboard.PrefActiveThreadID] = resolvedActiveThreadID
 
 	resolvedActiveCmdThreadID, prevCmd := resolution.ResolvedActiveCmdID, prefs[dashboard.PrefActiveCmdThreadID]
-	util.SafeGo(func() { persistResolvedUIPreference(context.Background(), s.prefManager, dashboard.PrefActiveCmdThreadID, resolvedActiveCmdThreadID, prevCmd) })
+	util.SafeGo(func() {
+		persistResolvedUIPreference(context.Background(), s.prefManager, dashboard.PrefActiveCmdThreadID, resolvedActiveCmdThreadID, prevCmd)
+	})
 	prefs[dashboard.PrefActiveCmdThreadID] = resolvedActiveCmdThreadID
 
 	timelinesByThread, diffTextByThread := s.uiRuntime.AllTimelinesAndDiffs()
@@ -113,34 +135,34 @@ func uiStateGet(s *Server, ctx context.Context, _ json.RawMessage) (any, error) 
 		"active_cmd_thread_diff_len", len(diffTextByThread[resolvedActiveCmdThreadID]),
 	)
 	return dashboard.BuildUIStateResult(dashboard.UIStateResultInput{
-		Threads:                  snapshot.Threads,
-		Statuses:                 snapshot.Statuses,
-		InterruptibleByThread:    snapshot.InterruptibleByThread,
-		StatusHeadersByThread:    snapshot.StatusHeadersByThread,
-		StatusDetailsByThread:    snapshot.StatusDetailsByThread,
-		TimelinesByThread:        toAnyMap(timelinesByThread),
-		DiffTextByThread:         diffTextByThread,
-		TokenUsageByThread:       snapshot.TokenUsageByThread,
-		AgentMetaByID:            snapshot.AgentMetaByID,
-		WorkspaceRunsByKey:       snapshot.WorkspaceRunsByKey,
-		ActiveThreadID:           resolvedActiveThreadID,
-		ActiveCmdThreadID:        resolvedActiveCmdThreadID,
-		MainAgentID:              resolvedMain,
-		ActivityStatsByThread:    snapshot.ActivityStatsByThread,
-		AlertsByThread:           snapshot.AlertsByThread,
-		AgentRuntimeByID:         dashboard.BuildAgentRuntimeByID(runtimeItems),
-		WorkspaceFeatureEnabled:  snapshot.WorkspaceFeatureEnabled,
-		WorkspaceLastError:       snapshot.WorkspaceLastError,
-		ViewPrefsChat:            viewPrefsChat,
-		HasViewPrefsChat:         hasViewPrefsChat,
-		ViewPrefsCmd:             viewPrefsCmd,
-		HasViewPrefsCmd:          hasViewPrefsCmd,
-		ThreadPinsChat:           threadPinsChat,
-		HasThreadPinsChat:        hasThreadPinsChat,
-		ThreadArchivesChat:       archivesValue,
-		HasThreadArchives:        hasArchives,
-		ShowInjectedPrompt:       showInjected,
-		HasShowInjected:          hasShowInjected,
+		Threads:                 snapshot.Threads,
+		Statuses:                snapshot.Statuses,
+		InterruptibleByThread:   snapshot.InterruptibleByThread,
+		StatusHeadersByThread:   snapshot.StatusHeadersByThread,
+		StatusDetailsByThread:   snapshot.StatusDetailsByThread,
+		TimelinesByThread:       toAnyMap(timelinesByThread),
+		DiffTextByThread:        diffTextByThread,
+		TokenUsageByThread:      snapshot.TokenUsageByThread,
+		AgentMetaByID:           snapshot.AgentMetaByID,
+		WorkspaceRunsByKey:      snapshot.WorkspaceRunsByKey,
+		ActiveThreadID:          resolvedActiveThreadID,
+		ActiveCmdThreadID:       resolvedActiveCmdThreadID,
+		MainAgentID:             resolvedMain,
+		ActivityStatsByThread:   snapshot.ActivityStatsByThread,
+		AlertsByThread:          snapshot.AlertsByThread,
+		AgentRuntimeByID:        dashboard.BuildAgentRuntimeByID(runtimeItems),
+		WorkspaceFeatureEnabled: snapshot.WorkspaceFeatureEnabled,
+		WorkspaceLastError:      snapshot.WorkspaceLastError,
+		ViewPrefsChat:           viewPrefsChat,
+		HasViewPrefsChat:        hasViewPrefsChat,
+		ViewPrefsCmd:            viewPrefsCmd,
+		HasViewPrefsCmd:         hasViewPrefsCmd,
+		ThreadPinsChat:          threadPinsChat,
+		HasThreadPinsChat:       hasThreadPinsChat,
+		ThreadArchivesChat:      archivesValue,
+		HasThreadArchives:       hasArchives,
+		ShowInjectedPrompt:      showInjected,
+		HasShowInjected:         hasShowInjected,
 	}), nil
 }
 
@@ -157,26 +179,41 @@ func resolveThreadArchivesForState(s *Server, ctx context.Context, prefs map[str
 }
 
 func toAnyMap[T any](in map[string]T) map[string]any {
-	if len(in) == 0 { return map[string]any{} }
+	if len(in) == 0 {
+		return map[string]any{}
+	}
 	out := make(map[string]any, len(in))
-	for k, v := range in { out[k] = v }
+	for k, v := range in {
+		out[k] = v
+	}
 	return out
 }
 
 func buildStateResolutionInput(snapshot uistate.RuntimeSnapshot, prefs map[string]any) dashboard.StateResolutionInput {
 	threads := make([]dashboard.StateThread, 0, len(snapshot.Threads))
-	for _, thread := range snapshot.Threads { threads = append(threads, dashboard.StateThread{ID: thread.ID, Name: thread.Name}) }
+	for _, thread := range snapshot.Threads {
+		threads = append(threads, dashboard.StateThread{ID: thread.ID, Name: thread.Name})
+	}
 	meta := make(map[string]dashboard.StateAgentMeta, len(snapshot.AgentMetaByID))
-	for id, item := range snapshot.AgentMetaByID { meta[id] = dashboard.StateAgentMeta{Alias: item.Alias, IsMain: item.IsMain} }
+	for id, item := range snapshot.AgentMetaByID {
+		meta[id] = dashboard.StateAgentMeta{Alias: item.Alias, IsMain: item.IsMain}
+	}
 	return dashboard.StateResolutionInput{Threads: threads, AgentMetaByID: meta, Prefs: prefs}
 }
 
 func applyThreadAliasesSnapshot(snapshot *uistate.RuntimeSnapshot, aliases map[string]string) {
-	if snapshot == nil || len(snapshot.Threads) == 0 || len(aliases) == 0 { return }
+	if snapshot == nil || len(snapshot.Threads) == 0 || len(aliases) == 0 {
+		return
+	}
 	for i := range snapshot.Threads {
 		id := strings.TrimSpace(snapshot.Threads[i].ID)
-		if id == "" { continue }
-		alias := strings.TrimSpace(aliases[id]); if alias == "" { continue }
+		if id == "" {
+			continue
+		}
+		alias := strings.TrimSpace(aliases[id])
+		if alias == "" {
+			continue
+		}
 		snapshot.Threads[i].Name = alias
 		meta := snapshot.AgentMetaByID[id]
 		meta.Alias = alias
@@ -185,14 +222,18 @@ func applyThreadAliasesSnapshot(snapshot *uistate.RuntimeSnapshot, aliases map[s
 }
 
 func persistResolvedUIPreference(ctx context.Context, manager *uistate.PreferenceManager, key, resolved string, original any) {
-	if manager == nil || resolved == dashboard.AsString(original) { return }
+	if manager == nil || resolved == dashboard.AsString(original) {
+		return
+	}
 	if err := manager.Set(ctx, key, resolved); err != nil {
 		logger.Warn("ui/state/get: persist resolved preference failed", logger.FieldKey, key, logger.FieldError, err)
 	}
 }
 
 func showInjectedPromptInChat(s *Server, ctx context.Context) bool {
-	if s == nil || s.prefManager == nil { return false }
+	if s == nil || s.prefManager == nil {
+		return false
+	}
 	value, err := s.prefManager.Get(ctx, prefKeyShowInjectedPromptInChat)
 	if err != nil {
 		logger.Warn("ui preferences: load injected prompt visibility failed", logger.FieldError, err)
@@ -202,7 +243,9 @@ func showInjectedPromptInChat(s *Server, ctx context.Context) bool {
 }
 
 func applyInjectedPromptVisibilityPreference(s *Server, ctx context.Context) {
-	if s == nil || s.uiRuntime == nil { return }
+	if s == nil || s.uiRuntime == nil {
+		return
+	}
 	s.uiRuntime.SetSanitizeInjectedUserMessage(!showInjectedPromptInChat(s, ctx))
 }
 

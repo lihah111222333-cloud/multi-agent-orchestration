@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -111,20 +110,6 @@ func skillDisplayName(storedName string, meta skillMetadata, storageID string) s
 	return storageID
 }
 
-func (s *SkillService) readSkillIndex(dirPath string) skillIndex {
-	path := filepath.Join(dirPath, skillIndexFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return skillIndex{}
-	}
-	var index skillIndex
-	if err := json.Unmarshal(data, &index); err != nil {
-		return skillIndex{}
-	}
-	index.Name = strings.TrimSpace(index.Name)
-	return index
-}
-
 func (s *SkillService) writeSkillIndex(dirPath, name string) error {
 	index := skillIndex{Name: strings.TrimSpace(name)}
 	data, err := json.Marshal(index)
@@ -157,11 +142,18 @@ func (s *SkillService) scanSkillRecords() ([]skillRecord, error) {
 		if statErr != nil || info.IsDir() {
 			continue
 		}
+		storedName := ""
+		if data, err := os.ReadFile(filepath.Join(dirPath, skillIndexFile)); err == nil {
+			var index skillIndex
+			if json.Unmarshal(data, &index) == nil {
+				storedName = strings.TrimSpace(index.Name)
+			}
+		}
 		records = append(records, skillRecord{
 			ID:         id,
 			DirPath:    dirPath,
 			SkillPath:  skillPath,
-			StoredName: s.readSkillIndex(dirPath).Name,
+			StoredName: storedName,
 			Meta:       extractSkillMetadata(skillPath),
 		})
 	}
@@ -397,27 +389,6 @@ func ensureSourceSkillFile(sourceDir string) (string, error) {
 	return path, nil
 }
 
-func copyRegularFile(srcPath, dstPath string, mode fs.FileMode) error {
-	srcFile, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = srcFile.Close() }()
-	if mode == 0 {
-		mode = 0o644
-	}
-	dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(dstFile, srcFile)
-	closeErr := dstFile.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
-}
-
 func copySkillDirectory(sourceDir, targetDir string) (skillImportStats, error) {
 	stats := skillImportStats{}
 	err := filepath.WalkDir(sourceDir, func(currentPath string, entry fs.DirEntry, walkErr error) error {
@@ -477,7 +448,11 @@ func copySkillDirectory(sourceDir, targetDir string) (skillImportStats, error) {
 		if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
 			return err
 		}
-		return copyRegularFile(currentPath, destinationPath, info.Mode().Perm())
+		data, err := os.ReadFile(currentPath)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(destinationPath, data, info.Mode().Perm())
 	})
 	return stats, err
 }

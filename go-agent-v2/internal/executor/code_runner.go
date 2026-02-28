@@ -1,8 +1,4 @@
-// code_runner.go — 代码块执行引擎: AI agent 生成的代码片段隔离执行。
-//
-// 支持语言: Go (run/test) · JavaScript (node) · TypeScript (npx tsx)
-// 安全约束: 临时目录隔离 · 进程组管理 · 信号量限流 · 输出聚合裁剪
-// 审批范围: 仅高风险 project_cmd 需要审批; run/test 受隔离+超时+输出上限约束
+// code_runner.go — 代码块执行引擎: 隔离执行 Go/JS/TS 代码片段。
 package executor
 
 import (
@@ -23,53 +19,41 @@ import (
 )
 
 const (
-	// maxConcurrentRuns 信号量容量 — 单实例最大并发执行数。
 	maxConcurrentRuns = 3
 
-	// defaultRunTimeout Run() 入口默认超时 (秒)。
 	defaultRunTimeout = 30 * time.Second
 
-	// maxOutputBytes stdout+stderr 聚合输出上限。
 	maxOutputBytes = 512 * 1024 // 512KB
 
-	// maxAuditPayload 审计写入时代码/命令/输出的裁剪上限。
 	maxAuditPayload = 4096
 )
 
 const (
-	ModeRun        = "run"         // 直接执行代码片段
-	ModeTest       = "test"        // go test -run
-	ModeProjectCmd = "project_cmd" // sh -c (高风险命令审批)
+	ModeRun        = "run"
+	ModeTest       = "test"
+	ModeProjectCmd = "project_cmd"
 )
 
-// CodeRunner 代码块执行引擎。
-//
-// 设计:
-//   - 每个实例拥有独立的临时目录根 (tempRoot), 互不干扰
-//   - 信号量 (sem) 限制并发执行数, 防止资源耗尽
-//   - 语言可用性在创建时探测, 不可用的语言不注册工具
 type CodeRunner struct {
-	workDir  string        // 项目工作目录 (go test/project_cmd 的 cmd.Dir)
-	hasNode  bool          // node 可用
-	hasTsx   bool          // tsx 可用 (PATH 或 node_modules/.bin/tsx)
-	sem      chan struct{} // 并发信号量
-	tempRoot string        // 实例级临时目录根
+	workDir  string
+	hasNode  bool
+	hasTsx   bool
+	sem      chan struct{}
+	tempRoot string
 }
 
-// RunRequest 执行请求。
 type RunRequest struct {
-	Language string        `json:"language"`            // go, javascript, typescript
-	Code     string        `json:"code,omitempty"`      // 代码片段 (run 模式)
-	Command  string        `json:"command,omitempty"`   // shell 命令 (project_cmd 模式)
-	Mode     string        `json:"mode"`                // run, test, project_cmd
-	AutoWrap bool          `json:"auto_wrap"`           // 自动包裹 main 函数 (Go)
-	TestFunc string        `json:"test_func,omitempty"` // go test -run 目标
-	TestPkg  string        `json:"test_pkg,omitempty"`  // go test 包路径
-	WorkDir  string        `json:"work_dir,omitempty"`  // 自定义工作目录 (需校验)
-	Timeout  time.Duration `json:"timeout,omitempty"`   // 超时 (零值 → defaultRunTimeout)
+	Language string        `json:"language"`
+	Code     string        `json:"code,omitempty"`
+	Command  string        `json:"command,omitempty"`
+	Mode     string        `json:"mode"`
+	AutoWrap bool          `json:"auto_wrap"`
+	TestFunc string        `json:"test_func,omitempty"`
+	TestPkg  string        `json:"test_pkg,omitempty"`
+	WorkDir  string        `json:"work_dir,omitempty"`
+	Timeout  time.Duration `json:"timeout,omitempty"`
 }
 
-// RunResult 执行结果。
 type RunResult struct {
 	Success   bool          `json:"success"`
 	Output    string        `json:"output"`
@@ -77,13 +61,9 @@ type RunResult struct {
 	Duration  time.Duration `json:"duration"`
 	Language  string        `json:"language"`
 	Mode      string        `json:"mode"`
-	Truncated bool          `json:"truncated"` // 输出是否被截断
+	Truncated bool          `json:"truncated"`
 }
 
-// NewCodeRunner 创建代码执行引擎。
-//
-// workDir 为项目根目录, 用于 go test 和 project_cmd 的工作目录。
-// 构造时探测 node/tsx 可用性, 创建实例级临时目录。
 func NewCodeRunner(workDir string) (*CodeRunner, error) {
 	if workDir == "" {
 		workDir = "."
@@ -93,9 +73,6 @@ func NewCodeRunner(workDir string) (*CodeRunner, error) {
 		return nil, pkgerr.Wrap(err, "NewCodeRunner", "resolve workDir")
 	}
 
-	// 优先将临时目录放在工作区内:
-	//   - go run 生成的主文件位于模块树内时, 可导入 internal/... 包
-	//   - 失败时回退到系统临时目录, 保证功能可用
 	tempParent := filepath.Join(abs, ".codex", "code_exec")
 	if mkErr := os.MkdirAll(tempParent, 0o755); mkErr != nil {
 		logger.Warn("code-runner: create in-workspace temp parent failed, fallback to os temp",
@@ -131,16 +108,12 @@ func NewCodeRunner(workDir string) (*CodeRunner, error) {
 	return r, nil
 }
 
-// HasNode 返回 node 是否可用。
 func (r *CodeRunner) HasNode() bool { return r.hasNode }
 
-// HasTsx 返回 tsx 是否可用 (PATH 或 node_modules/.bin/tsx)。
 func (r *CodeRunner) HasTsx() bool { return r.hasTsx }
 
-// WorkDir 返回当前 runner 的工作目录根。
 func (r *CodeRunner) WorkDir() string { return r.workDir }
 
-// Cleanup 清理实例级临时目录。应在 Server 关闭时调用。
 func (r *CodeRunner) Cleanup() {
 	if r.tempRoot != "" {
 		if err := os.RemoveAll(r.tempRoot); err != nil {
@@ -149,21 +122,17 @@ func (r *CodeRunner) Cleanup() {
 	}
 }
 
-// Run 执行代码块。信号量限流 → 按 Mode 分发。
 func (r *CodeRunner) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
-	// 超时兜底
 	if req.Timeout <= 0 {
 		req.Timeout = defaultRunTimeout
 	}
 
-	// 工作目录校验
-	if req.WorkDir != "" {
-		if err := r.validateWorkDir(req.WorkDir); err != nil {
-			return nil, err
-		}
+	if req.WorkDir == "" {
+		req.WorkDir = r.workDir
+	} else if err := r.validateWorkDir(req.WorkDir); err != nil {
+		return nil, err
 	}
 
-	// 信号量限流
 	select {
 	case r.sem <- struct{}{}:
 		defer func() { <-r.sem }()
@@ -203,7 +172,6 @@ func (r *CodeRunner) Run(ctx context.Context, req RunRequest) (*RunResult, error
 	return result, nil
 }
 
-// dispatchRun 按语言分发 run 模式请求。
 func (r *CodeRunner) dispatchRun(ctx context.Context, req RunRequest) (*RunResult, error) {
 	lang := strings.ToLower(strings.TrimSpace(req.Language))
 	switch lang {
@@ -218,7 +186,6 @@ func (r *CodeRunner) dispatchRun(ctx context.Context, req RunRequest) (*RunResul
 	}
 }
 
-// runGo 执行 Go 代码片段: MkdirTemp → main.go → go run。
 func (r *CodeRunner) runGo(ctx context.Context, req RunRequest) (*RunResult, error) {
 	dir, err := os.MkdirTemp(r.tempRoot, "go_")
 	if err != nil {
@@ -236,11 +203,7 @@ func (r *CodeRunner) runGo(ctx context.Context, req RunRequest) (*RunResult, err
 		return nil, pkgerr.Wrap(err, "CodeRunner.runGo", "write main.go")
 	}
 
-	workDir := r.workDir
-	if req.WorkDir != "" {
-		workDir = req.WorkDir
-	}
-	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, workDir, "go", "run", mainFile)
+	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, req.WorkDir, "go", "run", mainFile)
 	return &RunResult{
 		Success:   exitCode == 0,
 		Output:    output,
@@ -251,9 +214,9 @@ func (r *CodeRunner) runGo(ctx context.Context, req RunRequest) (*RunResult, err
 	}, nil
 }
 
-// runGoTest 执行 go test -v -run ^TestFunc$ TestPkg。
 func (r *CodeRunner) runGoTest(ctx context.Context, req RunRequest) (*RunResult, error) {
-	if req.TestFunc == "" {
+	testFunc := strings.TrimSpace(req.TestFunc)
+	if testFunc == "" {
 		return nil, pkgerr.New("CodeRunner.runGoTest", "test_func is required")
 	}
 	pkg := req.TestPkg
@@ -261,12 +224,8 @@ func (r *CodeRunner) runGoTest(ctx context.Context, req RunRequest) (*RunResult,
 		pkg = "./..."
 	}
 
-	pattern := "^" + regexp.QuoteMeta(strings.TrimSpace(req.TestFunc)) + "$"
-	workDir := r.workDir
-	if req.WorkDir != "" {
-		workDir = req.WorkDir
-	}
-	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, workDir, "go", "test", "-v", "-run", pattern, pkg)
+	pattern := "^" + regexp.QuoteMeta(testFunc) + "$"
+	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, req.WorkDir, "go", "test", "-v", "-run", pattern, pkg)
 	return &RunResult{
 		Success:   exitCode == 0,
 		Output:    output,
@@ -277,7 +236,6 @@ func (r *CodeRunner) runGoTest(ctx context.Context, req RunRequest) (*RunResult,
 	}, nil
 }
 
-// runJS 执行 JavaScript 代码片段: MkdirTemp → script.js → node。
 func (r *CodeRunner) runJS(ctx context.Context, req RunRequest) (*RunResult, error) {
 	if !r.hasNode {
 		return nil, pkgerr.New("CodeRunner.runJS", "node not available on PATH")
@@ -305,7 +263,6 @@ func (r *CodeRunner) runJS(ctx context.Context, req RunRequest) (*RunResult, err
 	}, nil
 }
 
-// runTS 执行 TypeScript 代码片段: MkdirTemp → script.ts → npx tsx。
 func (r *CodeRunner) runTS(ctx context.Context, req RunRequest) (*RunResult, error) {
 	if !r.hasTsx {
 		return nil, pkgerr.New("CodeRunner.runTS", "tsx not available on PATH or node_modules/.bin/tsx")
@@ -324,11 +281,9 @@ func (r *CodeRunner) runTS(ctx context.Context, req RunRequest) (*RunResult, err
 
 	name := "tsx"
 	if !commandExists(name) {
-		localTsx := resolveLocalTsxPath(r.workDir)
-		if localTsx == "" {
+		if name = resolveLocalTsxPath(r.workDir); name == "" {
 			return nil, pkgerr.New("CodeRunner.runTS", "tsx not available on PATH or node_modules/.bin/tsx")
 		}
-		name = localTsx
 	}
 
 	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, dir, name, scriptFile)
@@ -342,20 +297,12 @@ func (r *CodeRunner) runTS(ctx context.Context, req RunRequest) (*RunResult, err
 	}, nil
 }
 
-// runProjectCmd 执行 shell 命令 (高风险命令由上层审批)。
-//
-// 审批由上层 apiserver 处理, 此处仅负责执行。
 func (r *CodeRunner) runProjectCmd(ctx context.Context, req RunRequest) (*RunResult, error) {
 	if strings.TrimSpace(req.Command) == "" {
 		return nil, pkgerr.New("CodeRunner.runProjectCmd", "command is required")
 	}
 
-	dir := r.workDir
-	if req.WorkDir != "" {
-		dir = req.WorkDir
-	}
-
-	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, dir, "sh", "-c", req.Command)
+	output, exitCode, truncated := r.execCommand(ctx, req.Timeout, req.WorkDir, "sh", "-c", req.Command)
 	return &RunResult{
 		Success:   exitCode == 0,
 		Output:    output,
@@ -366,10 +313,8 @@ func (r *CodeRunner) runProjectCmd(ctx context.Context, req RunRequest) (*RunRes
 	}, nil
 }
 
-// importHintRe 匹配代码中形如 pkgName.Identifier 的包引用。
 var importHintRe = regexp.MustCompile(`\b([a-z][a-z0-9]*)\.[A-Z]`)
 
-// stdlibPackages 常用标准库包名 — 仅匹配代码中实际引用的包。
 var stdlibPackages = map[string]string{
 	"fmt":      "fmt",
 	"strings":  "strings",
@@ -405,20 +350,12 @@ var stdlibPackages = map[string]string{
 	"hash":     "hash",
 }
 
-// wrapGoMain 将 Go 代码片段自动包裹为可执行 main 包。
-//
-// 规则:
-//   - 已有 package 声明 → 原样返回
-//   - 扫描 pkgName.Identifier 模式, 仅导入实际引用的标准库包
-//   - 已有 func main() → 仅补 package header + imports
-//   - 否则包裹进 func main() { ... }
 func wrapGoMain(code string) string {
 	trimmed := strings.TrimSpace(code)
 	if strings.HasPrefix(trimmed, "package ") {
 		return code
 	}
 
-	// 扫描引用的包 (过滤注释行, 减少假阳性)
 	var codeLines []string
 	for line := range strings.SplitSeq(trimmed, "\n") {
 		stripped := strings.TrimSpace(line)
@@ -465,12 +402,6 @@ func wrapGoMain(code string) string {
 	return sb.String()
 }
 
-// execCommand 执行外部命令, 返回聚合输出、退出码和是否截断。
-//
-// 安全:
-//   - Setpgid=true: 创建独立进程组, 超时时 kill 整个组
-//   - stdout+stderr 聚合写入同一个 LimitedWriter, 总量限制 maxOutputBytes
-//   - context 超时由调用方 (Run) 设定
 func (r *CodeRunner) execCommand(ctx context.Context, timeout time.Duration, dir string, name string, args ...string) (output string, exitCode int, truncated bool) {
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -478,26 +409,20 @@ func (r *CodeRunner) execCommand(ctx context.Context, timeout time.Duration, dir
 	cmd := exec.CommandContext(execCtx, name, args...)
 	cmd.Dir = dir
 
-	// 进程组隔离: 超时时 kill 整个进程组
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// 避免 "shell 被杀但子进程仍持有 pipe" 导致 Wait 长时间阻塞。
 	cmd.Cancel = func() error {
 		r.killProcessGroup(cmd)
 		return nil
 	}
 	cmd.WaitDelay = 2 * time.Second
 
-	// stdout+stderr → 聚合输出 (合计 512KB 上限)
 	var combined bytes.Buffer
 	lw := util.NewLimitedWriter(&combined, maxOutputBytes)
 	cmd.Stdout = lw
 	cmd.Stderr = lw
 
-	err := cmd.Run()
-
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		if execCtx.Err() == context.DeadlineExceeded {
-			// cmd.Cancel 已 kill 进程组, 此处仅拼接超时标记
 			output = combined.String() + "\n--- TIMEOUT ---\n"
 			return output, -1, lw.Overflow()
 		}
@@ -511,7 +436,6 @@ func (r *CodeRunner) execCommand(ctx context.Context, timeout time.Duration, dir
 	return combined.String(), exitCode, lw.Overflow()
 }
 
-// killProcessGroup 终止整个进程组 (防止子进程泄漏)。
 func (r *CodeRunner) killProcessGroup(cmd *exec.Cmd) {
 	if cmd.Process == nil {
 		return
@@ -521,10 +445,6 @@ func (r *CodeRunner) killProcessGroup(cmd *exec.Cmd) {
 	}
 }
 
-// validateWorkDir 校验自定义工作目录是否在项目根内。
-//
-// 使用 filepath.Rel 判断, 拒绝 "../" 开头的路径 (防止路径穿越)。
-// NEVER 用 strings.HasPrefix — 无法区分 /root/work 和 /root/work2。
 func (r *CodeRunner) validateWorkDir(dir string) error {
 	rootAbs, err := filepath.Abs(r.workDir)
 	if err != nil {
@@ -544,7 +464,6 @@ func (r *CodeRunner) validateWorkDir(dir string) error {
 		return pkgerr.Newf("CodeRunner.validateWorkDir", "path %q is outside project root %q", dir, rootAbs)
 	}
 
-	// 软链接校验: 防止路径字面在根内, 但解析后跳到根外。
 	rootReal, err := filepath.EvalSymlinks(rootAbs)
 	if err != nil {
 		return pkgerr.Wrap(err, "CodeRunner.validateWorkDir", "resolve project root symlink")
@@ -552,7 +471,6 @@ func (r *CodeRunner) validateWorkDir(dir string) error {
 
 	pathReal, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		// 不存在路径交由后续执行阶段报错; 这里仅做越界拦截。
 		if os.IsNotExist(err) {
 			return nil
 		}
@@ -570,7 +488,6 @@ func (r *CodeRunner) validateWorkDir(dir string) error {
 	return nil
 }
 
-// commandExists 检测命令是否在 PATH 中可用。
 func commandExists(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
@@ -588,14 +505,12 @@ func resolveLocalTsxPath(workDir string) string {
 	return candidate
 }
 
-// cleanup 清理临时目录 (仅清理当前实例创建的目录)。
 func (r *CodeRunner) cleanup(path string) {
 	if err := os.RemoveAll(path); err != nil {
 		logger.Debug("code-runner: cleanup failed", logger.FieldPath, path, logger.FieldError, err)
 	}
 }
 
-// TruncateForAudit 裁剪字符串用于审计写入 (防止超大内容直存)。
 func TruncateForAudit(s string, maxLen int) string {
 	if maxLen <= 0 {
 		maxLen = maxAuditPayload

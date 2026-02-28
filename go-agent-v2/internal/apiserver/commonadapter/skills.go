@@ -28,7 +28,8 @@ func matchedTerms(text string, candidates []string) []string {
 	if text == "" || len(candidates) == 0 {
 		return nil
 	}
-	terms := make([]string, 0, len(candidates))
+	text = strings.ToLower(text)
+	var terms []string
 	seen := make(map[string]struct{}, len(candidates))
 	for _, raw := range candidates {
 		term := strings.TrimSpace(raw)
@@ -41,9 +42,6 @@ func matchedTerms(text string, candidates []string) []string {
 		}
 		seen[lowerTerm] = struct{}{}
 		terms = append(terms, term)
-	}
-	if len(terms) == 0 {
-		return nil
 	}
 	return terms
 }
@@ -125,12 +123,12 @@ func CollectReferencedLSPToolNames(hint string) []string {
 		return nil
 	}
 	matches := inlineCodeTokenPattern.FindAllStringSubmatch(hint, -1)
-	if len(matches) == 0 {
-		return nil
-	}
 	seen := make(map[string]struct{}, len(matches))
-	names := make([]string, 0, len(matches))
+	var names []string
 	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
 		name := strings.TrimSpace(match[1])
 		if !strings.HasPrefix(name, "lsp_") {
 			continue
@@ -141,9 +139,8 @@ func CollectReferencedLSPToolNames(hint string) []string {
 		seen[name] = struct{}{}
 		names = append(names, name)
 	}
-	if len(names) == 0 {
-		return nil
+	if len(names) > 1 {
+		sort.Strings(names)
 	}
-	sort.Strings(names)
 	return names
 }

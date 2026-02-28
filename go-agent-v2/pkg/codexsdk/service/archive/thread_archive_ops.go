@@ -94,13 +94,14 @@ func ThreadUnarchive(ctx context.Context, threadID string, deps ThreadArchiveDep
 	var notice ThreadArchiveRestoreNotice
 	var restoredFiles, skippedRestoreFiles []string
 	if wasArchived {
-		inspectNotice, inspectErr := InspectThreadArchiveForRestore(id, BuildThreadArchiveRestoreDeps(ResolveThreadArchiveRootDir, SanitizeArchiveNameStrict, nil, PathWithinRoot, nil, FileSHA256, FindLatestThreadArchiveManifestPath, ReadThreadArchiveManifest, FileState, nil))
+		restoreDeps := BuildThreadArchiveRestoreDeps(ResolveThreadArchiveRootDir, SanitizeArchiveNameStrict, ResolveCodexRootDir, PathWithinRoot, CopyFileOverwrite, FileSHA256, FindLatestThreadArchiveManifestPath, ReadThreadArchiveManifest, FileState, RemoveFile)
+		inspectNotice, inspectErr := InspectThreadArchiveForRestore(id, restoreDeps)
 		if inspectErr != nil {
 			logger.Error("thread/unarchive: inspect archive integrity failed", logger.FieldThreadID, id, logger.FieldError, inspectErr)
 		} else {
 			notice = inspectNotice
 		}
-		restored, skipped, restoreErr := RestoreThreadArchiveSources(id, ResolveThreadArchiveRootDir, SanitizeArchiveNameStrict, ResolveCodexRootDir, PathWithinRoot, CopyFileOverwrite, FileSHA256, FindLatestThreadArchiveManifestPath, ReadThreadArchiveManifest, FileState, RemoveFile)
+		restored, skipped, restoreErr := restoreThreadArchiveSourcesWithDeps(id, restoreDeps)
 		if restoreErr != nil {
 			logger.Error("thread/unarchive: restore archived codex artifacts failed", logger.FieldThreadID, id, logger.FieldError, restoreErr)
 		} else {
@@ -111,7 +112,6 @@ func ThreadUnarchive(ctx context.Context, threadID string, deps ThreadArchiveDep
 	if err := deps.SaveArchiveMap(ctx, archivedMap); err != nil {
 		return nil, appErrors.Wrap(err, "Server.threadUnarchive", "persist archive state")
 	}
-
 	// Remove archive dir so LoadThreadArchiveMapFromDisk does not re-discover it.
 	if rootDir, rootErr := ResolveThreadArchiveRootDir(); rootErr == nil {
 		if safeName, sanitizeErr := SanitizeArchiveNameStrict(id); sanitizeErr == nil {
@@ -120,7 +120,6 @@ func ThreadUnarchive(ctx context.Context, threadID string, deps ThreadArchiveDep
 			}
 		}
 	}
-
 	result := map[string]any{"ok": true, "threadId": id}
 	if len(restoredFiles) > 0 {
 		result["restoredFiles"] = restoredFiles

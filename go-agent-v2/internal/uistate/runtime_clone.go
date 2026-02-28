@@ -19,12 +19,11 @@ func cloneBaseSnapshot(src RuntimeSnapshot, includeTimeline bool) RuntimeSnapsho
 		AgentMetaByID:         make(map[string]AgentMeta, len(src.AgentMetaByID)),
 	}
 
+	out.TimelinesByThread = map[string][]TimelineItem{}
+	out.DiffTextByThread = map[string]string{}
 	if includeTimeline {
 		out.TimelinesByThread = make(map[string][]TimelineItem, len(src.TimelinesByThread))
 		out.DiffTextByThread = make(map[string]string, len(src.DiffTextByThread))
-	} else {
-		out.TimelinesByThread = map[string][]TimelineItem{}
-		out.DiffTextByThread = map[string]string{}
 	}
 
 	out.Threads = append(out.Threads, src.Threads...)
@@ -39,11 +38,9 @@ func cloneBaseSnapshot(src RuntimeSnapshot, includeTimeline bool) RuntimeSnapsho
 		if threadID == "" {
 			continue
 		}
-		if _, ok := out.InterruptibleByThread[threadID]; ok {
-			continue
+		if _, ok := out.InterruptibleByThread[threadID]; !ok {
+			out.InterruptibleByThread[threadID] = isInterruptibleThreadState(normalizeThreadState(out.Statuses[threadID]))
 		}
-		status := normalizeThreadState(out.Statuses[threadID])
-		out.InterruptibleByThread[threadID] = isInterruptibleThreadState(status)
 	}
 	for key, value := range src.StatusHeadersByThread {
 		out.StatusHeadersByThread[key] = value
@@ -84,18 +81,19 @@ func cloneTimelineItems(src, dst map[string][]TimelineItem) {
 		copied := make([]TimelineItem, len(list))
 		copy(copied, list)
 		for i := range copied {
-			if len(copied[i].Attachments) > 0 {
-				attachments := make([]TimelineAttachment, len(copied[i].Attachments))
-				copy(attachments, copied[i].Attachments)
-				copied[i].Attachments = attachments
+			item := &copied[i]
+			if len(item.Attachments) > 0 {
+				attachments := make([]TimelineAttachment, len(item.Attachments))
+				copy(attachments, item.Attachments)
+				item.Attachments = attachments
 			}
-			if copied[i].ExitCode != nil {
-				v := *copied[i].ExitCode
-				copied[i].ExitCode = &v
+			if item.ExitCode != nil {
+				v := *item.ExitCode
+				item.ExitCode = &v
 			}
-			if copied[i].ElapsedMS != nil {
-				v := *copied[i].ElapsedMS
-				copied[i].ElapsedMS = &v
+			if item.ElapsedMS != nil {
+				v := *item.ElapsedMS
+				item.ElapsedMS = &v
 			}
 		}
 		dst[key] = copied

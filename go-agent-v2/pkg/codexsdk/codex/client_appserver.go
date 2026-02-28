@@ -78,11 +78,9 @@ type AppServerClient struct {
 	cancel          context.CancelFunc
 	stderrCollector *logger.StderrCollector
 
-	// JSON-RPC request tracking
 	nextID  atomic.Int64
-	pending sync.Map // id → *pendingCall
-
-	activeTurnID atomic.Value // string
+	pending sync.Map
+	activeTurnID atomic.Value
 
 	listenerEnsureNeeded atomic.Bool
 	listenerEnsureInFlight atomic.Bool

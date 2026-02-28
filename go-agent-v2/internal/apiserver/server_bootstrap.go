@@ -49,18 +49,17 @@ func initCodeRunner(s *Server) {
 	if s == nil {
 		return
 	}
-
-	workDir := "."
-	if wd, err := os.Getwd(); err != nil {
+	workDir, err := os.Getwd()
+	if err != nil {
 		logger.Warn("app-server: resolve working directory failed; fallback to current path", logger.FieldError, err)
-	} else {
-		workDir = wd
+		workDir = "."
 	}
-	if cr, err := executor.NewCodeRunner(workDir); err != nil {
+	cr, err := executor.NewCodeRunner(workDir)
+	if err != nil {
 		logger.Warn("app-server: code runner unavailable", logger.FieldError, err)
-	} else {
-		s.codeRunner = cr
+		return
 	}
+	s.codeRunner = cr
 }
 func initStores(s *Server, db *pgxpool.Pool) {
 	if s == nil || db == nil {

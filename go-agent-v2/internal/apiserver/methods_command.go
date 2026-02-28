@@ -101,7 +101,6 @@ type skillsMatchPreviewParams = skillsruntime.SkillsMatchPreviewParams
 type skillsConfigReadParams = skillsruntime.SkillsConfigReadParams
 type skillsRemoteReadParams = skillsruntime.SkillsRemoteReadParams
 type skillsRemoteWriteParams = skillsruntime.SkillsRemoteWriteParams
-
 func newSkillsManager(s *Server) *skillsruntime.Manager {
 	if s == nil {
 		return skillsruntime.NewManager(nil, nil)

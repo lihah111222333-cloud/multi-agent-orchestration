@@ -21,16 +21,13 @@ func RunGit(repoRoot string, args ...string) (string, error) {
 }
 
 func GitRepoRootFromPath(path string) (string, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
+	if path = strings.TrimSpace(path); path == "" {
 		return "", errors.New("git path is empty")
 	}
-
 	output, err := RunGit(path, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", err
 	}
-
 	repoRoot := strings.TrimSpace(output)
 	if repoRoot == "" {
 		return "", errors.New("git repo root is empty")

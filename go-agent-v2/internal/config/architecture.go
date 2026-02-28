@@ -59,12 +59,10 @@ func LoadArchitectureRaw(configPath string) (*ArchitectureRaw, error) {
 func SaveArchitecture(configPath string, data *ArchitectureRaw) error {
 	architectureMu.Lock()
 	defer architectureMu.Unlock()
-
 	encoded, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return err
 	}
-
 	tmpPath := configPath + ".tmp"
 	if err := os.WriteFile(tmpPath, encoded, 0o644); err != nil {
 		return err

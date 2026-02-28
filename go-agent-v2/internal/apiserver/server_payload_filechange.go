@@ -4,8 +4,6 @@ import "strings"
 
 func normalizeFiles(raw any) []string {
 	switch v := raw.(type) {
-	case nil:
-		return nil
 	case string:
 		value := strings.TrimSpace(v)
 		if value == "" {
@@ -25,9 +23,8 @@ func normalizeFiles(raw any) []string {
 			}
 		}
 		return uniqueStrings(out)
-	default:
-		return nil
 	}
+	return nil
 }
 
 func uniqueStrings(items []string) []string {
@@ -61,21 +58,18 @@ func parseFilesFromPatchDelta(delta string) []string {
 		if trimmed == "" {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "diff --git ") {
+		path := ""
+		switch {
+		case strings.HasPrefix(trimmed, "diff --git "):
 			parts := strings.Fields(trimmed)
 			if len(parts) >= 4 {
-				path := strings.TrimPrefix(parts[3], "b/")
-				if path != "" {
-					files = append(files, path)
-				}
+				path = strings.TrimPrefix(parts[3], "b/")
 			}
-			continue
+		case len(trimmed) > 2 && trimmed[1] == ' ' && strings.ContainsRune("MAD", rune(trimmed[0])):
+			path = strings.TrimSpace(trimmed[2:])
 		}
-		if len(trimmed) > 2 && (strings.HasPrefix(trimmed, "M ") || strings.HasPrefix(trimmed, "A ") || strings.HasPrefix(trimmed, "D ")) {
-			path := strings.TrimSpace(trimmed[2:])
-			if path != "" {
-				files = append(files, path)
-			}
+		if path != "" {
+			files = append(files, path)
 		}
 	}
 	return uniqueStrings(files)
@@ -86,23 +80,16 @@ func toolResultSuccess(result string) bool {
 	if value == "" {
 		return true
 	}
-	if strings.HasPrefix(value, "error") ||
-		strings.HasPrefix(value, "failed") ||
-		strings.HasPrefix(value, "unknown tool") {
-		return false
+	for _, prefix := range []string{"error", "failed", "unknown tool"} {
+		if strings.HasPrefix(value, prefix) {
+			return false
+		}
 	}
-	if strings.HasPrefix(value, `{"error"`) ||
-		strings.Contains(value, `"error":`) {
-		return false
-	}
-	return true
+	return !strings.HasPrefix(value, `{"error"`) && !strings.Contains(value, `"error":`)
 }
 
 func rememberFileChanges(s *Server, threadID string, files []string) {
-	if s == nil {
-		return
-	}
-	if threadID == "" {
+	if s == nil || threadID == "" {
 		return
 	}
 	files = uniqueStrings(files)
@@ -113,10 +100,7 @@ func rememberFileChanges(s *Server, threadID string, files []string) {
 }
 
 func consumeRememberedFileChanges(s *Server, threadID string) []string {
-	if s == nil {
-		return nil
-	}
-	if threadID == "" {
+	if s == nil || threadID == "" {
 		return nil
 	}
 	return consumeFileChangesState(s, threadID)
@@ -126,8 +110,9 @@ func enrichFileChangePayload(s *Server, threadID, eventType, method string, payl
 	if payload == nil {
 		return
 	}
-	isFileChangeEvent := strings.Contains(strings.ToLower(eventType), "filechange") ||
-		strings.Contains(strings.ToLower(eventType), "patch_apply")
+	eventTypeLower := strings.ToLower(eventType)
+	isFileChangeEvent := strings.Contains(eventTypeLower, "filechange") ||
+		strings.Contains(eventTypeLower, "patch_apply")
 	isFileChangeMethod := strings.Contains(method, "fileChange")
 	if !isFileChangeEvent && !isFileChangeMethod {
 		return
@@ -138,31 +123,32 @@ func enrichFileChangePayload(s *Server, threadID, eventType, method string, payl
 		files = normalizeFiles(payload["file"])
 	}
 	if len(files) == 0 {
-		delta := ""
-		if value, ok := payload["delta"].(string); ok {
-			delta = value
-		} else if value, ok := payload["output"].(string); ok {
-			delta = value
+		for _, key := range []string{"delta", "output"} {
+			if value, ok := payload[key].(string); ok {
+				files = parseFilesFromPatchDelta(value)
+				break
+			}
 		}
-		files = parseFilesFromPatchDelta(delta)
 	}
 
+	remember := false
 	switch method {
 	case "item/fileChange/outputDelta", "item/started":
-		if len(files) > 0 {
-			payload["files"] = files
-			payload["file"] = files[0]
-			payload["type"] = "fileChange"
-			rememberFileChanges(s, threadID, files)
-		}
+		remember = true
 	case "item/completed":
 		if len(files) == 0 {
 			files = consumeRememberedFileChanges(s, threadID)
 		}
-		if len(files) > 0 {
-			payload["files"] = files
-			payload["file"] = files[0]
-			payload["type"] = "fileChange"
-		}
+	default:
+		return
+	}
+	if len(files) == 0 {
+		return
+	}
+	payload["files"] = files
+	payload["file"] = files[0]
+	payload["type"] = "fileChange"
+	if remember {
+		rememberFileChanges(s, threadID, files)
 	}
 }

@@ -22,9 +22,8 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// 解析地址: 去掉 ws:// 前缀
-	host := strings.TrimPrefix(addr, "ws://")
-	host = strings.TrimPrefix(host, "wss://")
+	// 解析地址: 去掉 ws:// / wss:// 前缀
+	host := strings.TrimPrefix(strings.TrimPrefix(addr, "ws://"), "wss://")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { handleUpgrade(s, w, r) })    // WebSocket
@@ -42,7 +41,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	if err != nil {
 		return pkgerr.Wrap(err, "Server.ListenAndServe", "listen")
 	}
-	defer func() { _ = ln.Close() }()
+	defer ln.Close()
 
 	// 优雅关闭: 给活跃连接 5 秒完成处理
 	util.SafeGo(func() {
@@ -70,8 +69,8 @@ func (s *Server) cleanupRuntimeResources() {
 	}
 	doRuntimeCleanupState(s, func() {
 		cancelAllCodeRuns(s)
-		if s.codeRunner != nil {
-			s.codeRunner.Cleanup()
+		if runner := s.codeRunner; runner != nil {
+			runner.Cleanup()
 		}
 		clearAllAgentWorkDirsState(s)
 

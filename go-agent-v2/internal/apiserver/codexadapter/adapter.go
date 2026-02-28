@@ -101,30 +101,25 @@ type Adapter struct {
 }
 
 func New(deps Deps) *Adapter {
-	adapter := &Adapter{ctx: normalizeDeps(deps)}
-	initializeTrackerState(adapter)
+	adapter := &Adapter{
+		ctx:                    normalizeDeps(deps),
+		trackerActiveTurns:     make(map[string]*trackedTurn),
+		trackerWatchdogTimeout: DefaultTurnWatchdogTimeout,
+		trackerSummaryCache:    make(map[string]trackedTurnSummaryCacheEntry),
+		trackerSummaryTTL:      DefaultTrackedTurnSummaryTTL,
+		trackerStallThreshold:  defaultStallThreshold,
+		trackerStallHeartbeat:  defaultStallHeartbeat,
+	}
+	adapter.tracker = turnTrackerState{
+		Mu:                  &adapter.trackerMu,
+		ActiveTurns:         &adapter.trackerActiveTurns,
+		TurnWatchdogTimeout: &adapter.trackerWatchdogTimeout,
+		TurnSummaryCache:    &adapter.trackerSummaryCache,
+		TurnSummaryTTL:      &adapter.trackerSummaryTTL,
+		StallThreshold:      &adapter.trackerStallThreshold,
+		StallHeartbeat:      &adapter.trackerStallHeartbeat,
+	}
 	return adapter
-}
-
-func initializeTrackerState(a *Adapter) {
-	if a == nil {
-		return
-	}
-	a.trackerActiveTurns = make(map[string]*trackedTurn)
-	a.trackerWatchdogTimeout = DefaultTurnWatchdogTimeout
-	a.trackerSummaryCache = make(map[string]trackedTurnSummaryCacheEntry)
-	a.trackerSummaryTTL = DefaultTrackedTurnSummaryTTL
-	a.trackerStallThreshold = defaultStallThreshold
-	a.trackerStallHeartbeat = defaultStallHeartbeat
-	a.tracker = turnTrackerState{
-		Mu:                  &a.trackerMu,
-		ActiveTurns:         &a.trackerActiveTurns,
-		TurnWatchdogTimeout: &a.trackerWatchdogTimeout,
-		TurnSummaryCache:    &a.trackerSummaryCache,
-		TurnSummaryTTL:      &a.trackerSummaryTTL,
-		StallThreshold:      &a.trackerStallThreshold,
-		StallHeartbeat:      &a.trackerStallHeartbeat,
-	}
 }
 
 func (a *Adapter) depsOrDefault() *Deps {

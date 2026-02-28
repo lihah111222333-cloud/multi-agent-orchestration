@@ -47,8 +47,8 @@ func threadLogFields(threadID string) []any {
 var errNoProcess = errors.New("codexadapter: agent process not found")
 
 func withClientE[T any](proc *codexsdk.AgentProcess, fn func(codexsdk.Client) (T, error)) (T, error) {
-	var zero T
 	if proc == nil || proc.Client == nil {
+		var zero T
 		return zero, errNoProcess
 	}
 	return fn(proc.Client)

@@ -269,21 +269,16 @@ const (
 	SKTypeParameter SymbolKind = 26
 )
 
-var symbolKindNames = map[SymbolKind]string{
-	SKFile: "file", SKModule: "module", SKNamespace: "namespace",
-	SKPackage: "package", SKClass: "class", SKMethod: "method",
-	SKProperty: "property", SKField: "field", SKConstructor: "constructor",
-	SKEnum: "enum", SKInterface: "interface", SKFunction: "function",
-	SKVariable: "variable", SKConstant: "constant", SKStruct: "struct",
-	SKEvent: "event", SKOperator: "operator", SKTypeParameter: "type_parameter",
-	SKString: "string", SKNumber: "number", SKBoolean: "boolean",
-	SKArray: "array", SKObject: "object", SKKey: "key",
-	SKNull: "null", SKEnumMember: "enum_member",
+var symbolKindNames = [...]string{
+	"", "file", "module", "namespace", "package", "class", "method", "property", "field", "constructor",
+	"enum", "interface", "function", "variable", "constant", "string", "number", "boolean", "array", "object",
+	"key", "null", "enum_member", "struct", "event", "operator", "type_parameter",
 }
 
 func (k SymbolKind) String() string {
-	if n, ok := symbolKindNames[k]; ok {
-		return n
+	i := int(k)
+	if i >= 0 && i < len(symbolKindNames) && symbolKindNames[i] != "" {
+		return symbolKindNames[i]
 	}
 	return "unknown"
 }

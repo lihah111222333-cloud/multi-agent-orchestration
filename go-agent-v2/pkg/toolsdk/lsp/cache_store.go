@@ -210,11 +210,7 @@ func (s *lspCacheStore) maybeCleanup() {
 
 	now := s.now()
 	s.mu.Lock()
-	if !s.lastCleanup.IsZero() && now.Sub(s.lastCleanup) < s.config.cleanupInterval {
-		s.mu.Unlock()
-		return
-	}
-	if s.cleanupRunning {
+	if (!s.lastCleanup.IsZero() && now.Sub(s.lastCleanup) < s.config.cleanupInterval) || s.cleanupRunning {
 		s.mu.Unlock()
 		return
 	}
@@ -280,13 +276,10 @@ func (s *lspCacheStore) ensurePersistentReady() bool {
 	}
 
 	s.mu.Lock()
-	if !s.persistent {
+	if !s.persistent || s.persistentReady {
+		ready := s.persistentReady
 		s.mu.Unlock()
-		return false
-	}
-	if s.persistentReady {
-		s.mu.Unlock()
-		return true
+		return ready
 	}
 	dir := s.config.dir
 	s.mu.Unlock()
@@ -297,20 +290,9 @@ func (s *lspCacheStore) ensurePersistentReady() bool {
 	}
 
 	probePath := filepath.Join(dir, ".cache-write-probe")
-	probeFile, err := os.OpenFile(probePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		s.fallbackToMemory("open-probe", err)
-		return false
-	}
-	if _, err := probeFile.Write([]byte("ok")); err != nil {
-		_ = probeFile.Close()
+	if err := os.WriteFile(probePath, []byte("ok"), 0o600); err != nil {
 		_ = os.Remove(probePath)
 		s.fallbackToMemory("write-probe", err)
-		return false
-	}
-	if err := probeFile.Close(); err != nil {
-		_ = os.Remove(probePath)
-		s.fallbackToMemory("close-probe", err)
 		return false
 	}
 	_ = os.Remove(probePath)

@@ -20,8 +20,7 @@ func CollectTrimmedUniqueValues(values []string, keyFn func(string) string) []st
 		}
 		key := value
 		if keyFn != nil {
-			key = strings.TrimSpace(keyFn(value))
-			if key == "" {
+			if key = strings.TrimSpace(keyFn(value)); key == "" {
 				key = value
 			}
 		}

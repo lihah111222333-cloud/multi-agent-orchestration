@@ -22,7 +22,6 @@ func (s *SystemLogStore) Append(ctx context.Context, level, loggerName, message,
 	return err
 }
 
-// ListParams 统一日志查询参数。
 type ListParams struct {
 	Level     string
 	Logger    string

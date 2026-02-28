@@ -19,97 +19,86 @@ import (
 func (s *Server) RegisterRuntimeTool(name string, handler tooladapter.RuntimeToolHandler) {
 	setRuntimeTool(s, name, handler)
 }
-
 func (s *Server) LookupRuntimeTool(name string) (tooladapter.RuntimeToolHandler, bool) {
 	return lookupRuntimeTool(s, name)
 }
-
-func (s *Server) IncrementToolCall(name string) int64 {
-	return incrementToolCallState(s, name)
-}
-
+func (s *Server) IncrementToolCall(name string) int64 { return incrementToolCallState(s, name) }
 func (s *Server) RegisterCodeRunCancel(agentID, callID string, cancel context.CancelFunc) string {
 	return registerCodeRunCancelState(s, agentID, callID, cancel)
 }
-
 func (s *Server) UnregisterCodeRunCancel(agentID, runKey string) {
 	unregisterCodeRunCancelState(s, agentID, runKey)
 }
 
 func (s *Server) CodeRunner() tools.CodeExecRunner {
-	if s == nil {
-		return nil
+	if s != nil {
+		return adaptCodeExecRunner(s.codeRunner)
 	}
-	return adaptCodeExecRunner(s.codeRunner)
+	return nil
 }
 
 func (s *Server) AuditLogger() tools.AuditLogger {
-	if s == nil {
-		return nil
+	if s != nil {
+		return adaptAuditLogger(s.auditLogStore)
 	}
-	return adaptAuditLogger(s.auditLogStore)
+	return nil
 }
 
 func (s *Server) DAGManager() tools.DAGManager {
-	if s == nil {
-		return nil
+	if s != nil {
+		return adaptDAGManager(s.dagStore)
 	}
-	return adaptDAGManager(s.dagStore)
+	return nil
 }
 
 func (s *Server) CommandCardStore() tools.CardStore {
-	if s == nil {
-		return nil
+	if s != nil {
+		return adaptCardStore(s.cmdStore)
 	}
-	return adaptCardStore(s.cmdStore)
+	return nil
 }
 
 func (s *Server) PromptTemplateStore() tools.TemplateStore {
-	if s == nil {
-		return nil
+	if s != nil {
+		return adaptTemplateStore(s.promptStore)
 	}
-	return adaptTemplateStore(s.promptStore)
+	return nil
 }
 
 func (s *Server) SharedFileStore() tools.FileStore {
-	if s == nil {
-		return nil
+	if s != nil {
+		return adaptFileStore(s.fileStore)
 	}
-	return adaptFileStore(s.fileStore)
+	return nil
 }
 
 func (s *Server) WorkspaceOps() tools.WorkspaceOps {
-	if s == nil {
-		return nil
+	if s != nil {
+		return adaptWorkspaceOps(s.workspaceMgr)
 	}
-	return adaptWorkspaceOps(s.workspaceMgr)
+	return nil
 }
 
 func (s *Server) NotifyEvent(method string, params any) {
-	if s == nil {
-		return
+	if s != nil {
+		notify(s, method, params)
 	}
-	notify(s, method, params)
 }
 
 func (s *Server) AgentLauncher() tools.AgentLauncher {
-	if s == nil {
-		return nil
+	if s != nil {
+		return adaptAgentLauncher(s.mgr)
 	}
-	return adaptAgentLauncher(s.mgr)
+	return nil
 }
 
 func (s *Server) SubmitPrompt(agentID, prompt string, images, files []string) error {
 	return submitPrompt(s, agentID, prompt, images, files)
 }
-
 func (s *Server) RememberReportRequest(senderID, workerID string) {
 	rememberReportRequest(s, senderID, workerID)
 }
-
-func (s *Server) NextThreadSeq() int64 {
-	return nextThreadSeqState(s)
-}
+func (s *Server) NextThreadSeq() int64 { return nextThreadSeqState(s) }
 
 func (s *Server) SaveSubAgent(id, name, cwd string) {
 	if s == nil || s.agentThreadStore == nil {
@@ -133,27 +122,16 @@ func (s *Server) DeleteSubAgent(id string) {
 	}
 }
 
-func (s *Server) CancelCodeRuns(agentID string) int {
-	return cancelCodeRunsState(s, agentID)
-}
-
-func (s *Server) SetAgentWorkDir(agentID, cwd string) {
-	setAgentWorkDirState(s, agentID, cwd)
-}
-
-func (s *Server) ClearAgentWorkDir(agentID string) {
-	clearAgentWorkDirState(s, agentID)
-}
-
-func (s *Server) GetAgentWorkDir(agentID string) string {
-	return getAgentWorkDirState(s, agentID)
-}
+func (s *Server) CancelCodeRuns(agentID string) int     { return cancelCodeRunsState(s, agentID) }
+func (s *Server) SetAgentWorkDir(agentID, cwd string)   { setAgentWorkDirState(s, agentID, cwd) }
+func (s *Server) ClearAgentWorkDir(agentID string)      { clearAgentWorkDirState(s, agentID) }
+func (s *Server) GetAgentWorkDir(agentID string) string { return getAgentWorkDirState(s, agentID) }
 
 func (s *Server) AllSchemas() []agentcore.DynamicTool {
-	if s == nil {
-		return nil
+	if s != nil {
+		return tooladapter.AllSchemas(toolAdapterProviders(s))
 	}
-	return tooladapter.AllSchemas(toolAdapterProviders(s))
+	return nil
 }
 
 func setRuntimeTool(s *Server, name string, handler tooladapter.RuntimeToolHandler) {

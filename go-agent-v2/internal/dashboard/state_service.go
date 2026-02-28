@@ -33,9 +33,8 @@ func ResolvePreferenceSideEffects(key string, value any) PreferenceSideEffects {
 	case PrefShowInjectedPromptInChat:
 		show := AsBool(value, false)
 		return PreferenceSideEffects{ShowInjectedPromptInChat: &show}
-	default:
-		return PreferenceSideEffects{}
 	}
+	return PreferenceSideEffects{}
 }
 
 type StateThread struct {
@@ -299,9 +298,8 @@ func AsString(value any) string {
 		return v
 	case json.Number:
 		return v.String()
-	default:
-		return ""
 	}
+	return ""
 }
 
 func AsPositiveInt(value any, minVal int) int {
@@ -359,9 +357,6 @@ func AsBool(value any, fallback bool) bool {
 }
 
 func NormalizeThreadAliases(value any) map[string]string {
-	if value == nil {
-		return map[string]string{}
-	}
 	switch m := value.(type) {
 	case map[string]string:
 		return m

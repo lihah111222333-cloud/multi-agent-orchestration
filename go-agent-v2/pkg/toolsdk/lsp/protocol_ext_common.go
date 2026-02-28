@@ -7,111 +7,98 @@ import (
 	"strings"
 )
 
-type LocationLink struct {
-	OriginSelectionRange *Range `json:"originSelectionRange,omitempty"`
-	TargetURI            string `json:"targetUri"`
-	TargetRange          Range  `json:"targetRange"`
-	TargetSelectionRange Range  `json:"targetSelectionRange"`
-}
-
-type Command struct {
-	Title     string `json:"title"`
-	Command   string `json:"command"`
-	Arguments []any  `json:"arguments,omitempty"`
-}
-
-type SymbolInformation struct {
-	Name          string     `json:"name"`
-	Kind          SymbolKind `json:"kind"`
-	Location      Location   `json:"location"`
-	ContainerName string     `json:"containerName,omitempty"`
-}
-
-type WorkspaceSymbolLocation struct {
-	URI string `json:"uri"`
-}
-
-type WorkspaceSymbol struct {
-	Name          string `json:"name"`
-	Kind          int    `json:"kind"`
-	Location      any    `json:"location,omitempty"` // Location | WorkspaceSymbolLocation
-	ContainerName string `json:"containerName,omitempty"`
-	Data          any    `json:"data,omitempty"`
-}
-
-type WorkspaceSymbolParams struct {
-	Query string `json:"query"`
-}
-
-type CodeAction struct {
-	Title       string         `json:"title"`
-	Kind        string         `json:"kind,omitempty"`
-	Diagnostics []Diagnostic   `json:"diagnostics,omitempty"`
-	Edit        *WorkspaceEdit `json:"edit,omitempty"`
-	Command     *Command       `json:"command,omitempty"`
-	Data        any            `json:"data,omitempty"`
-}
-
-type CodeActionContext struct {
-	Diagnostics []Diagnostic `json:"diagnostics"`
-	Only        []string     `json:"only,omitempty"`
-	TriggerKind int          `json:"triggerKind,omitempty"`
-}
-
-type CodeActionParams struct {
-	TextDocument TextDocumentIdentifier `json:"textDocument"`
-	Range        Range                  `json:"range"`
-	Context      CodeActionContext      `json:"context"`
-}
-
-type CallHierarchyItem struct {
-	Name           string `json:"name"`
-	Kind           int    `json:"kind"`
-	URI            string `json:"uri"`
-	Range          Range  `json:"range"`
-	SelectionRange Range  `json:"selectionRange"`
-	Data           any    `json:"data,omitempty"`
-}
-
-type TypeHierarchyItem struct {
-	Name           string `json:"name"`
-	Kind           int    `json:"kind"`
-	URI            string `json:"uri"`
-	Range          Range  `json:"range"`
-	SelectionRange Range  `json:"selectionRange"`
-	Data           any    `json:"data,omitempty"`
-}
-
-type SemanticTokensLegend struct {
-	TokenTypes     []string `json:"tokenTypes"`
-	TokenModifiers []string `json:"tokenModifiers"`
-}
-
-type SemanticTokensOptions struct {
-	Legend SemanticTokensLegend `json:"legend"`
-}
-
-type LocationResult struct {
-	Location     *Location     `json:"location,omitempty"`
-	LocationLink *LocationLink `json:"locationLink,omitempty"`
-	Canonical    *Location     `json:"canonical,omitempty"`
-}
+type (
+	LocationLink struct {
+		OriginSelectionRange *Range `json:"originSelectionRange,omitempty"`
+		TargetURI            string `json:"targetUri"`
+		TargetRange          Range  `json:"targetRange"`
+		TargetSelectionRange Range  `json:"targetSelectionRange"`
+	}
+	Command struct {
+		Title     string `json:"title"`
+		Command   string `json:"command"`
+		Arguments []any  `json:"arguments,omitempty"`
+	}
+	SymbolInformation struct {
+		Name          string     `json:"name"`
+		Kind          SymbolKind `json:"kind"`
+		Location      Location   `json:"location"`
+		ContainerName string     `json:"containerName,omitempty"`
+	}
+	WorkspaceSymbolLocation struct {
+		URI string `json:"uri"`
+	}
+	WorkspaceSymbol struct {
+		Name          string `json:"name"`
+		Kind          int    `json:"kind"`
+		Location      any    `json:"location,omitempty"` // Location | WorkspaceSymbolLocation
+		ContainerName string `json:"containerName,omitempty"`
+		Data          any    `json:"data,omitempty"`
+	}
+	WorkspaceSymbolParams struct {
+		Query string `json:"query"`
+	}
+	CodeAction struct {
+		Title       string         `json:"title"`
+		Kind        string         `json:"kind,omitempty"`
+		Diagnostics []Diagnostic   `json:"diagnostics,omitempty"`
+		Edit        *WorkspaceEdit `json:"edit,omitempty"`
+		Command     *Command       `json:"command,omitempty"`
+		Data        any            `json:"data,omitempty"`
+	}
+	CodeActionContext struct {
+		Diagnostics []Diagnostic `json:"diagnostics"`
+		Only        []string     `json:"only,omitempty"`
+		TriggerKind int          `json:"triggerKind,omitempty"`
+	}
+	CodeActionParams struct {
+		TextDocument TextDocumentIdentifier `json:"textDocument"`
+		Range        Range                  `json:"range"`
+		Context      CodeActionContext      `json:"context"`
+	}
+	CallHierarchyItem struct {
+		Name           string `json:"name"`
+		Kind           int    `json:"kind"`
+		URI            string `json:"uri"`
+		Range          Range  `json:"range"`
+		SelectionRange Range  `json:"selectionRange"`
+		Data           any    `json:"data,omitempty"`
+	}
+	TypeHierarchyItem struct {
+		Name           string `json:"name"`
+		Kind           int    `json:"kind"`
+		URI            string `json:"uri"`
+		Range          Range  `json:"range"`
+		SelectionRange Range  `json:"selectionRange"`
+		Data           any    `json:"data,omitempty"`
+	}
+	SemanticTokensLegend struct {
+		TokenTypes     []string `json:"tokenTypes"`
+		TokenModifiers []string `json:"tokenModifiers"`
+	}
+	SemanticTokensOptions struct {
+		Legend SemanticTokensLegend `json:"legend"`
+	}
+	LocationResult struct {
+		Location     *Location     `json:"location,omitempty"`
+		LocationLink *LocationLink `json:"locationLink,omitempty"`
+		Canonical    *Location     `json:"canonical,omitempty"`
+	}
+	WorkspaceSymbolResult struct {
+		SymbolInformation *SymbolInformation `json:"symbolInformation,omitempty"`
+		WorkspaceSymbol   *WorkspaceSymbol   `json:"workspaceSymbol,omitempty"`
+	}
+	CodeActionResult struct {
+		CodeAction *CodeAction `json:"codeAction,omitempty"`
+		Command    *Command    `json:"command,omitempty"`
+	}
+)
 
 func (r LocationResult) PrimaryLocation() *Location {
 	if r.Location != nil {
 		return r.Location
 	}
 	return r.Canonical
-}
-
-type WorkspaceSymbolResult struct {
-	SymbolInformation *SymbolInformation `json:"symbolInformation,omitempty"`
-	WorkspaceSymbol   *WorkspaceSymbol   `json:"workspaceSymbol,omitempty"`
-}
-
-type CodeActionResult struct {
-	CodeAction *CodeAction `json:"codeAction,omitempty"`
-	Command    *Command    `json:"command,omitempty"`
 }
 
 func isNullRaw(raw json.RawMessage) bool {

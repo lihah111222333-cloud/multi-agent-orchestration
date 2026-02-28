@@ -28,7 +28,6 @@ func buildResourceTools(provider ResourceProvider, specs []resourceToolSpec) []T
 	tools := make([]Tool, 0, len(specs))
 	for _, spec := range specs {
 		if spec.workspaceOnly && !hasWorkspace { continue }
-		spec := spec
 		tools = append(tools, Tool{
 			Schema: spec.schema,
 			Handler: func(_ ToolCallContext, args json.RawMessage) string {

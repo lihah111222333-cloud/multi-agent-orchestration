@@ -455,26 +455,18 @@ func extractPlanSnapshot(payload map[string]any) (string, bool, bool) {
 }
 
 func extractPlanEntries(payload map[string]any) ([]planEntry, string) {
-	if payload == nil {
-		return nil, ""
-	}
-	entries := parsePlanEntriesAny(payload["plan"])
-	explanation := extractPlanExplanation(payload["explanation"])
-	if len(entries) > 0 {
-		return entries, explanation
-	}
+	if payload == nil { return nil, "" }
+	explanation, _ := payload["explanation"].(string)
+	explanation = strings.TrimSpace(explanation)
+	if entries := parsePlanEntriesAny(payload["plan"]); len(entries) > 0 { return entries, explanation }
 	for _, key := range []string{"msg", "data", "payload"} {
 		nested, ok := payload[key].(map[string]any)
-		if !ok {
-			continue
-		}
-		entries = parsePlanEntriesAny(nested["plan"])
+		if !ok { continue }
 		if explanation == "" {
-			explanation = extractPlanExplanation(nested["explanation"])
+			text, _ := nested["explanation"].(string)
+			explanation = strings.TrimSpace(text)
 		}
-		if len(entries) > 0 {
-			return entries, explanation
-		}
+		if entries := parsePlanEntriesAny(nested["plan"]); len(entries) > 0 { return entries, explanation }
 	}
 	return nil, explanation
 }
@@ -503,8 +495,6 @@ func parsePlanEntriesAny(raw any) []planEntry {
 	return out
 }
 
-func extractPlanExplanation(raw any) string { text, _ := raw.(string); return strings.TrimSpace(text) }
-
 func formatPlanSnapshot(entries []planEntry, explanation string) (string, bool) {
 	total := len(entries)
 	if total == 0 {
@@ -520,12 +510,9 @@ func formatPlanSnapshot(entries []planEntry, explanation string) (string, bool) 
 		lines = append(lines, fmt.Sprintf("%d. %s %s", index+1, planStatusSymbol(entry.status), entry.step))
 	}
 	header := fmt.Sprintf("✓ 已完成 %d/%d 项任务", completed, total)
-	if explanation != "" {
-		lines = append([]string{header, explanation}, lines...)
-	} else {
-		lines = append([]string{header}, lines...)
-	}
-	return strings.Join(lines, "\n"), completed == total
+	prefix := []string{header}
+	if explanation != "" { prefix = append(prefix, explanation) }
+	return strings.Join(append(prefix, lines...), "\n"), completed == total
 }
 
 func planStatusSymbol(status string) string {

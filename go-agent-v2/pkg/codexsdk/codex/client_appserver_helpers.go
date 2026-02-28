@@ -178,16 +178,12 @@ func rpcErrorContains(err error, requireAll bool, parts ...string) bool {
 	text := strings.ToLower(strings.TrimSpace(err.Error()))
 	if requireAll {
 		for _, part := range parts {
-			if !strings.Contains(text, strings.ToLower(strings.TrimSpace(part))) {
-				return false
-			}
+			if !strings.Contains(text, strings.ToLower(strings.TrimSpace(part))) { return false }
 		}
 		return true
 	}
 	for _, part := range parts {
-		if strings.Contains(text, strings.ToLower(strings.TrimSpace(part))) {
-			return true
-		}
+		if strings.Contains(text, strings.ToLower(strings.TrimSpace(part))) { return true }
 	}
 	return false
 }

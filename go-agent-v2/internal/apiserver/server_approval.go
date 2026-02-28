@@ -164,13 +164,13 @@ func mergeApprovalDecisionPayload(method string, current map[string]any, result 
 }
 
 func approvalDecisionPayload(method string, approved bool) map[string]any {
-	decision := "accept"
 	if !approved {
-		decision = "decline"
-	} else if strings.TrimSpace(method) == approvalMethodSkillRequest {
-		decision = "approve"
+		return map[string]any{"decision": "decline"}
 	}
-	return map[string]any{"decision": decision}
+	if strings.TrimSpace(method) == approvalMethodSkillRequest {
+		return map[string]any{"decision": "approve"}
+	}
+	return map[string]any{"decision": "accept"}
 }
 
 func approvalDecisionAllowsSubmit(method string, payload map[string]any) bool {

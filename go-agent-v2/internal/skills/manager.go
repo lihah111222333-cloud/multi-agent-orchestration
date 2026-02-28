@@ -15,10 +15,10 @@ type SkillServiceProvider interface {
 type SkillServiceProviderFunc func() *service.SkillService
 
 func (fn SkillServiceProviderFunc) SkillService() *service.SkillService {
-	if fn == nil {
-		return nil
+	if fn != nil {
+		return fn()
 	}
-	return fn()
+	return nil
 }
 
 // AutoSkillMatchOptions controls inclusion behavior for auto-matched skills.
@@ -58,10 +58,10 @@ func (fn AutoMatchCollectorFunc) CollectAutoMatchedSkillMatches(
 	input []UserInput,
 	options AutoSkillMatchOptions,
 ) []AutoMatchedSkillMatch {
-	if fn == nil {
-		return nil
+	if fn != nil {
+		return fn(threadID, prompt, input, options)
 	}
-	return fn(threadID, prompt, input, options)
+	return nil
 }
 
 // Manager owns skills JSON-RPC business logic.
@@ -90,10 +90,10 @@ func (m *Manager) skillService() *service.SkillService {
 }
 
 func (m *Manager) autoMatcher() AutoMatchCollector {
-	if m == nil {
-		return nil
+	if m != nil {
+		return m.autoMatchCollector
 	}
-	return m.autoMatchCollector
+	return nil
 }
 
 // GetAgentSkills returns current configured skill list for an agent.
@@ -103,12 +103,5 @@ func (m *Manager) GetAgentSkills(agentID string) []string {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	values := m.agentSkills[agentID]
-	if len(values) == 0 {
-		return nil
-	}
-	out := make([]string, len(values))
-	copy(out, values)
-	return out
+	return append([]string(nil), m.agentSkills[agentID]...)
 }

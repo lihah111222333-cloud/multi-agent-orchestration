@@ -190,25 +190,9 @@ func (m *Manager) SkillsLocalImportDir(_ context.Context, p SkillsLocalImportDir
 		if err != nil {
 			return nil, apperrors.Wrap(err, "Server.skillsLocalImportDir", "import directory")
 		}
-		skillPayload := map[string]any{
-			"name":       result.Name,
-			"dir":        result.Dir,
-			"skill_file": result.SkillFile,
-			"source":     result.Source,
-			"files":      result.Files,
-			"bytes":      result.Bytes,
-		}
-		return map[string]any{
-			"ok": true,
-			"summary": map[string]int{
-				"requested": 1,
-				"imported":  1,
-				"failed":    0,
-			},
-			"skill":    skillPayload,
-			"skills":   []map[string]any{skillPayload},
-			"failures": []map[string]string{},
-		}, nil
+		response := skillImportResponse(1, []skillImportResult{result}, nil)
+		response["skill"] = skillImportResultPayload(result)
+		return response, nil
 	}
 
 	if strings.TrimSpace(p.Name) != "" {
@@ -249,35 +233,7 @@ func (m *Manager) SkillsLocalImportDir(_ context.Context, p SkillsLocalImportDir
 		results = append(results, result)
 	}
 
-	skillsPayload := make([]map[string]any, 0, len(results))
-	for _, result := range results {
-		skillsPayload = append(skillsPayload, map[string]any{
-			"name":       result.Name,
-			"dir":        result.Dir,
-			"skill_file": result.SkillFile,
-			"source":     result.Source,
-			"files":      result.Files,
-			"bytes":      result.Bytes,
-		})
-	}
-	failuresPayload := make([]map[string]string, 0, len(failures))
-	for _, failure := range failures {
-		failuresPayload = append(failuresPayload, map[string]string{
-			"source": failure.Source,
-			"error":  failure.Error,
-		})
-	}
-
-	return map[string]any{
-		"ok": len(failures) == 0,
-		"summary": map[string]int{
-			"requested": len(sources),
-			"imported":  len(results),
-			"failed":    len(failures),
-		},
-		"skills":   skillsPayload,
-		"failures": failuresPayload,
-	}, nil
+	return skillImportResponse(len(sources), results, failures), nil
 }
 
 // SkillsLocalDelete handles skills/local/delete.
@@ -298,18 +254,16 @@ func (m *Manager) SkillsLocalDelete(_ context.Context, p SkillsLocalDeleteParams
 		return nil, apperrors.Wrap(err, "Server.skillsLocalDelete", "delete skill")
 	}
 
-	removedBindings := 0
-
 	logger.Info("skills/local/delete: removed",
 		logger.FieldSkill, resolvedName,
 		logger.FieldPath, targetDir,
-		"removed_agent_bindings", removedBindings,
+		"removed_agent_bindings", 0,
 	)
 	return map[string]any{
 		"ok":                     true,
 		"name":                   resolvedName,
 		"dir":                    targetDir,
-		"removed_agent_bindings": removedBindings,
+		"removed_agent_bindings": 0,
 	}, nil
 }
 

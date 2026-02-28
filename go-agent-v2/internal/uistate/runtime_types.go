@@ -55,7 +55,7 @@ type (
 	AlertEntry struct {
 		ID      string `json:"id"`
 		Time    string `json:"time"`
-		Level   string `json:"level"` // "error" | "warning" | "stall"
+		Level   string `json:"level"`
 		Message string `json:"message"`
 	}
 	RuntimeSnapshot struct {
@@ -84,32 +84,20 @@ type (
 		CreatedAt time.Time
 	}
 	threadRuntime struct {
-		thinkingIndex, assistantIndex, commandIndex, planIndex int
-		editingFiles                                           map[string]struct{}
-
-		turnDepth, approvalDepth, userInputDepth                int
-		commandDepth, fileEditDepth, toolCallDepth, collabDepth int
-
-		terminalWaitOverlay, mcpStartupOverlay, backgroundOverlay bool
-		terminalWaitLabel, mcpStartupLabel, backgroundLabel       string
-		backgroundDetails                                         string
-
-		streamErrorText, streamErrorDetails string
-		statusHeader, reasoningHeaderBuf    string
-
-		hasDerivedState  bool
-		lastEventAt      time.Time
-		approvalContext  string
-		pendingHydration []HistoryRecord
+		thinkingIndex, assistantIndex, commandIndex, planIndex                 int
+		turnDepth, approvalDepth, userInputDepth                               int
+		commandDepth, fileEditDepth, toolCallDepth, collabDepth                int
+		terminalWaitOverlay, mcpStartupOverlay, backgroundOverlay              bool
+		terminalWaitLabel, mcpStartupLabel, backgroundLabel, backgroundDetails string
+		streamErrorText, streamErrorDetails, statusHeader, reasoningHeaderBuf  string
+		hasDerivedState                                                        bool
+		lastEventAt                                                            time.Time
+		approvalContext                                                        string
+		editingFiles                                                           map[string]struct{}
+		pendingHydration                                                       []HistoryRecord
 	}
 )
 
 func newThreadRuntime() *threadRuntime {
-	return &threadRuntime{
-		thinkingIndex:  -1,
-		assistantIndex: -1,
-		commandIndex:   -1,
-		planIndex:      -1,
-		editingFiles:   map[string]struct{}{},
-	}
+	return &threadRuntime{thinkingIndex: -1, assistantIndex: -1, commandIndex: -1, planIndex: -1, editingFiles: map[string]struct{}{}}
 }

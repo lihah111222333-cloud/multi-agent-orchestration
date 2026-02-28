@@ -17,7 +17,7 @@ const ptCols = `id, prompt_key, title, agent_key, tool_name, prompt_text,
 	variables, tags, description, enabled, created_by, updated_by, created_at, updated_at`
 
 func (s *PromptTemplateStore) Save(ctx context.Context, t *PromptTemplate) (*PromptTemplate, error) {
-	if existing, err := s.Get(ctx, t.PromptKey); err == nil && existing != nil {
+	if existing, _ := s.Get(ctx, t.PromptKey); existing != nil {
 		if _, err := s.pool.Exec(ctx,
 			`INSERT INTO prompt_versions (prompt_key, title, agent_key, tool_name, prompt_text,
 			   variables, tags, enabled, created_by, updated_by, source_updated_at)
@@ -58,8 +58,10 @@ func (s *PromptTemplateStore) Get(ctx context.Context, promptKey string) (*Promp
 }
 
 func (s *PromptTemplateStore) List(ctx context.Context, agentKey, keyword string, limit int) ([]PromptTemplate, error) {
-	q := NewQueryBuilder().Eq("agent_key", agentKey).KeywordLike(keyword, "prompt_key", "title", "prompt_text")
-	sql, params := q.Build("SELECT "+ptCols+" FROM prompt_templates", "updated_at DESC", limit)
+	sql, params := NewQueryBuilder().
+		Eq("agent_key", agentKey).
+		KeywordLike(keyword, "prompt_key", "title", "prompt_text").
+		Build("SELECT "+ptCols+" FROM prompt_templates", "updated_at DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err

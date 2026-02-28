@@ -23,32 +23,26 @@ type uiProjectsSetActiveParams = uiProjectsAddParams
 
 func normalizeProjectPath(path string) string {
 	value := strings.TrimSpace(path)
-	if value == "" {
-		return ""
+	if value == "" || value == "/" || isWindowsDriveRoot(value) {
+		return value
 	}
-	if value != "/" && !isWindowsDriveRoot(value) {
-		value = strings.TrimRight(value, "\\/")
-	}
-	return value
+	return strings.TrimRight(value, "\\/")
 }
 
 func isWindowsDriveRoot(path string) bool {
-	if len(path) < 2 || len(path) > 3 || !isASCIILetter(path[0]) || path[1] != ':' {
+	if len(path) < 2 || len(path) > 3 || path[1] != ':' {
+		return false
+	}
+	ch := path[0]
+	if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') {
 		return false
 	}
 	return len(path) == 2 || path[2] == '/' || path[2] == '\\'
 }
 
-func isASCIILetter(ch byte) bool {
-	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
-}
-
 func appendUniqueNormalizedProject(projects []string, path string) []string {
 	normalized := normalizeProjectPath(path)
-	if normalized == "" || normalized == "." {
-		return projects
-	}
-	if slices.Contains(projects, normalized) {
+	if normalized == "" || normalized == "." || slices.Contains(projects, normalized) {
 		return projects
 	}
 	return append(projects, normalized)

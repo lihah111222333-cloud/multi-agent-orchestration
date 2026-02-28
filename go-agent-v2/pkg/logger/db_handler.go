@@ -40,7 +40,6 @@ type DBHandler struct {
 	pool   *pgxpool.Pool
 	buf    chan LogEntry
 	attrs  []slog.Attr
-	group  string
 	level  slog.Level
 	done   chan struct{}
 	closed *atomic.Bool
@@ -63,7 +62,7 @@ func (h *DBHandler) Enabled(_ context.Context, level slog.Level) bool {
 }
 
 func (h *DBHandler) Handle(_ context.Context, r slog.Record) error {
-	if h.closed != nil && h.closed.Load() {
+	if h.closed.Load() {
 		return nil
 	}
 
@@ -100,14 +99,13 @@ func (h *DBHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &clone
 }
 
-func (h *DBHandler) WithGroup(name string) slog.Handler {
+func (h *DBHandler) WithGroup(_ string) slog.Handler {
 	clone := *h
-	clone.group = name
 	return &clone
 }
 
 func (h *DBHandler) Shutdown() {
-	if h.closed != nil && !h.closed.CompareAndSwap(false, true) {
+	if !h.closed.CompareAndSwap(false, true) {
 		return
 	}
 	close(h.buf)

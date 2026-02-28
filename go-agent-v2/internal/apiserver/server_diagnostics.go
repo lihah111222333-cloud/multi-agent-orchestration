@@ -10,13 +10,9 @@ func (s *Server) SetDiagnostics(uri string, diagnostics []lsp.Diagnostic) {
 	setDiagnostics(s, uri, diagnostics)
 }
 
-func (s *Server) GetDiagnostics(uri string) []lsp.Diagnostic {
-	return getDiagnostics(s, uri)
-}
+func (s *Server) GetDiagnostics(uri string) []lsp.Diagnostic { return getDiagnostics(s, uri) }
 
-func (s *Server) GetAllDiagnostics() map[string][]lsp.Diagnostic {
-	return allDiagnosticsCacheState(s)
-}
+func (s *Server) GetAllDiagnostics() map[string][]lsp.Diagnostic { return allDiagnosticsCacheState(s) }
 
 var diagnosticsAccessor = func(s *Server) lsp.DiagnosticsAccessor { return s }
 

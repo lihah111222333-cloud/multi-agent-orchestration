@@ -17,12 +17,11 @@ import (
 const (
 	defaultCodeOpenContextLines = 90
 	maxCodeOpenContextLines     = 180
-	maxCodeOpenFileBytes        = 64 << 20 // 64MB
-	maxInlineImageDataURLBytes  = 8 << 20  // 8MB
-	binaryProbeBytes            = 8 << 10  // 8KB
+	maxCodeOpenFileBytes        = 64 << 20
+	maxInlineImageDataURLBytes  = 8 << 20
+	binaryProbeBytes            = 8 << 10
 )
 
-// CodeOpenParams is the typed payload for ui/code/open.
 type CodeOpenParams struct {
 	FilePath string   `json:"filePath"`
 	Line     int      `json:"line"`
@@ -32,7 +31,6 @@ type CodeOpenParams struct {
 	Projects []string `json:"projects"`
 }
 
-// CodeOpenDiagnostic is a minimal diagnostic DTO used by CodeOpenService.
 type CodeOpenDiagnostic struct {
 	Line     int
 	Column   int
@@ -40,13 +38,11 @@ type CodeOpenDiagnostic struct {
 	Message  string
 }
 
-// CodeOpenHooks are injected from apiserver, so dashboard stays decoupled.
 type CodeOpenHooks struct {
 	OpenLSPFile      func(path, content string) error
 	DiagnosticsByURI func(uri string) []CodeOpenDiagnostic
 }
 
-// CodeOpenService hosts ui/code/open business logic.
 type CodeOpenService struct {
 	hooks CodeOpenHooks
 }
@@ -419,7 +415,6 @@ func supportsLSPFileType(path string) bool {
 	return false
 }
 
-// Open resolves and reads a code/file reference for UI preview.
 func (s *CodeOpenService) Open(p CodeOpenParams) (map[string]any, error) {
 	logger.Info("ui/code/open: begin",
 		"file_path", strings.TrimSpace(p.FilePath),

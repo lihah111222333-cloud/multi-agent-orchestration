@@ -15,7 +15,6 @@ const (
 	PrefActiveCmdThreadID        = "activeCmdThreadId"
 )
 
-// PreferenceSideEffects describes runtime side effects from ui/preferences/set.
 type PreferenceSideEffects struct {
 	MainAgentID              string
 	StallThresholdSec        int
@@ -23,7 +22,6 @@ type PreferenceSideEffects struct {
 	ShowInjectedPromptInChat *bool
 }
 
-// ResolvePreferenceSideEffects maps one preference mutation to runtime actions.
 func ResolvePreferenceSideEffects(key string, value any) PreferenceSideEffects {
 	switch strings.TrimSpace(key) {
 	case PrefMainAgentID:
@@ -40,26 +38,22 @@ func ResolvePreferenceSideEffects(key string, value any) PreferenceSideEffects {
 	}
 }
 
-// StateThread is a minimal thread DTO for resolution logic.
 type StateThread struct {
 	ID   string
 	Name string
 }
 
-// StateAgentMeta is a minimal agent-meta DTO for resolution logic.
 type StateAgentMeta struct {
 	Alias  string
 	IsMain bool
 }
 
-// StateResolutionInput is the DTO passed from apiserver to dashboard.
 type StateResolutionInput struct {
 	Threads       []StateThread
 	AgentMetaByID map[string]StateAgentMeta
 	Prefs         map[string]any
 }
 
-// StateResolution is the result of ui/state preference resolution.
 type StateResolution struct {
 	Aliases                map[string]string
 	ResolvedMainAgentID    string
@@ -67,7 +61,6 @@ type StateResolution struct {
 	ResolvedActiveCmdID    string
 }
 
-// ResolveState computes aliases and preferred thread/main ids.
 func ResolveState(input StateResolutionInput) StateResolution {
 	aliases := NormalizeThreadAliases(input.Prefs[PrefThreadAliases])
 	threads := make([]StateThread, 0, len(input.Threads))
@@ -107,7 +100,6 @@ type AgentRuntimeItem struct {
 	CodexThreadID string
 }
 
-// BuildAgentRuntimeByID converts manager runtime list into UI DTO.
 func BuildAgentRuntimeByID(items []AgentRuntimeItem) map[string]map[string]any {
 	result := map[string]map[string]any{}
 	for _, item := range items {
@@ -127,7 +119,6 @@ func BuildAgentRuntimeByID(items []AgentRuntimeItem) map[string]map[string]any {
 	return result
 }
 
-// UIStateResultInput carries apiserver->dashboard DTO for ui/state/get response building.
 type UIStateResultInput struct {
 	Threads               any
 	Statuses              map[string]string
@@ -161,7 +152,6 @@ type UIStateResultInput struct {
 	HasShowInjected    bool
 }
 
-// BuildUIStateResult assembles the final ui/state/get payload.
 func BuildUIStateResult(input UIStateResultInput) map[string]any {
 	result := map[string]any{
 		"threads":               input.Threads,
@@ -368,7 +358,6 @@ func AsBool(value any, fallback bool) bool {
 	return fallback
 }
 
-// NormalizeThreadAliases converts preference payload into map[string]string.
 func NormalizeThreadAliases(value any) map[string]string {
 	if value == nil {
 		return map[string]string{}

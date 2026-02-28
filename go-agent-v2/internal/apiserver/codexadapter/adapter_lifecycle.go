@@ -54,16 +54,14 @@ func (a *Adapter) ThreadFork(threadID string) (lifecyclesvc.ThreadForkResult, er
 }
 
 func (a *Adapter) ThreadRollback(threadID string, numTurns int) (map[string]any, error) {
-	return a.sendThreadCommand("Server.threadRollback", threadID, "/undo", strconv.Itoa(numTurns), "send undo command")
+	return withProcess(a, "Server.threadRollback", threadID, func(proc *codexsdk.AgentProcess) (map[string]any, error) {
+		return lifecyclesvc.RunThreadCommand(proc, "Server.threadRollback", "/undo", strconv.Itoa(numTurns), "send undo command", a.SendCommand)
+	})
 }
 
 func (a *Adapter) ReviewStart(threadID, reviewArgs string) (map[string]any, error) {
-	return a.sendThreadCommand("Server.reviewStart", threadID, "/review", reviewArgs, "send review command")
-}
-
-func (a *Adapter) sendThreadCommand(methodName, threadID, command, args, wrapMsg string) (map[string]any, error) {
-	return withProcess(a, methodName, threadID, func(proc *codexsdk.AgentProcess) (map[string]any, error) {
-		return lifecyclesvc.RunThreadCommand(proc, methodName, command, args, wrapMsg, a.SendCommand)
+	return withProcess(a, "Server.reviewStart", threadID, func(proc *codexsdk.AgentProcess) (map[string]any, error) {
+		return lifecyclesvc.RunThreadCommand(proc, "Server.reviewStart", "/review", reviewArgs, "send review command", a.SendCommand)
 	})
 }
 

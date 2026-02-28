@@ -37,10 +37,8 @@ func listHandler[P any](provider DashboardProvider, logKey, responseKey string, 
 		if ctx == nil {
 			ctx = context.Background()
 		}
-
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-
 		list, ok, err := query(ctx, provider, p)
 		if !ok || err != nil {
 			if err != nil {
@@ -117,62 +115,50 @@ func Register(register RegisterFn, provider DashboardProvider, _ MethodCaller) {
 	if register == nil {
 		return
 	}
-
 	register("dashboard/agentStatus", listHandler(provider, "agents", "agents",
 		func(ctx context.Context, dp DashboardProvider, p dashAgentStatusParams) (any, bool, error) {
 			return dp.ListAgentStatus(ctx, p.Status)
 		}))
-
 	register("dashboard/dags", listHandler(provider, "dags", "dags",
 		func(ctx context.Context, dp DashboardProvider, p dashDAGParams) (any, bool, error) {
 			return dp.ListDAGs(ctx, p.Keyword, p.Status, clampLimit(p.Limit, 100))
 		}))
-
 	register("dashboard/taskAcks", listHandler(provider, "acks", "acks",
 		func(ctx context.Context, dp DashboardProvider, p dashTaskAckParams) (any, bool, error) {
 			return dp.ListTaskAcks(ctx, p.Keyword, p.Status, p.Priority, p.AssignedTo, clampLimit(p.Limit, 100))
 		}))
-
 	register("dashboard/taskTraces", listHandler(provider, "traces", "traces",
 		func(ctx context.Context, dp DashboardProvider, p dashTaskTraceParams) (any, bool, error) {
 			return dp.ListTaskTraces(ctx, p.AgentID, p.Keyword, nil, clampLimit(p.Limit, 100))
 		}))
-
 	register("dashboard/commandCards", listHandler(provider, "cards", "cards",
 		func(ctx context.Context, dp DashboardProvider, p dashCommandCardParams) (any, bool, error) {
 			return dp.ListCommandCards(ctx, p.Keyword, clampLimit(p.Limit, 100))
 		}))
-
 	register("dashboard/prompts", listHandler(provider, "prompts", "prompts",
 		func(ctx context.Context, dp DashboardProvider, p dashPromptParams) (any, bool, error) {
 			return dp.ListPrompts(ctx, p.AgentKey, p.Keyword, clampLimit(p.Limit, 100))
 		}))
-
 	register("dashboard/sharedFiles", listHandler(provider, "files", "files",
 		func(ctx context.Context, dp DashboardProvider, p dashSharedFileParams) (any, bool, error) {
 			return dp.ListSharedFiles(ctx, p.Prefix, clampLimit(p.Limit, 500))
 		}))
-
 	register("dashboard/auditLogs", listHandler(provider, "logs", "logs",
 		func(ctx context.Context, dp DashboardProvider, p dashAuditLogParams) (any, bool, error) {
 			return dp.ListAuditLogs(ctx, p.EventType, p.Action, p.Actor, p.Keyword, clampLimit(p.Limit, 100))
 		}))
-
 	register("dashboard/aiLogs", listHandler(provider, "logs", "logs",
 		func(ctx context.Context, dp DashboardProvider, p dashAILogParams) (any, bool, error) {
 			return dp.QueryAILogs(ctx, p.Category, p.Keyword, clampLimit(p.Limit, 100))
 		}))
-
 	register("dashboard/busLogs", listHandler(provider, "logs", "logs",
 		func(ctx context.Context, dp DashboardProvider, p dashBusLogParams) (any, bool, error) {
 			return dp.ListBusLogs(ctx, p.Category, p.Severity, p.Keyword, clampLimit(p.Limit, 100))
 		}))
-
 	register("dashboard/skills", listHandler(provider, "skills", "skills",
 		func(_ context.Context, dp DashboardProvider, _ struct{}) (any, bool, error) {
 			return dp.ListSkills()
 		}))
-
 	register("dashboard/dagDetail", dagDetailHandler(provider))
 }
 

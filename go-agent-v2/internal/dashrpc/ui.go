@@ -97,35 +97,31 @@ func buildAgentFallbackFromThreads(ctx context.Context, caller MethodCaller) []a
 
 func UIDashboardGet(ctx context.Context, caller MethodCaller, p UIGetParams) (any, error) {
 	result := newDashboardPayload()
+	dashCopy := func(dstKey, method, srcKey string) {
+		out, _ := callDash(ctx, caller, method)
+		copyListField(result, dstKey, out, srcKey)
+	}
 
 	switch p.Page {
 	case "agents":
-		out, _ := callDash(ctx, caller, "agentStatus")
-		copyListField(result, "agents", out, "agents")
+		dashCopy("agents", "agentStatus", "agents")
 		if current, ok := result["agents"].([]any); !ok || len(current) == 0 {
 			if fallback := buildAgentFallbackFromThreads(ctx, caller); len(fallback) > 0 {
 				result["agents"] = fallback
 			}
 		}
 	case "dags":
-		out, _ := callDash(ctx, caller, "dags")
-		copyListField(result, "dags", out, "dags")
+		dashCopy("dags", "dags", "dags")
 	case "tasks":
-		acks, _ := callDash(ctx, caller, "taskAcks")
-		traces, _ := callDash(ctx, caller, "taskTraces")
-		copyListField(result, "taskAcks", acks, "acks")
-		copyListField(result, "taskTraces", traces, "traces")
+		dashCopy("taskAcks", "taskAcks", "acks")
+		dashCopy("taskTraces", "taskTraces", "traces")
 	case "skills":
-		out, _ := callDash(ctx, caller, "skills")
-		copyListField(result, "skills", out, "skills")
+		dashCopy("skills", "skills", "skills")
 	case "commands":
-		cards, _ := callDash(ctx, caller, "commandCards")
-		prompts, _ := callDash(ctx, caller, "prompts")
-		copyListField(result, "commandCards", cards, "cards")
-		copyListField(result, "prompts", prompts, "prompts")
+		dashCopy("commandCards", "commandCards", "cards")
+		dashCopy("prompts", "prompts", "prompts")
 	case "memory":
-		out, _ := callDash(ctx, caller, "sharedFiles")
-		copyListField(result, "memory", out, "files")
+		dashCopy("memory", "sharedFiles", "files")
 	default:
 		// keep stable empty shape
 	}

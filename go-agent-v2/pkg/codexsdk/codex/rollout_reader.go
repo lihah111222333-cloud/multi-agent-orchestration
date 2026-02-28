@@ -83,7 +83,7 @@ func parseRolloutLine(raw []byte, trimInjectedUserContent bool) (RolloutMessage,
 		return RolloutMessage{}, false
 	}
 	if payload.Role == "user" {
-		var ok bool
+		ok := false
 		text, ok = normalizeRolloutUserText(text, trimInjectedUserContent)
 		if !ok {
 			return RolloutMessage{}, false
@@ -154,9 +154,6 @@ func latestGlobMatch(pattern string) (string, bool, error) {
 }
 
 func extractRolloutText(content []rolloutContentItem) string {
-	if len(content) == 0 {
-		return ""
-	}
 	var sb strings.Builder
 	for _, item := range content {
 		sb.WriteString(item.Text)

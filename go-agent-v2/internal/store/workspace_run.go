@@ -51,10 +51,7 @@ func (s *WorkspaceRunStore) SaveRun(ctx context.Context, run *WorkspaceRun) (*Wo
 }
 
 func (s *WorkspaceRunStore) GetRun(ctx context.Context, runKey string) (*WorkspaceRun, error) {
-	rows, err := s.pool.Query(ctx,
-		"SELECT "+workspaceRunCols+" FROM workspace_runs WHERE run_key = $1",
-		runKey,
-	)
+	rows, err := s.pool.Query(ctx, "SELECT "+workspaceRunCols+" FROM workspace_runs WHERE run_key = $1", runKey)
 	if err != nil {
 		return nil, err
 	}
@@ -62,10 +59,8 @@ func (s *WorkspaceRunStore) GetRun(ctx context.Context, runKey string) (*Workspa
 }
 
 func (s *WorkspaceRunStore) ListRuns(ctx context.Context, status, dagKey string, limit int) ([]WorkspaceRun, error) {
-	q := NewQueryBuilder().
-		Eq("status", status).
-		Eq("dag_key", dagKey)
-	sql, params := q.Build("SELECT "+workspaceRunCols+" FROM workspace_runs", "updated_at DESC, id DESC", limit)
+	sql, params := NewQueryBuilder().Eq("status", status).Eq("dag_key", dagKey).
+		Build("SELECT "+workspaceRunCols+" FROM workspace_runs", "updated_at DESC, id DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err
@@ -144,10 +139,7 @@ func (s *WorkspaceRunStore) SaveFile(ctx context.Context, f *WorkspaceRunFile) (
 }
 
 func (s *WorkspaceRunStore) GetFile(ctx context.Context, runKey, relativePath string) (*WorkspaceRunFile, error) {
-	rows, err := s.pool.Query(ctx,
-		"SELECT "+workspaceRunFileCols+" FROM workspace_run_files WHERE run_key = $1 AND relative_path = $2",
-		runKey, relativePath,
-	)
+	rows, err := s.pool.Query(ctx, "SELECT "+workspaceRunFileCols+" FROM workspace_run_files WHERE run_key = $1 AND relative_path = $2", runKey, relativePath)
 	if err != nil {
 		return nil, err
 	}
@@ -155,10 +147,8 @@ func (s *WorkspaceRunStore) GetFile(ctx context.Context, runKey, relativePath st
 }
 
 func (s *WorkspaceRunStore) ListFiles(ctx context.Context, runKey, state string, limit int) ([]WorkspaceRunFile, error) {
-	q := NewQueryBuilder().
-		Eq("run_key", runKey).
-		Eq("state", state)
-	sql, params := q.Build("SELECT "+workspaceRunFileCols+" FROM workspace_run_files", "updated_at DESC, id DESC", limit)
+	sql, params := NewQueryBuilder().Eq("run_key", runKey).Eq("state", state).
+		Build("SELECT "+workspaceRunFileCols+" FROM workspace_run_files", "updated_at DESC, id DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err

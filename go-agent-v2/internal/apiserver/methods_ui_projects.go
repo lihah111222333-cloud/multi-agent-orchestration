@@ -38,13 +38,10 @@ func normalizeProjectPath(path string) string {
 }
 
 func isWindowsDriveRoot(path string) bool {
-	if len(path) == 2 {
-		return isASCIILetter(path[0]) && path[1] == ':'
+	if len(path) < 2 || len(path) > 3 || !isASCIILetter(path[0]) || path[1] != ':' {
+		return false
 	}
-	if len(path) == 3 {
-		return isASCIILetter(path[0]) && path[1] == ':' && (path[2] == '/' || path[2] == '\\')
-	}
-	return false
+	return len(path) == 2 || path[2] == '/' || path[2] == '\\'
 }
 
 func isASCIILetter(ch byte) bool {
@@ -93,10 +90,7 @@ func readProjectsState(s *Server, ctx context.Context) ([]string, string, error)
 	}
 	projects := parseProjectsList(prefs[prefProjectsList])
 	active := normalizeProjectPath(dashboard.AsString(prefs[prefProjectsActive]))
-	if active == "" {
-		active = "."
-	}
-	if active != "." && !slices.Contains(projects, active) {
+	if active == "" || (active != "." && !slices.Contains(projects, active)) {
 		active = "."
 	}
 	return projects, active, nil
@@ -109,10 +103,7 @@ func writeProjectsState(s *Server, ctx context.Context, projects []string, activ
 
 	normalizedProjects := parseProjectsList(projects)
 	normalizedActive := normalizeProjectPath(active)
-	if normalizedActive == "" {
-		normalizedActive = "."
-	}
-	if normalizedActive != "." && !slices.Contains(normalizedProjects, normalizedActive) {
+	if normalizedActive == "" || (normalizedActive != "." && !slices.Contains(normalizedProjects, normalizedActive)) {
 		normalizedActive = "."
 	}
 

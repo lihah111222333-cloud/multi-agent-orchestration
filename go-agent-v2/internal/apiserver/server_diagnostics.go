@@ -6,24 +6,20 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/toolsdk/lsp"
 )
 
-type serverDiagnosticsAccessor struct {
-	s *Server
+func (s *Server) SetDiagnostics(uri string, diagnostics []lsp.Diagnostic) {
+	setDiagnostics(s, uri, diagnostics)
 }
 
-func (a serverDiagnosticsAccessor) SetDiagnostics(uri string, diagnostics []lsp.Diagnostic) {
-	setDiagnostics(a.s, uri, diagnostics)
+func (s *Server) GetDiagnostics(uri string) []lsp.Diagnostic {
+	return getDiagnostics(s, uri)
 }
 
-func (a serverDiagnosticsAccessor) GetDiagnostics(uri string) []lsp.Diagnostic {
-	return getDiagnostics(a.s, uri)
-}
-
-func (a serverDiagnosticsAccessor) GetAllDiagnostics() map[string][]lsp.Diagnostic {
-	return allDiagnosticsCacheState(a.s)
+func (s *Server) GetAllDiagnostics() map[string][]lsp.Diagnostic {
+	return allDiagnosticsCacheState(s)
 }
 
 func diagnosticsAccessor(s *Server) lsp.DiagnosticsAccessor {
-	return serverDiagnosticsAccessor{s: s}
+	return s
 }
 
 func setDiagnostics(s *Server, uri string, diagnostics []lsp.Diagnostic) {

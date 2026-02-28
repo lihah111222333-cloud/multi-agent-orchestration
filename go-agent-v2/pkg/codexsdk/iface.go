@@ -32,6 +32,4 @@ func NewAgentManager(appFactory, restFactory ClientFactory) (*AgentManager, erro
 	return runner.NewAgentManager(appFactory, restFactory)
 }
 
-func NewAgentProcess(client Client) *AgentProcess {
-	return &runner.AgentProcess{Client: client}
-}
+func NewAgentProcess(client Client) *AgentProcess { return &runner.AgentProcess{Client: client} }

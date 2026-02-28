@@ -103,13 +103,12 @@ func (o *OrchestrationState) Snapshot() OrchestrationSnapshot {
 	for _, r := range o.activeRuns {
 		runs = append(runs, *r)
 	}
-	activeCount := len(runs)
 
 	return OrchestrationSnapshot{
 		Seq:            o.bus.Seq(),
 		UpdatedAt:      time.Now(),
-		Running:        activeCount > 0,
-		ActiveCount:    activeCount,
+		Running:        len(runs) > 0,
+		ActiveCount:    len(runs),
 		BindingWarning: o.bindingWarning,
 		ActiveRuns:     runs,
 	}

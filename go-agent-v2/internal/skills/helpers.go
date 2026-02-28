@@ -116,11 +116,9 @@ func expandSkillImportSource(source string) ([]string, error) {
 		return []string{source}, nil
 	}
 
-	hasSkillFile, err := sourceDirHasSkillFile(source)
-	if err != nil {
+	if hasSkillFile, err := sourceDirHasSkillFile(source); err != nil {
 		return nil, err
-	}
-	if hasSkillFile {
+	} else if hasSkillFile {
 		return []string{source}, nil
 	}
 
@@ -134,11 +132,9 @@ func expandSkillImportSource(source string) ([]string, error) {
 			continue
 		}
 		child := filepath.Join(source, entry.Name())
-		childHasSkillFile, statErr := sourceDirHasSkillFile(child)
-		if statErr != nil {
-			return nil, statErr
-		}
-		if childHasSkillFile {
+		if childHasSkillFile, err := sourceDirHasSkillFile(child); err != nil {
+			return nil, err
+		} else if childHasSkillFile {
 			children = append(children, child)
 		}
 	}

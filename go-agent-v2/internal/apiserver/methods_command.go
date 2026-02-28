@@ -104,7 +104,7 @@ func newSkillsManager(s *Server) *skillsruntime.Manager {
 		input []skillsruntime.UserInput,
 		options skillsruntime.AutoSkillMatchOptions,
 	) []skillsruntime.AutoMatchedSkillMatch {
-		if s == nil || s.codexAdapter == nil {
+		if s.codexAdapter == nil {
 			return nil
 		}
 		turnInput := make([]contracts.TurnInput, 0, len(input))
@@ -135,10 +135,7 @@ func newSkillsManager(s *Server) *skillsruntime.Manager {
 	return skillsruntime.NewManager(provider, collector)
 }
 
-func skillsManagerDelegate(s *Server) *skillsruntime.Manager {
-	if s != nil && s.skillsMgr != nil { return s.skillsMgr }
-	return newSkillsManager(s)
-}
+func skillsManagerDelegate(s *Server) *skillsruntime.Manager { if s != nil && s.skillsMgr != nil { return s.skillsMgr }; return newSkillsManager(s) }
 
 func skillsList(s *Server, ctx context.Context, _ json.RawMessage) (any, error)                  { return skillsManagerDelegate(s).SkillsList(ctx) }
 func appList(s *Server, ctx context.Context, _ json.RawMessage) (any, error)                     { return skillsManagerDelegate(s).AppList(ctx) }

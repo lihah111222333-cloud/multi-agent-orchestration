@@ -116,7 +116,7 @@ func (c *AppServerClient) handleReadLoopReadError(err error) ([]byte, bool, bool
 		// 避免 stream_error → "Reconnecting..." 在 UI 永久残留。
 	}
 
-	if c.stopped.Load() && isShutdownReadError(err) {
+	if c.stopped.Load() && err != nil && strings.Contains(err.Error(), "use of closed network connection") {
 		logger.Debug("codex: readLoop read failed (shutdown)", logger.FieldAgentID, c.AgentID, logger.FieldError, readErr)
 	} else {
 		logger.Warn("codex: readLoop read failed",
@@ -268,7 +268,7 @@ func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 			}
 			return
 		}
-		if !isThreadStatusChangedMethod(method) || activeTurnID == "" {
+		if !strings.EqualFold(strings.TrimSpace(method), threadStatusChangedMethod) || activeTurnID == "" {
 			return
 		}
 		if _, terminal := threadStatusChangedTerminalState(event.Data); terminal {
@@ -280,10 +280,6 @@ func (c *AppServerClient) trackTurnLifecycle(event Event, method string) {
 func isLifecycleCompletionEvent(eventType string) bool {
 	_, ok := lifecycleCompletionEventTypes[eventType]
 	return ok
-}
-
-func isThreadStatusChangedMethod(method string) bool {
-	return strings.EqualFold(strings.TrimSpace(method), threadStatusChangedMethod)
 }
 
 func shouldRecoverLifecycleOnMismatchedConversation(
@@ -304,7 +300,7 @@ func shouldRecoverLifecycleOnMismatchedConversation(
 	if event.Type == EventStreamError {
 		return targetsActiveTurn && !streamErrorWillRetry(event.Data)
 	}
-	if !isThreadStatusChangedMethod(method) {
+	if !strings.EqualFold(strings.TrimSpace(method), threadStatusChangedMethod) {
 		return false
 	}
 	_, terminal := threadStatusChangedTerminalState(event.Data)
@@ -586,11 +582,6 @@ func decodeJSONObject(raw json.RawMessage) (map[string]any, bool) {
 func truncateBytes(b []byte, max int) string {
 	if len(b) <= max { return string(b) }
 	return string(b[:max]) + "...(truncated)"
-}
-
-func isShutdownReadError(err error) bool {
-	if err == nil { return false }
-	return strings.Contains(err.Error(), "use of closed network connection")
 }
 
 const legacyMirrorDropLogSampleInterval int64 = 100

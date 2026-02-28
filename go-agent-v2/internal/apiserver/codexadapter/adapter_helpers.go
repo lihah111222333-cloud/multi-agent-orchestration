@@ -36,8 +36,8 @@ func requireThreadID(caller, threadID string) (string, error) {
 }
 
 func threadLogFields(threadID string) []any {
-	id := strings.TrimSpace(threadID)
-	return []any{logger.FieldAgentID, id, logger.FieldThreadID, id}
+	threadID = strings.TrimSpace(threadID)
+	return []any{logger.FieldAgentID, threadID, logger.FieldThreadID, threadID}
 }
 
 var errNoProcess = errors.New("codexadapter: agent process not found")

@@ -36,14 +36,13 @@ func CalculateHydrationLoadLimit(initialCount int, total int64) int {
 	if initialCount < 0 {
 		initialCount = 0
 	}
-	limit := initialCount
-	if total > int64(limit) {
-		limit = int(total)
+	if total <= int64(initialCount) {
+		return initialCount
 	}
-	if limit > ThreadMessageHydrationMaxRecords {
-		limit = ThreadMessageHydrationMaxRecords
+	if total > ThreadMessageHydrationMaxRecords {
+		return ThreadMessageHydrationMaxRecords
 	}
-	return limit
+	return int(total)
 }
 
 func StreamRemainingHistory(
@@ -111,24 +110,27 @@ func HandleThreadMessagesHydration(
 	if hydratePage == nil {
 		return
 	}
-	if before == 0 {
-		hydrated := hydratePage(page)
-		if onFirstPageHydrated != nil {
-			onFirstPageHydrated(len(page), len(all), hydrated)
-		}
-		if hydrated && calculateHydrationLoadLimit != nil && streamRemainingHistory != nil {
-			hydrateLimit := calculateHydrationLoadLimit(len(page), int64(len(all)))
-			if hydrateLimit > len(page) {
-				runAsync := asyncGo
-				if runAsync == nil {
-					runAsync = util.SafeGo
-				}
-				runAsync(func() {
-					streamRemainingHistory(all, page, hydrateLimit)
-				})
-			}
-		}
+	if before != 0 {
+		hydratePage(page)
 		return
 	}
-	hydratePage(page)
+
+	hydrated := hydratePage(page)
+	if onFirstPageHydrated != nil {
+		onFirstPageHydrated(len(page), len(all), hydrated)
+	}
+	if !hydrated || calculateHydrationLoadLimit == nil || streamRemainingHistory == nil {
+		return
+	}
+
+	hydrateLimit := calculateHydrationLoadLimit(len(page), int64(len(all)))
+	if hydrateLimit <= len(page) {
+		return
+	}
+	if asyncGo == nil {
+		asyncGo = util.SafeGo
+	}
+	asyncGo(func() {
+		streamRemainingHistory(all, page, hydrateLimit)
+	})
 }

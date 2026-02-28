@@ -10,10 +10,6 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-func passthroughSkillInputText(_ string, content string) string {
-	return content
-}
-
 func buildSelectedSkillPrompt(
 	selectedSkills []string,
 	readSkillContent func(skillName string) (string, error),
@@ -32,7 +28,7 @@ func buildSelectedSkillPrompt(
 	texts := make([]string, 0, len(ordered))
 	inputText := skillInputText
 	if inputText == nil {
-		inputText = passthroughSkillInputText
+		inputText = func(_ string, content string) string { return content }
 	}
 	for _, skillName := range ordered {
 		content, err := readSkillContent(skillName)
@@ -114,10 +110,6 @@ func prependLSPAvailabilityWarning(
 	return merge(warning, hint), missing
 }
 
-func collectDynamicToolNames(dynamicTools []agentcore.DynamicTool) map[string]struct{} {
-	return support.CollectDynamicToolNames(dynamicTools)
-}
-
 type AutoMatchInput = agentcore.AutoMatchInput
 type SkillMatchCandidate = agentcore.SkillMatchCandidate
 type AutoMatchedSkillMatch = agentcore.AutoMatchedSkillMatch
@@ -160,12 +152,13 @@ func collectAutoMatchedSkillMatches(
 		if _, exists := inputSkillSet[skillNameLower]; exists {
 			continue
 		}
-		matchedBy, matchedTerms := classifyAutoSkillMatch(normalizedPrompt, skillName, skill.ForceWords, skill.TriggerWords)
+		matchedBy, matchedTerms := support.ClassifyAutoSkillMatch(normalizedPrompt, skillName, skill.ForceWords, skill.TriggerWords)
 		if matchedBy == "" {
 			continue
 		}
 		if _, configured := configuredSet[skillNameLower]; configured {
-			if !includeConfiguredAutoMatchedSkill(matchedBy, options) {
+			if !((matchedBy == "explicit" && options.IncludeConfiguredExplicit) ||
+				(matchedBy == "force" && options.IncludeConfiguredForce)) {
 				continue
 			}
 		}
@@ -176,11 +169,6 @@ func collectAutoMatchedSkillMatches(
 		})
 	}
 	return matches
-}
-
-func includeConfiguredAutoMatchedSkill(matchedBy string, options AutoSkillMatchOptions) bool {
-	return (matchedBy == "explicit" && options.IncludeConfiguredExplicit) ||
-		(matchedBy == "force" && options.IncludeConfiguredForce)
 }
 
 func renderAutoMatchedSkillPrompt(
@@ -212,7 +200,7 @@ func renderAutoMatchedSkillPrompt(
 			continue
 		}
 		if match.MatchedBy == "force" {
-			instruction := forceMatchedSkillInstruction(match.MatchedTerms)
+			instruction := support.ForceMatchedSkillInstruction(match.MatchedTerms)
 			if strings.TrimSpace(instruction) != "" {
 				if mergePromptText != nil {
 					content = mergePromptText(instruction, content)
@@ -229,31 +217,12 @@ func renderAutoMatchedSkillPrompt(
 	return strings.Join(texts, "\n"), len(texts)
 }
 
-func lowerMatchedTerms(text string, candidates []string) []string {
-	return support.LowerMatchedTerms(text, candidates)
-}
-
-func explicitSkillMentionTerms(normalizedPrompt, skillName string, triggerWords []string) []string {
-	return support.ExplicitSkillMentionTerms(normalizedPrompt, skillName, triggerWords)
-}
-
-func classifyAutoSkillMatch(normalizedPrompt, skillName string, forceWords, triggerWords []string) (string, []string) {
-	return support.ClassifyAutoSkillMatch(normalizedPrompt, skillName, forceWords, triggerWords)
-}
-
-func forceMatchedSkillInstruction(matchedTerms []string) string {
-	return support.ForceMatchedSkillInstruction(matchedTerms)
-}
-
-func CollectReferencedLSPToolNames(hint string) []string {
-	return support.CollectReferencedLSPToolNames(hint)
-}
-
 var (
 	BuildSelectedSkillPrompt       = buildSelectedSkillPrompt
 	ResolveLSPUsagePromptHint      = resolveLSPUsagePromptHint
-	CollectDynamicToolNames        = collectDynamicToolNames
+	CollectDynamicToolNames        = support.CollectDynamicToolNames
 	PrependLSPAvailabilityWarning  = prependLSPAvailabilityWarning
 	CollectAutoMatchedSkillMatches = collectAutoMatchedSkillMatches
 	RenderAutoMatchedSkillPrompt   = renderAutoMatchedSkillPrompt
+	CollectReferencedLSPToolNames  = support.CollectReferencedLSPToolNames
 )

@@ -128,9 +128,7 @@ func removeConnState(s *Server, connID string) (*connEntry, bool) {
 }
 
 func allocPendingRequestState(s *Server) (reqID int64, ch <-chan *Response, cleanup func()) {
-	if s == nil {
-		return 0, nil, func() {}
-	}
+	if s == nil { return 0, nil, func() {} }
 	return s.connManagerState.allocPendingRequest()
 }
 
@@ -165,32 +163,22 @@ func addConnState(s *Server, connID string, entry *connEntry) {
 }
 
 func setDiagnosticsCacheState(s *Server, uri string, diagnostics []lsp.Diagnostic) {
-	if s == nil {
-		return
-	}
+	if s == nil { return }
 	state := &s.diagnosticsCacheState
-	state.diagMu.Lock()
-	if state.diagCache == nil {
-		state.diagCache = map[string][]lsp.Diagnostic{}
-	}
+	state.diagMu.Lock(); defer state.diagMu.Unlock()
+	if state.diagCache == nil { state.diagCache = map[string][]lsp.Diagnostic{} }
 	copied := cloneDiagnostics(diagnostics)
 	if len(copied) == 0 {
 		delete(state.diagCache, uri)
-		state.diagMu.Unlock()
 		return
 	}
 	state.diagCache[uri] = copied
-	state.diagMu.Unlock()
 }
 
 func getDiagnosticsCacheState(s *Server, uri string) []lsp.Diagnostic {
-	if s == nil {
-		return nil
-	}
+	if s == nil { return nil }
 	state := &s.diagnosticsCacheState
-	state.diagMu.RLock()
-	diagnostics := cloneDiagnostics(state.diagCache[uri])
-	state.diagMu.RUnlock()
+	state.diagMu.RLock(); diagnostics := cloneDiagnostics(state.diagCache[uri]); state.diagMu.RUnlock()
 	return diagnostics
 }
 
@@ -219,13 +207,9 @@ func takeReportRequestersState(s *Server, workerID string, now time.Time) []stri
 }
 
 func setNotifyHookState(s *Server, h func(method string, params any)) {
-	if s == nil {
-		return
-	}
+	if s == nil { return }
 	state := &s.notifyHookState
-	state.notifyHookMu.Lock()
-	state.notifyHook = h
-	state.notifyHookMu.Unlock()
+	state.notifyHookMu.Lock(); state.notifyHook = h; state.notifyHookMu.Unlock()
 }
 
 func stageUIStateChangedState(s *Server, key string, payload map[string]any, now time.Time, interval time.Duration, onFlush func()) (map[string]any, bool) {
@@ -278,28 +262,18 @@ func stopAllUIThrottleTimersState(s *Server) {
 }
 
 func clearAllToolCallState(s *Server) {
-	if s == nil {
-		return
-	}
+	if s == nil { return }
 	state := &s.toolCallState
-	state.toolCallMu.Lock()
-	clear(state.toolCallCount)
-	state.toolCallMu.Unlock()
+	state.toolCallMu.Lock(); clear(state.toolCallCount); state.toolCallMu.Unlock()
 }
 
 func incrementToolCallState(s *Server, name string) int64 {
-	if s == nil {
-		return 0
-	}
+	if s == nil { return 0 }
 	toolName := strings.TrimSpace(name)
-	if toolName == "" {
-		return 0
-	}
+	if toolName == "" { return 0 }
 	state := &s.toolCallState
 	state.toolCallMu.Lock()
-	if state.toolCallCount == nil {
-		state.toolCallCount = make(map[string]int64)
-	}
+	if state.toolCallCount == nil { state.toolCallCount = make(map[string]int64) }
 	state.toolCallCount[toolName]++
 	count := state.toolCallCount[toolName]
 	state.toolCallMu.Unlock()
@@ -312,12 +286,7 @@ func nextThreadSeqState(s *Server) int64 {
 }
 
 func doRuntimeCleanupState(s *Server, fn func()) {
-	if s == nil {
-		if fn != nil {
-			fn()
-		}
-		return
-	}
+	if s == nil { if fn != nil { fn() }; return }
 	s.runtimeGuardState.doCleanup(fn)
 }
 

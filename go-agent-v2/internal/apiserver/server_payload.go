@@ -51,27 +51,23 @@ func shouldEmitUIStateChanged(method string, payload map[string]any) bool {
 	if strings.HasPrefix(method, "workspace/run/") {
 		return true
 	}
-	for _, key := range []string{"threadId", "agent_id"} {
-		if value, _ := payload[key].(string); strings.TrimSpace(value) != "" {
-			return true
-		}
-	}
-	return false
+	threadID, _ := payload["threadId"].(string)
+	agentID, _ := payload["agent_id"].(string)
+	return strings.TrimSpace(threadID) != "" || strings.TrimSpace(agentID) != ""
 }
 
 func throttledUIStateChanged(s *Server, payload map[string]any) {
 	if s == nil {
 		return
 	}
-	key := "_global"
 	now := time.Now()
 	interval := time.Duration(uiStateThrottleMs) * time.Millisecond
 	pending, emitNow := stageUIStateChangedState(s,
-		key,
+		"_global",
 		payload,
 		now,
 		interval,
-		func() { flushUIStateChanged(s, key) },
+		func() { flushUIStateChanged(s, "_global") },
 	)
 	if !emitNow {
 		return

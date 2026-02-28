@@ -23,14 +23,15 @@ func readThreadRuntimeStateByHooks(threadID string, readRuntimeStatus func(strin
 	if id == "" {
 		return "idle"
 	}
+	activeTracked := hasActiveTrackedTurn != nil && hasActiveTrackedTurn(id)
 	if readRuntimeStatus == nil {
-		if hasActiveTrackedTurn != nil && hasActiveTrackedTurn(id) {
+		if activeTracked {
 			return "running"
 		}
 		return ""
 	}
 	state := normalizeInterruptState(readRuntimeStatus(id))
-	if state == "idle" && hasActiveTrackedTurn != nil && hasActiveTrackedTurn(id) {
+	if state == "idle" && activeTracked {
 		return "running"
 	}
 	return state
@@ -84,13 +85,14 @@ func sendInterruptCommand(proc any, sendCommand func(any, string, string) error)
 	if sendCommand == nil {
 		return false, apperrors.New("Server.turnInterrupt", "interrupt sender is not initialized")
 	}
-	if err := sendCommand(proc, "/interrupt", ""); err != nil {
-		if isInterruptNoActiveTurnError(err) {
-			return true, nil
-		}
-		return false, err
+	err := sendCommand(proc, "/interrupt", "")
+	if err == nil {
+		return false, nil
 	}
-	return false, nil
+	if isInterruptNoActiveTurnError(err) {
+		return true, nil
+	}
+	return false, err
 }
 
 func notifyTurnCompleted(

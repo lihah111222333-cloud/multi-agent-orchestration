@@ -66,10 +66,13 @@ func (c *AppServerClient) dialWS(ctx context.Context) (*websocket.Conn, error) {
 		HandshakeTimeout: 5 * time.Second,
 		NetDialContext:   (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 	}
-
 	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
-	if err != nil { return nil, err }
-	if conn == nil { return nil, apperrors.New("AppServerClient.dialWS", "dial returned nil websocket connection") }
+	if err != nil {
+		return nil, err
+	}
+	if conn == nil {
+		return nil, apperrors.New("AppServerClient.dialWS", "dial returned nil websocket connection")
+	}
 	_ = conn.SetReadDeadline(time.Now().Add(currentAppServerReadIdleTimeout()))
 	conn.SetPongHandler(func(string) error {
 		_ = conn.SetReadDeadline(time.Now().Add(currentAppServerReadIdleTimeout()))
@@ -85,7 +88,9 @@ func (c *AppServerClient) currentWSConn() *websocket.Conn {
 }
 
 func (c *AppServerClient) replaceWSConn(conn *websocket.Conn) {
-	if conn == nil { return }
+	if conn == nil {
+		return
+	}
 	c.wsMu.Lock()
 	prev := c.ws
 	c.ws = conn
@@ -97,7 +102,9 @@ func (c *AppServerClient) replaceWSConn(conn *websocket.Conn) {
 
 func (c *AppServerClient) replaceWSConnAndStartLoops(conn *websocket.Conn, resetReadLoopSignal bool) {
 	c.replaceWSConn(conn)
-	if resetReadLoopSignal { c.wsDone = make(chan struct{}) }
+	if resetReadLoopSignal {
+		c.wsDone = make(chan struct{})
+	}
 	util.SafeGo(func() { c.readLoop() })
 	util.SafeGo(func() { c.pingLoop(conn) })
 }
@@ -114,7 +121,9 @@ func appServerReconnectBackoff() backofflib.BackOff {
 }
 
 func (c *AppServerClient) sleepWithContext(delay time.Duration) bool {
-	if delay <= 0 { return true }
+	if delay <= 0 {
+		return true
+	}
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
@@ -129,7 +138,9 @@ func (c *AppServerClient) emitBackgroundEvent(message string, status string, act
 	c.handlerMu.RLock()
 	handler := c.handler
 	c.handlerMu.RUnlock()
-	if handler == nil { return }
+	if handler == nil {
+		return
+	}
 	payload := map[string]any{
 		"message": strings.TrimSpace(message),
 		"status":  strings.TrimSpace(status),
@@ -164,7 +175,9 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 			"read_failure_streak", health.ReadFailureStreak,
 			"read_errors_window", health.ReadErrorsWindow,
 		)
-		if !c.sleepWithContext(remaining) { return false }
+		if !c.sleepWithContext(remaining) {
+			return false
+		}
 	}
 	if c.shouldPreferRespawn(time.Now()) && c.recoverByRespawn(trigger, activeTurnID, "read_error_burst", lastErr) {
 		return true
@@ -172,7 +185,9 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 
 	bo := appServerReconnectBackoff()
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if c.stopped.Load() { return false }
+		if c.stopped.Load() {
+			return false
+		}
 		if !c.Running() {
 			logger.Warn("codex: reconnect aborted — process exited",
 				logger.FieldAgentID, c.AgentID,
@@ -183,7 +198,9 @@ func (c *AppServerClient) reconnectWS(trigger string, lastErr error) bool {
 		var delay time.Duration
 		if attempt > 1 {
 			delay = bo.NextBackOff()
-			if delay == backofflib.Stop { delay = appServerReconnectMaxDelay }
+			if delay == backofflib.Stop {
+				delay = appServerReconnectMaxDelay
+			}
 		}
 		if !c.sleepWithContext(delay) {
 			return false
@@ -220,7 +237,9 @@ func (c *AppServerClient) attemptSingleReconnect(trigger, activeTurnID string, a
 		health := c.noteReconnectFailure(time.Now())
 		willRetry := attempt < maxRetries
 		reconnectMessage := fmt.Sprintf("Reconnecting... %d/%d", attempt, maxRetries)
-		if !willRetry { reconnectMessage = fmt.Sprintf("Reconnect failed %d/%d", attempt, maxRetries) }
+		if !willRetry {
+			reconnectMessage = fmt.Sprintf("Reconnect failed %d/%d", attempt, maxRetries)
+		}
 		details := reconnectDetails(trigger, activeTurnID, map[string]any{
 			"message":     reconnectMessage,
 			"attempt":     attempt,
@@ -282,12 +301,15 @@ func (c *AppServerClient) restartProcessAndReconnect() error {
 		_ = c.stderrCollector.Close()
 		c.stderrCollector = nil
 	}
-
 	spawnCtx, cancel := context.WithTimeout(c.ctx, appServerStartupProbeTimeout)
 	defer cancel()
-	if err := c.Spawn(spawnCtx); err != nil { return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "spawn") }
+	if err := c.Spawn(spawnCtx); err != nil {
+		return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "spawn")
+	}
 	conn, err := c.dialWS(c.ctx)
-	if err != nil { return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "dial ws") }
+	if err != nil {
+		return apperrors.Wrap(err, "AppServerClient.restartProcessAndReconnect", "dial ws")
+	}
 	c.replaceWSConnAndStartLoops(conn, true)
 	return nil
 }
@@ -304,7 +326,9 @@ func (c *AppServerClient) recoverByRespawn(trigger, activeTurnID, reason string,
 	defer c.respawnRecoverInFlight.Store(false)
 
 	reason = strings.TrimSpace(reason)
-	if reason == "" { reason = "reconnect_recovery" }
+	if reason == "" {
+		reason = "reconnect_recovery"
+	}
 	c.emitBackgroundEvent("Recovering connection (restart app-server)...", "reconnecting", true, false, reconnectDetails(trigger, activeTurnID, map[string]any{
 		"phase":  "reconnect",
 		"reason": reason,
@@ -347,7 +371,9 @@ func (c *AppServerClient) recoverByRespawn(trigger, activeTurnID, reason string,
 			)
 			return
 		}
-		if threadID == "" { return }
+		if threadID == "" {
+			return
+		}
 		if err := c.ResumeThread(ResumeThreadRequest{ThreadID: threadID}); err != nil {
 			logger.Warn("codex: restart recovery resume failed",
 				logger.FieldAgentID, c.AgentID,
@@ -390,7 +416,9 @@ func (c *AppServerClient) RecoverConnection(reason string) error {
 		return apperrors.New("AppServerClient.RecoverConnection", "recovery already in progress")
 	}
 	recoveryReason := strings.TrimSpace(reason)
-	if recoveryReason == "" { recoveryReason = "manual_recover" }
+	if recoveryReason == "" {
+		recoveryReason = "manual_recover"
+	}
 	if !c.recoverByRespawn("manual", c.getActiveTurnID(), recoveryReason, nil) {
 		return apperrors.New("AppServerClient.RecoverConnection", "manual recovery failed")
 	}
@@ -401,7 +429,9 @@ func (c *AppServerClient) emitReconnectResolved() {
 	c.handlerMu.RLock()
 	handler := c.handler
 	c.handlerMu.RUnlock()
-	if handler == nil { return }
+	if handler == nil {
+		return
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"message":  "Reconnected",
 		"resolved": true,

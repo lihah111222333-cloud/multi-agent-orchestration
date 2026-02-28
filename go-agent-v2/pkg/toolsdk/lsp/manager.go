@@ -1,13 +1,3 @@
-// manager.go — 多语言 LSP 服务管理器。
-//
-// 按文件后缀自动选择语言服务器:
-//   - .go           → gopls
-//   - .rs           → rust-analyzer
-//   - .ts/.tsx/.js/.jsx → typescript-language-server --stdio
-//   - .py           → pylsp
-//   - .c/.h         → clangd
-//
-// 延迟启动: 首次打开某语言文件时才 spawn 对应进程。
 package lsp
 
 import (
@@ -36,13 +26,11 @@ var DefaultServers = []ServerConfig{
 	{
 		Language:   "go",
 		Command:    "gopls",
-		Args:       nil,
 		Extensions: []string{"go"},
 	},
 	{
 		Language:   "rust",
 		Command:    "rust-analyzer",
-		Args:       nil,
 		Extensions: []string{"rs"},
 	},
 	{
@@ -54,13 +42,11 @@ var DefaultServers = []ServerConfig{
 	{
 		Language:   "python",
 		Command:    "pylsp",
-		Args:       nil,
 		Extensions: []string{"py"},
 	},
 	{
 		Language:   "c",
 		Command:    "clangd",
-		Args:       nil,
 		Extensions: []string{"c", "h"},
 	},
 }
@@ -75,15 +61,6 @@ type ServerStatus struct {
 
 // Manager 管理多个语言的 LSP 客户端。
 type Manager struct {
-	// ========================================
-	// 锁层次 (Lock Hierarchy)
-	// ========================================
-	// Manager.mu < Client.mu
-	// Manager.mu 保护 configs/clients map, Client.mu 保护 pending/stdin。
-	// ensureClient 中: 持有 Manager.mu → 释放 → 调用 client.Start
-	// (client.Start 内部使用 Client.mu), 不嵌套。
-	// ========================================
-
 	mu          sync.RWMutex
 	configs     map[string]*ServerConfig // ext → config
 	languages   map[string]*ServerConfig // language(normalized) → config
@@ -109,10 +86,9 @@ func NewManager(configs []ServerConfig) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	workspaceID := "default-workspace"
 	if cwd, err := os.Getwd(); err == nil {
-		if abs, absErr := filepath.Abs(cwd); absErr == nil {
+		workspaceID = cwd
+		if abs, err := filepath.Abs(cwd); err == nil {
 			workspaceID = abs
-		} else {
-			workspaceID = cwd
 		}
 	}
 	m := &Manager{
@@ -189,26 +165,22 @@ func (m *Manager) SetRootURI(rootURI string) {
 // SetDiagnosticHandler 注册诊断回调 (所有语言共享)。
 func (m *Manager) SetDiagnosticHandler(h DiagnosticHandler) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.onDiag = h
+	m.mu.Unlock()
 }
 
 // SetStatusHandler 注册状态变更回调。
 func (m *Manager) SetStatusHandler(h func([]ServerStatus)) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.onStatus = h
+	m.mu.Unlock()
 }
 
 // OpenFile 打开文件 — 自动选择语言服务器并发送 didOpen。
-func (m *Manager) OpenFile(filePath, content string) error {
-	return m.openDocument(filePath, content)
-}
+func (m *Manager) OpenFile(filePath, content string) error { return m.openDocument(filePath, content) }
 
 // CloseFile 关闭文件。
-func (m *Manager) CloseFile(filePath string) error {
-	return m.closeDocument(filePath)
-}
+func (m *Manager) CloseFile(filePath string) error { return m.closeDocument(filePath) }
 
 // ChangeFile 更新文件内容 (didChange)，未打开文档会自动引导同步。
 func (m *Manager) ChangeFile(filePath string, version int, newContent string) error {
@@ -420,10 +392,7 @@ func (m *Manager) ensureClient(cfg *ServerConfig) (*Client, error) {
 	client = NewClient(cfg.Language)
 	m.clients[cfg.Language] = client
 
-	// 传递诊断回调
-	if m.onDiag != nil {
-		client.SetDiagnosticHandler(m.onDiag)
-	}
+	client.SetDiagnosticHandler(m.onDiag)
 
 	rootURI := effectiveRootURI(m.rootURI, m.workspaceID)
 	if m.rootURI == "" && rootURI != "" {

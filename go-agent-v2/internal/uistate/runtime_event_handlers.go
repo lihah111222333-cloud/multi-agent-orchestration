@@ -188,26 +188,10 @@ func (m *RuntimeManager) applyErrorOverlayLocked(rt *threadRuntime, threadID str
 	}
 }
 
-func clearTerminalWaitOverlay(rt *threadRuntime) {
-	rt.terminalWaitOverlay = false
-	rt.terminalWaitLabel = ""
-}
-
-func clearMCPStartupOverlay(rt *threadRuntime) {
-	rt.mcpStartupOverlay = false
-	rt.mcpStartupLabel = ""
-}
-
-func clearBackgroundOverlay(rt *threadRuntime) {
-	rt.backgroundOverlay = false
-	rt.backgroundLabel = ""
-	rt.backgroundDetails = ""
-}
-
-func clearStreamErrorOverlay(rt *threadRuntime) {
-	rt.streamErrorText = ""
-	rt.streamErrorDetails = ""
-}
+func clearTerminalWaitOverlay(rt *threadRuntime) { rt.terminalWaitOverlay, rt.terminalWaitLabel = false, "" }
+func clearMCPStartupOverlay(rt *threadRuntime)   { rt.mcpStartupOverlay, rt.mcpStartupLabel = false, "" }
+func clearBackgroundOverlay(rt *threadRuntime)   { rt.backgroundOverlay, rt.backgroundLabel, rt.backgroundDetails = false, "", "" }
+func clearStreamErrorOverlay(rt *threadRuntime)  { rt.streamErrorText, rt.streamErrorDetails = "", "" }
 
 func applyOverlays(rt *threadRuntime, eventType, method string, payload map[string]any) {
 	if isTerminalInteractionEvent(eventType, method) {
@@ -602,16 +586,9 @@ func (m *RuntimeManager) deriveThreadStatusTextsLocked(threadID, state string) (
 }
 
 func shouldShowMCPStartupOverlay(rt *threadRuntime) bool {
-	if rt == nil || !rt.mcpStartupOverlay {
-		return false
-	}
-	return rt.turnDepth == 0 &&
-		rt.approvalDepth == 0 &&
-		rt.userInputDepth == 0 &&
-		rt.commandDepth == 0 &&
-		rt.fileEditDepth == 0 &&
-		rt.toolCallDepth == 0 &&
-		rt.collabDepth == 0
+	return rt != nil && rt.mcpStartupOverlay &&
+		rt.turnDepth == 0 && rt.approvalDepth == 0 && rt.userInputDepth == 0 &&
+		rt.commandDepth == 0 && rt.fileEditDepth == 0 && rt.toolCallDepth == 0 && rt.collabDepth == 0
 }
 
 func isThreadStatusChangedEvent(eventType, method string) bool {
@@ -695,13 +672,8 @@ func isTerminalInteractionEvent(eventType, method string) bool {
 	return eventType == "exec_terminal_interaction" || eventType == "item/commandexecution/terminalinteraction" || strings.EqualFold(method, "item/commandExecution/terminalInteraction")
 }
 
-func isMCPStartupUpdateEvent(eventType, method string) bool {
-	return isMCPStartupEvent(eventType, method, "update")
-}
-
-func isMCPStartupCompleteEvent(eventType, method string) bool {
-	return isMCPStartupEvent(eventType, method, "complete")
-}
+func isMCPStartupUpdateEvent(eventType, method string) bool   { return isMCPStartupEvent(eventType, method, "update") }
+func isMCPStartupCompleteEvent(eventType, method string) bool { return isMCPStartupEvent(eventType, method, "complete") }
 
 func isMCPStartupEvent(eventType, method, kind string) bool {
 	base := "mcp_startup_" + kind
@@ -1053,9 +1025,7 @@ func handleErrorEvent(m *RuntimeManager, threadID string, fields resolvedFields,
 	}, ts)
 }
 
-func sanitizeUserMessageText(text string) string {
-	return sanitizeUserMessageTextWithMode(text, true)
-}
+func sanitizeUserMessageText(text string) string { return sanitizeUserMessageTextWithMode(text, true) }
 
 func sanitizeUserMessageTextWithMode(text string, trimInjected bool) string {
 	text = util.StripLeadingSystemNoise(text)

@@ -82,33 +82,21 @@ func (s *Server) sseHandler(c *gin.Context) {
 
 	logger.Info("dashboard: SSE client connected", "client_id", clientID)
 
-	c.Stream(func(w io.Writer) bool {
-		// 复用 timer 避免每次循环创建新定时器 (GC 压力)
+	c.Stream(func(io.Writer) bool {
 		keepalive := time.NewTimer(30 * time.Second)
 		defer keepalive.Stop()
-
-		for {
-			select {
-			case evt, ok := <-ch:
-				if !ok {
-					return false
-				}
-				c.SSEvent(evt.Type, evt.Data)
-				if !keepalive.Stop() {
-					select {
-					case <-keepalive.C:
-					default:
-					}
-				}
-				keepalive.Reset(30 * time.Second)
-				return true
-			case <-keepalive.C:
-				c.SSEvent("ping", "keepalive")
-				keepalive.Reset(30 * time.Second)
-				return true
-			case <-c.Request.Context().Done():
+		select {
+		case evt, ok := <-ch:
+			if !ok {
 				return false
 			}
+			c.SSEvent(evt.Type, evt.Data)
+			return true
+		case <-keepalive.C:
+			c.SSEvent("ping", "keepalive")
+			return true
+		case <-c.Request.Context().Done():
+			return false
 		}
 	})
 }

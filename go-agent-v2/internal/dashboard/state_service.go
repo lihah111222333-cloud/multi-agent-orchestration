@@ -195,9 +195,6 @@ func BuildUIStateResult(input UIStateResultInput) map[string]any {
 }
 
 func copyStateAgentMeta(input map[string]StateAgentMeta) map[string]StateAgentMeta {
-	if len(input) == 0 {
-		return map[string]StateAgentMeta{}
-	}
 	out := make(map[string]StateAgentMeta, len(input))
 	for k, v := range input {
 		out[k] = v
@@ -207,39 +204,46 @@ func copyStateAgentMeta(input map[string]StateAgentMeta) map[string]StateAgentMe
 
 func resolveMainAgentPreference(threads []StateThread, meta map[string]StateAgentMeta, preferred string) string {
 	pref := strings.TrimSpace(preferred)
-	if hasThread(threads, pref) {
-		return pref
-	}
-
-	for _, thread := range threads {
-		id := strings.TrimSpace(thread.ID)
-		if id == "" {
-			continue
-		}
-		if meta[id].IsMain {
-			return id
+	if pref != "" {
+		for _, thread := range threads {
+			if strings.TrimSpace(thread.ID) == pref {
+				return pref
+			}
 		}
 	}
-
+	fallback := ""
 	for _, thread := range threads {
 		id := strings.TrimSpace(thread.ID)
 		if id == "" {
 			continue
 		}
 		item := meta[id]
-		if looksLikeMainAgent(thread.Name) || looksLikeMainAgent(item.Alias) {
+		if item.IsMain {
 			return id
 		}
+		if fallback == "" && (looksLikeMainAgent(thread.Name) || looksLikeMainAgent(item.Alias)) {
+			fallback = id
+		}
 	}
-	return ""
+	return fallback
 }
 
 func resolvePreferredThreadID(threads []StateThread, preferred string) string {
-	id := strings.TrimSpace(preferred)
-	if hasThread(threads, id) {
-		return id
+	pref := strings.TrimSpace(preferred)
+	first := ""
+	for _, thread := range threads {
+		id := strings.TrimSpace(thread.ID)
+		if id == "" {
+			continue
+		}
+		if first == "" {
+			first = id
+		}
+		if id == pref {
+			return id
+		}
 	}
-	return firstThreadID(threads)
+	return first
 }
 
 func resolvePreferredCmdThreadID(threads []StateThread, mainAgentID, preferred string) string {
@@ -256,29 +260,6 @@ func resolvePreferredCmdThreadID(threads []StateThread, mainAgentID, preferred s
 		candidates = threads
 	}
 	return resolvePreferredThreadID(candidates, preferred)
-}
-
-func hasThread(threads []StateThread, id string) bool {
-	target := strings.TrimSpace(id)
-	if target == "" {
-		return false
-	}
-	for _, thread := range threads {
-		if strings.TrimSpace(thread.ID) == target {
-			return true
-		}
-	}
-	return false
-}
-
-func firstThreadID(threads []StateThread) string {
-	for _, thread := range threads {
-		id := strings.TrimSpace(thread.ID)
-		if id != "" {
-			return id
-		}
-	}
-	return ""
 }
 
 func looksLikeMainAgent(name string) bool {

@@ -33,12 +33,8 @@ func PruneOrchestrationPendingReports(pending map[string]map[string]time.Time, n
 
 // RememberOrchestrationRequester records one requester and returns watcher count.
 func RememberOrchestrationRequester(pending map[string]map[string]time.Time, workerID, requesterID string, now time.Time) int {
-	if pending == nil {
-		return 0
-	}
-	target := strings.TrimSpace(workerID)
-	requester := strings.TrimSpace(requesterID)
-	if target == "" || requester == "" {
+	target, requester := strings.TrimSpace(workerID), strings.TrimSpace(requesterID)
+	if pending == nil || target == "" || requester == "" {
 		return 0
 	}
 	waiters := pending[target]
@@ -52,11 +48,8 @@ func RememberOrchestrationRequester(pending map[string]map[string]time.Time, wor
 
 // TakeOrchestrationRequesters removes and returns requesters for one worker.
 func TakeOrchestrationRequesters(pending map[string]map[string]time.Time, workerID string) []string {
-	if pending == nil {
-		return nil
-	}
 	target := strings.TrimSpace(workerID)
-	if target == "" {
+	if pending == nil || target == "" {
 		return nil
 	}
 	waiters := pending[target]
@@ -66,9 +59,8 @@ func TakeOrchestrationRequesters(pending map[string]map[string]time.Time, worker
 	delete(pending, target)
 	requesters := make([]string, 0, len(waiters))
 	for requesterID := range waiters {
-		id := strings.TrimSpace(requesterID)
-		if id != "" {
-			requesters = append(requesters, id)
+		if requesterID = strings.TrimSpace(requesterID); requesterID != "" {
+			requesters = append(requesters, requesterID)
 		}
 	}
 	return requesters

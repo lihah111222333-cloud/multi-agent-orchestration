@@ -31,17 +31,12 @@ type LogEntry struct {
 	Extra      map[string]any
 }
 
-// ========================================
-// DBHandler — slog.Handler → PG 异步批量写入
-// ========================================
-
 const (
 	bufSize    = 1024
 	batchSize  = 100
 	flushDelay = 500 * time.Millisecond
 )
 
-// DBHandler 实现 slog.Handler，将日志异步批量写入 PostgreSQL system_logs 表。
 type DBHandler struct {
 	pool  *pgxpool.Pool
 	buf   chan LogEntry
@@ -53,7 +48,6 @@ type DBHandler struct {
 	closed *atomic.Bool
 }
 
-// NewDBHandler 创建并启动后台写入 goroutine。
 func NewDBHandler(pool *pgxpool.Pool, level slog.Level) *DBHandler {
 	h := &DBHandler{
 		pool:   pool,
@@ -66,12 +60,10 @@ func NewDBHandler(pool *pgxpool.Pool, level slog.Level) *DBHandler {
 	return h
 }
 
-// Enabled 实现 slog.Handler。
 func (h *DBHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= h.level
 }
 
-// Handle 实现 slog.Handler — 构造 LogEntry 推入异步缓冲。
 func (h *DBHandler) Handle(_ context.Context, r slog.Record) error {
 	if h.closed != nil && h.closed.Load() {
 		return nil
@@ -83,22 +75,17 @@ func (h *DBHandler) Handle(_ context.Context, r slog.Record) error {
 		Message: r.Message,
 	}
 
-	// 收集 With() 的固定 attrs
 	for _, a := range h.attrs {
 		applyAttr(&entry, a)
 	}
 
-	// 收集 Record 上的 attrs
 	r.Attrs(func(a slog.Attr) bool {
 		applyAttr(&entry, a)
 		return true
 	})
 
-	// 非阻塞推入 — chan 满时 drop
 	func() {
 		defer func() {
-			// 静默恢复: shutdown 期间通道被关闭时丢弃该条日志,
-			// 避免 send-on-closed-channel panic 影响主流程。
 			recover() //nolint:errcheck // 恢复值无需处理
 		}()
 		select {
@@ -110,36 +97,18 @@ func (h *DBHandler) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 
-// WithAttrs 实现 slog.Handler。
 func (h *DBHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	newAttrs := make([]slog.Attr, len(h.attrs)+len(attrs))
-	copy(newAttrs, h.attrs)
-	copy(newAttrs[len(h.attrs):], attrs)
-	return &DBHandler{
-		pool:   h.pool,
-		buf:    h.buf,
-		attrs:  newAttrs,
-		group:  h.group,
-		level:  h.level,
-		done:   h.done,
-		closed: h.closed,
-	}
+	clone := *h
+	clone.attrs = append(append([]slog.Attr(nil), h.attrs...), attrs...)
+	return &clone
 }
 
-// WithGroup 实现 slog.Handler。
 func (h *DBHandler) WithGroup(name string) slog.Handler {
-	return &DBHandler{
-		pool:   h.pool,
-		buf:    h.buf,
-		attrs:  h.attrs,
-		group:  name,
-		level:  h.level,
-		done:   h.done,
-		closed: h.closed,
-	}
+	clone := *h
+	clone.group = name
+	return &clone
 }
 
-// Shutdown 停止后台 goroutine 并 flush 剩余日志。
 func (h *DBHandler) Shutdown() {
 	if h.closed != nil && !h.closed.CompareAndSwap(false, true) {
 		return
@@ -148,11 +117,14 @@ func (h *DBHandler) Shutdown() {
 	<-h.done
 }
 
-// consumeLoop 后台批量消费 chan → INSERT。
 func (h *DBHandler) consumeLoop() {
 	defer close(h.done)
 
 	batch := make([]LogEntry, 0, batchSize)
+	flushBatch := func() {
+		h.flush(batch)
+		batch = batch[:0]
+	}
 	ticker := time.NewTicker(flushDelay)
 	defer ticker.Stop()
 
@@ -160,27 +132,23 @@ func (h *DBHandler) consumeLoop() {
 		select {
 		case entry, ok := <-h.buf:
 			if !ok {
-				// chan 关闭: flush 剩余
 				if len(batch) > 0 {
-					h.flush(batch)
+					flushBatch()
 				}
 				return
 			}
 			batch = append(batch, entry)
 			if len(batch) >= batchSize {
-				h.flush(batch)
-				batch = batch[:0]
+				flushBatch()
 			}
 		case <-ticker.C:
 			if len(batch) > 0 {
-				h.flush(batch)
-				batch = batch[:0]
+				flushBatch()
 			}
 		}
 	}
 }
 
-// flush 批量写入 PG (使用 pgx.Batch 单次往返)。
 func (h *DBHandler) flush(batch []LogEntry) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -211,8 +179,8 @@ func (h *DBHandler) flush(batch []LogEntry) {
 
 	br := h.pool.SendBatch(ctx, pgBatch)
 	defer func() {
-		if closeErr := br.Close(); closeErr != nil {
-			slog.Default().Debug("db_handler: close batch", "error", closeErr)
+		if err := br.Close(); err != nil {
+			slog.Default().Debug("db_handler: close batch", "error", err)
 		}
 	}()
 
@@ -223,7 +191,6 @@ func (h *DBHandler) flush(batch []LogEntry) {
 	}
 }
 
-// applyAttr 将 slog.Attr 映射到 LogEntry 的结构化字段。
 func applyAttr(e *LogEntry, a slog.Attr) {
 	switch a.Key {
 	case FieldSource:
@@ -263,23 +230,16 @@ func applyAttr(e *LogEntry, a slog.Attr) {
 	}
 }
 
-// ========================================
-// AttachDBHandler — pool ready 后动态挂载
-// ========================================
-
 var (
 	dbHandler   atomic.Pointer[DBHandler]
 	attachMu    sync.Mutex
-	baseHandler slog.Handler // 记录原始 handler，用于 AttachDBHandler 重建时避免嵌套
+	baseHandler slog.Handler
 )
 
-// AttachDBHandler 在 pool 初始化后调用，将 DBHandler 作为第二路 Handler 挂载。
-// 调用前的日志只写 stdout; 调用后开始双写。幂等: 重复调用会先关闭旧 DBHandler。
 func AttachDBHandler(pool *pgxpool.Pool) {
 	attachMu.Lock()
 	defer attachMu.Unlock()
 
-	// 幂等: 先关闭旧的
 	if old := dbHandler.Load(); old != nil {
 		old.Shutdown()
 	}
@@ -287,7 +247,6 @@ func AttachDBHandler(pool *pgxpool.Pool) {
 	h := NewDBHandler(pool, slog.LevelInfo)
 	dbHandler.Store(h)
 
-	// 首次挂载时记录原始 handler，后续重建时复用，防止 Fanout 嵌套
 	if baseHandler == nil {
 		baseHandler = getLogger().Handler()
 	}
@@ -296,7 +255,6 @@ func AttachDBHandler(pool *pgxpool.Pool) {
 	storeLogger(slog.New(multi))
 }
 
-// ShutdownDBHandler 关闭 DBHandler 并 flush 剩余日志。
 func ShutdownDBHandler() {
 	if h := dbHandler.Swap(nil); h != nil {
 		h.Shutdown()

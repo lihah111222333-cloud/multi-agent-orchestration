@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	// DB-only: 无内置默认提示词，未配置 settings.lspUsagePromptHint 时不注入。
 	defaultLSPUsagePromptHint       = ""
 	prefKeyLSPUsagePromptHint       = "settings.lspUsagePromptHint"
 	prefKeyShowInjectedPromptInChat = "settings.showInjectedPromptInChat"
@@ -20,15 +19,11 @@ const (
 )
 
 func bindRaw(s *Server, fn func(*Server, context.Context, json.RawMessage) (any, error)) Handler {
-	return func(ctx context.Context, params json.RawMessage) (any, error) {
-		return fn(s, ctx, params)
-	}
+	return func(ctx context.Context, params json.RawMessage) (any, error) { return fn(s, ctx, params) }
 }
 
 func bindTyped[P any](s *Server, fn func(*Server, context.Context, P) (any, error)) Handler {
-	return typedHandler(func(ctx context.Context, p P) (any, error) {
-		return fn(s, ctx, p)
-	})
+	return typedHandler(func(ctx context.Context, p P) (any, error) { return fn(s, ctx, p) })
 }
 
 // registerMethods 注册所有 JSON-RPC 方法 (完整对标 APP-SERVER-PROTOCOL.md)。
@@ -282,81 +277,17 @@ func accountRead(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	}, nil
 }
 
-// accountRateLimitsRead 读取速率限制。
 func accountRateLimitsRead(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	return map[string]any{"rateLimits": map[string]any{}}, nil
 }
 func offline52MethodList() []string {
-	return []string{
-		"initialize",
-		"thread/resume",
-		"thread/fork",
-		"thread/rollback",
-		"thread/loaded/list",
-		"thread/read",
-		"thread/resolve",
-		"thread/backgroundTerminals/clean",
-		"thread/realtime/start",
-		"thread/realtime/appendAudio",
-		"thread/realtime/appendText",
-		"thread/realtime/stop",
-		"turn/steer",
-		"turn/forceComplete",
-		"review/start",
-		"fuzzyFileSearch",
-		"skills/list",
-		"skills/remote/list",
-		"skills/remote/export",
-		"skills/remote/read",
-		"skills/remote/write",
-		"app/list",
-		"model/list",
-		"collaborationMode/list",
-		"experimentalFeature/list",
-		"config/read",
-		"externalAgentConfig/detect",
-		"externalAgentConfig/import",
-		"config/value/write",
-		"config/batchWrite",
-		"configRequirements/read",
-		"account/login/start",
-		"account/login/cancel",
-		"account/logout",
-		"account/read",
-		"account/rateLimits/read",
-		"config/mcpServer/reload",
-		"mcpServerStatus/list",
-		"windowsSandbox/setupStart",
-		"lsp_diagnostics_query",
-		"command/exec",
-		"thread/undo",
-		"thread/model/set",
-		"thread/personality/set",
-		"thread/approvals/set",
-		"thread/mcp/list",
-		"thread/skills/list",
-		"thread/debugMemory",
-		"mock/experimentalMethod",
-		"log/list",
-		"log/filters",
-		"workspace/run/create",
-		"workspace/run/get",
-		"workspace/run/list",
-		"workspace/run/merge",
-		"workspace/run/abort",
-		"ui/preferences/getAll",
-		"ui/projects/add",
-		"ui/projects/remove",
-		"debug/runtime",
-		"debug/gc",
-	}
+	return []string{"initialize", "thread/resume", "thread/fork", "thread/rollback", "thread/loaded/list", "thread/read", "thread/resolve", "thread/backgroundTerminals/clean", "thread/realtime/start", "thread/realtime/appendAudio", "thread/realtime/appendText", "thread/realtime/stop", "turn/steer", "turn/forceComplete", "review/start", "fuzzyFileSearch", "skills/list", "skills/remote/list", "skills/remote/export", "skills/remote/read", "skills/remote/write", "app/list", "model/list", "collaborationMode/list", "experimentalFeature/list", "config/read", "externalAgentConfig/detect", "externalAgentConfig/import", "config/value/write", "config/batchWrite", "configRequirements/read", "account/login/start", "account/login/cancel", "account/logout", "account/read", "account/rateLimits/read", "config/mcpServer/reload", "mcpServerStatus/list", "windowsSandbox/setupStart", "lsp_diagnostics_query", "command/exec", "thread/undo", "thread/model/set", "thread/personality/set", "thread/approvals/set", "thread/mcp/list", "thread/skills/list", "thread/debugMemory", "mock/experimentalMethod", "log/list", "log/filters", "workspace/run/create", "workspace/run/get", "workspace/run/list", "workspace/run/merge", "workspace/run/abort", "ui/preferences/getAll", "ui/projects/add", "ui/projects/remove", "debug/runtime", "debug/gc"}
 }
 
 type threadDebugMemoryParams struct {
 	Action string `json:"action,omitempty"`
 }
 
-// threadDebugMemory 调试记忆 (/debug-m-drop 或 /debug-m-update)。
 func (s *Server) threadDebugMemory(ctx context.Context, params json.RawMessage) (any, error) {
 	command := "/debug-m-drop"
 	if len(params) > 0 && string(params) != "null" {

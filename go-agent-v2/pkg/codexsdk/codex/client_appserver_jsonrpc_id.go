@@ -30,7 +30,7 @@ func (id jsonRPCID) pendingKey() string {
 	if value, ok := id.asString(); ok {
 		return "s:" + value
 	}
-	return "raw:" + strings.TrimSpace(string(id.raw))
+	return "raw:" + id.logValue()
 }
 
 func (id jsonRPCID) logValue() string {
@@ -74,12 +74,10 @@ func (id *jsonRPCID) UnmarshalJSON(data []byte) error {
 		id.raw = json.RawMessage(strconv.FormatInt(intID, 10))
 		return nil
 	}
-
 	var stringID string
 	if err := json.Unmarshal(data, &stringID); err == nil {
 		id.raw = json.RawMessage(strconv.Quote(stringID))
 		return nil
 	}
-
 	return fmt.Errorf("jsonrpc id must be string or integer, got: %s", trimmed)
 }

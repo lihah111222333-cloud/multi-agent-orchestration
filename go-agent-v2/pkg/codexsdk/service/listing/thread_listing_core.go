@@ -62,7 +62,7 @@ func PaginateLoadedThreadIDs(ids []string, cursor *string, limit *uint32) ([]str
 }
 
 func BuildThreadList(ctx context.Context, methodName string, syncRuntime bool, runningAgents func() []AgentInfo, appendHistoryFromStores func(context.Context, []ThreadListItem, map[string]struct{}, string) []ThreadListItem, loadThreadAliases func(context.Context) map[string]string, syncRuntimeThreads func([]ThreadListItem)) ([]ThreadListItem, error) {
-	agents := []AgentInfo(nil)
+	var agents []AgentInfo
 	if runningAgents != nil {
 		agents = runningAgents()
 	}
@@ -87,9 +87,10 @@ func AppendThreadHistoryFromStores(ctx context.Context, threads []ThreadListItem
 		idMethod = "thread/list"
 	}
 	for _, appendStore := range []func(context.Context, []ThreadListItem, map[string]struct{}, string) []ThreadListItem{appendHistoryFromBindingStore, appendHistoryFromStatusStore, appendHistoryFromArchiveState} {
-		if appendStore != nil {
-			threads = appendStore(ctx, threads, seen, idMethod)
+		if appendStore == nil {
+			continue
 		}
+		threads = appendStore(ctx, threads, seen, idMethod)
 	}
 	return threads
 }
@@ -241,11 +242,11 @@ func ApplyThreadAliases(threads []ThreadListItem, aliases map[string]string) {
 
 func LoadThreadAliases(ctx context.Context, getPref func(context.Context, string) (any, error)) map[string]string {
 	aliases, err := loadThreadAliases(ctx, getPref)
-	if err != nil {
-		logger.Warn("thread aliases: load preference failed", logger.FieldError, err)
-		return map[string]string{}
+	if err == nil {
+		return aliases
 	}
-	return aliases
+	logger.Warn("thread aliases: load preference failed", logger.FieldError, err)
+	return map[string]string{}
 }
 
 func loadThreadAliases(ctx context.Context, getPref func(context.Context, string) (any, error)) (map[string]string, error) {
@@ -288,9 +289,6 @@ func StringValue(value any) string {
 }
 
 func LoadedThreadIDsFromAgents(agents []AgentInfo) []string {
-	if len(agents) == 0 {
-		return []string{}
-	}
 	ids := make([]string, 0, len(agents))
 	seen := make(map[string]struct{}, len(agents))
 	for _, item := range agents {

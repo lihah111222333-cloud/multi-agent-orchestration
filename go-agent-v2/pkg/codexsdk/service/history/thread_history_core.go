@@ -12,17 +12,17 @@ import (
 const DefaultHistoryLookupTimeout = 5 * time.Second
 
 func EnsureContext(ctx context.Context) context.Context {
-	if ctx == nil {
-		return context.Background()
+	if ctx != nil {
+		return ctx
 	}
-	return ctx
+	return context.Background()
 }
 
 func NormalizeHistoryTimeout(timeout time.Duration) time.Duration {
-	if timeout <= 0 {
-		return DefaultHistoryLookupTimeout
+	if timeout > 0 {
+		return timeout
 	}
-	return timeout
+	return DefaultHistoryLookupTimeout
 }
 
 func lookupWithTimeout[T any](ctx context.Context, timeout time.Duration, lookup func(context.Context) (T, error)) (T, error) {
@@ -36,10 +36,9 @@ func lookupWithTimeout[T any](ctx context.Context, timeout time.Duration, lookup
 }
 
 func warnHistoryLookup(agentID, message string, err error) {
-	if err == nil {
-		return
+	if err != nil {
+		logger.Warn(message, append(common.ThreadLogFields(agentID), logger.FieldError, err)...)
 	}
-	logger.Warn(message, append(common.ThreadLogFields(agentID), logger.FieldError, err)...)
 }
 
 func ResolveCodexThreadCandidates(
@@ -57,13 +56,11 @@ func ResolveCodexThreadCandidates(
 	}
 	ctx = EnsureContext(ctx)
 	timeout = NormalizeHistoryTimeout(timeout)
-	appendUnique := appendUniqueThreadID
-	if appendUnique == nil {
-		appendUnique = common.AppendUniqueThreadIDFallback
+	if appendUniqueThreadID == nil {
+		appendUniqueThreadID = common.AppendUniqueThreadIDFallback
 	}
-	preview := previewCandidates
-	if preview == nil {
-		preview = func(ids []string, _ int) []string { return ids }
+	if previewCandidates == nil {
+		previewCandidates = func(ids []string, _ int) []string { return ids }
 	}
 	ids := make([]string, 0, 2)
 	seen := map[string]struct{}{}
@@ -78,15 +75,15 @@ func ResolveCodexThreadCandidates(
 			warnHistoryLookup(id, warnMsg, err)
 			return
 		}
-		ids = appendUnique(ids, seen, resolvedID)
+		ids = appendUniqueThreadID(ids, seen, resolvedID)
 	}
-	ids = appendUnique(ids, seen, id)
+	ids = appendUniqueThreadID(ids, seen, id)
 	resolveCandidate(findBindingCodexThreadID, "turn/start: resolve codex thread id from binding failed")
 	resolveCandidate(findStatusSessionID, "turn/start: resolve codex thread id from agent_status failed")
 	logger.Info("turn/start: historical resume candidates",
 		append(common.ThreadLogFields(id),
 			"candidate_count", len(ids),
-			"candidates", preview(ids, 4),
+			"candidates", previewCandidates(ids, 4),
 		)...,
 	)
 	return ids

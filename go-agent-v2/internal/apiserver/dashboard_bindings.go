@@ -16,7 +16,7 @@ type dashboardProvider struct {
 
 func (p dashboardProvider) callIfAvailable(available bool, call func() (any, error)) (any, bool, error) {
 	if !available { return nil, false, nil }
-	result, err := call(); return result, true, err
+	out, err := call(); return out, true, err
 }
 
 func (p dashboardProvider) HasDAGStore() bool { return p.s != nil && p.s.dagStore != nil }

@@ -18,8 +18,7 @@ func (s *DBQueryStore) Query(ctx context.Context, sqlText string, limit int) ([]
 		return nil, err
 	}
 	limit = util.ClampInt(limit, 1, 2000)
-	safeSql := strings.TrimRight(strings.TrimSpace(sqlText), ";")
-	rows, err := s.pool.Query(ctx, "WITH q AS ("+safeSql+") SELECT * FROM q LIMIT $1", limit)
+	rows, err := s.pool.Query(ctx, "WITH q AS ("+strings.TrimRight(strings.TrimSpace(sqlText), ";")+") SELECT * FROM q LIMIT $1", limit)
 	if err != nil {
 		return nil, err
 	}

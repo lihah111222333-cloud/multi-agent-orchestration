@@ -13,12 +13,11 @@ func handleHTTPRPC(s *Server, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server not ready", http.StatusServiceUnavailable)
 		return
 	}
-	switch r.Method {
-	case http.MethodOptions:
+	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
 		return
-	case http.MethodPost:
-	default:
+	}
+	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}

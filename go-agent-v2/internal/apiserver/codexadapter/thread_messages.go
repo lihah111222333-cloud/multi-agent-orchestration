@@ -105,8 +105,4 @@ func (a *Adapter) resolveRolloutHistorySource(ctx context.Context, threadID stri
 	)
 }
 
-func toHistoryRecords(msgs []messagessvc.ThreadHistoryMessage) []uistate.HistoryRecord {
-	return mapSlice(msgs, func(msg messagessvc.ThreadHistoryMessage) uistate.HistoryRecord {
-		return uistate.HistoryRecord{ID: msg.ID, Role: msg.Role, EventType: msg.EventType, Method: msg.Method, Content: msg.Content, Metadata: msg.Metadata, CreatedAt: msg.CreatedAt}
-	})
-}
+func toHistoryRecords(msgs []messagessvc.ThreadHistoryMessage) []uistate.HistoryRecord { return mapSlice(msgs, func(msg messagessvc.ThreadHistoryMessage) uistate.HistoryRecord { return uistate.HistoryRecord{ID: msg.ID, Role: msg.Role, EventType: msg.EventType, Method: msg.Method, Content: msg.Content, Metadata: msg.Metadata, CreatedAt: msg.CreatedAt} }) }

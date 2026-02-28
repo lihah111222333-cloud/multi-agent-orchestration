@@ -27,21 +27,13 @@ func (h codexAdapterHooks) listSkillMatchCandidates() ([]contracts.SkillMatchCan
 	return listSkillMatchCandidates(h.server)
 }
 
-func (h codexAdapterHooks) getAgentSkills(agentID string) []string {
-	return getAgentSkills(h.server, agentID)
-}
+func (h codexAdapterHooks) getAgentSkills(agentID string) []string { return getAgentSkills(h.server, agentID) }
 
-func (h codexAdapterHooks) allSchemas() []codexsdk.DynamicTool {
-	return h.server.AllSchemas()
-}
+func (h codexAdapterHooks) allSchemas() []codexsdk.DynamicTool { return h.server.AllSchemas() }
 
-func (h codexAdapterHooks) notify(method string, params any) {
-	notify(h.server, method, params)
-}
+func (h codexAdapterHooks) notify(method string, params any) { notify(h.server, method, params) }
 
-func (h codexAdapterHooks) setAgentWorkDir(agentID, cwd string) {
-	setAgentWorkDirState(h.server, agentID, cwd)
-}
+func (h codexAdapterHooks) setAgentWorkDir(agentID, cwd string) { setAgentWorkDirState(h.server, agentID, cwd) }
 
 func (h codexAdapterHooks) cancelCodeRuns(agentID string) int {
 	return cancelCodeRunsState(h.server, agentID)

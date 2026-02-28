@@ -41,17 +41,15 @@ type ArchitectureSnapshot struct {
 }
 
 func LoadArchitectureRaw(configPath string) (*ArchitectureRaw, error) {
+	raw := &ArchitectureRaw{}
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &ArchitectureRaw{}, nil
-		}
+		if os.IsNotExist(err) { return raw, nil }
 		return nil, err
 	}
-	raw := &ArchitectureRaw{}
 	if err := json.Unmarshal(data, raw); err != nil {
 		logger.Warn("config.json parse failed", logger.FieldError, err)
-		return &ArchitectureRaw{}, nil
+		return raw, nil
 	}
 	return raw, nil
 }
@@ -60,13 +58,9 @@ func SaveArchitecture(configPath string, data *ArchitectureRaw) error {
 	architectureMu.Lock()
 	defer architectureMu.Unlock()
 	encoded, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	tmpPath := configPath + ".tmp"
-	if err := os.WriteFile(tmpPath, encoded, 0o644); err != nil {
-		return err
-	}
+	if err := os.WriteFile(tmpPath, encoded, 0o644); err != nil { return err }
 	return os.Rename(tmpPath, configPath)
 }
 
@@ -76,9 +70,10 @@ func LoadArchitectureSnapshot(configPath string) (*ArchitectureSnapshot, error) 
 		return nil, err
 	}
 	normalized, _ := json.Marshal(raw)
+	hash := sha256.Sum256(normalized)
 	return &ArchitectureSnapshot{
 		Raw:       raw,
-		Hash:      fmt.Sprintf("sha256:%x", sha256.Sum256(normalized)),
+		Hash:      fmt.Sprintf("sha256:%x", hash),
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }

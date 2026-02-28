@@ -219,9 +219,8 @@ type initializeParams struct {
 }
 
 func initialize(_ *Server, _ context.Context, params json.RawMessage) (any, error) {
-	var p initializeParams
 	if params != nil {
-		if err := json.Unmarshal(params, &p); err != nil {
+		if err := json.Unmarshal(params, new(initializeParams)); err != nil {
 			logger.Debug("initialize: unmarshal params", logger.FieldError, err)
 		}
 	}

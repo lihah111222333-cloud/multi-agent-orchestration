@@ -111,8 +111,12 @@ func main() {
 		"runtime", info.Runtime,
 	)
 
-	// 日志持久化: stdout + 文件
-	if err := logger.InitWithFile("logs"); err != nil {
+	// 日志持久化: stdout + 文件 — 固定写入 ~/.multi-agent/log
+	logDir := "logs" // fallback
+	if home, err := os.UserHomeDir(); err == nil {
+		logDir = filepath.Join(home, ".multi-agent", "log")
+	}
+	if err := logger.InitWithFile(logDir); err != nil {
 		logger.Warn("file logging unavailable", logger.FieldError, err)
 	}
 

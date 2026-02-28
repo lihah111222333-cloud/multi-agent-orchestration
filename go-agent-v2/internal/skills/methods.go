@@ -76,13 +76,9 @@ type SkillsRemoteWriteParams struct {
 
 func (m *Manager) SkillsList(_ context.Context) (any, error) {
 	skillSvc := m.skillService()
-	if skillSvc == nil {
-		return map[string]any{"skills": []map[string]any{}}, nil
-	}
+	if skillSvc == nil { return map[string]any{"skills": []map[string]any{}}, nil }
 	list, err := skillSvc.ListSkills()
-	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.skillsList", "list skills")
-	}
+	if err != nil { return nil, apperrors.Wrap(err, "Server.skillsList", "list skills") }
 	skills := make([]map[string]any, 0, len(list))
 	for _, item := range list {
 		skills = append(skills, map[string]any{
@@ -103,17 +99,11 @@ func (m *Manager) AppList(_ context.Context) (any, error) {
 
 func (m *Manager) importSingleSkillDirectory(sourceDir, name string) (skillImportResult, error) {
 	skillSvc := m.skillService()
-	if skillSvc == nil {
-		return skillImportResult{}, apperrors.New("Server.importSingleSkillDirectory", "skill service unavailable")
-	}
+	if skillSvc == nil { return skillImportResult{}, apperrors.New("Server.importSingleSkillDirectory", "skill service unavailable") }
 	skillName, err := skillImportDirName(name, sourceDir)
-	if err != nil {
-		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "resolve skill name")
-	}
+	if err != nil { return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "resolve skill name") }
 	result, err := skillSvc.ImportSkillDirectory(sourceDir, skillName)
-	if err != nil {
-		return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "import directory")
-	}
+	if err != nil { return skillImportResult{}, apperrors.Wrap(err, "Server.importSingleSkillDirectory", "import directory") }
 
 	logger.Info("skills/local/importDir: imported",
 		logger.FieldSkill, skillName,
@@ -133,24 +123,14 @@ func (m *Manager) importSingleSkillDirectory(sourceDir, name string) (skillImpor
 
 func (m *Manager) SkillsLocalRead(_ context.Context, p SkillsLocalReadParams) (any, error) {
 	path := strings.TrimSpace(p.Path)
-	if path == "" {
-		return nil, apperrors.New("Server.skillsLocalRead", "path is required")
-	}
+	if path == "" { return nil, apperrors.New("Server.skillsLocalRead", "path is required") }
 	info, err := os.Stat(path)
-	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.skillsLocalRead", "stat file")
-	}
-	if info.IsDir() {
-		return nil, apperrors.Newf("Server.skillsLocalRead", "path is directory: %s", path)
-	}
+	if err != nil { return nil, apperrors.Wrap(err, "Server.skillsLocalRead", "stat file") }
+	if info.IsDir() { return nil, apperrors.Newf("Server.skillsLocalRead", "path is directory: %s", path) }
 	const maxSkillLocalReadBytes = 1 << 20 // 1MB
-	if info.Size() > maxSkillLocalReadBytes {
-		return nil, apperrors.Newf("Server.skillsLocalRead", "file too large: %d bytes", info.Size())
-	}
+	if info.Size() > maxSkillLocalReadBytes { return nil, apperrors.Newf("Server.skillsLocalRead", "file too large: %d bytes", info.Size()) }
 	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, apperrors.Wrap(err, "Server.skillsLocalRead", "read file")
-	}
+	if err != nil { return nil, apperrors.Wrap(err, "Server.skillsLocalRead", "read file") }
 	summary, summarySource := service.SummarizeSkillContent(string(data))
 	return map[string]any{
 		"skill": map[string]string{

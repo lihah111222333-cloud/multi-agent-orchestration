@@ -28,12 +28,7 @@ type Master struct {
 }
 
 func NewMaster(traces *store.TaskTraceStore, dag *store.TaskDAGStore, ack *store.TaskAckStore) *Master {
-	return &Master{
-		state:     StateIdle,
-		taskTrace: traces,
-		taskDAG:   dag,
-		taskAck:   ack,
-	}
+	return &Master{state: StateIdle, taskTrace: traces, taskDAG: dag, taskAck: ack}
 }
 
 func (m *Master) AddGateway(gw *Gateway) { m.gateways = append(m.gateways, gw) }
@@ -42,7 +37,6 @@ func (m *Master) Run(ctx context.Context) error {
 	logger.Info("orchestrator started", "gateways", len(m.gateways))
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -67,6 +61,5 @@ type Gateway struct {
 
 func (g *Gateway) Execute(ctx context.Context, task string) (string, error) {
 	logger.Info("gateway executing", logger.FieldGatewayID, g.ID, "task", task)
-	// TODO: 实现 Gateway 任务分发逻辑
 	return "dispatched", nil
 }

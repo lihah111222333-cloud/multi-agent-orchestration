@@ -33,10 +33,7 @@ type OrchestrationState struct {
 }
 
 func NewOrchestrationState(bus *MessageBus) *OrchestrationState {
-	return &OrchestrationState{
-		activeRuns: make(map[string]*RunState),
-		bus:        bus,
-	}
+	return &OrchestrationState{activeRuns: make(map[string]*RunState), bus: bus}
 }
 
 func (o *OrchestrationState) BeginRun(runID, statusHeader, statusDetails, source string) {

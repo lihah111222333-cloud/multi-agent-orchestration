@@ -119,10 +119,7 @@ func (c *AppServerClient) noteReadFailure(now time.Time) (appServerHealthSnapsho
 	c.healthMu.Lock()
 	defer c.healthMu.Unlock()
 
-	maxWindow := appServerCircuitBreakerWindow
-	if appServerRespawnEscalationWindow > maxWindow {
-		maxWindow = appServerRespawnEscalationWindow
-	}
+	maxWindow := max(appServerCircuitBreakerWindow, appServerRespawnEscalationWindow)
 	c.health.readFailureTimes = append(c.health.readFailureTimes, now)
 	c.health.readFailureTimes = filterRecentTimes(c.health.readFailureTimes, now, maxWindow)
 	c.health.totalReadFailures++

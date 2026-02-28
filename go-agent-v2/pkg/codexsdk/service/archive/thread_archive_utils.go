@@ -72,8 +72,7 @@ func SanitizeArchiveNameStrict(raw string) (string, error) {
 }
 
 func PathWithinRoot(root, path string) (bool, error) {
-	root = strings.TrimSpace(root)
-	path = strings.TrimSpace(path)
+	root, path = strings.TrimSpace(root), strings.TrimSpace(path)
 	if root == "" || path == "" {
 		return false, apperrors.New("PathWithinRoot", "root and path are required")
 	}

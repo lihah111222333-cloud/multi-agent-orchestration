@@ -16,10 +16,9 @@ func PruneOrchestrationPendingReports(pending map[string]map[string]time.Time, n
 	if len(pending) == 0 || ttl <= 0 {
 		return
 	}
-	cutoff := now.Add(-ttl)
 	for workerID, waiters := range pending {
 		for requesterID, createdAt := range waiters {
-			if createdAt.Before(cutoff) {
+			if createdAt.Before(now.Add(-ttl)) {
 				delete(waiters, requesterID)
 			}
 		}
@@ -30,29 +29,29 @@ func PruneOrchestrationPendingReports(pending map[string]map[string]time.Time, n
 }
 
 func RememberOrchestrationRequester(pending map[string]map[string]time.Time, workerID, requesterID string, now time.Time) int {
-	target, requester := strings.TrimSpace(workerID), strings.TrimSpace(requesterID)
-	if pending == nil || target == "" || requester == "" {
+	workerID, requesterID = strings.TrimSpace(workerID), strings.TrimSpace(requesterID)
+	if pending == nil || workerID == "" || requesterID == "" {
 		return 0
 	}
-	waiters := pending[target]
+	waiters := pending[workerID]
 	if waiters == nil {
 		waiters = make(map[string]time.Time)
-		pending[target] = waiters
+		pending[workerID] = waiters
 	}
-	waiters[requester] = now
+	waiters[requesterID] = now
 	return len(waiters)
 }
 
 func TakeOrchestrationRequesters(pending map[string]map[string]time.Time, workerID string) []string {
-	target := strings.TrimSpace(workerID)
-	if pending == nil || target == "" {
+	workerID = strings.TrimSpace(workerID)
+	if pending == nil || workerID == "" {
 		return nil
 	}
-	waiters := pending[target]
+	waiters := pending[workerID]
 	if len(waiters) == 0 {
 		return nil
 	}
-	delete(pending, target)
+	delete(pending, workerID)
 	requesters := make([]string, 0, len(waiters))
 	for requesterID := range waiters {
 		if requesterID = strings.TrimSpace(requesterID); requesterID != "" {

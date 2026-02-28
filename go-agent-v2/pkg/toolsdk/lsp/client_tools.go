@@ -8,7 +8,6 @@ import (
 
 const defaultFormattingTabSize = 4
 
-// CodeAction 查询指定范围可用的 code action/command。
 func (c *Client) CodeAction(
 	_ context.Context,
 	uri string,
@@ -36,7 +35,6 @@ func (c *Client) CodeAction(
 	return decodeCodeActions(raw)
 }
 
-// SignatureHelp 查询指定位置的函数签名提示。
 func (c *Client) SignatureHelp(_ context.Context, uri string, line, character int) (*SignatureHelpResult, error) {
 	raw, err := c.callPositionRaw("textDocument/signatureHelp", uri, line, character)
 	if err != nil {
@@ -45,7 +43,6 @@ func (c *Client) SignatureHelp(_ context.Context, uri string, line, character in
 	return decodeSignatureHelp(raw)
 }
 
-// Format 获取文档格式化建议，不自动应用编辑。
 func (c *Client) Format(_ context.Context, uri string, tabSize int, insertSpaces bool) ([]TextEdit, error) {
 	if tabSize <= 0 {
 		tabSize = defaultFormattingTabSize
@@ -64,7 +61,6 @@ func (c *Client) Format(_ context.Context, uri string, tabSize int, insertSpaces
 	return decodeTextEdits(raw)
 }
 
-// SemanticTokens 获取语义高亮 token，并按 legend 解码。
 func (c *Client) SemanticTokens(_ context.Context, uri string) (*SemanticTokensResult, error) {
 	if err := c.ensureRunning(); err != nil {
 		return nil, err
@@ -115,7 +111,6 @@ func limitSemanticTokenData(data []int, tokenLimit int) []int {
 	return append([]int(nil), data...)
 }
 
-// FoldingRange 获取可折叠区间，并执行边界过滤。
 func (c *Client) FoldingRange(_ context.Context, uri string) ([]FoldingRange, error) {
 	raw, err := c.callRawWhenRunning("textDocument/foldingRange", FoldingRangeParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
@@ -127,12 +122,10 @@ func (c *Client) FoldingRange(_ context.Context, uri string) ([]FoldingRange, er
 	return decodeFoldingRanges(raw)
 }
 
-// Implementation 返回实现位置，兼容 Location/Location[]/LocationLink[]。
 func (c *Client) Implementation(_ context.Context, uri string, line, character int) ([]LocationResult, error) {
 	return c.positionLocationsLike("textDocument/implementation", uri, line, character)
 }
 
-// TypeDefinition 返回类型定义位置，兼容 Location/Location[]/LocationLink[]。
 func (c *Client) TypeDefinition(_ context.Context, uri string, line, character int) ([]LocationResult, error) {
 	return c.positionLocationsLike("textDocument/typeDefinition", uri, line, character)
 }
@@ -145,7 +138,6 @@ func (c *Client) positionLocationsLike(method, uri string, line, character int) 
 	return decodeLocationsLike(raw)
 }
 
-// CallHierarchy 查询调用层级。
 func (c *Client) CallHierarchy(_ context.Context, uri string, line, character int, direction string) ([]CallHierarchyResult, error) {
 	items, err := prepareHierarchyItems(c, "textDocument/prepareCallHierarchy", uri, line, character, decodePrepareCallHierarchyItems)
 	if err != nil {
@@ -155,17 +147,19 @@ func (c *Client) CallHierarchy(_ context.Context, uri string, line, character in
 		return nil, nil
 	}
 
+	includeIncoming := direction == "incoming" || direction == "both"
+	includeOutgoing := direction == "outgoing" || direction == "both"
 	out := make([]CallHierarchyResult, 0, len(items))
 	for _, item := range items {
 		entry := CallHierarchyResult{Item: item}
-		if direction == "incoming" || direction == "both" {
+		if includeIncoming {
 			incoming, err := callNullableSlice[CallHierarchyIncomingCall](c, "callHierarchy/incomingCalls", CallHierarchyIncomingCallsParams{Item: item}, "decode callHierarchy incoming")
 			if err != nil {
 				return nil, err
 			}
 			entry.Incoming = incoming
 		}
-		if direction == "outgoing" || direction == "both" {
+		if includeOutgoing {
 			outgoing, err := callNullableSlice[CallHierarchyOutgoingCall](c, "callHierarchy/outgoingCalls", CallHierarchyOutgoingCallsParams{Item: item}, "decode callHierarchy outgoing")
 			if err != nil {
 				return nil, err
@@ -178,7 +172,6 @@ func (c *Client) CallHierarchy(_ context.Context, uri string, line, character in
 	return out, nil
 }
 
-// TypeHierarchy 查询类型层级。
 func (c *Client) TypeHierarchy(_ context.Context, uri string, line, character int, direction string) ([]TypeHierarchyResult, error) {
 	items, err := prepareHierarchyItems(c, "textDocument/prepareTypeHierarchy", uri, line, character, decodePrepareTypeHierarchyItems)
 	if err != nil {
@@ -188,17 +181,19 @@ func (c *Client) TypeHierarchy(_ context.Context, uri string, line, character in
 		return nil, nil
 	}
 
+	includeSupertypes := direction == "supertypes" || direction == "both"
+	includeSubtypes := direction == "subtypes" || direction == "both"
 	out := make([]TypeHierarchyResult, 0, len(items))
 	for _, item := range items {
 		entry := TypeHierarchyResult{Item: item}
-		if direction == "supertypes" || direction == "both" {
+		if includeSupertypes {
 			supertypes, err := callNullableSlice[TypeHierarchyItem](c, "typeHierarchy/supertypes", TypeHierarchySupertypesParams{Item: item}, "decode typeHierarchy supertypes")
 			if err != nil {
 				return nil, err
 			}
 			entry.Supertypes = supertypes
 		}
-		if direction == "subtypes" || direction == "both" {
+		if includeSubtypes {
 			subtypes, err := callNullableSlice[TypeHierarchyItem](c, "typeHierarchy/subtypes", TypeHierarchySubtypesParams{Item: item}, "decode typeHierarchy subtypes")
 			if err != nil {
 				return nil, err

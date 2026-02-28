@@ -52,34 +52,13 @@ func extractHTTP(msg string) (method, url, endpoint string) {
 	return
 }
 
-func extractStatus(msg string) (code, text string) {
-	if m := reStatus.FindStringSubmatch(msg); len(m) >= 2 {
-		code = m[1]
-		if len(m) == 3 {
-			text = m[2]
-		}
-	}
-	return
-}
-
-func extractModel(msg string) string {
-	if m := reModel.FindStringSubmatch(msg); len(m) == 2 {
-		return m[1]
-	}
-	return ""
-}
-
 func (s *AILogStore) Query(ctx context.Context, category, keyword string, limit int) ([]AILogRow, error) {
 	limit = util.ClampInt(limit, 1, 2000)
 	fetchLimit := limit
 	if category != "" {
 		fetchLimit = min(limit*5, 2000)
 	}
-	sql, params := NewQueryBuilder().
-		KeywordLike(keyword, "message").
-		Build(
-			"SELECT "+sysLogCols+" FROM system_logs",
-			"ts DESC, id DESC", fetchLimit)
+	sql, params := NewQueryBuilder().KeywordLike(keyword, "message").Build("SELECT "+sysLogCols+" FROM system_logs", "ts DESC, id DESC", fetchLimit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err
@@ -96,8 +75,17 @@ func (s *AILogStore) Query(ctx context.Context, category, keyword string, limit 
 			continue
 		}
 		method, url, endpoint := extractHTTP(log.Message)
-		statusCode, statusText := extractStatus(log.Message)
-		model := extractModel(log.Message)
+		statusCode, statusText := "", ""
+		if m := reStatus.FindStringSubmatch(log.Message); len(m) >= 2 {
+			statusCode = m[1]
+			if len(m) == 3 {
+				statusText = m[2]
+			}
+		}
+		model := ""
+		if m := reModel.FindStringSubmatch(log.Message); len(m) == 2 {
+			model = m[1]
+		}
 
 		result = append(result, AILogRow{
 			Ts:         log.Ts,

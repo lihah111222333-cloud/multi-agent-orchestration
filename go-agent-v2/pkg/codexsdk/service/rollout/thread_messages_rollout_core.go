@@ -34,10 +34,9 @@ func LoadAllThreadMessagesFromCodexRollout(
 	empty := []ThreadHistoryMessage{}
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" || resolveRolloutHistorySource == nil { return empty, nil }
-	normalize := normalizeCodexThreadID
-	if normalize == nil { normalize = strings.TrimSpace }
+	if normalizeCodexThreadID == nil { normalizeCodexThreadID = strings.TrimSpace }
 	codexThreadID, rolloutPath := resolveRolloutHistorySource(ctx, threadID)
-	codexThreadID = normalize(codexThreadID)
+	codexThreadID = normalizeCodexThreadID(codexThreadID)
 	if codexThreadID == "" { return empty, nil }
 	path := strings.TrimSpace(rolloutPath)
 	if path == "" {
@@ -137,25 +136,22 @@ func ResolveRolloutHistorySource(
 ) (codexThreadID string, rolloutPath string) {
 	id := strings.TrimSpace(threadID)
 	if id == "" { return "", "" }
-	normalize := normalizeCodexThreadID
-	if normalize == nil { normalize = strings.TrimSpace }
+	if normalizeCodexThreadID == nil { normalizeCodexThreadID = strings.TrimSpace }
 	if getRunningCodexThreadID != nil {
-		candidate := normalize(getRunningCodexThreadID(id))
+		candidate := normalizeCodexThreadID(getRunningCodexThreadID(id))
 		if candidate != "" { return candidate, "" }
 	}
 	if findBinding != nil {
-		boundID, path, err := findBinding(ctx, id)
-		if err == nil {
-			candidate := normalize(boundID)
+		if boundID, path, err := findBinding(ctx, id); err == nil {
+			candidate := normalizeCodexThreadID(boundID)
 			if candidate != "" { return candidate, strings.TrimSpace(path) }
 		}
 	}
 	if findStatusSessionID != nil {
-		sessionID, err := findStatusSessionID(ctx, id)
-		if err == nil {
-			candidate := normalize(sessionID)
+		if sessionID, err := findStatusSessionID(ctx, id); err == nil {
+			candidate := normalizeCodexThreadID(sessionID)
 			if candidate != "" { return candidate, "" }
 		}
 	}
-	return normalize(id), ""
+	return normalizeCodexThreadID(id), ""
 }

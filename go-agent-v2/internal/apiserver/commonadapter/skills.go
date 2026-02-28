@@ -139,8 +139,6 @@ func CollectReferencedLSPToolNames(hint string) []string {
 		seen[name] = struct{}{}
 		names = append(names, name)
 	}
-	if len(names) > 1 {
-		sort.Strings(names)
-	}
+	sort.Strings(names)
 	return names
 }

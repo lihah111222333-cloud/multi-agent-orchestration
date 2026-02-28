@@ -231,20 +231,17 @@ func (m *AgentManager) Launch(ctx context.Context, id, name, prompt, cwd string,
 				m.handleEvent(proc, event)
 			})
 			if fallbackErr := fallback.SpawnAndConnect(ctx, prompt, cwd, "", instructions, dynamicTools); fallbackErr == nil {
-				event, marshalErr := buildJSONEvent(
-					agentcore.EventBackgroundEvent,
-					map[string]any{
-						"message": "App-server unavailable; using HTTP fallback",
-						"status":  "degraded",
-						"active":  false,
-						"done":    true,
-						"phase":   "transport_fallback",
-					},
-				)
+				eventData, marshalErr := json.Marshal(map[string]any{
+					"message": "App-server unavailable; using HTTP fallback",
+					"status":  "degraded",
+					"active":  false,
+					"done":    true,
+					"phase":   "transport_fallback",
+				})
 				if marshalErr != nil {
 					logger.Warn("runner: fallback event marshal failed", logger.FieldAgentID, id, logger.FieldError, marshalErr)
 				}
-				m.handleEvent(proc, event)
+				m.handleEvent(proc, agentcore.Event{Type: agentcore.EventBackgroundEvent, Data: eventData})
 				logger.Warn("runner: launched with REST fallback",
 					logger.FieldAgentID, id,
 					logger.FieldPort, port,
@@ -357,14 +354,17 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event agentcore.Event) {
 	}
 
 	if normalized.UIType == uistate.UITypeTurnComplete {
-		if report := extractLastAgentMessage(event.Data); report != "" {
-			proc.mu.Lock()
-			proc.LastReport = report
-			proc.mu.Unlock()
-			logger.Info("runner: captured task report",
-				logger.FieldAgentID, proc.ID,
-				"report_len", len(report),
-			)
+		var payload map[string]any
+		if err := json.Unmarshal(event.Data, &payload); err == nil && payload != nil {
+			if report := extractLastAgentMessageFromMap(payload); report != "" {
+				proc.mu.Lock()
+				proc.LastReport = report
+				proc.mu.Unlock()
+				logger.Info("runner: captured task report",
+					logger.FieldAgentID, proc.ID,
+					"report_len", len(report),
+				)
+			}
 		}
 	}
 
@@ -377,49 +377,39 @@ func (m *AgentManager) handleEvent(proc *AgentProcess, event agentcore.Event) {
 }
 
 func (m *AgentManager) Submit(id, prompt string, images, files []string) error {
-	proc, err := m.get(id)
-	if err != nil {
-		return err
+	proc := m.Get(id)
+	if proc == nil {
+		return apperrors.Newf("AgentManager.get", "agent %s not found", id)
 	}
-	m.emitUserMessageEvent(proc, prompt, images, files)
-	return proc.Client.Submit(prompt, images, files, nil)
-}
 
-func (m *AgentManager) emitUserMessageEvent(proc *AgentProcess, prompt string, images, files []string) {
 	m.mu.RLock()
 	handler := m.onEvent
 	m.mu.RUnlock()
-	if proc == nil || handler == nil {
-		return
+	if handler != nil {
+		payloadMap := map[string]any{
+			"role":    "user",
+			"content": prompt,
+		}
+		if len(images) > 0 {
+			payloadMap["images"] = images
+		}
+		if len(files) > 0 {
+			payloadMap["files"] = files
+		}
+		data, err := json.Marshal(payloadMap)
+		if err != nil {
+			logger.Warn("runner: emitUserMessageEvent marshal failed", logger.FieldAgentID, proc.ID, logger.FieldError, err)
+		} else {
+			handler(proc.ID, agentcore.Event{Type: "user_message", Data: data})
+		}
 	}
-
-	payloadMap := map[string]any{
-		"role":    "user",
-		"content": prompt,
-	}
-	if len(images) > 0 {
-		payloadMap["images"] = images
-	}
-	if len(files) > 0 {
-		payloadMap["files"] = files
-	}
-	event, err := buildJSONEvent("user_message", payloadMap)
-	if err != nil {
-		logger.Warn("runner: emitUserMessageEvent marshal failed", logger.FieldAgentID, proc.ID, logger.FieldError, err)
-		return
-	}
-	handler(proc.ID, event)
-}
-
-func buildJSONEvent(eventType string, payload map[string]any) (agentcore.Event, error) {
-	data, err := json.Marshal(payload)
-	return agentcore.Event{Type: eventType, Data: data}, err
+	return proc.Client.Submit(prompt, images, files, nil)
 }
 
 func (m *AgentManager) SendCommand(id, cmd, args string) error {
-	proc, err := m.get(id)
-	if err != nil {
-		return err
+	proc := m.Get(id)
+	if proc == nil {
+		return apperrors.Newf("AgentManager.get", "agent %s not found", id)
 	}
 	return proc.Client.SendCommand(cmd, args)
 }

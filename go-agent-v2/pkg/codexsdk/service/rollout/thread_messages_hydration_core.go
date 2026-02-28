@@ -85,14 +85,13 @@ func StreamRemainingHistory(
 		}
 		before = batch[len(batch)-1].ID
 	}
-	if loaded == len(first) {
-		return
-	}
-	if beforeNotify != nil {
-		beforeNotify()
-	}
-	if notifyProgress != nil {
-		notifyProgress(loaded, pageNum)
+	if loaded != len(first) {
+		if beforeNotify != nil {
+			beforeNotify()
+		}
+		if notifyProgress != nil {
+			notifyProgress(loaded, pageNum)
+		}
 	}
 }
 

@@ -84,8 +84,7 @@ func (m *Manager) bootstrapDocumentLocked(filePath, uri string) (*Client, *Serve
 		return client, cfg, state, nil
 	}
 
-	isStale := state.MtimeNS != stat.ModTime().UnixNano() || state.Size != stat.Size() || state.ContentHash != hash
-	if !isStale {
+	if state.MtimeNS == stat.ModTime().UnixNano() && state.Size == stat.Size() && state.ContentHash == hash {
 		return client, cfg, state, nil
 	}
 
@@ -129,8 +128,7 @@ func (m *Manager) bootstrapDocumentWithoutClientLocked(filePath, uri, language s
 		return state, nil
 	}
 
-	isStale := state.MtimeNS != stat.ModTime().UnixNano() || state.Size != stat.Size() || state.ContentHash != hash
-	if !isStale {
+	if state.MtimeNS == stat.ModTime().UnixNano() && state.Size == stat.Size() && state.ContentHash == hash {
 		return state, nil
 	}
 
@@ -381,8 +379,7 @@ func (m *Manager) upsertDocumentStateCache(filePath, uri string, state *document
 	})
 }
 
-func (m *Manager) cacheWorkspaceHint(filePath string) string {
-	_ = filePath
+func (m *Manager) cacheWorkspaceHint(_ string) string {
 	m.mu.RLock()
 	root := strings.TrimSpace(m.rootURI)
 	workspaceID := strings.TrimSpace(m.workspaceID)
@@ -437,10 +434,10 @@ func nextOpenVersionFromBaseline(state *documentSyncState, diskMtimeNS, diskSize
 	if state == nil || state.Version <= 0 {
 		return 1
 	}
-	if state.MtimeNS != diskMtimeNS || state.Size != diskSize || state.ContentHash != diskHash {
-		return state.Version + 1
+	if state.MtimeNS == diskMtimeNS && state.Size == diskSize && state.ContentHash == diskHash {
+		return state.Version
 	}
-	return state.Version
+	return state.Version + 1
 }
 
 func atLeastOneVersion(version int) int {

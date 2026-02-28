@@ -257,11 +257,9 @@ func inspectThreadArchiveForRestoreWithDeps(threadID string, deps ThreadArchiveR
 			modified = append(modified, archivedPath)
 		}
 	}
-	if len(modified) > 0 {
-		sort.Strings(modified)
-		notice.Modified = true
-		notice.ModifiedFiles = modified
-	}
+	sort.Strings(modified)
+	notice.Modified = len(modified) > 0
+	notice.ModifiedFiles = modified
 	return notice, nil
 }
 
@@ -300,10 +298,8 @@ func PruneArchivedCodexSourceFiles(
 		if withinCodex, err := pathWithinRoot(codexRoot, srcPath); err != nil || !withinCodex {
 			continue
 		}
-		if archiveRoot != "" {
-			if withinArchive, err := pathWithinRoot(archiveRoot, srcPath); err == nil && withinArchive {
-				continue
-			}
+		if withinArchive, err := pathWithinRoot(archiveRoot, srcPath); archiveRoot != "" && err == nil && withinArchive {
+			continue
 		}
 		state, err := fileState(srcPath)
 		if err != nil {
@@ -348,28 +344,26 @@ func appendRestoreSkippedSource(
 	reason string,
 	skipErr error,
 ) {
-	value := strings.TrimSpace(sourcePath)
-	if value == "" {
+	if sourcePath = strings.TrimSpace(sourcePath); sourcePath == "" {
 		return
 	}
-	logFields := []any{logger.FieldThreadID, threadID, "source_path", value, "archived_path", strings.TrimSpace(archivedPath), "reason", reason}
+	logFields := []any{logger.FieldThreadID, threadID, "source_path", sourcePath, "archived_path", strings.TrimSpace(archivedPath), "reason", reason}
 	if skipErr != nil {
 		logFields = append(logFields, logger.FieldError, skipErr)
 	}
 	logger.Error("thread/unarchive: restore artifact skipped", logFields...)
-	skippedSet[value] = struct{}{}
+	skippedSet[sourcePath] = struct{}{}
 }
 
 func restoreThreadArchiveSourcesWithDeps(threadID string, deps ThreadArchiveRestoreDeps) ([]string, []string, error) {
-	id := strings.TrimSpace(threadID)
-	if id == "" {
+	if threadID = strings.TrimSpace(threadID); threadID == "" {
 		return []string{}, []string{}, nil
 	}
 	if err := deps.validateRestore(); err != nil {
 		return nil, nil, err
 	}
 
-	_, manifest, ok, err := loadThreadArchiveManifestScope(id, "restoreThreadArchiveSources", deps)
+	_, manifest, ok, err := loadThreadArchiveManifestScope(threadID, "restoreThreadArchiveSources", deps)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -388,29 +382,28 @@ func restoreThreadArchiveSourcesWithDeps(threadID string, deps ThreadArchiveRest
 		if sourcePath == "" {
 			continue
 		}
-		withinCodex, err := deps.pathWithinRoot(codexRoot, sourcePath)
-		if err != nil {
-			appendRestoreSkippedSource(id, skippedSet, sourcePath, "", "validate source path scope", err)
-			continue
-		}
-		if !withinCodex {
-			appendRestoreSkippedSource(id, skippedSet, sourcePath, "", "source path is outside codex root", nil)
+		if withinCodex, err := deps.pathWithinRoot(codexRoot, sourcePath); err != nil || !withinCodex {
+			reason := "source path is outside codex root"
+			if err != nil {
+				reason = "validate source path scope"
+			}
+			appendRestoreSkippedSource(threadID, skippedSet, sourcePath, "", reason, err)
 			continue
 		}
 		archivedPath, reason, skipErr := validateArchivedArtifact(meta, manifest.ArchiveDir, deps.pathWithinRoot, deps.fileState, deps.fileSHA256, false, "archived path is empty")
 		if reason != "" || skipErr != nil {
-			appendRestoreSkippedSource(id, skippedSet, sourcePath, archivedPath, reason, skipErr)
+			appendRestoreSkippedSource(threadID, skippedSet, sourcePath, archivedPath, reason, skipErr)
 			continue
 		}
 		if err := deps.copyFileOverwrite(archivedPath, sourcePath); err != nil {
-			appendRestoreSkippedSource(id, skippedSet, sourcePath, archivedPath, "restore file to source path", err)
+			appendRestoreSkippedSource(threadID, skippedSet, sourcePath, archivedPath, "restore file to source path", err)
 			continue
 		}
 		if reason, err := validateOptionalChecksum(deps.fileSHA256, sourcePath, meta.SHA256, "compute restored source checksum", "restored source checksum mismatch"); err != nil || reason != "" {
 			if deps.removeFile != nil {
 				_ = deps.removeFile(sourcePath)
 			}
-			appendRestoreSkippedSource(id, skippedSet, sourcePath, archivedPath, reason, err)
+			appendRestoreSkippedSource(threadID, skippedSet, sourcePath, archivedPath, reason, err)
 			continue
 		}
 		restoredSet[sourcePath] = struct{}{}

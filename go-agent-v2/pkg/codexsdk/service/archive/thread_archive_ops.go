@@ -46,7 +46,7 @@ func resolveArchiveState(ctx context.Context, deps ThreadArchiveDeps, caller, th
 		return "", nil, appErrors.Wrap(err, caller, "load archive state")
 	}
 	if archivedMap == nil {
-		archivedMap = map[string]int64{}
+		return id, map[string]int64{}, nil
 	}
 	return id, archivedMap, nil
 }
@@ -95,14 +95,12 @@ func ThreadUnarchive(ctx context.Context, threadID string, deps ThreadArchiveDep
 	var restoredFiles, skippedRestoreFiles []string
 	if wasArchived {
 		restoreDeps := BuildThreadArchiveRestoreDeps(ResolveThreadArchiveRootDir, SanitizeArchiveNameStrict, ResolveCodexRootDir, PathWithinRoot, CopyFileOverwrite, FileSHA256, FindLatestThreadArchiveManifestPath, ReadThreadArchiveManifest, FileState, RemoveFile)
-		inspectNotice, inspectErr := InspectThreadArchiveForRestore(id, restoreDeps)
-		if inspectErr != nil {
+		if inspectNotice, inspectErr := InspectThreadArchiveForRestore(id, restoreDeps); inspectErr != nil {
 			logger.Error("thread/unarchive: inspect archive integrity failed", logger.FieldThreadID, id, logger.FieldError, inspectErr)
 		} else {
 			notice = inspectNotice
 		}
-		restored, skipped, restoreErr := restoreThreadArchiveSourcesWithDeps(id, restoreDeps)
-		if restoreErr != nil {
+		if restored, skipped, restoreErr := restoreThreadArchiveSourcesWithDeps(id, restoreDeps); restoreErr != nil {
 			logger.Error("thread/unarchive: restore archived codex artifacts failed", logger.FieldThreadID, id, logger.FieldError, restoreErr)
 		} else {
 			restoredFiles, skippedRestoreFiles = restored, skipped
@@ -112,7 +110,6 @@ func ThreadUnarchive(ctx context.Context, threadID string, deps ThreadArchiveDep
 	if err := deps.SaveArchiveMap(ctx, archivedMap); err != nil {
 		return nil, appErrors.Wrap(err, "Server.threadUnarchive", "persist archive state")
 	}
-	// Remove archive dir so LoadThreadArchiveMapFromDisk does not re-discover it.
 	if rootDir, rootErr := ResolveThreadArchiveRootDir(); rootErr == nil {
 		if safeName, sanitizeErr := SanitizeArchiveNameStrict(id); sanitizeErr == nil {
 			if removeErr := os.RemoveAll(filepath.Join(rootDir, safeName)); removeErr != nil {

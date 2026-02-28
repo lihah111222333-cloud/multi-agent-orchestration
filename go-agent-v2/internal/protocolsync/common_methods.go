@@ -52,15 +52,12 @@ func FindProtocolCommonPath() (string, error) {
 	}
 	moduleRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
 
-	candidates := []string{
-		filepath.Join(moduleRoot, "..", "codex-rs", rel),
-		filepath.Join(moduleRoot, "..", "codex", "codex-rs", rel),
-		filepath.Join(moduleRoot, "..", "..", "codex", "codex-rs", rel),
-		filepath.Join(moduleRoot, "..", "..", "..", "codex", "codex-rs", rel),
-	}
-
-	for _, candidate := range candidates {
-		candidate = filepath.Clean(candidate)
+	for _, candidate := range [...]string{
+		filepath.Clean(filepath.Join(moduleRoot, "..", "codex-rs", rel)),
+		filepath.Clean(filepath.Join(moduleRoot, "..", "codex", "codex-rs", rel)),
+		filepath.Clean(filepath.Join(moduleRoot, "..", "..", "codex", "codex-rs", rel)),
+		filepath.Clean(filepath.Join(moduleRoot, "..", "..", "..", "codex", "codex-rs", rel)),
+	} {
 		if util.FileExists(candidate) {
 			return candidate, nil
 		}
@@ -70,17 +67,16 @@ func FindProtocolCommonPath() (string, error) {
 }
 
 func LoadMethodCatalog(commonPath string) (MethodCatalog, error) {
-	contentBytes, err := os.ReadFile(commonPath)
+	content, err := os.ReadFile(commonPath)
 	if err != nil {
 		return MethodCatalog{}, apperrors.Wrap(err, "protocolsync.LoadMethodCatalog", "read protocol common.rs")
 	}
-	content := string(contentBytes)
 
-	requests, err := parseMacroMethods(content, "server_request_definitions!")
+	requests, err := parseMacroMethods(string(content), "server_request_definitions!")
 	if err != nil {
 		return MethodCatalog{}, apperrors.Wrap(err, "protocolsync.LoadMethodCatalog", "parse server requests")
 	}
-	notifications, err := parseMacroMethods(content, "server_notification_definitions!")
+	notifications, err := parseMacroMethods(string(content), "server_notification_definitions!")
 	if err != nil {
 		return MethodCatalog{}, apperrors.Wrap(err, "protocolsync.LoadMethodCatalog", "parse server notifications")
 	}

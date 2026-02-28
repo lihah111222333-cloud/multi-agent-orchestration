@@ -32,8 +32,7 @@ func (s *InteractionStore) Create(ctx context.Context, i *Interaction) (*Interac
 }
 
 func (s *InteractionStore) Get(ctx context.Context, id int) (*Interaction, error) {
-	rows, err := s.pool.Query(ctx,
-		interactionSelect+" WHERE id = $1", id)
+	rows, err := s.pool.Query(ctx, interactionSelect+" WHERE id = $1", id)
 	if err != nil {
 		return nil, err
 	}
@@ -44,8 +43,7 @@ func (s *InteractionStore) List(ctx context.Context, threadID, keyword string, l
 	sql, params := NewQueryBuilder().
 		Eq("thread_id", threadID).
 		KeywordLike(keyword, "sender", "receiver", "msg_type").
-		Build(interactionSelect,
-			"created_at DESC, id DESC", limit)
+		Build(interactionSelect, "created_at DESC, id DESC", limit)
 	rows, err := s.pool.Query(ctx, sql, params...)
 	if err != nil {
 		return nil, err

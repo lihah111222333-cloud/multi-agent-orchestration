@@ -85,14 +85,12 @@ func ResolveState(input StateResolutionInput) StateResolution {
 	}
 
 	resolvedMain := resolveMainAgentPreference(threads, meta, AsString(input.Prefs[PrefMainAgentID]))
-	resolvedActive := resolvePreferredThreadID(threads, AsString(input.Prefs[PrefActiveThreadID]))
-	resolvedActiveCmd := resolvePreferredCmdThreadID(threads, resolvedMain, AsString(input.Prefs[PrefActiveCmdThreadID]))
 
 	return StateResolution{
 		Aliases:                aliases,
 		ResolvedMainAgentID:    resolvedMain,
-		ResolvedActiveThreadID: resolvedActive,
-		ResolvedActiveCmdID:    resolvedActiveCmd,
+		ResolvedActiveThreadID: resolvePreferredThreadID(threads, AsString(input.Prefs[PrefActiveThreadID])),
+		ResolvedActiveCmdID:    resolvePreferredCmdThreadID(threads, resolvedMain, AsString(input.Prefs[PrefActiveCmdThreadID])),
 	}
 }
 
@@ -244,17 +242,16 @@ func resolvePreferredThreadID(threads []StateThread, preferred string) string {
 
 func resolvePreferredCmdThreadID(threads []StateThread, mainAgentID, preferred string) string {
 	mainID := strings.TrimSpace(mainAgentID)
+	if mainID == "" {
+		return resolvePreferredThreadID(threads, preferred)
+	}
 	candidates := make([]StateThread, 0, len(threads))
 	for _, thread := range threads {
-		id := strings.TrimSpace(thread.ID)
-		if id == "" || (mainID != "" && id == mainID) {
-			continue
+		if id := strings.TrimSpace(thread.ID); id != "" && id != mainID {
+			candidates = append(candidates, thread)
 		}
-		candidates = append(candidates, thread)
 	}
-	if len(candidates) == 0 {
-		candidates = threads
-	}
+	if len(candidates) == 0 { return resolvePreferredThreadID(threads, preferred) }
 	return resolvePreferredThreadID(candidates, preferred)
 }
 

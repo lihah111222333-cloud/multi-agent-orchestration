@@ -13,26 +13,27 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-type Server struct {
-	router *gin.Engine
-	stores *Stores
-	bus    *EventBus
-}
-
-type Stores struct {
-	Interaction      *store.InteractionStore
-	TaskTrace        *store.TaskTraceStore
-	PromptTemplate   *store.PromptTemplateStore
-	CommandCard      *store.CommandCardStore
-	AuditLog         *store.AuditLogStore
-	SystemLog        *store.SystemLogStore
-	AILog            *store.AILogStore
-	BusLog           *store.BusLogStore
-	SharedFile       *store.SharedFileStore
-	AgentStatus      *store.AgentStatusStore
-	TopologyApproval *store.TopologyApprovalStore
-	DBQuery          *store.DBQueryStore
-}
+type (
+	Server struct {
+		router *gin.Engine
+		stores *Stores
+		bus    *EventBus
+	}
+	Stores struct {
+		Interaction      *store.InteractionStore
+		TaskTrace        *store.TaskTraceStore
+		PromptTemplate   *store.PromptTemplateStore
+		CommandCard      *store.CommandCardStore
+		AuditLog         *store.AuditLogStore
+		SystemLog        *store.SystemLogStore
+		AILog            *store.AILogStore
+		BusLog           *store.BusLogStore
+		SharedFile       *store.SharedFileStore
+		AgentStatus      *store.AgentStatusStore
+		TopologyApproval *store.TopologyApprovalStore
+		DBQuery          *store.DBQueryStore
+	}
+)
 
 func NewServer(stores *Stores, cfg *config.Config) *Server {
 	gin.SetMode(cfg.GinMode)

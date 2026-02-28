@@ -247,24 +247,21 @@ func runHierarchyTool[T any](
 	if err != nil {
 		return toolError(err)
 	}
+	var formatErr func(error) string
+	if tool == "lsp_type_hierarchy" {
+		formatErr = func(err error) string {
+			return h.contextualToolError(tool, filePath, params.Line, params.Column, err)
+		}
+	}
 	return runAndMarshalLogged(
 		call,
 		func() (T, error) { return run(filePath, params.Line, params.Column, params.Direction) },
-		h.hierarchyToolErrorFormatter(tool, filePath, params.Line, params.Column),
+		formatErr,
 		emptyMsg,
 		func(result T) bool { return isHierarchyResultEmpty(result) },
 		func(result T) []any { return []any{"result_count", hierarchyResultCount(result)} },
 		append(lspToolPathPositionAttrs(filePath, params.Line, params.Column), "direction", params.Direction)...,
 	)
-}
-
-func (h *ToolHandlers) hierarchyToolErrorFormatter(tool, filePath string, line, column int) func(error) string {
-	if tool == "lsp_type_hierarchy" {
-		return func(err error) string {
-			return h.contextualToolError("lsp_type_hierarchy", filePath, line, column, err)
-		}
-	}
-	return nil
 }
 
 func hierarchyResultMeta[T any](result T) (int, bool) {
@@ -2113,43 +2110,42 @@ func validateWorkspaceSymbolRequest(call *lspToolCallLogger, req workspaceSymbol
 }
 
 func (h *ToolHandlers) Implementation(args json.RawMessage) string {
-	return runFilePositionManagerTool(
-		h,
-		"lsp_implementation",
-		args,
+	return h.runLimitedLocationTool("lsp_implementation", args, "no implementation found",
 		func(filePath string, line, column int) ([]LocationResult, error) {
-			result, err := h.manager.Implementation(filePath, line, column)
-			if err != nil {
-				return nil, err
-			}
-			return limitResults(result, XRefResultLimit), nil
+			return h.manager.Implementation(filePath, line, column)
 		},
-		func(filePath string, line, column int, err error) string {
-			return h.contextualToolError("lsp_implementation", filePath, line, column, err)
-		},
-		"no implementation found",
-		func(result []LocationResult) bool { return len(result) == 0 },
-		func(result []LocationResult) []any { return []any{"result_count", len(result)} },
-		nil,
 	)
 }
 
 func (h *ToolHandlers) TypeDefinition(args json.RawMessage) string {
+	return h.runLimitedLocationTool("lsp_type_definition", args, "no type definition found",
+		func(filePath string, line, column int) ([]LocationResult, error) {
+			return h.manager.TypeDefinition(filePath, line, column)
+		},
+	)
+}
+
+func (h *ToolHandlers) runLimitedLocationTool(
+	tool string,
+	args json.RawMessage,
+	emptyMsg string,
+	run func(filePath string, line, column int) ([]LocationResult, error),
+) string {
 	return runFilePositionManagerTool(
 		h,
-		"lsp_type_definition",
+		tool,
 		args,
 		func(filePath string, line, column int) ([]LocationResult, error) {
-			result, err := h.manager.TypeDefinition(filePath, line, column)
+			result, err := run(filePath, line, column)
 			if err != nil {
 				return nil, err
 			}
 			return limitResults(result, XRefResultLimit), nil
 		},
 		func(filePath string, line, column int, err error) string {
-			return h.contextualToolError("lsp_type_definition", filePath, line, column, err)
+			return h.contextualToolError(tool, filePath, line, column, err)
 		},
-		"no type definition found",
+		emptyMsg,
 		func(result []LocationResult) bool { return len(result) == 0 },
 		func(result []LocationResult) []any { return []any{"result_count", len(result)} },
 		nil,

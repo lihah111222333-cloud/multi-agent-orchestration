@@ -242,11 +242,12 @@ func FindLatestThreadArchiveManifestPath(threadDir string) (string, bool, error)
 			}
 			return apperrors.Wrap(statErr, "FindLatestThreadArchiveManifestPath", action)
 		}
-		if !stat.IsDir() {
-			modAt := stat.ModTime().UnixNano()
-			if latestPath == "" || modAt > latestAt || (modAt == latestAt && path > latestPath) {
-				latestPath, latestAt = path, modAt
-			}
+		if stat.IsDir() {
+			return nil
+		}
+		modAt := stat.ModTime().UnixNano()
+		if latestPath == "" || modAt > latestAt || (modAt == latestAt && path > latestPath) {
+			latestPath, latestAt = path, modAt
 		}
 		return nil
 	}
@@ -295,16 +296,14 @@ func ResolveCodexRootDir() (string, error) {
 }
 
 func FileState(path string) (ThreadArchiveFileState, error) {
-	state := ThreadArchiveFileState{}
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return state, nil
+			return ThreadArchiveFileState{}, nil
 		}
-		return state, err
+		return ThreadArchiveFileState{}, err
 	}
-	state.Exists, state.IsDir, state.SizeBytes = true, info.IsDir(), info.Size()
-	return state, nil
+	return ThreadArchiveFileState{Exists: true, IsDir: info.IsDir(), SizeBytes: info.Size()}, nil
 }
 
 func RemoveFile(path string) error { return os.Remove(path) }

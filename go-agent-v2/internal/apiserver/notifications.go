@@ -101,8 +101,6 @@ func mapEventToMethod(eventType string) string {
 	if strings.Contains(eventType, "/") {
 		return eventType
 	}
-	logger.Warn("app-server: unmapped event type → fallback to agent/event/ prefix",
-		logger.FieldEventType, eventType,
-	)
+	logger.Warn("app-server: unmapped event type → fallback to agent/event/ prefix", logger.FieldEventType, eventType)
 	return "agent/event/" + eventType
 }

@@ -9,12 +9,13 @@ type TaskDAGStore struct{ BaseStore }
 
 func NewTaskDAGStore(pool *pgxpool.Pool) *TaskDAGStore { return &TaskDAGStore{NewBaseStore(pool)} }
 
-const dagCols = `id, dag_key, title, description, status, created_by,
+const (
+	dagCols = `id, dag_key, title, description, status, created_by,
 	metadata, started_at, finished_at, created_at, updated_at`
-
-const nodeCols = `id, dag_key, node_key, title, node_type, assigned_to,
+	nodeCols = `id, dag_key, node_key, title, node_type, assigned_to,
 	depends_on, status, command_ref, config, result,
 	started_at, finished_at, created_at, updated_at`
+)
 
 func (s *TaskDAGStore) SaveDAG(ctx context.Context, d *TaskDAG) (*TaskDAG, error) {
 	rows, err := s.pool.Query(ctx,

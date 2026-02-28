@@ -84,14 +84,12 @@ func initStores(s *Server, db *pgxpool.Pool) {
 	s.agentThreadStore = store.NewAgentThreadStore(db)
 
 	if s.cfg != nil {
-		maxFileBytes := int64(s.cfg.OrchestrationWorkspaceMaxFileBytes)
-		maxTotalBytes := int64(s.cfg.OrchestrationWorkspaceMaxTotalBytes)
 		workspaceMgr, mgrErr := service.NewWorkspaceManager(
 			s.workspaceRunStore,
 			s.cfg.OrchestrationWorkspaceRoot,
 			s.cfg.OrchestrationWorkspaceMaxFiles,
-			maxFileBytes,
-			maxTotalBytes,
+			int64(s.cfg.OrchestrationWorkspaceMaxFileBytes),
+			int64(s.cfg.OrchestrationWorkspaceMaxTotalBytes),
 		)
 		if mgrErr != nil {
 			logger.Warn("app-server: workspace manager unavailable", logger.FieldError, mgrErr)
@@ -101,8 +99,6 @@ func initStores(s *Server, db *pgxpool.Pool) {
 		}
 	}
 	logger.Info("app-server: resource tools + dashboard enabled")
-
-	// 恢复上次持久化的子 agent
 	recoverSubAgents(s)
 }
 
@@ -123,14 +119,15 @@ func recoverSubAgents(s *Server) {
 	logger.Info("orchestration: recovering sub-agents", "count", len(agents))
 	for _, a := range agents {
 		launchCtx, launchCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if launchErr := s.mgr.Launch(launchCtx, a.ThreadID, a.Prompt, "", a.Cwd, "", nil); launchErr != nil {
+		launchErr := s.mgr.Launch(launchCtx, a.ThreadID, a.Prompt, "", a.Cwd, "", nil)
+		launchCancel()
+		if launchErr != nil {
 			logger.Warn("orchestration: recover sub-agent failed",
 				logger.FieldAgentID, a.ThreadID, logger.FieldError, launchErr)
 			_ = s.agentThreadStore.Delete(context.Background(), a.ThreadID)
-		} else {
-			logger.Info("orchestration: sub-agent recovered", logger.FieldAgentID, a.ThreadID, logger.FieldName, a.Prompt)
+			continue
 		}
-		launchCancel()
+		logger.Info("orchestration: sub-agent recovered", logger.FieldAgentID, a.ThreadID, logger.FieldName, a.Prompt)
 	}
 }
 
@@ -158,14 +155,15 @@ func defaultSkillsCacheDir() string {
 	}
 
 	cacheDir := filepath.Join(homeDir, ".multi-agent", "skills-cache")
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		logger.Warn("skills directory: ensure cache dir failed, fallback to local path",
-			logger.FieldError, err,
-			logger.FieldPath, cacheDir,
-		)
-		return ensureSkillsCacheDir(localFallback)
+	err = os.MkdirAll(cacheDir, 0o755)
+	if err == nil {
+		return cacheDir
 	}
-	return cacheDir
+	logger.Warn("skills directory: ensure cache dir failed, fallback to local path",
+		logger.FieldError, err,
+		logger.FieldPath, cacheDir,
+	)
+	return ensureSkillsCacheDir(localFallback)
 }
 
 func initSkills(s *Server, skillsDir string) {

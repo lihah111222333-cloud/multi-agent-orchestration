@@ -110,28 +110,19 @@ func RunThreadFork(threadID string, proc *codexsdk.AgentProcess, forkThread func
 
 func RunThreadRealtimeStart(threadID, prompt string) (map[string]any, error) {
 	return runThreadRealtimeAction("Server.threadRealtimeStart", threadID, func() error {
-		if strings.TrimSpace(prompt) == "" {
-			return apperrors.New("Server.threadRealtimeStart", "prompt is required")
-		}
-		return nil
+		return validateRealtimeRequiredString("Server.threadRealtimeStart", "prompt", prompt)
 	})
 }
 
 func RunThreadRealtimeAppendAudio(threadID string, audio any) (map[string]any, error) {
 	return runThreadRealtimeAction("Server.threadRealtimeAppendAudio", threadID, func() error {
-		if audio == nil {
-			return apperrors.New("Server.threadRealtimeAppendAudio", "audio is required")
-		}
-		return nil
+		return validateRealtimeRequiredAny("Server.threadRealtimeAppendAudio", "audio", audio)
 	})
 }
 
 func RunThreadRealtimeAppendText(threadID, text string) (map[string]any, error) {
 	return runThreadRealtimeAction("Server.threadRealtimeAppendText", threadID, func() error {
-		if strings.TrimSpace(text) == "" {
-			return apperrors.New("Server.threadRealtimeAppendText", "text is required")
-		}
-		return nil
+		return validateRealtimeRequiredString("Server.threadRealtimeAppendText", "text", text)
 	})
 }
 
@@ -320,12 +311,27 @@ func runThreadRealtimeAction(method, threadID string, validate func() error) (ma
 	if _, err := common.RequireThreadID(method, threadID); err != nil {
 		return nil, err
 	}
-	if validate != nil {
-		if err := validate(); err != nil {
-			return nil, err
-		}
+	if validate == nil {
+		return map[string]any{}, nil
+	}
+	if err := validate(); err != nil {
+		return nil, err
 	}
 	return map[string]any{}, nil
+}
+
+func validateRealtimeRequiredString(method, field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return apperrors.New(method, field+" is required")
+	}
+	return nil
+}
+
+func validateRealtimeRequiredAny(method, field string, value any) error {
+	if value == nil {
+		return apperrors.New(method, field+" is required")
+	}
+	return nil
 }
 
 func runNoContentAction(method, missingHandlerMsg, wrapMsg string, handlerReady bool, invoke func() error) (map[string]any, error) {

@@ -101,13 +101,9 @@ func collectSkillImportSources(path string, paths []string) []string {
 
 func sourceDirHasSkillFile(source string) (bool, error) {
 	info, err := os.Stat(filepath.Join(source, "SKILL.md"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return !info.IsDir(), nil
+	if err == nil { return !info.IsDir(), nil }
+	if os.IsNotExist(err) { return false, nil }
+	return false, err
 }
 
 func expandSkillImportSource(source string) ([]string, error) {
@@ -116,9 +112,11 @@ func expandSkillImportSource(source string) ([]string, error) {
 		return []string{source}, nil
 	}
 
-	if hasSkillFile, err := sourceDirHasSkillFile(source); err != nil {
+	hasSkillFile, err := sourceDirHasSkillFile(source)
+	if err != nil {
 		return nil, err
-	} else if hasSkillFile {
+	}
+	if hasSkillFile {
 		return []string{source}, nil
 	}
 
@@ -132,9 +130,11 @@ func expandSkillImportSource(source string) ([]string, error) {
 			continue
 		}
 		child := filepath.Join(source, entry.Name())
-		if childHasSkillFile, err := sourceDirHasSkillFile(child); err != nil {
+		childHasSkillFile, err := sourceDirHasSkillFile(child)
+		if err != nil {
 			return nil, err
-		} else if childHasSkillFile {
+		}
+		if childHasSkillFile {
 			children = append(children, child)
 		}
 	}
@@ -146,8 +146,7 @@ func expandSkillImportSource(source string) ([]string, error) {
 }
 
 func resolveSkillMatchPreviewThreadID(p SkillsMatchPreviewParams) string {
-	threadID := strings.TrimSpace(p.ThreadID)
-	if threadID != "" {
+	if threadID := strings.TrimSpace(p.ThreadID); threadID != "" {
 		return threadID
 	}
 	return strings.TrimSpace(p.AgentID)

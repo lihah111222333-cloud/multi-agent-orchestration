@@ -20,9 +20,7 @@ type Event struct {
 	Data any
 }
 
-func NewEventBus() *EventBus {
-	return &EventBus{subscribers: make(map[string]chan Event)}
-}
+func NewEventBus() *EventBus { return &EventBus{subscribers: make(map[string]chan Event)} }
 
 func (b *EventBus) Publish(event Event) {
 	b.mu.RLock()
@@ -61,11 +59,9 @@ func (s *Server) sseHandler(c *gin.Context) {
 	clientID := fmt.Sprintf("sse-%d", time.Now().UnixNano())
 	ch := s.bus.Subscribe(clientID)
 	keepalive := time.NewTicker(30 * time.Second)
-	defer func() {
-		keepalive.Stop()
-		s.bus.Unsubscribe(clientID)
-		logger.Info("dashboard: SSE client disconnected", "client_id", clientID)
-	}()
+	defer logger.Info("dashboard: SSE client disconnected", "client_id", clientID)
+	defer s.bus.Unsubscribe(clientID)
+	defer keepalive.Stop()
 
 	logger.Info("dashboard: SSE client connected", "client_id", clientID)
 

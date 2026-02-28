@@ -72,15 +72,11 @@ func ClassifyStatus(lines []string, hasSession bool, stagnantSec int) string {
 	}
 
 	merged := strings.ToLower(strings.Join(normalized, "\n"))
-	for _, kw := range errorKeywords {
-		if strings.Contains(merged, kw) {
-			return "error"
-		}
+	if slices.ContainsFunc(errorKeywords, func(kw string) bool { return strings.Contains(merged, kw) }) {
+		return "error"
 	}
-	for _, kw := range disconnectedKeywords {
-		if strings.Contains(merged, kw) {
-			return "disconnected"
-		}
+	if slices.ContainsFunc(disconnectedKeywords, func(kw string) bool { return strings.Contains(merged, kw) }) {
+		return "disconnected"
 	}
 	if stagnantSec >= defaultStuckSec {
 		return "stuck"

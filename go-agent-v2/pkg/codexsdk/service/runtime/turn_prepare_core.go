@@ -149,7 +149,11 @@ func collectAutoMatchedSkillMatches(a PrepareAdapter, agentID, prompt string, in
 		}
 		return nil
 	}
-	return a.CollectAutoMatchedSkillMatches(prompt, buildAutoMatchInputs(input), a.ListAgentSkills(agentID), candidates, options)
+	autoMatchInputs := make([]AutoMatchInput, 0, len(input))
+	for _, item := range input {
+		autoMatchInputs = append(autoMatchInputs, AutoMatchInput{Type: item.Type, Name: item.Name})
+	}
+	return a.CollectAutoMatchedSkillMatches(prompt, autoMatchInputs, a.ListAgentSkills(agentID), candidates, options)
 }
 
 func ParseTurnInputs(inputs []TurnInput, fileContentInputText func(string, string) string, buildAttachmentName func(string) string, buildAttachmentPreviewURL func(string) string) ParsedTurnInputs {
@@ -270,14 +274,6 @@ func ComposeUserTimelineTextForTurn(prompt, submitPrompt, injectedHint string, s
 		return hint
 	}
 	return submitPrompt + "\n" + hint
-}
-
-func buildAutoMatchInputs(input []TurnInput) []AutoMatchInput {
-	var out []AutoMatchInput
-	for _, item := range input {
-		out = append(out, AutoMatchInput{Type: item.Type, Name: item.Name})
-	}
-	return out
 }
 
 func normalizeAttachmentBuilders(buildAttachmentName func(string) string, buildAttachmentPreviewURL func(string) string) (func(string) string, func(string) string) {

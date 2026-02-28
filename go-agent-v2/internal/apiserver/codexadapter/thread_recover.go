@@ -25,14 +25,14 @@ func (a *Adapter) ThreadRecover(_ context.Context, threadID string) (threadRecov
 		return threadRecoverResult{}, err
 	}
 	return withProcess(a, "Server.threadRecover", id, func(proc *codexsdk.AgentProcess) (threadRecoverResult, error) {
-		if recoverErr := withClient(proc, func(c codexsdk.Client) error {
+		if err := withClient(proc, func(c codexsdk.Client) error {
 			recoverClient, ok := c.(recoverConnectionClient)
 			if !ok {
 				return apperrors.New("Server.threadRecover", "client does not support connection recovery")
 			}
 			return recoverClient.RecoverConnection("manual_ui_recover")
-		}); recoverErr != nil {
-			return threadRecoverResult{}, apperrors.Wrap(recoverErr, "Server.threadRecover", "recover connection")
+		}); err != nil {
+			return threadRecoverResult{}, apperrors.Wrap(err, "Server.threadRecover", "recover connection")
 		}
 		logger.Info("thread/recover: manual recovery triggered", threadLogFields(id)...)
 		return threadRecoverResult{ThreadID: id, Status: "recovering", Recovered: true, Mode: "respawn"}, nil

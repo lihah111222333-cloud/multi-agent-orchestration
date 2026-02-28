@@ -11,10 +11,10 @@ func (a *Adapter) trackerStateAndNotify() (turnTrackerState, func(string, any)) 
 	if a == nil {
 		return turnTrackerState{}, nil
 	}
-	if a.ctx != nil {
-		return a.tracker, a.ctx.Notify
+	if a.ctx == nil {
+		return a.tracker, nil
 	}
-	return a.tracker, nil
+	return a.tracker, a.ctx.Notify
 }
 
 func (a *Adapter) trackerState() turnTrackerState {

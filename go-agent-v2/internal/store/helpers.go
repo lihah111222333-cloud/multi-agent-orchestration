@@ -28,10 +28,10 @@ func mustMarshalJSON(v any) []byte {
 }
 
 func defaultStr(s, def string) string {
-	if s == "" {
-		return def
+	if s != "" {
+		return s
 	}
-	return s
+	return def
 }
 
 type BaseStore struct{ pool *pgxpool.Pool }

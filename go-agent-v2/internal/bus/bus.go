@@ -144,27 +144,29 @@ func (b *MessageBus) Publish(msg Message) {
 	b.mu.RUnlock()
 
 	for _, sub := range matched {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					b.dropped.Add(1)
-				}
-			}()
-			select {
-			case sub.Ch <- msg:
-			default:
-				b.dropped.Add(1)
-				logger.Warn("bus: subscriber channel full, message dropped",
-					logger.FieldSubscriber, sub.ID,
-					logger.FieldTopic, msg.Topic,
-					logger.FieldSeq, msg.Seq,
-				)
-			}
-		}()
+		b.publishToSubscriber(sub, msg)
 	}
 
 	if onPub != nil {
 		onPub(msg)
+	}
+}
+
+func (b *MessageBus) publishToSubscriber(sub *Subscriber, msg Message) {
+	defer func() {
+		if r := recover(); r != nil {
+			b.dropped.Add(1)
+		}
+	}()
+	select {
+	case sub.Ch <- msg:
+	default:
+		b.dropped.Add(1)
+		logger.Warn("bus: subscriber channel full, message dropped",
+			logger.FieldSubscriber, sub.ID,
+			logger.FieldTopic, msg.Topic,
+			logger.FieldSeq, msg.Seq,
+		)
 	}
 }
 

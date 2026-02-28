@@ -101,9 +101,7 @@ func OrchestrationTools(provider OrchestrationProvider, runtime AgentRuntimeProv
 }
 
 func orchestrationListAgents(provider OrchestrationProvider, callerID string) string {
-	if provider == nil || provider.AgentLauncher() == nil {
-		return "[]"
-	}
+	if provider == nil || provider.AgentLauncher() == nil { return "[]" }
 	infos := provider.AgentLauncher().List()
 	data, err := json.Marshal(infos)
 	if err != nil {
@@ -113,13 +111,9 @@ func orchestrationListAgents(provider OrchestrationProvider, callerID string) st
 	if err != nil {
 		return string(data)
 	}
-	if len(list) == 0 {
-		return "[]"
-	}
+	if len(list) == 0 { return "[]" }
 	callerID = strings.TrimSpace(callerID)
-	if callerID == "" {
-		return string(data)
-	}
+	if callerID == "" { return string(data) }
 	filtered := make([]map[string]any, 0, len(list))
 	for _, item := range list {
 		agentID, _ := item["id"].(string)
@@ -128,9 +122,7 @@ func orchestrationListAgents(provider OrchestrationProvider, callerID string) st
 		}
 		filtered = append(filtered, item)
 	}
-	if len(filtered) == 0 {
-		return "[]"
-	}
+	if len(filtered) == 0 { return "[]" }
 	out, err := json.Marshal(filtered)
 	if err != nil {
 		return ToolError(err)

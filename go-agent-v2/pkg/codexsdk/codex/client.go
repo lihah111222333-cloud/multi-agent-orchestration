@@ -20,14 +20,13 @@ type Client struct {
 }
 
 func NewClient(port int, agentID string) *Client {
-	return &Client{
-		AppServerClient: NewAppServerClient(port, agentID),
-		Transport:       TransportSSE,
-	}
+	return &Client{AppServerClient: NewAppServerClient(port, agentID), Transport: TransportSSE}
 }
 
 func (c *Client) Health() error {
-	if c == nil || !c.Running() { return apperrors.New("Client.Health", "client not running") }
+	if c == nil || !c.Running() {
+		return apperrors.New("Client.Health", "client not running")
+	}
 	return nil
 }
 
@@ -45,6 +44,8 @@ func (c *Client) DeleteThread(threadID string) error {
 
 func checkPortFree(port int) error {
 	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err == nil { _ = l.Close() }
+	if err == nil {
+		_ = l.Close()
+	}
 	return err
 }

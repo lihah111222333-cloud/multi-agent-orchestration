@@ -31,11 +31,7 @@ func (c *StderrCollector) Write(p []byte) (int, error) {
 	return c.pw.Write(p)
 }
 
-func (c *StderrCollector) Close() error {
-	_ = c.pw.Close()
-	<-c.done
-	return nil
-}
+func (c *StderrCollector) Close() error { _ = c.pw.Close(); <-c.done; return nil }
 
 func (c *StderrCollector) scan() {
 	defer close(c.done)
@@ -49,7 +45,6 @@ func (c *StderrCollector) scan() {
 		FieldAgentID, c.agentID,
 		"logger", "codex.stderr",
 	}
-
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {

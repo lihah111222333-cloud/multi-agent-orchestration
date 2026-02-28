@@ -9,9 +9,13 @@ import (
 )
 
 func ToMapAny(v any) map[string]any {
-	if m, ok := v.(map[string]any); ok { return m }
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
 	m := map[string]any{}
-	if raw, err := json.Marshal(v); err == nil { _ = json.Unmarshal(raw, &m) }
+	if raw, err := json.Marshal(v); err == nil {
+		_ = json.Unmarshal(raw, &m)
+	}
 	return m
 }
 
@@ -23,8 +27,12 @@ func EscapeLike(s string) string {
 }
 
 func ClampInt(v, lo, hi int) int {
-	if v < lo { return lo }
-	if v > hi { return hi }
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
 	return v
 }
 
@@ -32,10 +40,7 @@ func SafeGo(fn func()) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Error("goroutine panicked",
-					logger.FieldError, r,
-					"stack", string(debug.Stack()),
-				)
+				logger.Error("goroutine panicked", logger.FieldError, r, "stack", string(debug.Stack()))
 			}
 		}()
 		fn()

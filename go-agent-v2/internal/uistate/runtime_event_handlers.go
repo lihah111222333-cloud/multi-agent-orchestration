@@ -188,13 +188,9 @@ func (m *RuntimeManager) applyErrorOverlayLocked(rt *threadRuntime, threadID str
 	}
 }
 
-func clearTerminalWaitOverlay(rt *threadRuntime) {
-	rt.terminalWaitOverlay, rt.terminalWaitLabel = false, ""
-}
+func clearTerminalWaitOverlay(rt *threadRuntime) { rt.terminalWaitOverlay, rt.terminalWaitLabel = false, "" }
 func clearMCPStartupOverlay(rt *threadRuntime) { rt.mcpStartupOverlay, rt.mcpStartupLabel = false, "" }
-func clearBackgroundOverlay(rt *threadRuntime) {
-	rt.backgroundOverlay, rt.backgroundLabel, rt.backgroundDetails = false, "", ""
-}
+func clearBackgroundOverlay(rt *threadRuntime) { rt.backgroundOverlay, rt.backgroundLabel, rt.backgroundDetails = false, "", "" }
 func clearStreamErrorOverlay(rt *threadRuntime) { rt.streamErrorText, rt.streamErrorDetails = "", "" }
 
 func applyOverlays(rt *threadRuntime, eventType, method string, payload map[string]any) {

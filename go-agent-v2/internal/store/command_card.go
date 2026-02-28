@@ -30,10 +30,9 @@ func (s *CommandCardStore) Save(ctx context.Context, c *CommandCard) (*CommandCa
 		}
 	}
 	schemaJSON := mustMarshalJSON(c.ArgsSchema)
-	updatedBy := defaultStr(c.UpdatedBy, "")
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO command_cards (card_key, title, description, command_template, args_schema,
-		   risk_level, enabled, created_by, updated_by, updated_at)
+	   risk_level, enabled, created_by, updated_by, updated_at)
 		 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, NOW())
 		 ON CONFLICT (card_key) DO UPDATE SET
 		   title=EXCLUDED.title, description=EXCLUDED.description,
@@ -42,7 +41,7 @@ func (s *CommandCardStore) Save(ctx context.Context, c *CommandCard) (*CommandCa
 	   updated_by=EXCLUDED.updated_by, updated_at=NOW()
 	 RETURNING `+ccCols,
 		c.CardKey, c.Title, c.Description, c.CommandTemplate, string(schemaJSON),
-		defaultStr(c.RiskLevel, "normal"), c.Enabled, updatedBy, updatedBy)
+		defaultStr(c.RiskLevel, "normal"), c.Enabled, c.UpdatedBy, c.UpdatedBy)
 	if err != nil {
 		return nil, err
 	}

@@ -50,11 +50,12 @@ func newResult(id any, result any) *Response {
 }
 
 func normalizeInternalErrorCode(code int, msg string) int {
-	if code == CodeInternalError {
-		text := strings.ToLower(strings.TrimSpace(msg))
-		if strings.Contains(text, "invalid params") || isLikelyInvalidParamsMessage(text) {
-			return CodeInvalidParams
-		}
+	if code != CodeInternalError {
+		return code
+	}
+	text := strings.ToLower(strings.TrimSpace(msg))
+	if strings.Contains(text, "invalid params") || isLikelyInvalidParamsMessage(text) {
+		return CodeInvalidParams
 	}
 	return code
 }
@@ -74,9 +75,6 @@ var invalidParamsMarkers = [...]string{
 }
 
 func isLikelyInvalidParamsMessage(text string) bool {
-	if text == "" {
-		return false
-	}
 	for _, marker := range invalidParamsMarkers {
 		if strings.Contains(text, marker) {
 			return true
@@ -112,7 +110,6 @@ func typedHandler[P any](fn func(ctx context.Context, p P) (any, error)) Handler
 func noopHandler() Handler {
 	return func(_ context.Context, _ json.RawMessage) (any, error) { return map[string]any{}, nil }
 }
-
 func stubHandler(result any) Handler {
 	return func(_ context.Context, _ json.RawMessage) (any, error) { return result, nil }
 }

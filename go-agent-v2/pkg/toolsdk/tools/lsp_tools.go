@@ -212,10 +212,9 @@ func RegisterLSPHandlers(dst map[string]LSPDynamicToolHandler, provider LSPHandl
 		return
 	}
 	for _, spec := range baseLSPToolSpecs() {
-		if spec.handler == nil {
-			continue
+		if handler := spec.handler; handler != nil {
+			dst[spec.schema.Name] = handler(provider)
 		}
-		dst[spec.schema.Name] = spec.handler(provider)
 	}
 }
 

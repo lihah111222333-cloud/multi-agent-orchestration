@@ -68,7 +68,7 @@ func resolveDynamicToolThreadIDs(agentID, rawThreadID string) (threadID, codexTh
 	threadID = strings.TrimSpace(agentID)
 	codexThreadID = strings.TrimSpace(rawThreadID)
 	if threadID == "" {
-		threadID = codexThreadID
+		return codexThreadID, ""
 	}
 	if codexThreadID == threadID {
 		codexThreadID = ""
@@ -108,11 +108,12 @@ func handleDynamicToolCall(s *Server, agentID string, event agentcore.Event) {
 		errMsg := "bad dynamic_tool_call data: " + err.Error()
 		logger.Warn("app-server: bad dynamic_tool_call data", logger.FieldAgentID, agentID, logger.FieldError, err,
 			"raw", string(event.Data))
-		if event.RespondFunc != nil {
+		switch {
+		case event.RespondFunc != nil:
 			if respErr := event.RespondFunc(-32602, errMsg); respErr != nil {
 				logger.Warn("app-server: respond error failed", logger.FieldAgentID, agentID, logger.FieldError, respErr)
 			}
-		} else if event.RequestID != nil {
+		case event.RequestID != nil:
 			if respErr := s.codexAdapter.RespondError(proc, *event.RequestID, -32602, errMsg); respErr != nil {
 				logger.Warn("app-server: respond error failed", logger.FieldAgentID, agentID, logger.FieldError, respErr)
 			}
@@ -206,12 +207,11 @@ func buildToolNotifyPayload(
 		"elapsedMs":  elapsed.Milliseconds(),
 		"resultLen":  len(result),
 	}
+	if len(result) > 500 {
+		result = result[:500]
+	}
 	if result != "" {
-		n := len(result)
-		if n > 500 {
-			n = 500
-		}
-		payload["resultPreview"] = result[:n]
+		payload["resultPreview"] = result
 	}
 	return payload
 }

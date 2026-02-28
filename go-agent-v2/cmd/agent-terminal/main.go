@@ -41,7 +41,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
-//go:embed all:frontend/dist/*
+//go:embed all:frontend
 var assets embed.FS
 
 //go:embed assets/appicon.png
@@ -388,7 +388,11 @@ func setupAppServer(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool,
 		SkillsDir: ".agent/skills",
 	}
 	appSrv := apiserver.New(deps)
-	setupAppServerLSPRoot(appSrv)
+	if cwd, cwdErr := os.Getwd(); cwdErr != nil {
+		logger.Warn("setup app-server lsp root failed", logger.FieldError, cwdErr)
+	} else {
+		apiserver.SetupLSP(appSrv, cwd)
+	}
 
 	util.SafeGo(func() {
 		if err := appSrv.ListenAndServe(ctx, addr); err != nil {
@@ -402,18 +406,6 @@ func setupAppServer(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool,
 	})
 
 	return appSrv, mgr
-}
-
-func setupAppServerLSPRoot(server *apiserver.Server) {
-	if server == nil {
-		return
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		logger.Warn("setup app-server lsp root failed", logger.FieldError, err)
-		return
-	}
-	apiserver.SetupLSP(server, cwd)
 }
 
 func callerTrace(skip, maxFrames int) string {

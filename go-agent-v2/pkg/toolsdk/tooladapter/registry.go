@@ -57,15 +57,6 @@ type Providers struct {
 	CodeRunTracker
 }
 
-type schemaProviderFunc func() []tools.DynamicTool
-
-func (f schemaProviderFunc) AllSchemas() []tools.DynamicTool {
-	if f == nil {
-		return nil
-	}
-	return f()
-}
-
 type lspAddonDynamicToolProvider struct {
 	name     string
 	register func(tools.LSPProvider)
@@ -130,25 +121,15 @@ func AllSchemas(deps Providers) []tools.DynamicTool {
 }
 
 func runtimeTools(deps Providers) []tools.Tool {
-	resolvedSchema := deps.Schema
-	if resolvedSchema == nil {
-		resolvedSchema = schemaProviderFunc(func() []tools.DynamicTool { return nil })
-	}
-
 	all := make([]tools.Tool, 0, 32)
 	all = append(all, buildLSPTools(deps.LSP)...)
 	all = append(all, tools.CodeRunTools(deps.CodeRun, deps.AgentRuntime, deps.Approvals)...)
 	all = append(all, tools.ResourceTools(deps.Resource)...)
-	all = append(all, tools.OrchestrationTools(deps.Orchestration, deps.AgentRuntime, resolvedSchema)...)
+	all = append(all, tools.OrchestrationTools(deps.Orchestration, deps.AgentRuntime, deps.Schema)...)
 	return dedupeToolsByName(all)
 }
 
 func schemaTools(deps Providers) []tools.Tool {
-	resolvedSchema := deps.Schema
-	if resolvedSchema == nil {
-		resolvedSchema = schemaProviderFunc(func() []tools.DynamicTool { return nil })
-	}
-
 	lspTools := buildLSPTools(deps.LSP)
 	if !hasAvailableLSPServer(deps.LSP) {
 		filtered := make([]tools.Tool, 0, 1)
@@ -165,7 +146,7 @@ func schemaTools(deps Providers) []tools.Tool {
 	all = append(all, lspTools...)
 	all = append(all, tools.CodeRunTools(deps.CodeRun, deps.AgentRuntime, deps.Approvals)...)
 	all = append(all, tools.ResourceTools(deps.Resource)...)
-	all = append(all, tools.OrchestrationTools(deps.Orchestration, deps.AgentRuntime, resolvedSchema)...)
+	all = append(all, tools.OrchestrationTools(deps.Orchestration, deps.AgentRuntime, deps.Schema)...)
 	return dedupeToolsByName(all)
 }
 
@@ -297,11 +278,7 @@ func snapshotLSPAddonDynamicToolProviders() []lspAddonDynamicToolProvider {
 	if len(lspAddonDynamicToolProviders) == 0 {
 		return nil
 	}
-	out := make([]lspAddonDynamicToolProvider, 0, len(lspAddonDynamicToolProviders))
-	for _, provider := range lspAddonDynamicToolProviders {
-		out = append(out, provider)
-	}
-	return out
+	return append([]lspAddonDynamicToolProvider(nil), lspAddonDynamicToolProviders...)
 }
 
 func buildLSPAddonDynamicToolSchemas(providers []lspAddonDynamicToolProvider) []tools.DynamicTool {

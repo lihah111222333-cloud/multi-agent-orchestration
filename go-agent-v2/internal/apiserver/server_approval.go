@@ -341,25 +341,16 @@ type approvalRespondParams struct {
 	Decision  any   `json:"decision,omitempty"`
 }
 
-func approvalRespondStatus(ok bool, status string) map[string]any {
-	return map[string]any{"ok": ok, "status": status}
-}
+func approvalRespondTyped(s *Server, _ context.Context, p approvalRespondParams) (any, error) {
+	if s == nil { return map[string]any{"ok": false, "status": "server_not_ready"}, nil }
+	if p.RequestID <= 0 { return map[string]any{"ok": false, "status": "invalid_request_id"}, nil }
 
-func approvalRespondResultPayload(p approvalRespondParams) (map[string]any, bool) {
 	result := map[string]any{}
 	if p.Decision != nil { result["decision"] = p.Decision }
 	if p.Approved != nil { result["approved"] = *p.Approved }
-	return result, len(result) > 0
-}
+	if len(result) == 0 { return map[string]any{"ok": false, "status": "decision_or_approved_required"}, nil }
 
-func approvalRespondTyped(s *Server, _ context.Context, p approvalRespondParams) (any, error) {
-	if s == nil { return approvalRespondStatus(false, "server_not_ready"), nil }
-	if p.RequestID <= 0 { return approvalRespondStatus(false, "invalid_request_id"), nil }
+	if !ResolvePendingRequest(s, p.RequestID, result) { return map[string]any{"ok": false, "status": "not_pending"}, nil }
 
-	result, ok := approvalRespondResultPayload(p)
-	if !ok { return approvalRespondStatus(false, "decision_or_approved_required"), nil }
-
-	if !ResolvePendingRequest(s, p.RequestID, result) { return approvalRespondStatus(false, "not_pending"), nil }
-
-	return approvalRespondStatus(true, "resolved"), nil
+	return map[string]any{"ok": true, "status": "resolved"}, nil
 }

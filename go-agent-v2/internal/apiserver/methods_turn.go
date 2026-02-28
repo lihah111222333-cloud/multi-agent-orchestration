@@ -168,9 +168,7 @@ func normalizeReviewStartResponse(threadID string, result map[string]any) review
 		},
 		ReviewThreadID: threadID,
 	}
-	if result == nil {
-		return response
-	}
+	if result == nil { return response }
 	if reviewThreadID, ok := result["reviewThreadId"].(string); ok {
 		if reviewThreadID = strings.TrimSpace(reviewThreadID); reviewThreadID != "" {
 			response.ReviewThreadID = reviewThreadID
@@ -180,11 +178,7 @@ func normalizeReviewStartResponse(threadID string, result map[string]any) review
 		if id, ok := turnMap["id"].(string); ok {
 			response.Turn.ID = id
 		}
-		if status, ok := turnMap["status"].(string); ok {
-			if status = strings.TrimSpace(status); status != "" {
-				response.Turn.Status = status
-			}
-		}
+			if status, ok := turnMap["status"].(string); ok && strings.TrimSpace(status) != "" { response.Turn.Status = strings.TrimSpace(status) }
 		if items, ok := turnMap["items"].([]any); ok {
 			response.Turn.Items = items
 		}

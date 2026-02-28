@@ -27,8 +27,6 @@ const (
 	StateError    = runner.StateError
 )
 
-func NewAgentManager(appFactory, restFactory ClientFactory) (*AgentManager, error) {
-	return runner.NewAgentManager(appFactory, restFactory)
-}
+func NewAgentManager(appFactory, restFactory ClientFactory) (*AgentManager, error) { return runner.NewAgentManager(appFactory, restFactory) }
 
 func NewAgentProcess(client Client) *AgentProcess { return &runner.AgentProcess{Client: client} }

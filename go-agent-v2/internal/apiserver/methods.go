@@ -125,10 +125,10 @@ func (s *Server) registerMethods() {
 	s.methods["configRequirements/read"] = bindRaw(s, configRequirementsRead)
 
 	s.methods["account/login/start"] = bindTyped(s, accountLoginStartTyped)
-	s.methods["account/login/cancel"] = bindRaw(s, accountLoginCancel)
+	s.methods["account/login/cancel"] = stubHandler(map[string]any{})
 	s.methods["account/logout"] = bindRaw(s, accountLogout)
 	s.methods["account/read"] = bindRaw(s, accountRead)
-	s.methods["account/rateLimits/read"] = bindRaw(s, accountRateLimitsRead)
+	s.methods["account/rateLimits/read"] = stubHandler(map[string]any{"rateLimits": map[string]any{}})
 
 	registerNoop("mcpServer/oauth/login")
 	s.methods["config/mcpServer/reload"] = bindRaw(s, mcpServerReload)
@@ -258,10 +258,6 @@ func accountLoginStartTyped(_ *Server, _ context.Context, p accountLoginStartPar
 	return map[string]any{"loginUrl": "https://platform.openai.com/api-keys"}, nil
 }
 
-func accountLoginCancel(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
-	return map[string]any{}, nil
-}
-
 func accountLogout(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	if err := os.Unsetenv("OPENAI_API_KEY"); err != nil {
 		logger.Warn("account/logout: unsetenv failed", logger.FieldError, err)
@@ -283,9 +279,6 @@ func accountRead(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
 	}, nil
 }
 
-func accountRateLimitsRead(_ *Server, _ context.Context, _ json.RawMessage) (any, error) {
-	return map[string]any{"rateLimits": map[string]any{}}, nil
-}
 func offline52MethodList() []string {
 	return []string{"initialize", "thread/resume", "thread/fork", "thread/rollback", "thread/loaded/list", "thread/read", "thread/resolve", "thread/backgroundTerminals/clean", "thread/realtime/start", "thread/realtime/appendAudio", "thread/realtime/appendText", "thread/realtime/stop", "turn/steer", "turn/forceComplete", "review/start", "fuzzyFileSearch", "skills/list", "skills/remote/list", "skills/remote/export", "skills/remote/read", "skills/remote/write", "app/list", "model/list", "collaborationMode/list", "experimentalFeature/list", "config/read", "externalAgentConfig/detect", "externalAgentConfig/import", "config/value/write", "config/batchWrite", "configRequirements/read", "account/login/start", "account/login/cancel", "account/logout", "account/read", "account/rateLimits/read", "config/mcpServer/reload", "mcpServerStatus/list", "windowsSandbox/setupStart", "lsp_diagnostics_query", "command/exec", "thread/undo", "thread/model/set", "thread/personality/set", "thread/approvals/set", "thread/mcp/list", "thread/skills/list", "thread/debugMemory", "mock/experimentalMethod", "log/list", "log/filters", "workspace/run/create", "workspace/run/get", "workspace/run/list", "workspace/run/merge", "workspace/run/abort", "ui/preferences/getAll", "ui/projects/add", "ui/projects/remove", "debug/runtime", "debug/gc"}
 }

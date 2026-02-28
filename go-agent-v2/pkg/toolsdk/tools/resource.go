@@ -12,11 +12,8 @@ import (
 	"github.com/multi-agent/go-agent-v2/pkg/logger"
 )
 
-// ResourceTools returns resource tool schemas and handlers.
 func ResourceTools(provider ResourceProvider) []Tool {
-	if provider == nil || provider.DAGManager() == nil {
-		return nil
-	}
+	if provider == nil || provider.DAGManager() == nil { return nil }
 	return buildResourceTools(provider, resourceToolSpecs())
 }
 
@@ -30,9 +27,7 @@ func buildResourceTools(provider ResourceProvider, specs []resourceToolSpec) []T
 	hasWorkspace := provider.WorkspaceOps() != nil
 	tools := make([]Tool, 0, len(specs))
 	for _, spec := range specs {
-		if spec.workspaceOnly && !hasWorkspace {
-			continue
-		}
+		if spec.workspaceOnly && !hasWorkspace { continue }
 		spec := spec
 		tools = append(tools, Tool{
 			Schema: spec.schema,

@@ -1,4 +1,3 @@
-// shared_file.go — 共享文件存储 CRUD (对应 Python shared_file_store.py)。
 package store
 
 import (
@@ -9,20 +8,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// SharedFileStore 共享文件存储。
 type SharedFileStore struct{ BaseStore }
 
-// NewSharedFileStore 创建共享文件存储。
-func NewSharedFileStore(pool *pgxpool.Pool) *SharedFileStore { return &SharedFileStore{NewBaseStore(pool)} }
-
-// normalizePath 清理路径。
-func normalizePath(path string) string {
-	p := strings.TrimSpace(filepath.ToSlash(path))
-	p = strings.Trim(p, "/")
-	return p
+func NewSharedFileStore(pool *pgxpool.Pool) *SharedFileStore {
+	return &SharedFileStore{NewBaseStore(pool)}
 }
 
-// Write 写入文件 (UPSERT)。
+func normalizePath(path string) string {
+	return strings.Trim(filepath.ToSlash(strings.TrimSpace(path)), "/")
+}
+
 func (s *SharedFileStore) Write(ctx context.Context, path, content, actor string) (*SharedFile, error) {
 	p := normalizePath(path)
 	if p == "" {
@@ -40,23 +35,20 @@ func (s *SharedFileStore) Write(ctx context.Context, path, content, actor string
 	return collectOne[SharedFile](rows)
 }
 
-// Read 读取文件。
 func (s *SharedFileStore) Read(ctx context.Context, path string) (*SharedFile, error) {
-	p := normalizePath(path)
 	rows, err := s.pool.Query(ctx,
-		"SELECT path, content, updated_by, created_at, updated_at FROM shared_files WHERE path = $1", p)
+		"SELECT path, content, updated_by, created_at, updated_at FROM shared_files WHERE path = $1",
+		normalizePath(path))
 	if err != nil {
 		return nil, err
 	}
 	return collectOne[SharedFile](rows)
 }
 
-// List 列表查询文件。
 func (s *SharedFileStore) List(ctx context.Context, prefix string, limit int) ([]SharedFile, error) {
 	q := NewQueryBuilder()
 	if prefix != "" {
-		np := normalizePath(prefix)
-		q.KeywordLike(np, "path")
+		q.KeywordLike(normalizePath(prefix), "path")
 	}
 	sql, params := q.Build(
 		"SELECT path, content, updated_by, created_at, updated_at FROM shared_files",
@@ -68,10 +60,8 @@ func (s *SharedFileStore) List(ctx context.Context, prefix string, limit int) ([
 	return collectRows[SharedFile](rows)
 }
 
-// Delete 删除文件。
-func (s *SharedFileStore) Delete(ctx context.Context, path, actor string) (bool, error) {
-	p := normalizePath(path)
-	tag, err := s.pool.Exec(ctx, "DELETE FROM shared_files WHERE path = $1", p)
+func (s *SharedFileStore) Delete(ctx context.Context, path, _ string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, "DELETE FROM shared_files WHERE path = $1", normalizePath(path))
 	if err != nil {
 		return false, err
 	}

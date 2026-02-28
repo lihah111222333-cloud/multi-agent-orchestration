@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"fmt"
 	"strings"
 	"time"
 )
@@ -13,26 +12,18 @@ const (
 
 func BuildOrchestrationCompletionReport(workerID, status, reason, summary string) string {
 	worker := strings.TrimSpace(workerID)
-	if worker == "" {
-		worker = "unknown-agent"
-	}
+	if worker == "" { worker = "unknown-agent" }
 	st := strings.TrimSpace(status)
-	if st == "" {
-		st = "completed"
+	if st == "" { st = "completed" }
+
+	report := "[Auto report] Agent " + worker + " finished delegated work.\nstatus: " + st
+	if sm := TruncateOrchestrationSummary(summary, MaxOrchestrationReportSummaryRunes); sm != "" {
+		report += "\nsummary: " + sm
 	}
-	rs := strings.TrimSpace(reason)
-	sm := TruncateOrchestrationSummary(summary, MaxOrchestrationReportSummaryRunes)
-	lines := []string{
-		fmt.Sprintf("[Auto report] Agent %s finished delegated work.", worker),
-		fmt.Sprintf("status: %s", st),
+	if rs := strings.TrimSpace(reason); rs != "" && !strings.EqualFold(rs, "turn_complete") {
+		report += "\nreason: " + rs
 	}
-	if sm != "" {
-		lines = append(lines, "summary: "+sm)
-	}
-	if rs != "" && !strings.EqualFold(rs, "turn_complete") {
-		lines = append(lines, "reason: "+rs)
-	}
-	return strings.Join(lines, "\n")
+	return report
 }
 
 func TruncateOrchestrationSummary(value string, limit int) string {

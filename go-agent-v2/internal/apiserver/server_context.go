@@ -183,9 +183,7 @@ func getDiagnosticsCacheState(s *Server, uri string) []lsp.Diagnostic {
 }
 
 func allDiagnosticsCacheState(s *Server) map[string][]lsp.Diagnostic {
-	if s == nil {
-		return map[string][]lsp.Diagnostic{}
-	}
+	if s == nil { return map[string][]lsp.Diagnostic{} }
 	state := &s.diagnosticsCacheState
 	state.diagMu.RLock()
 	out := make(map[string][]lsp.Diagnostic, len(state.diagCache))

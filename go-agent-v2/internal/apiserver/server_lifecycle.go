@@ -61,9 +61,7 @@ func (s *Server) cleanupRuntimeResources() {
 	if s == nil { return }
 	doRuntimeCleanupState(s, func() {
 		cancelAllCodeRuns(s)
-		if runner := s.codeRunner; runner != nil {
-			runner.Cleanup()
-		}
+		if runner := s.codeRunner; runner != nil { runner.Cleanup() }
 		clearAllAgentWorkDirsState(s)
 
 		stopAllUIThrottleTimersState(s)

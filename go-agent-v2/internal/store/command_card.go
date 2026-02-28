@@ -29,8 +29,8 @@ func (s *CommandCardStore) Save(ctx context.Context, c *CommandCard) (*CommandCa
 			logger.Warn("store: save command card version failed", "card_key", existing.CardKey, logger.FieldError, err)
 		}
 	}
-
 	schemaJSON := mustMarshalJSON(c.ArgsSchema)
+	updatedBy := defaultStr(c.UpdatedBy, "")
 	rows, err := s.pool.Query(ctx,
 		`INSERT INTO command_cards (card_key, title, description, command_template, args_schema,
 		   risk_level, enabled, created_by, updated_by, updated_at)
@@ -40,9 +40,9 @@ func (s *CommandCardStore) Save(ctx context.Context, c *CommandCard) (*CommandCa
 		   command_template=EXCLUDED.command_template, args_schema=EXCLUDED.args_schema,
 		   risk_level=EXCLUDED.risk_level, enabled=EXCLUDED.enabled,
 	   updated_by=EXCLUDED.updated_by, updated_at=NOW()
-		 RETURNING `+ccCols,
+	 RETURNING `+ccCols,
 		c.CardKey, c.Title, c.Description, c.CommandTemplate, string(schemaJSON),
-		defaultStr(c.RiskLevel, "normal"), c.Enabled, defaultStr(c.UpdatedBy, ""), defaultStr(c.UpdatedBy, ""))
+		defaultStr(c.RiskLevel, "normal"), c.Enabled, updatedBy, updatedBy)
 	if err != nil {
 		return nil, err
 	}
